@@ -1,0 +1,42 @@
+# === Vendored toolchains (multi-GB, not source) ===
+/emsdk/
+/qt/
+/deps/
+/.qtvenv/
+/toolchain/*/
+!/toolchain/env.sh
+
+# === Build directories ===
+/build-coin/
+/build-freecad/
+/build-freecad-gui/
+/build-occt/
+/build-xercesc/
+/build-yamlcpp/
+
+# === Install trees / web output ===
+/freecad-install/
+/freecad-gui-install/
+/play/
+/play-gui/
+
+# === Compiled artifacts ===
+*.o
+*.a
+*.so
+*.dylib
+*.wasm
+*.wasm.map
+
+# spike build outputs (keep source: *.cpp *.mjs *.cjs *.sh CMakeLists.txt package.json)
+spikes/**/build/
+spikes/**/node_modules/
+spikes/**/*.js
+spikes/**/*.wasm
+
+# === Logs ===
+aqtinstall.log
+*.log
+
+# === OS / editor cruft ===
+.DS_Store
