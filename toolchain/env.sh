@@ -2,10 +2,12 @@
 # Single source of truth for the FreeCAD-Web wasm toolchain.
 # Usage:  . toolchain/env.sh   (source it; do NOT execute)
 #
-# Pins emscripten to 3.1.74 (targets Qt 6.9). Every build/spike script must
+# Pins emscripten to 3.1.70 (targets Qt 6.9). Every build/spike script must
 # source this first so nothing accidentally falls back to Homebrew emscripten.
 
-export ROOT=/Users/mstavridis/Downloads/FreeCAD-Web
+# Repo root = parent of this script's directory (toolchain/). Self-locating so
+# the tree can live anywhere; requires sourcing (not executing) this file.
+export ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 # Bring emcc/em++/emcmake/node/python onto PATH from the pinned SDK.
 source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
