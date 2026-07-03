@@ -1,0 +1,24 @@
+diff --git a/sources/pyside6/cmake/Macros/PySideModules.cmake b/sources/pyside6/cmake/Macros/PySideModules.cmake
+index 5cd12b6..84991af 100644
+--- a/sources/pyside6/cmake/Macros/PySideModules.cmake
++++ b/sources/pyside6/cmake/Macros/PySideModules.cmake
+@@ -233,7 +233,18 @@ macro(create_pyside_module)
+             "--compiler-path=${SHIBOKEN_ANDROID_COMPILER_PREFIX}${CMAKE_ANDROID_API}-clang++")
+     endif()
+ 
+-    if(CMAKE_HOST_APPLE)
++    # Cross-compiling for WebAssembly (Emscripten): the host macOS SDK's libc++
++    # uses clang-19+ builtins (__builtin_ctzg) that libclang-18 cannot parse.
++    # Point shiboken at em++ so it detects the Emscripten target sysroot's libc++
++    # instead, and parse under the wasm target so Qt's platform #ifdefs resolve to
++    # Q_OS_WASM rather than Q_OS_MACOS.
++    if(EMSCRIPTEN)
++        message(STATUS "Building PySide bindings for Emscripten/wasm; compiler-path=${CMAKE_CXX_COMPILER}")
++        list(APPEND shiboken_command "--compiler-path=${CMAKE_CXX_COMPILER}")
++        list(APPEND shiboken_command "--clang-option=--target=wasm32-unknown-emscripten")
++    endif()
++
++    if(CMAKE_HOST_APPLE AND NOT EMSCRIPTEN)
+         set(shiboken_framework_include_dir_list ${QT_FRAMEWORK_INCLUDE_DIR})
+         make_path(shiboken_framework_include_dirs ${shiboken_framework_include_dir_list})
+         list(APPEND shiboken_command "--framework-include-paths=${shiboken_framework_include_dirs}")
