@@ -13,6 +13,10 @@
 /build-occt/
 /build-xercesc/
 /build-yamlcpp/
+/build-pivy-wasm/
+/build-pyside-wasm/
+/build-shiboken-gen/
+/build-shiboken-wasm/
 
 # === Install trees / web output ===
 /freecad-install/

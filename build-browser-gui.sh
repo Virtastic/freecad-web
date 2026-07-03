@@ -19,7 +19,8 @@ export FC_LINK_MODE_FLAGS="\
 --preload-file $INST/Ext@/freecad/Ext \
 --preload-file $INST/share@/freecad/share \
 --preload-file $ROOT/deps/src/freecad/src/Gui/Stylesheets@/freecad/share/Gui/Stylesheets \
---preload-file $ROOT/deps/src/freecad/src/Mod/Material/Gui/Resources/icons@/freecad/share/Mod/Material/Resources/icons"
+--preload-file $ROOT/deps/src/freecad/src/Mod/Material/Gui/Resources/icons@/freecad/share/Mod/Material/Resources/icons \
+--preload-file $ROOT/deps/wasm/pyside-pkg@/pyside-pkg"
 
 echo "=== reconfigure GUI for browser + relink ==="
 bash configure-gui.sh > /tmp/fc-gui-cfg.log 2>&1
@@ -96,6 +97,61 @@ if mcc_anchor in s and mcc_hook not in s:
     print('patched makeContextCurrent GLImmediate init')
 else:
     print('makeContextCurrent pattern not found (skipped)')
-open(p,'w').write(s)
+mat_old="""  } else {
+    throw "glMaterialfv: TODO: " + pname;
+  }
+}"""
+mat_new="""  } else if (pname == 5632) {
+    GLEmulation.materialEmission = GLEmulation.materialEmission || [0,0,0,1];
+    GLEmulation.materialEmission[0] = GROWABLE_HEAP_F32()[((param) >>> 2) >>> 0];
+    GLEmulation.materialEmission[1] = GROWABLE_HEAP_F32()[(((param) + (4)) >>> 2) >>> 0];
+    GLEmulation.materialEmission[2] = GROWABLE_HEAP_F32()[(((param) + (8)) >>> 2) >>> 0];
+    GLEmulation.materialEmission[3] = GROWABLE_HEAP_F32()[(((param) + (12)) >>> 2) >>> 0];
+  } else {
+    if (!GLEmulation.__matWarned) { GLEmulation.__matWarned = {}; }
+    if (!GLEmulation.__matWarned[pname]) { GLEmulation.__matWarned[pname] = 1; err("glMaterialfv: ignored pname " + pname); }
+  }
+}"""
+if mat_old in s:
+    s=s.replace(mat_old,mat_new,1); print('patched glMaterialfv')
+else: print('glMaterialfv pattern not found (skipped)')
+nrm_old="""/** @suppress {duplicate } */ var _glNormal3f = (x, y, z) => {
+  assert(GLImmediate.mode >= 0);
+  // must be in begin/end"""
+nrm_new="""/** @suppress {duplicate } */ var _glNormal3f = (x, y, z) => {
+  if (GLImmediate.mode < 0) { GLEmulation.__curNormal = [x,y,z]; return; }
+  // must be in begin/end"""
+if nrm_old in s:
+    s=s.replace(nrm_old,nrm_new,1); print('patched glNormal3f')
+else: print('glNormal3f pattern not found (skipped)')
+amb_old = "GLEmulation.lightModelAmbient = new Float32Array([ .2, .2, .2, 1 ]);"
+amb_new = "GLEmulation.lightModelAmbient = new Float32Array([ 1, 1, 1, 1 ]);"
+if amb_old in s:
+    s=s.replace(amb_old,amb_new,1); print("patched default lightModelAmbient")
+else:
+    print("default lightModelAmbient not found (skipped)")
+open(p,"w").write(s)
+lm_old="""  if (pname == 2899) {
+    // GL_LIGHT_MODEL_AMBIENT
+    GLEmulation.lightModelAmbient[0] = GROWABLE_HEAP_F32()[((param) >>> 2) >>> 0];
+    GLEmulation.lightModelAmbient[1] = GROWABLE_HEAP_F32()[(((param) + (4)) >>> 2) >>> 0];
+    GLEmulation.lightModelAmbient[2] = GROWABLE_HEAP_F32()[(((param) + (8)) >>> 2) >>> 0];
+    GLEmulation.lightModelAmbient[3] = GROWABLE_HEAP_F32()[(((param) + (12)) >>> 2) >>> 0];
+  } else {
+    throw \"glLightModelfv: TODO: \" + pname;
+  }"""
+lm_new="""  if (pname == 2899) {
+    var FCWEB_AMB = 0.55;
+    GLEmulation.lightModelAmbient[0] = Math.max(FCWEB_AMB, GROWABLE_HEAP_F32()[((param) >>> 2) >>> 0]);
+    GLEmulation.lightModelAmbient[1] = Math.max(FCWEB_AMB, GROWABLE_HEAP_F32()[(((param) + (4)) >>> 2) >>> 0]);
+    GLEmulation.lightModelAmbient[2] = Math.max(FCWEB_AMB, GROWABLE_HEAP_F32()[(((param) + (8)) >>> 2) >>> 0]);
+    GLEmulation.lightModelAmbient[3] = GROWABLE_HEAP_F32()[(((param) + (12)) >>> 2) >>> 0];
+  } else {
+  }"""
+if lm_old in s:
+    s=s.replace(lm_old,lm_new,1); print("patched glLightModelfv ambient floor")
+else:
+    print("glLightModelfv pattern not found (skipped)")
+open(p,"w").write(s)
 PYPATCH
 echo "=== GUI browser artifacts ===" && ls -la play-gui/FreeCAD.* 2>/dev/null | awk '{print $5, $9}'
