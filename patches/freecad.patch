@@ -1,3 +1,17 @@
+diff --git a/cMake/FindOCC.cmake b/cMake/FindOCC.cmake
+index c72066f..1c929f1 100644
+--- a/cMake/FindOCC.cmake
++++ b/cMake/FindOCC.cmake
+@@ -148,7 +148,8 @@ if(OCC_FOUND)
+     TKLCAF
+     TKVCAF
+     TKCDF
+-    TKMeshVS
++    # TKMeshVS (OCCT mesh visualization) is not built in the minimal wasm OCCT
++    # and is unused by FreeCAD (mesh display goes through Coin). Drop it.
+     TKService
+     TKV3d
+   )
 diff --git a/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake b/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake
 index feb517c..0c37913 100644
 --- a/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake
@@ -28,6 +42,28 @@ index c3dc0ee..dd6b89d 100644
  endfunction()
  
  function(qt_create_resource_file outfile)
+diff --git a/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake b/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake
+index cd00c0d..067731a 100644
+--- a/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake
++++ b/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake
+@@ -78,7 +78,16 @@ macro(SetupSalomeSMESH)
+         # on openSUSE 13.1 VTK_LIBRARIES ends with "optimized" keyword
+         list(REMOVE_ITEM VTK_LIBRARIES "optimized" "debug")
+ 
+-        if(NOT FREECAD_USE_EXTERNAL_SMESH)
++        if(EMSCRIPTEN)
++            # wasm: no MEDFile/MPI (bundled SMESH compiles no DriverMED source, only
++            # headers). Wire our prebuilt static HDF5 from deps/wasm directly.
++            set(HDF5_FOUND TRUE)
++            set(HDF5_INCLUDE_DIR "${FCWEB_DW}/include")
++            set(HDF5_INCLUDE_DIRS "${FCWEB_DW}/include")
++            set(HDF5_C_STATIC_LIBRARY "${FCWEB_DW}/lib/libhdf5.a")
++            set(HDF5_LIBRARIES "${FCWEB_DW}/lib/libhdf5.a")
++            set(SMESH_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/3rdParty/salomesmesh/inc)
++        elseif(NOT FREECAD_USE_EXTERNAL_SMESH)
+             find_package(MEDFile REQUIRED)
+             # See https://www.hdfgroup.org/HDF5/release/cmakebuild.html
+             if (MSVC)
 diff --git a/src/3rdParty/CMakeLists.txt b/src/3rdParty/CMakeLists.txt
 index a88b4ec..07c0d9f 100644
 --- a/src/3rdParty/CMakeLists.txt
@@ -45,6 +81,129 @@ index a88b4ec..07c0d9f 100644
  
  if (BUILD_ASSEMBLY AND NOT FREECAD_USE_EXTERNAL_ONDSELSOLVER)
      if( NOT EXISTS "${CMAKE_SOURCE_DIR}/src/3rdParty/OndselSolver/CMakeLists.txt" )
+diff --git a/src/3rdParty/libE57Format/src/CheckedFile.cpp b/src/3rdParty/libE57Format/src/CheckedFile.cpp
+index 8571676..d73dbe9 100644
+--- a/src/3rdParty/libE57Format/src/CheckedFile.cpp
++++ b/src/3rdParty/libE57Format/src/CheckedFile.cpp
+@@ -43,12 +43,19 @@
+ #else
+ #error "no supported compiler defined"
+ #endif
+-#elif defined( __linux__ )
++#elif defined( __linux__ ) || defined( __EMSCRIPTEN__ )
+ #define _LARGEFILE64_SOURCE
+ #define __LARGE64_FILES
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <unistd.h>
++// wasm/musl: legacy S_IREAD/S_IWRITE aliases are not always exposed.
++#ifndef S_IREAD
++#define S_IREAD S_IRUSR
++#endif
++#ifndef S_IWRITE
++#define S_IWRITE S_IWUSR
++#endif
+ #elif defined(__BSD)
+ #include <sys/stat.h>
+ #include <sys/types.h>
+@@ -492,7 +499,7 @@ uint64_t CheckedFile::lseek64( int64_t offset, int whence )
+ #endif
+ #elif defined( __linux__ )
+    int64_t result = ::lseek64( fd_, offset, whence );
+-#elif defined( __APPLE__ ) || defined(__BSD)
++#elif defined( __APPLE__ ) || defined(__BSD) || defined(__EMSCRIPTEN__)
+    int64_t result = ::lseek( fd_, offset, whence );
+ #else
+ #error "no supported OS platform defined"
+diff --git a/src/3rdParty/salomesmesh/CMakeLists.txt b/src/3rdParty/salomesmesh/CMakeLists.txt
+index 144edf1..1f6292e 100644
+--- a/src/3rdParty/salomesmesh/CMakeLists.txt
++++ b/src/3rdParty/salomesmesh/CMakeLists.txt
+@@ -320,6 +320,16 @@ SET_BIN_DIR(SMESHDS SMESHDS)
+ # SMESH #
+ #########
+ FILE(GLOB SMESH_source_files src/SMESH/*.c src/SMESH/*.cpp src/Controls/*.cpp inc/SMESH_*.h*)
++if(EMSCRIPTEN)
++    # wasm: no medfile (med.h) — exclude the MED format wrapper/driver sources.
++    # MeshPart/OpenSCAD don't need MED I/O; FEM+MED can add medfile later.
++    FILE(GLOB SMESH_med_files src/SMESH/MED_*.cpp src/SMESH/DriverMED_*.cpp)
++    list(REMOVE_ITEM SMESH_source_files ${SMESH_med_files})
++    # SMESH_MeshVSLink bridges to OCCT MeshVS (TKMeshVS, not built for wasm; FreeCAD
++    # renders meshes via Coin, not MeshVS). Exclude it.
++    FILE(GLOB SMESH_meshvs_files src/SMESH/SMESH_MeshVSLink.cpp)
++    list(REMOVE_ITEM SMESH_source_files ${SMESH_meshvs_files})
++endif()
+ ADD_LIBRARY(SMESH SHARED ${SMESH_source_files})
+ TARGET_LINK_LIBRARIES(SMESH SMDS SMESHDS  Driver DriverSTL DriverDAT DriverUNV ${SMESH_LIBS} ${OPENCASCADE_LIBRARIES} ${OCC_LIBRARIES} ${OCC_DEBUG_LIBRARIES} ${OCC_OCAF_DEBUG_LIBRARIES} ${OCC_OCAF_LIBRARIES} ${MEDFILE_LIBRARIES} ${VTK_LIBRARIES})
+  
+diff --git a/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp b/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp
+index 23c5083..f589c30 100644
+--- a/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp
++++ b/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp
+@@ -29,7 +29,9 @@
+ #ifndef WIN32
+ #include <unistd.h>
+ #include <sys/stat.h>
+-#include <execinfo.h>
++#ifndef __EMSCRIPTEN__
++#include <execinfo.h>  // glibc backtrace — absent in wasm/musl
++#endif
+ #endif
+ 
+ 
+@@ -106,7 +108,9 @@ namespace Kernel_Utils
+     return guid;
+   }
+ 
+-#ifndef WIN32
++#if defined(__EMSCRIPTEN__)
++  void print_traceback() {}  // no execinfo/backtrace in wasm
++#elif !defined(WIN32)
+   void print_traceback()
+   {
+     void *array[50];
+diff --git a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp
+index 4c0a901..9b8affc 100644
+--- a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp
++++ b/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp
+@@ -530,6 +530,10 @@ int SMESH_Mesh::UNVToMesh(const char* theFileName)
+ 
+ int SMESH_Mesh::MEDToMesh(const char* theFileName, const char* theMeshName)
+ {
++#ifdef __EMSCRIPTEN__
++  // MED file I/O (DriverMED) needs med.h/medfile, not ported to wasm.
++  throw SALOME_Exception(LOCALIZED("MED import is not available in the WebAssembly build"));
++#else
+   if(MYDEBUG) MESSAGE("MEDToMesh - theFileName = "<<theFileName<<", mesh name = "<<theMeshName);
+   if(_isShapeToMesh)
+     throw SALOME_Exception(LOCALIZED("a shape to mesh has already been defined"));
+@@ -564,6 +568,7 @@ int SMESH_Mesh::MEDToMesh(const char* theFileName, const char* theMeshName)
+     }
+   }
+   return (int) status;
++#endif
+ }
+ 
+ //=======================================================================
+@@ -1437,6 +1442,10 @@ void SMESH_Mesh::ExportMED(const char *        file,
+                            bool                theAutoDimension,
+                            bool                theAddODOnVertices)
+ {
++#ifdef __EMSCRIPTEN__
++  // MED file export (DriverMED) needs med.h/medfile, not ported to wasm.
++  throw SALOME_Exception(LOCALIZED("MED export is not available in the WebAssembly build"));
++#else
+   SMESH_TRY;
+ 
+   DriverMED_W_SMESHDS_Mesh myWriter;
+@@ -1487,6 +1496,7 @@ void SMESH_Mesh::ExportMED(const char *        file,
+   myWriter.Perform();
+ 
+   SMESH_CATCH( SMESH::throwSalomeEx );
++#endif
+ }
+ 
+ //================================================================================
 diff --git a/src/App/Application.cpp b/src/App/Application.cpp
 index 9384790..73da4d0 100644
 --- a/src/App/Application.cpp
@@ -6513,10 +6672,10 @@ index 143a85b..764efe0 100644
 +        ext->setLinkVisible(visible);
 +}
 diff --git a/src/Main/CMakeLists.txt b/src/Main/CMakeLists.txt
-index 8006443..664d536 100644
+index 8006443..0064bb9 100644
 --- a/src/Main/CMakeLists.txt
 +++ b/src/Main/CMakeLists.txt
-@@ -44,6 +44,40 @@ if(BUILD_GUI)
+@@ -44,6 +44,133 @@ if(BUILD_GUI)
          )
      endif(NOT BUILD_DYNAMIC_LINK_PYTHON)
  
@@ -6552,12 +6711,105 @@ index 8006443..664d536 100644
 +                list(APPEND FreeCAD_LIBS SpreadsheetGui)
 +            endif()
 +        endif()
++        if(BUILD_MESH)
++            list(APPEND FreeCAD_LIBS Mesh)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS MeshGui)
++            endif()
++        endif()
++        if(BUILD_POINTS)
++            list(APPEND FreeCAD_LIBS Points)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS PointsGui)
++            endif()
++        endif()
++        if(BUILD_SURFACE)
++            list(APPEND FreeCAD_LIBS Surface)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS SurfaceGui)
++            endif()
++        endif()
++        if(BUILD_MEASURE)
++            list(APPEND FreeCAD_LIBS Measure)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS MeasureGui)
++            endif()
++        endif()
++        if(BUILD_IMPORT)
++            list(APPEND FreeCAD_LIBS Import)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS ImportGui)
++            endif()
++        endif()
++        if(BUILD_INSPECTION)
++            list(APPEND FreeCAD_LIBS Inspection)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS InspectionGui)
++            endif()
++        endif()
++        if(BUILD_TECHDRAW)
++            list(APPEND FreeCAD_LIBS TechDraw)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS TechDrawGui)
++            endif()
++        endif()
++        if(BUILD_MESH_PART)
++            list(APPEND FreeCAD_LIBS MeshPart)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS MeshPartGui)
++            endif()
++        endif()
++        if(BUILD_ROBOT)
++            list(APPEND FreeCAD_LIBS Robot)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS RobotGui)
++            endif()
++        endif()
++        if(BUILD_REVERSEENGINEERING)
++            list(APPEND FreeCAD_LIBS ReverseEngineering)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS ReverseEngineeringGui)
++            endif()
++        endif()
++        if(BUILD_SPREADSHEET)
++            list(APPEND FreeCAD_LIBS Spreadsheet)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS SpreadsheetGui)
++            endif()
++        endif()
++        if(BUILD_START)
++            list(APPEND FreeCAD_LIBS Start)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS StartGui)
++            endif()
++        endif()
++        if(BUILD_FEM)
++            list(APPEND FreeCAD_LIBS Fem)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS FemGui)
++            endif()
++        endif()
++        if(BUILD_ASSEMBLY)
++            list(APPEND FreeCAD_LIBS Assembly)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS AssemblyGui)
++            endif()
++        endif()
++        if(BUILD_CAM)
++            list(APPEND FreeCAD_LIBS Path PathSimulator CAMSimulator)
++            if(BUILD_GUI)
++                list(APPEND FreeCAD_LIBS PathGui)
++            endif()
++        endif()
++        if(BUILD_WEB)
++            list(APPEND FreeCAD_LIBS Web)
++        endif()
 +    endif()
 +
      add_executable(FreeCADMain WIN32 ${FreeCAD_SRCS})
      target_link_libraries(FreeCADMain ${FreeCAD_LIBS})
      if (FREECAD_WARN_ERROR)
-@@ -92,6 +126,16 @@ if(NOT BUILD_DYNAMIC_LINK_PYTHON)
+@@ -92,6 +219,16 @@ if(NOT BUILD_DYNAMIC_LINK_PYTHON)
      )
  endif(NOT BUILD_DYNAMIC_LINK_PYTHON)
  
@@ -6604,10 +6856,10 @@ index ae23df7..49bf99c 100644
      const char* mingw_prefix = getenv("MINGW_PREFIX");
      const char* py_home = getenv("PYTHONHOME");
 diff --git a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
-index d56d1a8..d2da20e 100644
+index d56d1a8..08908f3 100644
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -1,457 +1,516 @@
+@@ -1,457 +1,593 @@
 -/***************************************************************************
 - *   Copyright (c) 2008 Jürgen Riegel <juergen.riegel@web.de>              *
 - *                                                                         *
@@ -7172,6 +7424,39 @@ index d56d1a8..d2da20e 100644
 +extern "C" PyObject* PyInit_SketcherGui();
 +extern "C" PyObject* PyInit__PartDesign();
 +extern "C" PyObject* PyInit_PartDesignGui();
++extern "C" PyObject* PyInit_Mesh();
++extern "C" PyObject* PyInit_MeshGui();
++extern "C" PyObject* PyInit_Points();
++extern "C" PyObject* PyInit_PointsGui();
++extern "C" PyObject* PyInit_Surface();
++extern "C" PyObject* PyInit_SurfaceGui();
++extern "C" PyObject* PyInit_Measure();
++extern "C" PyObject* PyInit_MeasureGui();
++extern "C" PyObject* PyInit_Import();
++extern "C" PyObject* PyInit_ImportGui();
++extern "C" PyObject* PyInit_Inspection();
++extern "C" PyObject* PyInit_InspectionGui();
++extern "C" PyObject* PyInit_TechDraw();
++extern "C" PyObject* PyInit_TechDrawGui();
++extern "C" PyObject* PyInit_MeshPart();
++extern "C" PyObject* PyInit_MeshPartGui();
++extern "C" PyObject* PyInit_Robot();
++extern "C" PyObject* PyInit_RobotGui();
++extern "C" PyObject* PyInit_ReverseEngineering();
++extern "C" PyObject* PyInit_ReverseEngineeringGui();
++extern "C" PyObject* PyInit_Spreadsheet();
++extern "C" PyObject* PyInit_SpreadsheetGui();
++extern "C" PyObject* PyInit_Start();
++extern "C" PyObject* PyInit_StartGui();
++extern "C" PyObject* PyInit_Fem();
++extern "C" PyObject* PyInit_FemGui();
++extern "C" PyObject* PyInit_AssemblyApp();
++extern "C" PyObject* PyInit_AssemblyGui();
++extern "C" PyObject* PyInit_PathApp();
++extern "C" PyObject* PyInit_PathGui();
++extern "C" PyObject* PyInit_PathSimulator();
++extern "C" PyObject* PyInit_CAMSimulator();
++extern "C" PyObject* PyInit_Web();
 +// PySide6/Shiboken built as wasm static libs: register the C extension modules as
 +// builtins so `import PySide6.QtWidgets` (Draft/Arch etc.) resolves in the browser.
 +extern "C" PyObject* PyInit_Shiboken();
@@ -7180,6 +7465,12 @@ index d56d1a8..d2da20e 100644
 +extern "C" PyObject* PyInit_QtWidgets();
 +extern "C" PyObject* PyInit_DraftUtils();
 +extern "C" PyObject* PyInit__coin();  // pivy (SWIG Coin3D bindings)
++extern "C" PyObject* PyInit__ifcopenshell_wrapper();  // IfcOpenShell (SWIG IFC bindings)
++// numpy C extensions (static; numpy/__init__.py aliases them to dotted names)
++extern "C" PyObject* PyInit__multiarray_umath();
++extern "C" PyObject* PyInit__pocketfft_umath();
++extern "C" PyObject* PyInit__umath_linalg();
++extern "C" PyObject* PyInit_lapack_lite();
 +
 +// JS->Python bridge for the browser build: lets the page drive FreeCAD via
 +// Module.ccall('fcweb_run_python', ...). Exceptions are reported, not fatal.
@@ -7212,6 +7503,39 @@ index d56d1a8..d2da20e 100644
 +    PyImport_AppendInittab("SketcherGui", PyInit_SketcherGui);
 +    PyImport_AppendInittab("_PartDesign", PyInit__PartDesign);
 +    PyImport_AppendInittab("PartDesignGui", PyInit_PartDesignGui);
++    PyImport_AppendInittab("Mesh", PyInit_Mesh);
++    PyImport_AppendInittab("MeshGui", PyInit_MeshGui);
++    PyImport_AppendInittab("Points", PyInit_Points);
++    PyImport_AppendInittab("PointsGui", PyInit_PointsGui);
++    PyImport_AppendInittab("Surface", PyInit_Surface);
++    PyImport_AppendInittab("SurfaceGui", PyInit_SurfaceGui);
++    PyImport_AppendInittab("Measure", PyInit_Measure);
++    PyImport_AppendInittab("MeasureGui", PyInit_MeasureGui);
++    PyImport_AppendInittab("Import", PyInit_Import);
++    PyImport_AppendInittab("ImportGui", PyInit_ImportGui);
++    PyImport_AppendInittab("Inspection", PyInit_Inspection);
++    PyImport_AppendInittab("InspectionGui", PyInit_InspectionGui);
++    PyImport_AppendInittab("TechDraw", PyInit_TechDraw);
++    PyImport_AppendInittab("TechDrawGui", PyInit_TechDrawGui);
++    PyImport_AppendInittab("MeshPart", PyInit_MeshPart);
++    PyImport_AppendInittab("MeshPartGui", PyInit_MeshPartGui);
++    PyImport_AppendInittab("Robot", PyInit_Robot);
++    PyImport_AppendInittab("RobotGui", PyInit_RobotGui);
++    PyImport_AppendInittab("ReverseEngineering", PyInit_ReverseEngineering);
++    PyImport_AppendInittab("ReverseEngineeringGui", PyInit_ReverseEngineeringGui);
++    PyImport_AppendInittab("Spreadsheet", PyInit_Spreadsheet);
++    PyImport_AppendInittab("SpreadsheetGui", PyInit_SpreadsheetGui);
++    PyImport_AppendInittab("Start", PyInit_Start);
++    PyImport_AppendInittab("StartGui", PyInit_StartGui);
++    PyImport_AppendInittab("Fem", PyInit_Fem);
++    PyImport_AppendInittab("FemGui", PyInit_FemGui);
++    PyImport_AppendInittab("AssemblyApp", PyInit_AssemblyApp);
++    PyImport_AppendInittab("AssemblyGui", PyInit_AssemblyGui);
++    PyImport_AppendInittab("PathApp", PyInit_PathApp);
++    PyImport_AppendInittab("PathGui", PyInit_PathGui);
++    PyImport_AppendInittab("PathSimulator", PyInit_PathSimulator);
++    PyImport_AppendInittab("CAMSimulator", PyInit_CAMSimulator);
++    PyImport_AppendInittab("Web", PyInit_Web);
 +    // Register PySide/Shiboken extension modules as builtins under safe
 +    // underscore names (dotted inittab names break CPython's importlib
 +    // bootstrap on this build); the preloaded PySide6/shiboken6 packages'
@@ -7222,6 +7546,11 @@ index d56d1a8..d2da20e 100644
 +    PyImport_AppendInittab("QtWidgets_fcweb", PyInit_QtWidgets);
 +    PyImport_AppendInittab("DraftUtils", PyInit_DraftUtils);
 +    PyImport_AppendInittab("_coin", PyInit__coin);
++    PyImport_AppendInittab("_ifcopenshell_wrapper", PyInit__ifcopenshell_wrapper);
++    PyImport_AppendInittab("_multiarray_umath", PyInit__multiarray_umath);
++    PyImport_AppendInittab("_pocketfft_umath", PyInit__pocketfft_umath);
++    PyImport_AppendInittab("_umath_linalg", PyInit__umath_linalg);
++    PyImport_AppendInittab("lapack_lite", PyInit_lapack_lite);
 +#endif
 +#if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
 +    setlocale(LC_ALL, "");       // use native environment settings
@@ -7581,6 +7910,102 @@ index d56d1a8..d2da20e 100644
 +    // http://blog.kalmbachnet.de/?postid=75
 +}
 +#endif
+diff --git a/src/Mod/CAM/PathSimulator/AppGL/DlgCAMSimulator.cpp b/src/Mod/CAM/PathSimulator/AppGL/DlgCAMSimulator.cpp
+index 74a5af0..24a62ee 100644
+--- a/src/Mod/CAM/PathSimulator/AppGL/DlgCAMSimulator.cpp
++++ b/src/Mod/CAM/PathSimulator/AppGL/DlgCAMSimulator.cpp
+@@ -231,7 +231,11 @@ void DlgCAMSimulator::initialize()
+ 
+     const qreal retinaScale = devicePixelRatio();
+     glViewport(0, 0, width() * retinaScale, height() * retinaScale);
++#ifndef __EMSCRIPTEN__
++    // WebGL2/GLES3 has no GL_MULTISAMPLE toggle — MSAA is controlled by the
++    // framebuffer's sample count, always on for the default framebuffer.
+     glEnable(GL_MULTISAMPLE);
++#endif
+ }
+ 
+ void DlgCAMSimulator::checkInitialization()
+diff --git a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
+index 606e748..4772474 100644
+--- a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
++++ b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
+@@ -103,10 +103,20 @@ void ViewProviderFemConstraint::loadSymbol(const char* fileName)
+ {
+     ivFile = fileName;
+     SoInput in;
++    std::string retryPath;
+     if (!in.openFile(ivFile)) {
+-        std::stringstream str;
+-        str << "Error opening symbol file " << fileName;
+-        throw Base::ImportError(str.str());
++        // resourceSymbolDir is a static captured at load time; under wasm that is
++        // __wasm_call_ctors, before App::Application exists, so getResourceDir()
++        // returned an incomplete path. Recompute it now (App exists at runtime).
++        std::string fn(fileName ? fileName : "");
++        std::string base = fn.substr(fn.find_last_of('/') + 1);
++        retryPath = App::Application::getResourceDir() + "Mod/Fem/Resources/symbols/" + base;
++        if (!in.openFile(retryPath.c_str())) {
++            std::stringstream str;
++            str << "Error opening symbol file " << fileName;
++            throw Base::ImportError(str.str());
++        }
++        ivFile = retryPath.c_str();
+     }
+     SoSeparator* nodes = SoDB::readAll(&in);
+     if (!nodes) {
+diff --git a/src/Mod/Mesh/Gui/CMakeLists.txt b/src/Mod/Mesh/Gui/CMakeLists.txt
+index 036001d..cc694b6 100644
+--- a/src/Mod/Mesh/Gui/CMakeLists.txt
++++ b/src/Mod/Mesh/Gui/CMakeLists.txt
+@@ -170,6 +170,10 @@ endif ()
+ 
+ add_library(MeshGui SHARED ${MeshGui_SRCS} ${MeshGuiIcon_SVG})
+ target_link_libraries(MeshGui ${MeshGui_LIBS})
++if(EMSCRIPTEN)
++    # Qt-for-wasm has no QProcess; RemeshGmsh (external gmsh tool) needs the stub.
++    target_compile_options(MeshGui PRIVATE -include ${FCWEB_DW}/include/qprocess_stub.h)
++endif()
+ if (FREECAD_WARN_ERROR)
+     target_compile_warn_error(MeshGui)
+ endif()
+diff --git a/src/Mod/Mesh/Gui/RemeshGmsh.cpp b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
+index b49851f..0f10409 100644
+--- a/src/Mod/Mesh/Gui/RemeshGmsh.cpp
++++ b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
+@@ -114,6 +114,9 @@ GmshWidget::~GmshWidget()
+ void GmshWidget::setupConnections()
+ {
+     // clang-format off
++#ifndef __EMSCRIPTEN__
++    // Qt-for-wasm has no QProcess signals (stubbed, no Q_OBJECT); gmsh remeshing
++    // shells out to an external tool that cannot run in the browser anyway.
+     connect(&d->gmsh, &QProcess::started, this, &GmshWidget::started);
+     connect(&d->gmsh, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+             this, &GmshWidget::finished);
+@@ -123,6 +126,7 @@ void GmshWidget::setupConnections()
+             this, &GmshWidget::readyReadStandardError);
+     connect(&d->gmsh, &QProcess::readyReadStandardOutput,
+             this, &GmshWidget::readyReadStandardOutput);
++#endif
+     connect(d->ui.killButton, &QPushButton::clicked,
+             this, &GmshWidget::onKillButtonClicked);
+     connect(d->ui.clearButton, &QPushButton::clicked,
+diff --git a/src/Mod/MeshPart/Gui/CMakeLists.txt b/src/Mod/MeshPart/Gui/CMakeLists.txt
+index f1c8383..733312a 100644
+--- a/src/Mod/MeshPart/Gui/CMakeLists.txt
++++ b/src/Mod/MeshPart/Gui/CMakeLists.txt
+@@ -81,6 +81,10 @@ endif(FREECAD_USE_PCH)
+ 
+ add_library(MeshPartGui SHARED ${MeshPartGui_SRCS} ${MeshPartGui_Scripts} ${FLATMESH_PY_SRCS})
+ target_link_libraries(MeshPartGui ${MeshPartGui_LIBS})
++if(EMSCRIPTEN)
++    # includes Mesh/Gui/RemeshGmsh.h which references QProcess (absent in Qt-wasm)
++    target_compile_options(MeshPartGui PRIVATE -include ${FCWEB_DW}/include/qprocess_stub.h)
++endif()
+ if (FREECAD_WARN_ERROR)
+     target_compile_warn_error(MeshPartGui)
+ endif()
 diff --git a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 index 7610c2d..a006fe1 100644
 --- a/src/Mod/Part/Gui/SoBrepFaceSet.cpp

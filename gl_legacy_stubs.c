@@ -74,6 +74,55 @@ void glTexCoord3fv(const GLfloat* v) { (void)v; }
 void glTexGenf(GLenum coord, GLenum pn, GLfloat p) { (void)coord;(void)pn;(void)p; }
 void glVertex2s(GLshort x, GLshort y) { (void)x;(void)y; }
 
+/* glInterleavedArrays: MeshGui's SoFCMeshObject/SoFCIndexedFaceSet feed
+ * interleaved vertex/normal/color/texcoord arrays. LEGACY_GL_EMULATION lacks
+ * it, but it decomposes exactly into the client-state calls the emulation DOES
+ * provide, so implement it per the classic GL spec (component order T,C,N,V). */
+extern void glEnableClientState(GLenum);
+extern void glDisableClientState(GLenum);
+extern void glVertexPointer(GLint, GLenum, GLsizei, const void*);
+extern void glNormalPointer(GLenum, GLsizei, const void*);
+extern void glColorPointer(GLint, GLenum, GLsizei, const void*);
+extern void glTexCoordPointer(GLint, GLenum, GLsizei, const void*);
+void glInterleavedArrays(GLenum format, GLsizei stride, const void* pointer) {
+    const GLenum GL_VERTEX_ARRAY_=0x8074, GL_NORMAL_ARRAY_=0x8075,
+                 GL_COLOR_ARRAY_=0x8076, GL_TEXTURE_COORD_ARRAY_=0x8078;
+    const GLenum GL_FLOAT_=0x1406, GL_UNSIGNED_BYTE_=0x1401;
+    const int F = (int)sizeof(GLfloat);
+    int tc=0, cc=0, ct=(int)GL_FLOAT_, nrm=0, vc=3;
+    switch (format) {
+        case 0x2A20: vc=2; break;                                   /* V2F */
+        case 0x2A21: vc=3; break;                                   /* V3F */
+        case 0x2A22: cc=4; ct=(int)GL_UNSIGNED_BYTE_; vc=2; break;   /* C4UB_V2F */
+        case 0x2A23: cc=4; ct=(int)GL_UNSIGNED_BYTE_; vc=3; break;   /* C4UB_V3F */
+        case 0x2A24: cc=3; vc=3; break;                             /* C3F_V3F */
+        case 0x2A25: nrm=1; vc=3; break;                            /* N3F_V3F */
+        case 0x2A26: cc=4; nrm=1; vc=3; break;                      /* C4F_N3F_V3F */
+        case 0x2A27: tc=2; vc=3; break;                             /* T2F_V3F */
+        case 0x2A28: tc=4; vc=4; break;                             /* T4F_V4F */
+        case 0x2A29: tc=2; cc=4; ct=(int)GL_UNSIGNED_BYTE_; vc=3; break; /* T2F_C4UB_V3F */
+        case 0x2A2A: tc=2; cc=3; vc=3; break;                       /* T2F_C3F_V3F */
+        case 0x2A2B: tc=2; nrm=1; vc=3; break;                      /* T2F_N3F_V3F */
+        case 0x2A2C: tc=2; cc=4; nrm=1; vc=3; break;                /* T2F_C4F_N3F_V3F */
+        case 0x2A2D: tc=4; cc=4; nrm=1; vc=4; break;                /* T4F_C4F_N3F_V4F */
+        default: return;
+    }
+    int off = 0;
+    int toff=off; if (tc) off += tc*F;
+    int coff=off; if (cc) off += (ct==(int)GL_UNSIGNED_BYTE_) ? 4 : cc*F;
+    int noff=off; if (nrm) off += 3*F;
+    int voff=off; off += vc*F;
+    GLsizei str = stride ? stride : (GLsizei)off;
+    const char* base = (const char*)pointer;
+    if (tc) { glEnableClientState(GL_TEXTURE_COORD_ARRAY_); glTexCoordPointer(tc, GL_FLOAT_, str, base+toff); }
+    else glDisableClientState(GL_TEXTURE_COORD_ARRAY_);
+    if (cc) { glEnableClientState(GL_COLOR_ARRAY_); glColorPointer(cc, (GLenum)ct, str, base+coff); }
+    else glDisableClientState(GL_COLOR_ARRAY_);
+    if (nrm) { glEnableClientState(GL_NORMAL_ARRAY_); glNormalPointer(GL_FLOAT_, str, base+noff); }
+    else glDisableClientState(GL_NORMAL_ARRAY_);
+    glEnableClientState(GL_VERTEX_ARRAY_); glVertexPointer(vc, GL_FLOAT_, str, base+voff);
+}
+
 /* ARB VBO suffix aliases used by PartGui's Coin SoBrepFaceSet (map to core). */
 #include <GLES2/gl2.h>
 void glBindBufferARB(GLenum target, GLuint buffer) { glBindBuffer(target, buffer); }

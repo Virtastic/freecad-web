@@ -24,5 +24,48 @@ Module['preRun'].push(function () {
     FS.mkdirTree('/home/web_user/.local/share');
     FS.mkdirTree('/home/web_user/.config');
     FS.mkdirTree('/home/web_user/.cache');
+    // IDBFS persistence (R4): mount the user's home on IndexedDB so documents
+    // and settings survive page reloads. Restore BEFORE main() runs (run dep),
+    // then persist on an interval + expose an explicit flush hook.
+    // Disable with ?noidbfs (e.g. for pristine-boot tests). Node builds skip it.
+    try {
+      var qs2 = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
+      var wantIdb = (typeof window !== 'undefined') && !qs2.has('noidbfs') &&
+                    typeof IDBFS !== 'undefined';
+      if (wantIdb) {
+        FS.mount(IDBFS, {}, '/home/web_user');
+        addRunDependency('fcweb-idbfs-restore');
+        FS.syncfs(true, function (e) {
+          if (e) { if (typeof err === 'function') err('[pre-gui] IDBFS restore failed: ' + e); }
+          else {
+            // Restore may have wiped the skeleton dirs on first run; re-ensure them.
+            try {
+              FS.mkdirTree('/home/web_user/.FreeCAD');
+              FS.mkdirTree('/home/web_user/.local/share');
+              FS.mkdirTree('/home/web_user/.config');
+              FS.mkdirTree('/home/web_user/.cache');
+            } catch (e2) {}
+          }
+          removeRunDependency('fcweb-idbfs-restore');
+        });
+        var syncing = false;
+        var flush = function (cb) {
+          if (syncing) { if (cb) cb('busy'); return; }
+          syncing = true;
+          FS.syncfs(false, function (e) {
+            syncing = false;
+            if (e && typeof err === 'function') err('[pre-gui] IDBFS persist failed: ' + e);
+            if (cb) cb(e);
+          });
+        };
+        Module.fcwebSyncFS = flush;                 // explicit flush for the harness/UI
+        setInterval(flush, 15000);                  // periodic autosave of /home/web_user
+        if (typeof window !== 'undefined') {
+          window.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'hidden') flush();
+          });
+        }
+      }
+    } catch (e3) { if (typeof err === 'function') err('[pre-gui] IDBFS setup: ' + e3); }
   } catch (e) { if (typeof err === 'function') err('[pre-gui] ' + e); }
 });

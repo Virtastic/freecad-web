@@ -44,3 +44,10 @@ aqtinstall.log
 
 # === OS / editor cruft ===
 .DS_Store
+
+# === Additional wasm dep build dirs (Wave 5+ / numpy) ===
+/build-hdf5/
+/build-vtk/
+/build-ifcopenshell/
+/build-numpy/
+/node_modules/

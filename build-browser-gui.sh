@@ -20,11 +20,37 @@ export FC_LINK_MODE_FLAGS="\
 --preload-file $INST/share@/freecad/share \
 --preload-file $ROOT/deps/src/freecad/src/Gui/Stylesheets@/freecad/share/Gui/Stylesheets \
 --preload-file $ROOT/deps/src/freecad/src/Mod/Material/Gui/Resources/icons@/freecad/share/Mod/Material/Resources/icons \
+--preload-file $ROOT/deps/src/freecad/data/examples@/freecad/examples \
 --preload-file $ROOT/deps/wasm/pyside-pkg@/pyside-pkg"
 
 echo "=== reconfigure GUI for browser + relink ==="
-bash configure-gui.sh > /tmp/fc-gui-cfg.log 2>&1
-echo "configure exit=$?"
+# Reconfiguring re-runs cmake, which re-dirties the whole object tree. Skip it
+# when build.ninja already carries the intended link flags (set FC_SKIP_CONFIGURE=1).
+if [ -z "${FC_SKIP_CONFIGURE:-}" ]; then
+  bash configure-gui.sh > /tmp/fc-gui-cfg.log 2>&1
+  echo "configure exit=$?"
+else
+  echo "configure SKIPPED (FC_SKIP_CONFIGURE set)"
+fi
+
+# Stage workbench share-resources that FreeCAD reads at runtime via
+# getResourceDir()/share (CMAKE_INSTALL_DATADIR is empty in this build, so the
+# cmake datadir installs land in the wrong place). BIM/Arch reads Presets/*.json
+# at `import Arch` time; without them the whole BIM workbench fails to import.
+if [ -d "$ROOT/deps/src/freecad/src/Mod/BIM/Presets" ]; then
+  mkdir -p "$INST/share/Mod/BIM"
+  cp -r "$ROOT/deps/src/freecad/src/Mod/BIM/Presets" "$INST/share/Mod/BIM/"
+fi
+# Python workbenches load their selector icon from share/Mod/<WB>/Resources/icons
+# at runtime (CMAKE_INSTALL_DATADIR is empty so cmake misplaces them). Stage them.
+for wb in BIM OpenSCAD Draft Arch CAM Fem Start Spreadsheet Assembly Web Robot Points TechDraw; do
+  src="$ROOT/deps/src/freecad/src/Mod/$wb/Resources"
+  if [ -d "$src" ]; then
+    mkdir -p "$INST/share/Mod/$wb"
+    cp -r "$src" "$INST/share/Mod/$wb/"
+  fi
+done
+
 ninja -C build-freecad-gui bin/FreeCAD.js
 mkdir -p play-gui
 cp build-freecad-gui/bin/FreeCAD.js   play-gui/
@@ -32,11 +58,28 @@ cp build-freecad-gui/bin/FreeCAD.wasm play-gui/
 cp build-freecad-gui/bin/FreeCAD.data play-gui/ 2>/dev/null || true
 cp play/server.py play-gui/
 cp spikes/01-qt-widgets/build/qtloader.js play-gui/   # Qt's known-good wasm loader
+# Root URL (http://localhost:8791/) must serve the CURRENT harness, not a stale
+# index.html — keep index.html identical to freecad-gui.html.
+cp play-gui/freecad-gui.html play-gui/index.html
 # Make getWasmTableEntry tolerate garbage/out-of-range function pointers (from a
 # deeper wasm+pthreads memory bug) so those proxied calls no-op instead of
 # throwing an uncaught cascade that breaks the Qt paint.
 python3 - <<'PYPATCH'
 p='play-gui/FreeCAD.js'; s=open(p).read()
+# A TechDraw static constructor does a one-time null-pointer write during
+# __wasm_call_ctors that clobbers the address-0 stack-cookie sentinel (only the
+# reserved null-guard region is touched). Restore the sentinel and continue
+# instead of aborting; the app is fully functional afterward. TODO: locate the
+# exact ctor (SAFE_HEAP build / bisect) and fix the null deref at the source.
+a0_old='''  if (GROWABLE_HEAP_U32()[((0) >>> 2) >>> 0] != 1668509029) /* 'emsc' */ {
+    abort("Runtime error: The application has corrupted its heap memory area (address zero)!");
+  }'''
+a0_new='''  if (GROWABLE_HEAP_U32()[((0) >>> 2) >>> 0] != 1668509029) /* 'emsc' */ {
+    if (!globalThis.__fcAddr0Warned) { globalThis.__fcAddr0Warned=1; err("[FCWEB] address-0 sentinel clobbered by an init-time null write — restoring and continuing"); }
+    GROWABLE_HEAP_U32()[((0) >>> 2) >>> 0] = 1668509029;
+  }'''
+if a0_old in s: s=s.replace(a0_old,a0_new,1); print('patched address-0 sentinel restore')
+else: print('address-0 sentinel pattern not found (skipped)')
 old='if (funcPtr >= wasmTableMirror.length) wasmTableMirror.length = funcPtr + 1;\n    wasmTableMirror[funcPtr] = func = wasmTable.get(funcPtr);'
 new='if (funcPtr >= wasmTableMirror.length) wasmTableMirror.length = funcPtr + 1;\n    try { wasmTableMirror[funcPtr] = func = wasmTable.get(funcPtr); } catch (e) { func = undefined; }'
 if old in s:

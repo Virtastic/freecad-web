@@ -1,0 +1,23 @@
+{
+  "name": "freecad-web",
+  "version": "1.0.0",
+  "description": "",
+  "main": "post-fix.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Virtastic/freecad-wasm.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Virtastic/freecad-wasm/issues"
+  },
+  "homepage": "https://github.com/Virtastic/freecad-wasm#readme",
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}
