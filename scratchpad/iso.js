@@ -12,7 +12,7 @@ const PY = process.argv[2];
   const errs = [];
   page.on('pageerror', e => errs.push('[PAGEERROR] '+String(e.message).slice(0,140)));
   page.on('console', m => { const t=m.text(); if(/abort|unreachable|RuntimeError|Aborted/.test(t)) errs.push('[con] '+t.slice(0,140)); });
-  await page.goto('http://localhost:8792/freecad-gui.html', { waitUntil:'domcontentloaded', timeout:120000 });
+  await page.goto('http://localhost:8799/freecad-gui.html', { waitUntil:'domcontentloaded', timeout:120000 });
   await page.waitForFunction(() => window.fcInstance && window.fcInstance._malloc, { timeout: 480000, polling: 2000 });
   await new Promise(r => setTimeout(r, 12000));
   try {

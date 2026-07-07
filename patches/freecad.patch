@@ -6856,10 +6856,10 @@ index ae23df7..49bf99c 100644
      const char* mingw_prefix = getenv("MINGW_PREFIX");
      const char* py_home = getenv("PYTHONHOME");
 diff --git a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
-index d56d1a8..08908f3 100644
+index d56d1a8..915c353 100644
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -1,457 +1,593 @@
+@@ -1,457 +1,597 @@
 -/***************************************************************************
 - *   Copyright (c) 2008 Jürgen Riegel <juergen.riegel@web.de>              *
 - *                                                                         *
@@ -7547,10 +7547,14 @@ index d56d1a8..08908f3 100644
 +    PyImport_AppendInittab("DraftUtils", PyInit_DraftUtils);
 +    PyImport_AppendInittab("_coin", PyInit__coin);
 +    PyImport_AppendInittab("_ifcopenshell_wrapper", PyInit__ifcopenshell_wrapper);
-+    PyImport_AppendInittab("_multiarray_umath", PyInit__multiarray_umath);
-+    PyImport_AppendInittab("_pocketfft_umath", PyInit__pocketfft_umath);
-+    PyImport_AppendInittab("_umath_linalg", PyInit__umath_linalg);
-+    PyImport_AppendInittab("lapack_lite", PyInit_lapack_lite);
++    // Register under the FULL dotted names numpy's own C code imports itself by
++    // (PyImport_ImportModule("numpy._core._multiarray_umath"), etc.). A meta-path
++    // finder in numpy/__init__.py lets BuiltinImporter resolve these dotted
++    // builtins, so PyInit runs exactly once (cached under the dotted name).
++    PyImport_AppendInittab("numpy._core._multiarray_umath", PyInit__multiarray_umath);
++    PyImport_AppendInittab("numpy.fft._pocketfft_umath", PyInit__pocketfft_umath);
++    PyImport_AppendInittab("numpy.linalg._umath_linalg", PyInit__umath_linalg);
++    PyImport_AppendInittab("numpy.linalg.lapack_lite", PyInit_lapack_lite);
 +#endif
 +#if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
 +    setlocale(LC_ALL, "");       // use native environment settings

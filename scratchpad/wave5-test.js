@@ -53,7 +53,7 @@ print("PROBE-END"); flush()
     page.on('pageerror', e => errs.push('[PAGEERROR] ' + String(e.message).slice(0,160)));
     page.on('console', m => { const t=m.text(); if(/abort|RuntimeError|unreachable|Aborted/.test(t)) errs.push('[con] '+t.slice(0,160)); });
     console.log('booting (285MB, allow ~60-90s)...');
-    await page.goto('http://localhost:8792/freecad-gui.html', { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await page.goto('http://localhost:8799/freecad-gui.html', { waitUntil: 'domcontentloaded', timeout: 90000 });
     await page.waitForFunction(() => window.fcInstance && window.fcInstance._malloc, { timeout: 600000, polling: 3000 });
     await new Promise(r => setTimeout(r, 14000));
     console.log('booted; running probe...');

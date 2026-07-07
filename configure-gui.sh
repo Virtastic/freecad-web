@@ -16,7 +16,11 @@ NPYLIBS=""
 if [ -d "$DW/lib/numpy-mod" ]; then
   # Single space-separated line (newlines would become ninja line-continuations
   # WITHOUT spaces, concatenating the paths). Module libs first, then support libs.
-  NPYLIBS="$( { ls "$DW"/lib/numpy-mod/libnpy__multiarray_umath.a "$DW"/lib/numpy-mod/libnpy__pocketfft_umath.a "$DW"/lib/numpy-mod/libnpy__umath_linalg.a "$DW"/lib/numpy-mod/libnpy_lapack_lite.a; ls "$DW"/lib/numpy-mod/*.a | grep -vE 'libnpy_(_multiarray|_pocketfft|_umath_linalg|lapack_lite)\.a'; } 2>/dev/null | tr '\n' ' ')"
+  # The per-dispatch archives (*.dispatch.h_baseline.a) are ALSO aggregated into
+  # the *_mtargets.a archives; linking both duplicates the CPU-dispatch static
+  # initializers -> numpy aborts with "CPU dispatcher tracer already initlized".
+  # Link only the mtargets (which cover all 18 dispatch objects), not the individuals.
+  NPYLIBS="$( { ls "$DW"/lib/numpy-mod/libnpy__multiarray_umath.a "$DW"/lib/numpy-mod/libnpy__pocketfft_umath.a "$DW"/lib/numpy-mod/libnpy__umath_linalg.a "$DW"/lib/numpy-mod/libnpy_lapack_lite.a; ls "$DW"/lib/numpy-mod/*.a | grep -vE 'libnpy_(_multiarray|_pocketfft|_umath_linalg|lapack_lite)\.a|dispatch\.h_baseline\.a'; } 2>/dev/null | tr '\n' ' ')"
 fi
 
 emcmake cmake -S deps/src/freecad -B build-freecad-gui -G Ninja \

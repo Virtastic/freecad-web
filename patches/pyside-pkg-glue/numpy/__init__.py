@@ -94,19 +94,30 @@ import warnings
 # Alias them into sys.modules under their real dotted names so numpy's internal
 # `from . import _multiarray_umath` (etc.) resolves to the builtins. ---
 if sys.platform == "emscripten":
-    import importlib as _il
-    for _leaf, _dotted in (
-        ("_multiarray_umath", "numpy._core._multiarray_umath"),
-        ("_pocketfft_umath", "numpy.fft._pocketfft_umath"),
-        ("_umath_linalg", "numpy.linalg._umath_linalg"),
-        ("lapack_lite", "numpy.linalg.lapack_lite"),
-    ):
-        if _dotted not in sys.modules:
-            try:
-                sys.modules[_dotted] = _il.import_module(_leaf)
-            except ImportError:
-                pass
-    del _il
+    # The numpy C extensions are statically linked and registered in the CPython
+    # inittab under their FULL dotted names (numpy._core._multiarray_umath, ...).
+    # BuiltinImporter.find_spec refuses to resolve submodules (returns None when
+    # path is not None), so install a meta-path finder that maps those exact
+    # dotted names to BuiltinImporter. This lets numpy's own internal
+    # PyImport_ImportModule("numpy._core._multiarray_umath") calls resolve, and
+    # ensures each PyInit runs exactly once (cached under the dotted name).
+    import _imp as _imp_mod
+    from importlib.machinery import BuiltinImporter as _BI, ModuleSpec as _MS
+    _NPY_BUILTINS = frozenset((
+        "numpy._core._multiarray_umath",
+        "numpy.fft._pocketfft_umath",
+        "numpy.linalg._umath_linalg",
+        "numpy.linalg.lapack_lite",
+    ))
+
+    class _NumpyBuiltinFinder:
+        def find_spec(self, name, path=None, target=None):
+            if name in _NPY_BUILTINS and _imp_mod.is_builtin(name):
+                return _MS(name, _BI, is_package=False)
+            return None
+
+    if not any(f.__class__.__name__ == "_NumpyBuiltinFinder" for f in sys.meta_path):
+        sys.meta_path.insert(0, _NumpyBuiltinFinder())
 
 from ._globals import _NoValue, _CopyMode
 from ._expired_attrs_2_0 import __expired_attributes__

@@ -1,0 +1,30 @@
+diff --git a/numpy/_core/src/common/npy_cpu_dispatch.c b/numpy/_core/src/common/npy_cpu_dispatch.c
+index ff22f23..7c21cc5 100644
+--- a/numpy/_core/src/common/npy_cpu_dispatch.c
++++ b/numpy/_core/src/common/npy_cpu_dispatch.c
+@@ -8,14 +8,21 @@
+ NPY_VISIBILITY_HIDDEN int
+ npy_cpu_dispatch_tracer_init(PyObject *mod)
+ {
+-    if (npy_static_pydata.cpu_dispatch_registry != NULL) {
+-        PyErr_Format(PyExc_RuntimeError, "CPU dispatcher tracer already initlized");
+-        return -1;
+-    }
+     PyObject *mod_dict = PyModule_GetDict(mod);
+     if (mod_dict == NULL) {
+         return -1;
+     }
++    /* FreeCAD-wasm: static monolith may re-enter PyInit__multiarray_umath (the
++     * module is not always cached in sys.modules between attempts). Make tracer
++     * init idempotent: if the registry already exists, re-attach it to the new
++     * module dict and succeed instead of aborting the whole import. */
++    if (npy_static_pydata.cpu_dispatch_registry != NULL) {
++        if (PyDict_SetItemString(mod_dict, "__cpu_targets_info__",
++                                 npy_static_pydata.cpu_dispatch_registry) != 0) {
++            return -1;
++        }
++        return 0;
++    }
+     PyObject *reg_dict = PyDict_New();
+     if (reg_dict == NULL) {
+         return -1;
