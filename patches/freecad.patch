@@ -8083,10 +8083,10 @@ index 606e748..4772474 100644
      SoSeparator* nodes = SoDB::readAll(&in);
      if (!nodes) {
 diff --git a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py b/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
-index 7b93c64..7d9b8d3 100644
+index 7b93c64..9b6349f 100644
 --- a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
 +++ b/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
-@@ -30,14 +30,30 @@ __url__ = "https://www.freecad.org"
+@@ -30,14 +30,25 @@ __url__ = "https://www.freecad.org"
  #  \ingroup FEM
  #  \brief task panel for mechanical ResultObjectPython
  
@@ -8098,20 +8098,14 @@ index 7b93c64..7d9b8d3 100644
 +# usable (e.g. some minimal deployments), and to plt=None if matplotlib is absent.
  try:
      import matplotlib
--
+ 
 -    matplotlib.use("Qt5Agg")
-+    import sys as _sys
-+
-+    if _sys.platform == "emscripten":
-+        # The interactive Qt canvas (QtAgg) needs the _ctypes extension, which is
-+        # not part of the WebAssembly CPython build, so use the non-interactive
-+        # Agg backend there (plots still render; they are drawn into the panel).
++    # Prefer the interactive Qt canvas (works in the wasm build too, now that
++    # _ctypes/libffi + Pillow are available); fall back to non-interactive Agg.
++    try:
++        matplotlib.use("QtAgg")
++    except Exception:
 +        matplotlib.use("Agg")
-+    else:
-+        try:
-+            matplotlib.use("QtAgg")
-+        except Exception:
-+            matplotlib.use("Agg")
 +    import matplotlib.pyplot as plt
  except Exception:
 -    print("Failed to set matplotlib backend to Qt5Agg")
@@ -8121,7 +8115,7 @@ index 7b93c64..7d9b8d3 100644
  import numpy as np
  
  from PySide import QtCore
-@@ -382,6 +398,10 @@ class _TaskPanel:
+@@ -382,6 +393,10 @@ class _TaskPanel:
              self.none_selected(True)
  
      def show_histogram_clicked(self):
@@ -8132,7 +8126,7 @@ index 7b93c64..7d9b8d3 100644
          if len(plt.get_fignums()) > 0:
              plt.show()
          else:
-@@ -537,6 +557,10 @@ class _TaskPanel:
+@@ -537,6 +552,10 @@ class _TaskPanel:
          (minm, maxm) = self.get_result_stats(res_type)
          self.update_colors_stats(res_values, res_unit, minm, maxm)
  
