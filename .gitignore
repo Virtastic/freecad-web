@@ -55,3 +55,8 @@ scratchpad/vtktest/*.wasm
 scratchpad/vtktest/*.js
 scratchpad/vtktest/*.vtu
 scratchpad/vtktest/*.log
+scratchpad/fttest/*.wasm
+scratchpad/fttest/*.js
+scratchpad/fttest/*.ttf
+scratchpad/fttest/*.err
+build-matplotlib/

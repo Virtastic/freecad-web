@@ -6947,10 +6947,10 @@ index ae23df7..49bf99c 100644
      const char* mingw_prefix = getenv("MINGW_PREFIX");
      const char* py_home = getenv("PYTHONHOME");
 diff --git a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
-index d56d1a8..915c353 100644
+index d56d1a8..e1dabea 100644
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -1,457 +1,597 @@
+@@ -1,457 +1,622 @@
 -/***************************************************************************
 - *   Copyright (c) 2008 Jürgen Riegel <juergen.riegel@web.de>              *
 - *                                                                         *
@@ -7563,6 +7563,20 @@ index d56d1a8..915c353 100644
 +extern "C" PyObject* PyInit__umath_linalg();
 +extern "C" PyObject* PyInit_lapack_lite();
 +
++// matplotlib C extensions (static; a finder in matplotlib/__init__.py resolves
++// the dotted builtin names, as for numpy).
++extern "C" PyObject* PyInit__backend_agg();
++extern "C" PyObject* PyInit_ft2font();
++extern "C" PyObject* PyInit__image();
++extern "C" PyObject* PyInit__path();
++extern "C" PyObject* PyInit__qhull();
++extern "C" PyObject* PyInit__tri();
++extern "C" PyObject* PyInit__c_internal_utils();
++extern "C" PyObject* PyInit__ttconv();
++
++// kiwisolver C extension (matplotlib layout dependency)
++extern "C" PyObject* PyInit__cext();
++
 +// JS->Python bridge for the browser build: lets the page drive FreeCAD via
 +// Module.ccall('fcweb_run_python', ...). Exceptions are reported, not fatal.
 +#include <emscripten.h>
@@ -7646,6 +7660,17 @@ index d56d1a8..915c353 100644
 +    PyImport_AppendInittab("numpy.fft._pocketfft_umath", PyInit__pocketfft_umath);
 +    PyImport_AppendInittab("numpy.linalg._umath_linalg", PyInit__umath_linalg);
 +    PyImport_AppendInittab("numpy.linalg.lapack_lite", PyInit_lapack_lite);
++    // matplotlib C extensions under their full dotted names (finder in
++    // matplotlib/__init__.py maps them to BuiltinImporter).
++    PyImport_AppendInittab("matplotlib.backends._backend_agg", PyInit__backend_agg);
++    PyImport_AppendInittab("matplotlib.ft2font", PyInit_ft2font);
++    PyImport_AppendInittab("matplotlib._image", PyInit__image);
++    PyImport_AppendInittab("matplotlib._path", PyInit__path);
++    PyImport_AppendInittab("matplotlib._qhull", PyInit__qhull);
++    PyImport_AppendInittab("matplotlib._tri", PyInit__tri);
++    PyImport_AppendInittab("matplotlib._c_internal_utils", PyInit__c_internal_utils);
++    PyImport_AppendInittab("matplotlib._ttconv", PyInit__ttconv);
++    PyImport_AppendInittab("kiwisolver._cext", PyInit__cext);
 +#endif
 +#if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
 +    setlocale(LC_ALL, "");       // use native environment settings
