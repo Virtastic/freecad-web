@@ -7930,56 +7930,6 @@ index 74a5af0..24a62ee 100644
  }
  
  void DlgCAMSimulator::checkInitialization()
-diff --git a/src/Mod/Fem/App/PropertyPostDataObject.cpp b/src/Mod/Fem/App/PropertyPostDataObject.cpp
-index f416dd7..453bf3a 100644
---- a/src/Mod/Fem/App/PropertyPostDataObject.cpp
-+++ b/src/Mod/Fem/App/PropertyPostDataObject.cpp
-@@ -403,6 +403,37 @@ void PropertyPostDataObject::RestoreDocFile(Base::Reader& reader)
-             xmlReader = vtkSmartPointer<vtkXMLImageDataReader>::New();
-         }
- 
-+#if defined(__EMSCRIPTEN__)
-+        // VTK's XML reader pipeline (vtkXMLReader::Update) is not functional in the
-+        // WebAssembly build: it traps (unreachable) inside the demand-driven
-+        // executive. Skip loading the cached post-processing dataset and leave a
-+        // valid empty data object of the right type so the document restores
-+        // cleanly. The FemPost pipeline regenerates this data from the result mesh
-+        // when the pipeline is (re)run, so no user data is lost.
-+        (void)xmlReader;
-+        Base::Console().Warning(
-+            "FEM post-processing data '%s' not loaded: the VTK XML reader is "
-+            "unavailable in the WebAssembly build; the pipeline regenerates it on "
-+            "recompute.\n",
-+            fi.filePath().c_str());
-+        aboutToSetValue();
-+        if (extension == "vtp") {
-+            m_dataObject = vtkSmartPointer<vtkPolyData>::New();
-+        }
-+        else if (extension == "vts") {
-+            m_dataObject = vtkSmartPointer<vtkStructuredGrid>::New();
-+        }
-+        else if (extension == "vtr") {
-+            m_dataObject = vtkSmartPointer<vtkRectilinearGrid>::New();
-+        }
-+        else if (extension == "vti") {
-+            m_dataObject = vtkSmartPointer<vtkUniformGrid>::New();
-+        }
-+        else {  // vtu and anything else -> unstructured grid
-+            m_dataObject = vtkSmartPointer<vtkUnstructuredGrid>::New();
-+        }
-+        hasSetValue();
-+#else
-         xmlReader->SetFileName(fi.filePath().c_str());
-         xmlReader->Update();
- 
-@@ -429,6 +460,7 @@ void PropertyPostDataObject::RestoreDocFile(Base::Reader& reader)
-             m_dataObject->DeepCopy(xmlReader->GetOutputAsDataSet());
-             hasSetValue();
-         }
-+#endif
-     }
- 
-     // delete the temp file
 diff --git a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 index 606e748..4772474 100644
 --- a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp

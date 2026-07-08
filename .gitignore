@@ -51,3 +51,7 @@ aqtinstall.log
 /build-ifcopenshell/
 /build-numpy/
 /node_modules/
+scratchpad/vtktest/*.wasm
+scratchpad/vtktest/*.js
+scratchpad/vtktest/*.vtu
+scratchpad/vtktest/*.log
