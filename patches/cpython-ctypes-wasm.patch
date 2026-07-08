@@ -1,0 +1,19 @@
+diff --git a/Lib/ctypes/__init__.py b/Lib/ctypes/__init__.py
+index 8261773..ae22370 100644
+--- a/Lib/ctypes/__init__.py
++++ b/Lib/ctypes/__init__.py
+@@ -481,6 +481,14 @@ def LoadLibrary(self, name):
+     pythonapi = PyDLL("libpython%d.%d.so" % _sys.version_info[:2])
+ elif _sys.platform == "cygwin":
+     pythonapi = PyDLL("libpython%d.%d.dll" % _sys.version_info[:2])
++elif _sys.platform == "emscripten":
++    # WebAssembly has no dlopen ("dynamic linking not enabled"), so PyDLL(None)
++    # raises at import. ctypes data types and CFUNCTYPE callbacks still work
++    # (they need only libffi); loading external shared libraries does not.
++    try:
++        pythonapi = PyDLL(None)
++    except OSError:
++        pythonapi = None
+ else:
+     pythonapi = PyDLL(None)
+ 

@@ -6947,10 +6947,10 @@ index ae23df7..49bf99c 100644
      const char* mingw_prefix = getenv("MINGW_PREFIX");
      const char* py_home = getenv("PYTHONHOME");
 diff --git a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
-index d56d1a8..e1dabea 100644
+index d56d1a8..300618e 100644
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -1,457 +1,622 @@
+@@ -1,457 +1,630 @@
 -/***************************************************************************
 - *   Copyright (c) 2008 Jürgen Riegel <juergen.riegel@web.de>              *
 - *                                                                         *
@@ -7577,6 +7577,12 @@ index d56d1a8..e1dabea 100644
 +// kiwisolver C extension (matplotlib layout dependency)
 +extern "C" PyObject* PyInit__cext();
 +
++// _ctypes (built against libffi; enables ctypes + interactive matplotlib QtAgg)
++extern "C" PyObject* PyInit__ctypes();
++
++// Pillow _imaging (PIL image I/O; matplotlib imshow/savefig png)
++extern "C" PyObject* PyInit__imaging();
++
 +// JS->Python bridge for the browser build: lets the page drive FreeCAD via
 +// Module.ccall('fcweb_run_python', ...). Exceptions are reported, not fatal.
 +#include <emscripten.h>
@@ -7671,6 +7677,8 @@ index d56d1a8..e1dabea 100644
 +    PyImport_AppendInittab("matplotlib._c_internal_utils", PyInit__c_internal_utils);
 +    PyImport_AppendInittab("matplotlib._ttconv", PyInit__ttconv);
 +    PyImport_AppendInittab("kiwisolver._cext", PyInit__cext);
++    PyImport_AppendInittab("_ctypes", PyInit__ctypes);
++    PyImport_AppendInittab("PIL._imaging", PyInit__imaging);
 +#endif
 +#if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
 +    setlocale(LC_ALL, "");       // use native environment settings
