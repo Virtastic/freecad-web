@@ -64,6 +64,97 @@ index cd00c0d..067731a 100644
              find_package(MEDFile REQUIRED)
              # See https://www.hdfgroup.org/HDF5/release/cmakebuild.html
              if (MSVC)
+diff --git a/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake b/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake
+index 5626251..ded5adf 100644
+--- a/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake
++++ b/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake
+@@ -85,6 +85,86 @@ macro(SetupShibokenAndPyside)
+     file(WRITE ${CMAKE_BINARY_DIR}/Ext/PySide/QtCore.py "from PySide${PYSIDE_MAJOR_VERSION}.QtCore import *\n\n"
+                                 "#QCoreApplication.CodecForTr=0\n"
+                                 "#QCoreApplication.UnicodeUTF8=1\n")
++    # Qt for WebAssembly has no subprocess support, so PySide's QtCore ships no
++    # QProcess. Several FEM/mesh modules do `from PySide.QtCore import QProcess`
++    # at import time; without a symbol that raises ImportError and spams the log.
++    # Provide an importable, inert stub (running a process is impossible in the
++    # browser and raises a clear RuntimeError only if actually invoked).
++    file(APPEND ${CMAKE_BINARY_DIR}/Ext/PySide/QtCore.py [==[
++
++try:
++    QProcess  # provided by a full Qt build
++except NameError:
++    from enum import IntEnum as _IntEnum
++
++    class QProcess(QObject):
++        """Inert QProcess stub for the Qt-for-WebAssembly build (no subprocess)."""
++
++        class ProcessState(_IntEnum):
++            NotRunning = 0
++            Starting = 1
++            Running = 2
++
++        class ExitStatus(_IntEnum):
++            NormalExit = 0
++            CrashExit = 1
++
++        class ProcessError(_IntEnum):
++            FailedToStart = 0
++            Crashed = 1
++            Timedout = 2
++            WriteError = 3
++            ReadError = 4
++            UnknownError = 5
++
++        NotRunning = ProcessState.NotRunning
++        Starting = ProcessState.Starting
++        Running = ProcessState.Running
++        NormalExit = ExitStatus.NormalExit
++        CrashExit = ExitStatus.CrashExit
++
++        def __init__(self, *args, **kwargs):
++            super().__init__(*args, **kwargs)
++            self._state = QProcess.ProcessState.NotRunning
++
++        def state(self):
++            return self._state
++
++        def _unavailable(self, *a, **k):
++            raise RuntimeError(
++                "QProcess is not available in the WebAssembly build "
++                "(the browser cannot launch external processes)")
++
++        # launching / waiting are genuinely impossible in wasm
++        start = startDetached = execute = _unavailable
++
++        def waitForStarted(self, *a, **k):
++            return False
++
++        def waitForFinished(self, *a, **k):
++            return False
++
++        def kill(self, *a, **k):
++            pass
++
++        terminate = kill
++
++        def readAll(self, *a, **k):
++            return QByteArray()
++
++        readAllStandardOutput = readAllStandardError = readAll
++
++        def exitCode(self):
++            return -1
++
++        def exitStatus(self):
++            return QProcess.ExitStatus.CrashExit
++
++        def setProgram(self, *a, **k):
++            pass
++
++        setArguments = setWorkingDirectory = setProcessEnvironment = setProgram
++]==])
+     file(WRITE ${CMAKE_BINARY_DIR}/Ext/PySide/QtNetwork.py  "from PySide${PYSIDE_MAJOR_VERSION}.QtNetwork import *\n")
+     if(BUILD_GUI)
+         file(WRITE ${CMAKE_BINARY_DIR}/Ext/PySide/QtGui.py  "from PySide${PYSIDE_MAJOR_VERSION}.QtGui import *\n"
 diff --git a/src/3rdParty/CMakeLists.txt b/src/3rdParty/CMakeLists.txt
 index a88b4ec..07c0d9f 100644
 --- a/src/3rdParty/CMakeLists.txt
@@ -7958,6 +8049,55 @@ index 606e748..4772474 100644
      }
      SoSeparator* nodes = SoDB::readAll(&in);
      if (!nodes) {
+diff --git a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py b/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
+index 7b93c64..958ed09 100644
+--- a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
++++ b/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
+@@ -30,14 +30,20 @@ __url__ = "https://www.freecad.org"
+ #  \ingroup FEM
+ #  \brief task panel for mechanical ResultObjectPython
+ 
++# matplotlib is optional: it is only used for the interactive result-histogram
++# plot in this task panel. It is not available in every deployment (e.g. the
++# WebAssembly build, where it is not ported). Import it lazily/defensively so
++# merely opening a FEM document (which imports this module via the result view
++# provider) does not fail or spam the report view; the histogram button is
++# guarded on `plt` being available.
+ try:
+     import matplotlib
+ 
+     matplotlib.use("Qt5Agg")
++    import matplotlib.pyplot as plt
+ except Exception:
+-    print("Failed to set matplotlib backend to Qt5Agg")
++    plt = None
+ 
+-import matplotlib.pyplot as plt
+ import numpy as np
+ 
+ from PySide import QtCore
+@@ -382,6 +388,10 @@ class _TaskPanel:
+             self.none_selected(True)
+ 
+     def show_histogram_clicked(self):
++        if plt is None:
++            FreeCAD.Console.PrintWarning(
++                "matplotlib is not available; result histogram plotting is disabled.\n")
++            return
+         if len(plt.get_fignums()) > 0:
+             plt.show()
+         else:
+@@ -537,6 +547,10 @@ class _TaskPanel:
+         (minm, maxm) = self.get_result_stats(res_type)
+         self.update_colors_stats(res_values, res_unit, minm, maxm)
+ 
++        if plt is None:
++            # matplotlib unavailable (e.g. WebAssembly build): the mesh result
++            # coloring above still applies; only the histogram plot is skipped.
++            return
+         if len(plt.get_fignums()) > 0:
+             plt.close()
+         plt.ioff()  # disable interactive mode so we have full control when plot is shown
 diff --git a/src/Mod/Mesh/Gui/CMakeLists.txt b/src/Mod/Mesh/Gui/CMakeLists.txt
 index 036001d..cc694b6 100644
 --- a/src/Mod/Mesh/Gui/CMakeLists.txt
