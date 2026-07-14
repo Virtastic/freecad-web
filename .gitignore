@@ -64,3 +64,8 @@ scratchpad/fttest/*.js
 scratchpad/fttest/*.ttf
 scratchpad/fttest/*.err
 build-matplotlib/
+
+# terraform local state
+*.tfstate
+*.tfstate.*
+.terraform/
