@@ -22,7 +22,11 @@
 /freecad-install/
 /freecad-gui-install/
 /play/
-/play-gui/
+# play-gui: track the hand-authored front-end (served by the deploy container),
+# ignore the multi-hundred-MB build artifacts (shipped via GitHub Release instead).
+/play-gui/*
+!/play-gui/freecad-gui.html
+!/play-gui/qtloader.js
 
 # === Compiled artifacts ===
 *.o

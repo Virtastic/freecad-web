@@ -1,0 +1,409 @@
+<!doctype html><html><head><meta charset="utf-8"><title>FreeCAD — WebAssembly (GUI)</title><link rel="icon" href="data:,">
+<style>
+ html,body{margin:0;height:100%;background:#2b2b2b;color:#ddd;font:13px ui-monospace,Menlo,monospace;overflow:hidden}
+ /* Qt fills the ENTIRE browser window. The boot log is an optional overlay, not
+    a permanent strip, so FreeCAD gets the full viewport. */
+ #screen{position:absolute;inset:0}
+ #screen>canvas{width:100%;height:100%;display:block}
+ #log{position:absolute;left:0;right:0;bottom:0;height:170px;overflow:auto;white-space:pre-wrap;
+      background:rgba(17,17,27,.95);border-top:1px solid #444;padding:6px 8px;color:#a6e3a1;font-size:11px;z-index:10}
+ #log.hidden{display:none}
+ .err{color:#f38ba8} #status{color:#f9e2af}
+ #logtoggle{position:absolute;right:6px;bottom:6px;z-index:11;background:#1e1e2e;color:#8087a2;
+      border:1px solid #45475a;border-radius:4px;padding:1px 7px;font:11px ui-monospace,Menlo,monospace;cursor:pointer;opacity:.45}
+ #logtoggle:hover{opacity:1}
+ /* Full-screen loading overlay so the first ~4s of boot reads as "loading", not frozen. */
+ #boot{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;
+      justify-content:center;gap:18px;background:#2b2b2b}
+ #boot.done{opacity:0;pointer-events:none;transition:opacity .4s;display:flex}
+ #boot .spin{width:46px;height:46px;border:4px solid #45475a;border-top-color:#89b4fa;border-radius:50%;animation:fcsp 1s linear infinite}
+ @keyframes fcsp{to{transform:rotate(360deg)}}
+ #boot .bt{font-size:16px;color:#cdd6f4;letter-spacing:.5px}
+ #boot .bs{font-size:12px;color:#9399b2;max-width:70vw;text-align:center;min-height:1.2em}
+ #boot .berr{color:#f38ba8}
+</style></head>
+<body>
+<div id="screen"></div>
+<div id="boot"><div class="spin"></div><div class="bt">Loading FreeCAD</div><div class="bs" id="bootstatus">starting… (first load downloads ~450 MB)</div></div>
+<div id="log" class="hidden"><span id="status">loading…</span></div>
+<button id="logtoggle" title="show/hide boot log">log</button>
+<script>
+ const logEl=document.getElementById('log');
+ const __t0=performance.now();
+ const __bootEl=document.getElementById('boot'), __bootStatus=document.getElementById('bootstatus');
+ const __DEBUG=/[?&]debug/.test(location.search);
+ // Boot-progress noise: emscripten download/dep counters + our own diagnostic
+ // markers. Never shown in the log unless ?debug; instead summarized in the
+ // loading overlay. This is what looked like "tons of errors": pure progress spam.
+ const __NOISE=/\[deps\] remaining|Downloading data|\bRunning\.\.\.|\[FCWEB-MARK|\[BOOTTIME|\[SPE \d|\[FCWEB\]|InitApplications|InitGui \d|all InitGui|activateWorkbench:|showMainWindow:|setBranding:|loadOpenInventor:|checkParameters:|execute:(begin|end)|mw wrapper singleton|pyside warmup|emscripten GL emulation/;
+ function __setBoot(msg,isErr){ if(!__bootStatus) return; __bootStatus.textContent=msg;
+   __bootStatus.classList.toggle('berr',!!isErr); }
+ function __hideBoot(){ if(__bootEl) __bootEl.classList.add('done'); }
+ // FCWEB: append() was THE boot bottleneck. FreeCAD prints thousands of lines at
+ // startup; the old impl created a DOM node per line AND forced a synchronous
+ // reflow every line (scrollTop=scrollHeight), making boot O(n^2) — ~90s of pure
+ // DOM thrash on the main thread (the "page unresponsive" freeze). Now: keep a
+ // capped ring buffer and flush to the DOM once per animation frame (one reflow
+ // per frame, not per line), so logging is O(1) amortized regardless of volume.
+ const __LOG_CAP=400; let __logBuf=[]; let __flushQueued=false; let __errPending=false;
+ function __flushLog(){ __flushQueued=false;
+   if(__logBuf.length>__LOG_CAP) __logBuf=__logBuf.slice(-__LOG_CAP);
+   logEl.textContent=__logBuf.join('\n'); if(__errPending){logEl.classList.add('err');__errPending=false;}
+   logEl.scrollTop=logEl.scrollHeight; }
+ function append(t,cls){
+   // FCWEB: the 3D widget's on-screen rect (CSS px, in-window) is published from
+   // Python (only Qt knows the MDI layout). Capture it for the overlay compositor
+   // and don't spam the log with it.
+   if(typeof t==='string'){ const mR=t.indexOf('FCRECT '); if(mR>=0){
+     try{ window.__fcWidgetRect=JSON.parse(t.slice(mR+7)); }catch(e){} return; } }
+   const noise = typeof t==='string' && __NOISE.test(t);
+   // Progress noise (incl. our stderr diagnostic markers) is dropped unless
+   // ?debug; genuine errors/messages are never noise, so they still show. The log
+   // stays clean and readable when opened via the toggle.
+   if(__DEBUG || !noise){
+     __logBuf.push("{"+((performance.now()-__t0)/1000).toFixed(1)+"s} "+t);
+     if(cls==='err') __errPending=true;
+     if(!__flushQueued){ __flushQueued=true; requestAnimationFrame(__flushLog); }
+   }
+   // Surface real errors in the loading overlay so a boot failure isn't invisible.
+   if(cls==='err' && !noise && __bootEl && !__bootEl.classList.contains('done')) __setBoot(String(t).slice(0,140),true);
+   // Optional: persist FCWEB diagnostic markers to the server synchronously (for
+   // trap localization). Gated on ?fcmark to avoid slowing normal runs.
+   try { if(window.__FCMARK && typeof t==='string' && t.indexOf('FCWEB-')>=0){
+     var x=new XMLHttpRequest(); x.open('POST','/mark',false); x.send(t); } } catch(e){} }
+ let stackDumps=0;
+ window.addEventListener('error',e=>{ append('window error: '+e.message,'err');
+   if(e.error&&e.error.stack&&stackDumps<4){ stackDumps++; append('STACK:\n'+e.error.stack,'err'); }});
+ // Toggle the (hidden-by-default) boot log for debugging.
+ document.getElementById('logtoggle').addEventListener('click',()=>{
+   document.getElementById('log').classList.toggle('hidden'); });
+ // Fallback: if onLoaded never fires (older loader path), drop the overlay once
+ // the app is clearly up so it can't get stuck covering the UI.
+ (function(){ const iv=setInterval(()=>{ const l=logEl.textContent||'';
+   if(/execute:end/.test(l) || (window.fcInstance&&window.fcInstance._malloc)){
+     setTimeout(__hideBoot,1500); clearInterval(iv); } },1000);
+   setTimeout(()=>{ __hideBoot(); clearInterval(iv); },90000); })();
+ async function init(){
+   try { globalThis.__FCWEB_SEARCH = location.search || ''; } catch(e){}
+   const screen=document.getElementById('screen');
+   try {
+     const instance = window.fcInstance = await qtLoad({
+       // emscripten Module config merged by qtLoad:
+       print:(t)=>append(t), printErr:(t)=>append(t,'err'),
+       setStatus:(t)=>{ if(!t) return; append('[status] '+t);
+         // Friendly loading-overlay text (no raw byte counts / spam).
+         const m=/\((\d+)\/(\d+)\)/.exec(t);
+         if(/Downloading/.test(t)){ __setBoot(m?('Downloading… '+Math.floor(100*(+m[1])/(+m[2]))+'%'):'Downloading… (first load ~450 MB)'); }
+         else if(/Running/.test(t)){ __setBoot('Starting FreeCAD…'); } },
+       monitorRunDependencies:(n)=>{ append('[deps] remaining='+n);
+         if(n>0) __setBoot('Unpacking application data… ('+n+' left)'); },
+       onAbort:(w)=>append('[ABORT] '+w,'err'),
+       qt: {
+         onLoaded: () => { const st=document.getElementById('status'); if(st) st.textContent='FreeCAD loaded';
+           // App is up: reveal the full-window FreeCAD UI and drop the loader.
+           __setBoot('Ready'); __hideBoot();
+           try { window.dispatchEvent(new Event('resize')); } catch(e){}
+           // FCWEB: warm up the PySide/Shiboken wrapper machinery right after
+           // boot. If the FIRST Qt-object wrap in a session happens lazily in
+           // the middle of widget construction (e.g. DraftToolBar.__init__),
+           // the just-created C++ widget gets collected during the nested
+           // PySide6 module import and its wrapper is invalidated. Importing
+           // the bindings + wrapping the main window once up-front makes all
+           // later wraps stable.
+           try { setTimeout(function(){
+             var m=window.fcInstance; if(!m) return;
+             var code="import shiboken6, sys\nimport PySide6.QtCore, PySide6.QtGui, PySide6.QtWidgets\nimport FreeCADGui\n# Pin the MainWindow wrapper for the app lifetime: shiboken parents runtime\n# widgets (addToolBar etc.) to this wrapper, and if it gets GC'd the children's\n# wrappers are cascade-invalidated even though the C++ objects live on.\nsys._fcweb_mw = FreeCADGui.getMainWindow()\nprint('[fcweb] mw wrapper singleton:', sys._fcweb_mw is FreeCADGui.getMainWindow())\nprint('[fcweb] pyside warmup done')";
+             var n=new TextEncoder().encode(code).length+1; var pp=m._malloc(n); m.stringToUTF8(code,pp,n);
+             try { m._fcweb_run_python(pp); } catch(e){ append('pyside warmup threw: '+e,'err'); } finally { m._free(pp); }
+           }, 8000); } catch(e){}
+           // FCWEB autotest: ?autotest=1 creates a doc+box+fit automatically
+           try { if (new URLSearchParams(location.search).has('autotest')) {
+             setTimeout(function(){
+               var m=window.fcInstance; if(!m) return;
+               var code="import FreeCAD as App\nd=App.newDocument('AutoTest')\nb=d.addObject('Part::Box','Box')\nb.Length=10; b.Width=20; b.Height=30\nd.recompute()\nimport FreeCADGui as Gui\nv=Gui.ActiveDocument.ActiveView\nv.viewIsometric()\nv.fitAll()\nGui.updateGui()\nprint('CAM-ORI', ['%.3f'%x for x in v.getCameraOrientation().Q])\nprint('AUTOTEST-DONE')";
+               var n=new TextEncoder().encode(code).length+1; var pp=m._malloc(n); m.stringToUTF8(code,pp,n);
+               try { m._fcweb_run_python(pp); } catch(e){ append('autotest threw: '+e,'err'); } finally { m._free(pp); }
+             }, 12000);
+           } } catch(e){}
+         },
+         onExit: (e) => append('[exit] code='+(e&&e.code)),
+         entryFunction: window.FreeCAD_entry,
+         containerElements: [screen],
+       }
+     });
+   } catch(e){ append('qtLoad failed: '+e,'err'); if(e&&e.stack) append(e.stack,'err'); }
+ }
+</script>
+<script>
+// FCWEB: the GL emulation calls enable/disable/vertexAttribPointer with
+// location -1 for attributes its generated shader doesn't use — each call spams
+// "INVALID_VALUE: index out of range". GL semantics are error+ignore, so skip
+// them silently.
+(function(){
+  ['enableVertexAttribArray','disableVertexAttribArray'].forEach(function(nm){
+    var o=WebGL2RenderingContext.prototype[nm];
+    WebGL2RenderingContext.prototype[nm]=function(i){ if(i<0||i===4294967295) return; return o.call(this,i); };
+  });
+  var vap=WebGL2RenderingContext.prototype.vertexAttribPointer;
+  WebGL2RenderingContext.prototype.vertexAttribPointer=function(i){ if(i<0||i===4294967295) return; return vap.apply(this,arguments); };
+})();
+</script>
+<script>
+// FCWEB GL tracer: wrap WebGL2 draw calls to see what actually reaches the GPU.
+(function(){
+  window.__gllog = [];
+  function wrap(proto, name){
+    var orig = proto[name];
+    proto[name] = function(){
+      if (window.__gllog.length < 400) {
+        var prog = this.getParameter(this.CURRENT_PROGRAM);
+        var vp = this.getParameter(this.VIEWPORT);
+        var rec = { fn:name, args:Array.prototype.slice.call(arguments,0,5),
+          prog: prog? (prog.__fcid || (prog.__fcid = ++window.__progn||(window.__progn=1))) : 0,
+          depth: this.isEnabled(this.DEPTH_TEST), vp: vp && Array.prototype.slice.call(vp) };
+        // For the box face draw (TRIANGLES, big count, main viewport) capture MVP uniforms
+        if (name==='drawArrays' && arguments[0]===4 && arguments[2]>=24 && vp && vp[2]>400 && prog && !window.__mvpDumped) {
+          window.__mvpDumped = true;
+          try {
+            var gl=this, dump={};
+            var n=gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+            for (var i=0;i<n;i++){ var u=gl.getActiveUniform(prog,i); { var loc=gl.getUniformLocation(prog,u.name); var val=gl.getUniform(prog,loc); dump[u.name]= (val&&val.length!==undefined)?Array.prototype.slice.call(val):val; } }
+            var a0 = { enabled: gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_ENABLED),
+              size: gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_SIZE),
+              type: gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_TYPE),
+              stride: gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_STRIDE),
+              bufBound: !!gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING) };
+            // read back a few vertices from the bound array buffer
+            var buf = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING);
+            var verts=null;
+            if (buf) { gl.bindBuffer(gl.ARRAY_BUFFER, buf); var out=new Float32Array(12); try{ gl.getBufferSubData(gl.ARRAY_BUFFER,0,out); verts=Array.prototype.slice.call(out);}catch(e){verts='readfail:'+e;} }
+            // enumerate ALL attributes by name + their pointer/offset
+            var attrs=[]; var na=gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES);
+            for (var ai=0; ai<na; ai++){ var inf=gl.getActiveAttrib(prog,ai); var loc=gl.getAttribLocation(prog,inf.name);
+              attrs.push({ name:inf.name, loc:loc,
+                enabled: gl.getVertexAttrib(loc, gl.VERTEX_ATTRIB_ARRAY_ENABLED),
+                size: gl.getVertexAttrib(loc, gl.VERTEX_ATTRIB_ARRAY_SIZE),
+                stride: gl.getVertexAttrib(loc, gl.VERTEX_ATTRIB_ARRAY_STRIDE),
+                offset: gl.getVertexAttribOffset(loc, gl.VERTEX_ATTRIB_ARRAY_POINTER) }); }
+            var shaders = gl.getAttachedShaders(prog).map(function(sh){ return { type: gl.getShaderParameter(sh, gl.SHADER_TYPE)===gl.VERTEX_SHADER?'VS':'FS', src: gl.getShaderSource(sh) }; });
+            window.__mvp = { count:arguments[2], vp:Array.prototype.slice.call(vp), uniforms:dump, attribs:attrs, firstVerts:verts, shaders:shaders };
+          } catch(e){ window.__mvp={err:String(e)}; }
+        }
+        window.__gllog.push(rec);
+      }
+      return orig.apply(this, arguments);
+    };
+  }
+  try {
+    wrap(WebGL2RenderingContext.prototype, 'drawElements');
+    wrap(WebGL2RenderingContext.prototype, 'drawArrays');
+    var qp = new URLSearchParams(location.search);
+    if (qp.has('nodepth') || qp.has('nocull')) {
+      var _en = WebGL2RenderingContext.prototype.enable;
+      WebGL2RenderingContext.prototype.enable = function(cap){
+        if (qp.has('nodepth') && cap === 0x0B71) return;  // DEPTH_TEST
+        if (qp.has('nocull') && cap === 0x0B44) return;    // CULL_FACE
+        return _en.call(this, cap); };
+    }
+    if (qp.has('darkbg')) {
+      var _cc = WebGL2RenderingContext.prototype.clearColor;
+      WebGL2RenderingContext.prototype.clearColor = function(){ return _cc.call(this, 0.05, 0.05, 0.15, 1); };
+    }
+  } catch(e){}
+
+  // FCWEB 3D-overlay compositor: Qt-wasm won't blit Coin's render to the page.
+  // So we read Coin's pixels from the default framebuffer (Coin renders to FBO 0
+  // via the wasm patch) and paint them onto our own overlay <canvas> that sits
+  // above the Qt canvas — completely outside Qt's (broken) compositor.
+  (function(){
+    var qp = new URLSearchParams(location.search);
+    // The 3D overlay compositor activates whenever 3D rendering is on.
+    if (qp.has('no3d')) return;  // compositor on by default with the 3D pipeline
+    var ov, ovctx, buf, imgData, lastW=0, lastH=0, throttle=0;
+    // Publish the 3D widget's on-screen rect (CSS px, relative to the main window)
+    // from Qt — only Qt knows the MDI/dock layout. Printed to stderr as "FCRECT {…}"
+    // and captured by append(). Polled because docks/resizes move it.
+    // NOTE: write to sys.__stderr__ (raw fd 2 -> emscripten printErr -> our append
+    // hook), NOT sys.stderr — FreeCAD redirects sys.stderr into the in-app Report
+    // view, which would spam it red. Dedupe: only emit when the rect changes.
+    var RECT_PY = [
+      "try:",
+      " from PySide2 import QtWidgets, QtCore",
+      "except Exception:",
+      " from PySide6 import QtWidgets, QtCore",
+      "import FreeCAD as _f, FreeCADGui as _g, json as _j, sys as _s",
+      "_mw=_g.getMainWindow()",
+      "_md=_mw.findChild(QtWidgets.QMdiArea) if _mw else None",
+      "_sub=_md.activeSubWindow() if _md else None",
+      "_w=_sub.widget() if _sub else None",
+      "if _w is not None:",
+      " _p=_w.mapTo(_mw, QtCore.QPoint(0,0))",
+      " _r=[_p.x(),_p.y(),_w.width(),_w.height()]",
+      " if getattr(_f,'_fcrect_last',None)!=_r:",
+      "  _f._fcrect_last=_r",
+      "  _s.__stderr__.write('FCRECT '+_j.dumps(_r)+'\\n'); _s.__stderr__.flush()",
+      ""
+    ].join("\n");
+    function publishRect(){
+      try{ var m=window.fcInstance; if(!m||!m._fcweb_run_python) return;
+        var n=new TextEncoder().encode(RECT_PY).length+1; var q=m._malloc(n);
+        m.stringToUTF8(RECT_PY,q,n); m._fcweb_run_python(q); m._free(q);
+      }catch(e){}
+    }
+    setTimeout(publishRect, 4000); setInterval(publishRect, 1500);
+    window.addEventListener('resize', ()=>setTimeout(publishRect,120));
+
+    // --- Crash resilience: periodic auto-save of open documents to the persisted
+    // home (IDBFS), plus restore-on-boot. FreeCAD's native recovery writes to /tmp
+    // (ephemeral MEMFS in wasm), so it can't survive a reload; this keeps a live
+    // .FCStd copy of every open doc under the IDBFS-backed home so the rare
+    // event-loop trap (or any reload) never loses work — web-app "always restore"
+    // model. saveCopy() persists without touching the doc's own path/dirty state.
+    function runPy(src){
+      try{ var m=window.fcInstance; if(!m||!m._fcweb_run_python) return;
+        var n=new TextEncoder().encode(src).length+1; var q=m._malloc(n);
+        m.stringToUTF8(src,q,n); m._fcweb_run_python(q); m._free(q);
+      }catch(e){}
+    }
+    var AUTOSAVE_PY = [
+      "import FreeCAD as _App, os as _os",
+      "_rec='/home/web_user/.FreeCAD/recovery'",
+      "_os.makedirs(_rec, exist_ok=True)",
+      "_open=set()",
+      "for _d in list(_App.listDocuments().values()):",
+      "    _open.add(_d.Name)",
+      "    try: _d.saveCopy(_os.path.join(_rec,_d.Name+'.FCStd'))",
+      "    except Exception: pass",
+      "for _f in _os.listdir(_rec):",           // drop recovery copies of closed docs
+      "    if _f.endswith('.FCStd') and _f[:-6] not in _open:",
+      "        try: _os.remove(_os.path.join(_rec,_f))",
+      "        except Exception: pass",
+      ""
+    ].join("\n");
+    var RESTORE_PY = [
+      "import FreeCAD as _App, os as _os, sys as _s",
+      "_rec='/home/web_user/.FreeCAD/recovery'",
+      "_n=0",
+      "if _os.path.isdir(_rec):",
+      "    for _f in sorted(_os.listdir(_rec)):",
+      "        if _f.endswith('.FCStd'):",
+      "            try:",
+      "                _App.openDocument(_os.path.join(_rec,_f)); _n+=1",
+      "            except Exception: pass",
+      "if _n: _s.__stderr__.write('[fcweb] restored %d recovered document(s) from last session\\n'%_n); _s.__stderr__.flush()",
+      ""
+    ].join("\n");
+    // Restore once after boot settles, then auto-save every 30s.
+    setTimeout(function(){ runPy(RESTORE_PY); }, 13000);
+    setInterval(function(){ runPy(AUTOSAVE_PY); }, 30000);
+    // Best-effort final save when the tab is hidden/closed (persists via IDBFS flush).
+    document.addEventListener('visibilitychange', function(){ if(document.hidden) runPy(AUTOSAVE_PY); });
+    function ensureOverlay(){
+      if (ov) return;
+      var screen = document.getElementById('screen');
+      ov = document.createElement('canvas');
+      ov.id = 'fcweb-3d-overlay';
+      ov.style.cssText = 'position:absolute;pointer-events:none;z-index:5;';
+      screen.appendChild(ov);
+      ovctx = ov.getContext('2d');
+    }
+    // Read Coin's render from the CURRENTLY BOUND framebuffer (its own QOpenGLWidget
+    // FBO when ?nofbo0 is set — a buffer Qt's UI never overdraws) and paint it to
+    // the overlay, synchronously at draw time so the FBO content is guaranteed live.
+    function blit(gl, x, y, w, h){
+      if (w<=0||h<=0) return;
+      try {
+        if (!buf || lastW!==w || lastH!==h){ buf=new Uint8Array(w*h*4); imgData=new ImageData(w,h); lastW=w; lastH=h; ensureOverlay(); }
+        gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);  // reads current READ_FRAMEBUFFER
+        var d=imgData.data, opaque=0;
+        // Key out Coin's ACTUAL background color rather than a hardcoded gray: Coin
+        // clears the FBO to black or the theme gray depending on state, so a fixed
+        // key leaves a black rectangle over the viewport. Sample the FBO border
+        // (where the centered model rarely reaches) and take the per-channel median
+        // of 8 points so one clipped sample can't skew the key.
+        function _px(ix,iy){ var o=(iy*w+ix)*4; return [buf[o],buf[o+1],buf[o+2]]; }
+        var _sp=[_px(1,1),_px(w-2,1),_px(1,h-2),_px(w-2,h-2),_px(w>>1,1),_px(w>>1,h-2),_px(1,h>>1),_px(w-2,h>>1)];
+        function _med(ch){ var a=_sp.map(function(s){return s[ch];}).sort(function(x,y){return x-y;}); return (a[3]+a[4])>>1; }
+        var keyR=_med(0), keyG=_med(1), keyB=_med(2), TOL=24;
+        for (var row=0; row<h; row++){
+          var src=(h-1-row)*w*4, dst=row*w*4;   // flip GL bottom-up -> top-down
+          for (var col=0; col<w*4; col+=4){ var rr=buf[src+col],gg=buf[src+col+1],bb=buf[src+col+2];
+            d[dst+col]=rr; d[dst+col+1]=gg; d[dst+col+2]=bb;
+            // Transparent where the render matches the viewport background (so the
+            // FreeCAD UI/viewport shows through everywhere except the 3D model).
+            var isBg=(Math.abs(rr-keyR)<=TOL && Math.abs(gg-keyG)<=TOL && Math.abs(bb-keyB)<=TOL);
+            d[dst+col+3]= isBg ? 0 : 255; if(!isBg)opaque++; }
+        }
+        window.__ovOpaque = opaque;  // non-zero alpha pixel count (diagnostic)
+        // Only PAINT a pass that has substantial geometry, so a background-only pass
+        // doesn't wipe the frame that had the model. `opaque` is the full-res count.
+        var nonbg=opaque;
+        window.__ovBlits=(window.__ovBlits||0)+1; window.__ovMaxNonBg=Math.max(window.__ovMaxNonBg||0,nonbg); window.__ovLastFbo=(w+'x'+h);
+        (window.__ovLog=window.__ovLog||[]).length<60 && window.__ovLog.push(w+'x'+h+':'+nonbg);
+        if (nonbg < 500) return;  // background-only read — don't overwrite the model frame
+        ov.width=w; ov.height=h;                 // backing store = FBO device px
+        ovctx.putImageData(imgData, 0, 0);
+        // Position the overlay exactly over the 3D widget's on-screen rect (CSS px,
+        // published from Qt via FCRECT). Preserve the FBO aspect (contain-fit,
+        // centered) so the model is never stretched. Fall back to the whole screen
+        // rect until the first FCRECT arrives.
+        var R = window.__fcWidgetRect;               // [x,y,w,h] CSS, in-window
+        var rx, ry, rw, rh;
+        if (R && R.length===4 && R[2]>10 && R[3]>10){ rx=R[0]; ry=R[1]; rw=R[2]; rh=R[3]; }
+        else { var sc=document.getElementById('screen').getBoundingClientRect(); rx=0; ry=0; rw=sc.width; rh=sc.height; }
+        var af = w/h, ar = rw/rh, dispW, dispH;
+        if (af > ar){ dispW = rw; dispH = rw/af; } else { dispH = rh; dispW = rh*af; }
+        ov.style.left  = Math.round(rx + (rw-dispW)/2) + 'px';
+        ov.style.top   = Math.round(ry + (rh-dispH)/2) + 'px';
+        ov.style.width = Math.round(dispW)+'px';
+        ov.style.height= Math.round(dispH)+'px';
+      } catch(e){ if(window.__ovErr!==String(e)){ window.__ovErr=String(e); console.log('[overlay]',e); } }
+    }
+    var capGl=null, capFbo=null, capVP=null, rafPending=false;
+    // Read Coin's FBO right after its frame's draws (rAF), while the buffer is
+    // still fresh (a persistent poll would read stale/recycled FBOs). This
+    // re-fires on every Coin redraw, so camera moves / orbit update the overlay.
+    function frameBlit(){
+      rafPending=false;
+      if (!capGl || !capVP) return;
+      var gl=capGl, prev=gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, capFbo);
+      blit(gl, capVP[0], capVP[1], capVP[2], capVP[3]);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prev);
+    }
+    ['drawArrays','drawElements'].forEach(function(nm){
+      var orig = WebGL2RenderingContext.prototype[nm];
+      WebGL2RenderingContext.prototype[nm] = function(){
+        var r = orig.apply(this, arguments);
+        var vp = this.getParameter(this.VIEWPORT);
+        var fbo=this.getParameter(this.FRAMEBUFFER_BINDING);
+        // Depth fix: Qt re-binds its widget FBO mid-render, so the C++ depth clear
+        // lands on the wrong buffer → frame 2+ geometry fails the depth test and
+        // vanishes (renders once, then blank). The Coin background quad (count=4,
+        // depth-test OFF, big viewport) is always the FIRST draw of a frame on the
+        // real target — clear depth right after it, on whatever FBO is truly bound.
+        if (nm==='drawArrays' && arguments[2]===4 && fbo && vp && vp[2]>=300 && !this.isEnabled(this.DEPTH_TEST)) {
+          this.clearDepth(1); this.clear(this.DEPTH_BUFFER_BIT);
+        }
+        // Coin renders into a DEDICATED offscreen FBO (window.__fcCoinFbo, set by
+        // View3DInventorViewer::renderScene); Qt's UI draws go to the default
+        // framebuffer (fbo === null). So blit ONLY when a real FBO is bound — that
+        // isolates the clean 3D scene and drops the UI entirely (no ghosting).
+        if (fbo && vp) (window.__fboDraws=window.__fboDraws||[]).length<60 && window.__fboDraws.push(vp[2]+'x'+vp[3]);
+        if (fbo && vp && vp[2]>=200 && vp[3]>=150) {
+          var prev=this.getParameter(this.READ_FRAMEBUFFER_BINDING);
+          this.bindFramebuffer(this.READ_FRAMEBUFFER, fbo);
+          blit(this, vp[0], vp[1], vp[2], vp[3]);
+          this.bindFramebuffer(this.READ_FRAMEBUFFER, prev);
+        }
+        return r;
+      };
+    });
+    console.log('[fcweb] 3D overlay compositor active');
+  })();
+})();
+</script>
+<script src="FreeCAD.js"></script>
+<script src="qtloader.js"></script>
+<script>init();</script>
+</body></html>
