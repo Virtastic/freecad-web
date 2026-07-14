@@ -34,17 +34,27 @@ jobs:
       - uses: actions/checkout@v4
 
       # Pull the prebuilt engine artifacts into the build context. A clean checkout omits them
-      # (gitignored); the Dockerfile COPY would fail without this.
+      # (gitignored); the Dockerfile COPY would fail without this. Self-contained (curl + python3,
+      # both on the runner) — the self-hosted runner has no `gh` CLI.
       - name: Fetch build artifacts from the release
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REQ_TAG: ${{ inputs.release_tag }}
         run: |
-          TAG="${{ inputs.release_tag }}"
-          [ -z "$TAG" ] && TAG=$(gh release view --json tagName -q .tagName)
-          echo "using release: $TAG"
+          set -e
+          api="https://api.github.com/repos/$REPO/releases"
+          if [ -n "$REQ_TAG" ]; then rel="$api/tags/$REQ_TAG"; else rel="$api/latest"; fi
+          json=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$rel")
+          tag=$(printf '%s' "$json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tag_name"])')
+          echo "using release: $tag"
           mkdir -p play-gui
-          gh release download "$TAG" --dir play-gui --clobber \
-            --pattern 'FreeCAD.js' --pattern 'FreeCAD.wasm' --pattern 'FreeCAD.data'
+          for name in FreeCAD.js FreeCAD.wasm FreeCAD.data; do
+            aid=$(printf '%s' "$json" | python3 -c "import sys,json;print(next(a['id'] for a in json.load(sys.stdin)['assets'] if a['name']=='$name'))")
+            echo "downloading $name (asset $aid)"
+            curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+              "$api/assets/$aid" -o "play-gui/$name"
+          done
           test -s play-gui/FreeCAD.wasm && test -s play-gui/FreeCAD.data \
             || { echo "FATAL: artifacts missing/empty after download" >&2; exit 1; }
 
