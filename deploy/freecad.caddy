@@ -1,0 +1,14 @@
+# Edge vhost for freecad.virtastic.app — deployed as a drop-in into the shared edge Caddy's
+# sites dir (on the VPS: /opt/edge/sites/freecad.caddy; imported by /opt/edge/Caddyfile via
+# `import sites/*.caddy`). The shared edge terminates TLS with the Cloudflare Origin cert and
+# reverse-proxies to the freecad container by name on the shared docker network.
+#
+# The container's own nginx already sets COOP/COEP/CORP (required for SharedArrayBuffer); those
+# response headers pass through this reverse_proxy. So this vhost deliberately does NOT set them
+# again (duplicate COOP/COEP breaks crossOriginIsolated) and does NOT `encode` (would interfere
+# with the large raw .wasm/.data and Range requests).
+freecad.virtastic.app {
+	tls /certs/virtastic.crt /certs/virtastic.key
+	import sec_headers
+	reverse_proxy freecad:80
+}

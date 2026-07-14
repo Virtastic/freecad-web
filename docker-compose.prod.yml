@@ -1,0 +1,15 @@
+# Production compose for freecad.virtastic.app — synced to /opt/freecad/ on the OVH VPS.
+# One static-serving nginx container joined to the shared `nostalgia` docker network; the shared
+# edge Caddy reaches it by name (freecad:80). Publishes NO host ports — only the edge talks to it.
+# FreeCAD.data (the preloaded FS) is baked into the image, so there is no external data volume.
+services:
+  freecad:
+    image: freecad:ovh              # built + tagged by the deploy workflow on the runner
+    container_name: freecad
+    restart: unless-stopped
+    networks: [shared]
+
+networks:
+  shared:
+    external: true
+    name: nostalgia

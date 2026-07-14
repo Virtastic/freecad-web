@@ -1,0 +1,123 @@
+name: deploy-ovh (freecad.virtastic.app)
+
+# Deploys the FreeCAD-WASM app to the OVH VPS via the self-hosted runner in the Virtastic org.
+# The runner executes ON the VPS with docker access, so steps use docker/docker compose directly
+# (same pattern as openmw-wasm / ja2-web). Unlike openmw, FreeCAD is NOT compiled on the box — the
+# huge prebuilt artifacts (FreeCAD.js/.wasm/.data) are gitignored and pulled from a GitHub Release
+# published after a local build:
+#     FC_SKIP_CONFIGURE=1 bash build-browser-gui.sh
+#     gh release create build-YYYYMMDD play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data
+#
+# Prereqs on the box (one-time, shared with the other sites): the self-hosted runner, the shared
+# `edge-caddy` container + `nostalgia` network, and /opt/edge/certs/virtastic.{crt,key}.
+on:
+  push:
+    branches: [ovhcloud]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag holding the artifacts (blank = latest)"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-ovh-freecad
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Public-repo hardening: never run on forks or PR-triggered events — this job
+    # executes on the production VPS runner.
+    if: github.repository == 'Virtastic/freecad-wasm' && github.event_name != 'pull_request'
+    runs-on: [self-hosted, ovh, virtastic]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pull the prebuilt engine artifacts into the build context. A clean checkout omits them
+      # (gitignored); the Dockerfile COPY would fail without this.
+      - name: Fetch build artifacts from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          [ -z "$TAG" ] && TAG=$(gh release view --json tagName -q .tagName)
+          echo "using release: $TAG"
+          mkdir -p play-gui
+          gh release download "$TAG" --dir play-gui --clobber \
+            --pattern 'FreeCAD.js' --pattern 'FreeCAD.wasm' --pattern 'FreeCAD.data'
+          test -s play-gui/FreeCAD.wasm && test -s play-gui/FreeCAD.data \
+            || { echo "FATAL: artifacts missing/empty after download" >&2; exit 1; }
+
+      - name: Build image
+        run: DOCKER_BUILDKIT=1 docker build -t freecad:ovh -f infra/Dockerfile .
+
+      - name: Sync compose to /opt/freecad
+        run: |
+          sudo mkdir -p /opt/freecad
+          sudo cp docker-compose.prod.yml /opt/freecad/docker-compose.prod.yml
+
+      # Drop the vhost into the shared edge's sites dir (imported by /opt/edge/Caddyfile).
+      - name: Install edge vhost
+        run: sudo cp deploy/freecad.caddy /opt/edge/sites/freecad.caddy
+
+      - name: Start / update container
+        run: docker compose -f /opt/freecad/docker-compose.prod.yml up -d
+
+      # Validate, then restart the shared edge to apply the new vhost (admin API disabled, so
+      # `caddy reload` can't be used; restart re-reads the Caddyfile, ~3s blip). Validate first to
+      # protect the other sites on this edge.
+      - name: Apply edge config
+        run: |
+          docker exec edge-caddy caddy validate --config /etc/caddy/Caddyfile
+          docker restart edge-caddy
+
+      # Fast internal gate: the container itself answers 200 + COOP on the shared network.
+      - name: Health check (container)
+        run: |
+          sleep 4
+          docker run --rm --network nostalgia curlimages/curl:latest \
+            -fsS -D - -o /dev/null http://freecad:80/ \
+            | tee /dev/stderr | grep -qi '^cross-origin-opener-policy: same-origin'
+
+      # Real end-to-end gate for the config THIS deploy controls: the shared edge (TLS + sec_headers
+      # + reverse_proxy to the container). Hit the edge DIRECTLY via --resolve to 127.0.0.1, bypassing
+      # Cloudflare. -k because the edge presents the Cloudflare Origin CA cert (not a public CA).
+      - name: Health check (edge, bypassing Cloudflare)
+        run: |
+          set -e
+          E() { curl -sS -k --resolve freecad.virtastic.app:443:127.0.0.1 "$@"; }
+          for i in $(seq 1 12); do
+            E -o /dev/null https://freecad.virtastic.app/ && break
+            echo "edge not ready yet ($i)…"; sleep 3
+          done
+          E -D /tmp/h -o /dev/null https://freecad.virtastic.app/
+          echo "--- / headers (edge, pre-CF) ---"; cat /tmp/h
+          grep -qi '^cross-origin-opener-policy: same-origin'   /tmp/h
+          grep -qi '^cross-origin-embedder-policy: require-corp' /tmp/h
+          # engine wasm carries the correct MIME through the edge
+          E -D - -o /dev/null https://freecad.virtastic.app/FreeCAD.wasm \
+            | tee /tmp/w | grep -qi '^content-type: *application/wasm'
+          # landing gate
+          E -f -o /dev/null https://freecad.virtastic.app/
+          echo "edge health OK"
+
+      # Purge the edge cache for the engine binaries — STABLE names but change every build, and
+      # Cache-Control: immutable does NOT invalidate Cloudflare's edge cache (browser-only). Best
+      # effort: no-op unless CF_PURGE_TOKEN + CF_ZONE_ID secrets are set.
+      - name: Purge Cloudflare cache
+        continue-on-error: true
+        env:
+          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+        run: |
+          if [ -z "$CF_PURGE_TOKEN" ] || [ -z "$CF_ZONE_ID" ]; then
+            echo "CF_PURGE_TOKEN/CF_ZONE_ID not set — skipping edge purge (purge manually on redeploy)."
+            exit 0
+          fi
+          curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CF_PURGE_TOKEN}" -H "Content-Type: application/json" \
+            --data '{"files":[
+              "https://freecad.virtastic.app/FreeCAD.js",
+              "https://freecad.virtastic.app/FreeCAD.wasm",
+              "https://freecad.virtastic.app/FreeCAD.data"
+            ]}'
