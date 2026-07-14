@@ -1,0 +1,53 @@
+name: dns (freecad.virtastic.app)
+
+# Idempotent, STATELESS Cloudflare DNS upsert for freecad.virtastic.app — creates or updates the
+# A record (-> the OVH VPS, proxied). Stateless so it needs no Terraform remote state; safe to run
+# any number of times. Uses the org/repo secret CLOUDFLARE_API_TOKEN (zone-scoped: Zone:Read,
+# DNS:Edit). Set it once (the token never touches anyone's shell logs):
+#     gh secret set CLOUDFLARE_API_TOKEN --org Virtastic --repos freecad-wasm
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths: ["infra/terraform/variables.tf", ".github/workflows/dns.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dns-freecad
+  cancel-in-progress: false
+
+jobs:
+  dns:
+    runs-on: ubuntu-latest
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      ZONE: virtastic.app
+      NAME: freecad.virtastic.app
+      IP: ORIGIN-IP-REDACTED
+    steps:
+      - name: Upsert A record (proxied) via Cloudflare API
+        run: |
+          set -euo pipefail
+          [ -n "${CF_TOKEN:-}" ] || { echo "::error::CLOUDFLARE_API_TOKEN secret not set — gh secret set CLOUDFLARE_API_TOKEN --org Virtastic --repos freecad-wasm"; exit 1; }
+          auth=(-H "Authorization: Bearer ${CF_TOKEN}" -H "Content-Type: application/json")
+          api=https://api.cloudflare.com/client/v4
+
+          zid=$(curl -fsS "${auth[@]}" "$api/zones?name=${ZONE}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"][0]["id"])')
+          echo "zone $ZONE -> $zid"
+
+          rec=$(curl -fsS "${auth[@]}" "$api/zones/$zid/dns_records?type=A&name=${NAME}")
+          rid=$(printf '%s' "$rec" | python3 -c 'import sys,json;r=json.load(sys.stdin)["result"];print(r[0]["id"] if r else "")')
+
+          body=$(printf '{"type":"A","name":"%s","content":"%s","ttl":1,"proxied":true,"comment":"FreeCAD-WASM on the shared OVH VPS (managed by CI)"}' "$NAME" "$IP")
+
+          if [ -n "$rid" ]; then
+            echo "updating existing record $rid"
+            curl -fsS -X PUT "${auth[@]}" "$api/zones/$zid/dns_records/$rid" --data "$body" \
+              | python3 -c 'import sys,json;d=json.load(sys.stdin);print("ok:",d["result"]["name"],"->",d["result"]["content"],"proxied="+str(d["result"]["proxied"]))'
+          else
+            echo "creating record"
+            curl -fsS -X POST "${auth[@]}" "$api/zones/$zid/dns_records" --data "$body" \
+              | python3 -c 'import sys,json;d=json.load(sys.stdin);print("ok:",d["result"]["name"],"->",d["result"]["content"],"proxied="+str(d["result"]["proxied"]))'
+          fi
