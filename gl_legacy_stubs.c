@@ -41,7 +41,9 @@ void glGetDoublev(GLenum pn, GLdouble* p) { (void)pn; if (p) { for (int i=0;i<16
 void glPixelZoom(GLfloat x, GLfloat y) { (void)x;(void)y; }
 void glRasterPos2d(GLdouble x, GLdouble y) { (void)x;(void)y; }
 void glTexCoord4fv(const GLfloat* v) { (void)v; }
-void glRenderMode(GLenum m) { (void)m; }
+// Returns GLint (hit count in GL_SELECT/GL_FEEDBACK exit) — a void definition
+// is a wasm signature mismatch vs callers expecting the count (mesh picking).
+GLint glRenderMode(GLenum m) { (void)m; return 0; }
 void glSelectBuffer(GLsizei n, unsigned int* b) { (void)n;(void)b; }
 void glInitNames(void) {}
 void glPushName(unsigned int n) { (void)n; }

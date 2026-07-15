@@ -19,8 +19,9 @@ export FC_LINK_MODE_FLAGS="\
 --preload-file $INST/Ext@/freecad/Ext \
 --preload-file $INST/share@/freecad/share \
 --preload-file $ROOT/deps/src/freecad/src/Gui/Stylesheets@/freecad/share/Gui/Stylesheets \
+--preload-file $ROOT/deps/src/freecad/src/Gui/PreferencePacks@/freecad/share/Gui/PreferencePacks \
 --preload-file $ROOT/deps/src/freecad/src/Mod/Material/Gui/Resources/icons@/freecad/share/Mod/Material/Resources/icons \
---preload-file $ROOT/deps/src/freecad/data/examples@/freecad/examples \
+--preload-file $ROOT/deps/src/freecad/data/examples@/freecad/share/examples \
 --preload-file $ROOT/deps/wasm/pyside-pkg@/pyside-pkg"
 
 echo "=== reconfigure GUI for browser + relink ==="
@@ -51,7 +52,7 @@ for wb in BIM OpenSCAD Draft Arch CAM Fem Start Spreadsheet Assembly Web Robot P
   fi
 done
 
-ninja -C build-freecad-gui bin/FreeCAD.js
+ninja -C build-freecad-gui bin/FreeCAD.js ${FC_JOBS:+-j ${FC_JOBS}}
 mkdir -p play-gui
 cp build-freecad-gui/bin/FreeCAD.js   play-gui/
 cp build-freecad-gui/bin/FreeCAD.wasm play-gui/
@@ -197,4 +198,125 @@ else:
     print("glLightModelfv pattern not found (skipped)")
 open(p,"w").write(s)
 PYPATCH
+# Second pass: the patterns above are for READABLE (-O1) JS. At -O2 emscripten
+# MINIFIES the JS glue, so those all skip ("pattern not found") and the essential
+# GL-emulation patches go missing → any 3D viewport render hits a null
+# getCurTexUnit and CRASHES the tab. This pass applies the same fixes in minified
+# form (idempotent — skips if the readable pass already applied them).
+python3 - <<'PYMIN'
+p='play-gui/FreeCAD.js'; s=open(p).read(); orig=s; out=[]
+def rep(name, old, new, sentinel):
+    global s
+    if sentinel in s: out.append(name+':already'); return
+    if old in s: s=s.replace(old,new,1); out.append(name+':OK-min')
+    else: out.append(name+':skip-min')
+# getCurTexUnit null guard (the crash)
+rep('getCurTexUnit',
+ 'function getCurTexUnit(){return s_texUnits[s_activeTexture]}',
+ 'function getCurTexUnit(){if(!s_texUnits)return{enabled_tex1D:false,enabled_tex2D:false,enabled_tex3D:false,enabled_texCube:false,texTypesEnabled:0,env:{}};return s_texUnits[s_activeTexture]}',
+ 'if(!s_texUnits)return{enabled_tex1D')
+# getWasmTableEntry: tolerate bad function pointers
+rep('getWasmTableEntry',
+ 'wasmTableMirror[funcPtr]=func=wasmTable.get(funcPtr)}return func}',
+ 'try{wasmTableMirror[funcPtr]=func=wasmTable.get(funcPtr)}catch(e){func=undefined}}if(!func){return function(){return 0}}return func}',
+ 'catch(e){func=undefined}}if(!func)')
+# glNormal3f outside begin/end: stash instead of corrupting vertexData
+rep('glNormal3f',
+ '_glNormal3f=(x,y,z)=>{GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+ '_glNormal3f=(x,y,z)=>{if(GLImmediate.mode<0){GLEmulation.__curNormal=[x,y,z];return}GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+ 'if(GLImmediate.mode<0){GLEmulation.__curNormal')
+# makeContextCurrent -> init GLImmediate (ROOT fix: Qt contexts never fire
+# moduleContextCreatedCallbacks, so s_texUnits stays null)
+anchor='moduleContextCreatedCallbacks.push(()=>GLImmediate.init());'
+hook=anchor+'(function(){var _mcc=GL.makeContextCurrent;GL.makeContextCurrent=function(ctx){var r=_mcc.call(GL,ctx);try{if(GL.currentContext&&typeof GLctx!=="undefined"&&GLctx){if(!GLImmediate.initted){Browser.useWebGL=true;GLImmediate.init()}if(!GL.currentContext.tempVertexBuffers1){GL.generateTempBuffers(true,GL.currentContext)}}}catch(e){}return r}})();/*FCWEBMCC*/'
+if '/*FCWEBMCC*/' in s: out.append('makeContextCurrent:already')
+elif anchor in s: s=s.replace(anchor,hook,1); out.append('makeContextCurrent:OK-min')
+else: out.append('makeContextCurrent:skip-min')
+# Neutralize fixed-function GL emulation TODO-throws (glMaterialfv/glLightfv/
+# glTexGen*/glTexCoord3f...): Coin's material/light sends hit these and a single
+# JS throw unwinds the ENTIRE scene traversal -> geometry silently blanked
+# (found via FS3/FS4 bracket logs around SoMaterialBundle::sendFirst).
+import re as _re
+_pat=_re.compile(r'throw"gl(Materialfv|Lightfv|LightModelf|LightModelfv|TexCoord3f|TexCoord4f|TexGenfv|TexGeni): TODO[^"]*"(\+[A-Za-z_$][\w$]*)?')
+s,_n=_pat.subn('0',s)
+out.append('gl-throws:'+str(_n))
+# Implement glMaterialfv(GL_AMBIENT_AND_DIFFUSE=5634): that's how Coin sends the
+# shape color; without it every solid renders white/gray.
+mad_old='else if(pname==5633){GLEmulation.materialShininess[0]=GROWABLE_HEAP_F32()[param>>>2>>>0]}else{0}}var _emscripten_glMaterialfv'
+mad_new=('else if(pname==5633){GLEmulation.materialShininess[0]=GROWABLE_HEAP_F32()[param>>>2>>>0]}'
+ 'else if(pname==5634){var _r=GROWABLE_HEAP_F32()[param>>>2>>>0],_g=GROWABLE_HEAP_F32()[param+4>>>2>>>0],_b=GROWABLE_HEAP_F32()[param+8>>>2>>>0],_a=GROWABLE_HEAP_F32()[param+12>>>2>>>0];'
+ 'GLEmulation.materialAmbient[0]=_r;GLEmulation.materialAmbient[1]=_g;GLEmulation.materialAmbient[2]=_b;GLEmulation.materialAmbient[3]=_a;'
+ 'GLEmulation.materialDiffuse[0]=_r;GLEmulation.materialDiffuse[1]=_g;GLEmulation.materialDiffuse[2]=_b;GLEmulation.materialDiffuse[3]=_a}'
+ 'else{0}}var _emscripten_glMaterialfv')
+if 'pname==5634' in s: out.append('mat-color:already')
+elif mad_old in s: s=s.replace(mad_old,mad_new,1); out.append('mat-color:OK')
+else: out.append('mat-color:MISS')
+# COLOR_MATERIAL approximation: Coin sends per-shape diffuse via glColor with
+# GL_COLOR_MATERIAL (the GL default); the emulation ignores COLOR_MATERIAL, so
+# mirror glColor into materialAmbient/Diffuse — this is what makes solids COLORED.
+gc_old='else{GLImmediate.clientColor[0]=r;GLImmediate.clientColor[1]=g;GLImmediate.clientColor[2]=b;GLImmediate.clientColor[3]=a}};var _glColor3f'
+gc_new=('else{GLImmediate.clientColor[0]=r;GLImmediate.clientColor[1]=g;GLImmediate.clientColor[2]=b;GLImmediate.clientColor[3]=a}'
+ 'if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;GLEmulation.materialDiffuse[1]=g;GLEmulation.materialDiffuse[2]=b;GLEmulation.materialDiffuse[3]=a;'
+ 'GLEmulation.materialAmbient[0]=r;GLEmulation.materialAmbient[1]=g;GLEmulation.materialAmbient[2]=b;GLEmulation.materialAmbient[3]=a}};var _glColor3f')
+# 3D viewport ON by default (?no3d opts out) — the render pipeline works now.
+r3_old='if(qs.has("render3d")){ENV.FCWEB_ENABLE_3D="1";ENV.FCWEB_NO_FBO0="1"}'
+r3_new='if(!qs.has("no3d")){ENV.FCWEB_ENABLE_3D="1";ENV.FCWEB_NO_FBO0="1"}'
+if r3_new in s: out.append('3d-default:already')
+elif r3_old in s: s=s.replace(r3_old,r3_new,1); out.append('3d-default:OK')
+else: out.append('3d-default:MISS')
+if 'materialDiffuse[0]=r' in s: out.append('color-material:already')
+elif gc_old in s: s=s.replace(gc_old,gc_new,1); out.append('color-material:OK')
+else: out.append('color-material:MISS')
+# brighten default ambient lighting so lit 3D surfaces aren't near-black
+la_old='GLEmulation.lightModelAmbient=new Float32Array([.2,.2,.2,1]);GLEmulation.materialAmbient=new Float32Array([.2,.2,.2,1]);'
+la_new='GLEmulation.lightModelAmbient=new Float32Array([.45,.45,.45,1]);GLEmulation.materialAmbient=new Float32Array([.8,.8,.8,1]);'
+if la_new in s: out.append('ambient:already')
+elif la_old in s: s=s.replace(la_old,la_new,1); out.append('ambient:OK-min')
+else: out.append('ambient:skip-min')
+# ROOT-CAUSE FIX (3D redraw): Coin leaves a VBO bound to ARRAY_BUFFER after other
+# draws; emscripten immediate-mode prepare() then sees currentArrayBufferBinding!=null
+# and SKIPS uploading the glBegin/glVertex data, drawing that foreign buffer's zeros
+# instead -> the box collapses to the origin on frame 2+ ("renders once, then blank").
+# glEnd immediate data is ALWAYS in tempData, so clear the binding before flush.
+rep('glEnd-arraybuf-clear',
+ 'GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);GLImmediate.flush();',
+ 'GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}GLImmediate.flush();',
+ 'GLctx.currentArrayBufferBinding=null;}GLImmediate.flush()')
+# rebind the fixed-function program before each immediate flush (Qt UI draws leave a
+# foreign program current -> "no valid shader program in use" on the immediate draw)
+rep('flush-useprogram',
+ 'flush(numProvidedIndexes,startIndex=0,ptr=0){var renderer=GLImmediate.getRenderer();var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;',
+ 'flush(numProvidedIndexes,startIndex=0,ptr=0){var renderer=GLImmediate.getRenderer();if(renderer&&renderer.program){GLctx.useProgram(renderer.program)}var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;',
+ 'useProgram(renderer.program)}var numVertices')
+# never adopt Qt's currently-bound shader as the immediate-mode renderer (it has no
+# u_modelView -> geometry transforms to garbage). Always build the generated program.
+rep('createrenderer-nocurr',
+ 'createRenderer(renderer){var useCurrProgram=!!GL.currProgram;',
+ 'createRenderer(renderer){var useCurrProgram=false;',
+ 'createRenderer(renderer){var useCurrProgram=false;')
+# validate cached renderers still own a live GL program (contexts get recreated in
+# Qt-wasm; a stale renderer.program -> INVALID_OPERATION drawArrays)
+rep('getrenderer-validate',
+ 'getRenderer(){if(GLImmediate.currentRenderer){return GLImmediate.currentRenderer}',
+ 'getRenderer(){if(GLImmediate.currentRenderer){var _vp0;try{_vp0=GLImmediate.currentRenderer.program&&GLctx.isProgram(GLImmediate.currentRenderer.program)}catch(_e){_vp0=false}if(_vp0){return GLImmediate.currentRenderer}GLImmediate.currentRenderer=null}',
+ '_vp0')
+rep('keyview-validate',
+ 'var renderer=keyView.get();if(!renderer){renderer=GLImmediate.createRenderer();',
+ 'var renderer=keyView.get();if(renderer){var _vp1;try{_vp1=renderer.program&&GLctx.isProgram(renderer.program)}catch(_e){_vp1=false}if(!_vp1)renderer=null}if(!renderer){renderer=GLImmediate.createRenderer();',
+ '_vp1')
+# SHADING: the emulation ships a ready headlight (lightPosition[0]=[0,0,1,0],
+# lightDiffuse[0]=white) but Coin never enables GL_LIGHTING/GL_LIGHT0 in wasm, so
+# solids render FLAT single-color. Enable lighting for draws that carry normals
+# (real geometry); leave normal-less draws (background gradient/text/UI) unlit.
+rep('shading-headlight',
+ 'flush(numProvidedIndexes,startIndex=0,ptr=0){',
+ 'flush(numProvidedIndexes,startIndex=0,ptr=0){try{if(typeof GLEmulation!=="undefined"&&GLImmediate.enabledClientAttributes){var _hasN=!!GLImmediate.enabledClientAttributes[GLImmediate.NORMAL!=null?GLImmediate.NORMAL:1];if(GLEmulation.lightingEnabled!==_hasN){GLEmulation.lightingEnabled=_hasN;GLImmediate.currentRenderer=null;}if(_hasN&&GLEmulation.lightEnabled&&!GLEmulation.lightEnabled[0]){GLEmulation.lightEnabled[0]=true;GLEmulation.lightModelTwoSide=1;GLImmediate.currentRenderer=null;}}}catch(_e){}',
+ '_hasN=!!GLImmediate.enabledClientAttributes')
+# silence per-frame "Unhandled pname in call to glTexEnv{f,i,fv}" warnings (Coin's
+# texture-env sends; GL semantics are error+ignore, so ignore quietly)
+s,_nt=_re.subn(r'err\("WARNING: Unhandled `pname` in call to `glTexEnv[fiv]+`\."\)','0',s)
+out.append('texenv-warn:'+str(_nt))
+if s!=orig: open(p,'w').write(s)
+print('[minified GL patches] '+' | '.join(out))
+PYMIN
 echo "=== GUI browser artifacts ===" && ls -la play-gui/FreeCAD.* 2>/dev/null | awk '{print $5, $9}'
