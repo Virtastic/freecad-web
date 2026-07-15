@@ -242,6 +242,16 @@
       " if getattr(_f,'_fcrect_last',None)!=_r:",
       "  _f._fcrect_last=_r",
       "  _s.__stderr__.write('FCRECT '+_j.dumps(_r)+'\\n'); _s.__stderr__.flush()",
+      // wasm: entering Sketcher edit sets the sketch ViewProvider Visibility=False,
+      // and the edit geometry (EditRoot) sits under that visibility switch — which,
+      // under the emscripten GL emulation, culls the whole subtree so you sketch
+      // 'blind'. Force the in-edit ViewProvider visible so its edit scene renders.
+      "try:",
+      " _ad=_g.activeDocument()",
+      " _ie=_ad.getInEdit() if _ad else None",
+      " if _ie is not None and not bool(_ie.Visibility):",
+      "  _ie.Visibility=True",
+      "except Exception: pass",
       ""
     ].join("\n");
     function publishRect(){
