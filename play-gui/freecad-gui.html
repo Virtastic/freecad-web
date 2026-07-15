@@ -238,6 +238,12 @@
       // UI. showFullScreen() drops the frame so the app fills the viewport cleanly. Once.
       "if _mw is not None and not getattr(_f,'_fcweb_fs_done',False):",
       " _mw.showFullScreen(); _f._fcweb_fs_done=True",
+      // Expose FreeCAD.installAddon('owner/repo') in the Python console: it drops a request
+      // file that the JS watcher picks up and installs via GitHub fetch (no git in wasm). Once.
+      "if not getattr(_f,'_fcweb_addon_api',False):",
+      " def _fcweb_install_addon(spec):",
+      "  open('/tmp/_fcaddonreq','w').write(str(spec)); print('requested addon install: '+str(spec))",
+      " _f.installAddon=_fcweb_install_addon; _f._fcweb_addon_api=True",
       "_md=_mw.findChild(QtWidgets.QMdiArea) if _mw else None",
       "_sub=_md.activeSubWindow() if _md else None",
       "_w=_sub.widget() if _sub else None",
@@ -471,10 +477,10 @@
     alert('Save timed out');
   }
 
-  function openFile(){
+  function openFile(filter){
     if(!ready()){ return; }
     var inp=document.createElement('input'); inp.type='file';
-    inp.accept='.FCStd,.fcstd,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj';
+    inp.accept='.FCStd,.fcstd,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.FCMacro,.py,.svg,.dxf,.zip';
     inp.style.cssText='position:fixed;left:-9999px;'; document.body.appendChild(inp);
     inp.onchange=async function(){
       try{
@@ -487,6 +493,28 @@
       var ext=(f.name.split('.').pop()||'').toLowerCase();
       if(ext==='fcstd'){
         py("import FreeCAD, FreeCADGui as Gui\nD=FreeCAD.openDocument("+JSON.stringify(path)+")\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
+      } else if(ext==='fcmacro'||ext==='py'){
+        // Macro / Python script: copy into the user macro dir (so it shows in Macro > Macros...)
+        // and run it immediately, exactly like FreeCAD's "Execute macro".
+        py([
+          "import os, shutil, FreeCAD, FreeCADGui as Gui",
+          "src="+JSON.stringify(path),
+          "md=FreeCAD.getUserMacroDir(True)",
+          "os.makedirs(md, exist_ok=True)",
+          "dst=os.path.join(md, os.path.basename(src))",
+          "try: shutil.copyfile(src, dst)",
+          "except Exception: dst=src",
+          "try:",
+          "  Gui.doCommandGui('exec(open(%r, encoding=\"utf-8\").read())' % dst)",
+          "except Exception as e:",
+          "  import sys; sys.__stderr__.write('macro error: %s\\n'%e)"
+        ].join('\n'));
+      } else if(ext==='zip'){
+        // Custom workbench / addon package: extract into the user Mod dir and load it, so an
+        // engineer can install a plugin they already have as a .zip (no network needed).
+        installWorkbenchZip(path);
+      } else if(ext==='svg'||ext==='dxf'){
+        py("import FreeCAD, FreeCADGui as Gui, importSVG, importDXF\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\n(importSVG if "+JSON.stringify(ext)+"=='svg' else importDXF).insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
       } else {
         py("import FreeCAD, Part, FreeCADGui as Gui\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\nPart.insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
       }
@@ -494,28 +522,154 @@
     };
     inp.click();
   }
-  window.fcwebDownload=download; window.fcwebOpen=openFile;
-
-  // on-screen buttons (top-right, above the Qt canvas)
-  function addUI(){
-    if(document.getElementById('fcweb-fileui')) return;
-    var bar=document.createElement('div'); bar.id='fcweb-fileui';
-    bar.style.cssText='position:absolute;top:6px;right:12px;z-index:30;display:flex;gap:6px;font:12px system-ui;';
-    function mk(label,title,fn){ var btn=document.createElement('button'); btn.textContent=label; btn.title=title;
-      btn.style.cssText='background:#2b2b3a;color:#dcdce6;border:1px solid #454560;border-radius:4px;padding:4px 9px;cursor:pointer;';
-      btn.onmouseenter=function(){btn.style.background='#3a3a4e';}; btn.onmouseleave=function(){btn.style.background='#2b2b3a';};
-      btn.onclick=fn; return btn; }
-    bar.appendChild(mk('\u{1F4C2} Open','Open a .FCStd / STEP / STL / IGES from your computer (Ctrl+O)',openFile));
-    bar.appendChild(mk('\u{1F4BE} Save','Download the active document as .FCStd (Ctrl+S)',download));
-    document.body.appendChild(bar);
+  // Save bridge: FreeCAD's native File > Save / Save As / Export (patched Gui/FileDialog.cpp
+  // getSaveFileName) hands us a staging path under /home/web_user/_dl and writes the file there
+  // in whatever format the user chose. We watch each registered path and download it to the
+  // user's machine when it appears or changes (mtime/size), so every Save/Export menu path works.
+  var pendingSaves={};  // path -> last {mtime,size} we downloaded
+  function registerSave(path){
+    if(!ready()) return;
+    var m=window.fcInstance, FS=m.FS, dir=path.replace(/\/[^\/]*$/,'');
+    try{ FS.mkdirTree ? FS.mkdirTree(dir) : FS.mkdir(dir); }catch(e){}
+    if(!(path in pendingSaves)) pendingSaves[path]=null;
+    ensureSaveWatcher();
   }
-  // Ctrl+S / Ctrl+O -> our bridge, in capture phase so Qt's broken native dialog never runs
+  var saveWatch=null;
+  function ensureSaveWatcher(){
+    if(saveWatch) return;
+    saveWatch=setInterval(function(){
+      if(!ready()) return;
+      var m=window.fcInstance, FS=m.FS;
+      for(var path in pendingSaves){
+        var st; try{ st=FS.stat(path); }catch(e){ continue; }   // not written yet
+        if(!st || !st.size) continue;
+        var sig=st.mtime+':'+st.size, prev=pendingSaves[path];
+        if(prev===sig) continue;                                 // unchanged since last download
+        // wait one tick for a size-stable file (write finished), then download
+        pendingSaves[path]=sig;
+        (function(p,size){
+          var bytes; try{ bytes=FS.readFile(p); }catch(e){ return; }
+          if(bytes.length!==size) { pendingSaves[p]=null; return; } // mid-write; retry next tick
+          var name=p.replace(/^.*\//,'');
+          var blob=new Blob([bytes],{type:'application/octet-stream'});
+          var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){URL.revokeObjectURL(a.href);},15000);
+        })(path,st.size);
+      }
+    },400);
+  }
+  function logmsg(s){ try{ py("import sys; sys.__stderr__.write("+JSON.stringify(s+"\n")+")"); }catch(e){} }
+
+  // Load any freshly-added workbenches under the user Mod dir without a restart: exec each
+  // Init.py / InitGui.py the way FreeCAD's startup does. Best-effort; errors go to the log.
+  function loadUserMods(){
+    py([
+      "import os, sys, FreeCAD, FreeCADGui as Gui",
+      "moddir=os.path.join(FreeCAD.getUserAppDataDir(),'Mod')",
+      "loaded=getattr(FreeCAD,'_fcweb_loaded_mods',None)",
+      "if loaded is None: loaded=FreeCAD._fcweb_loaded_mods=set()",
+      "if os.path.isdir(moddir):",
+      " for name in sorted(os.listdir(moddir)):",
+      "  d=os.path.join(moddir,name)",
+      "  if not os.path.isdir(d) or d in loaded: continue",
+      "  loaded.add(d)",
+      "  if d not in sys.path: sys.path.append(d)",
+      "  for boot in ('Init.py','InitGui.py'):",
+      "   fp=os.path.join(d,boot)",
+      "   if os.path.isfile(fp):",
+      "    try:",
+      "     ns={'__file__':fp,'__name__':'__main__'}; exec(open(fp,encoding='utf-8').read(), ns)",
+      "     sys.__stderr__.write('addon loaded: %s (%s)\\n'%(name,boot))",
+      "    except Exception as e: sys.__stderr__.write('addon %s %s error: %s\\n'%(name,boot,e))"
+    ].join('\n'));
+  }
+
+  function installWorkbenchZip(path){
+    logmsg('installing workbench from '+path.replace(/^.*\//,'')+' ...');
+    py([
+      "import os, zipfile, FreeCAD",
+      "src="+JSON.stringify(path),
+      "moddir=os.path.join(FreeCAD.getUserAppDataDir(),'Mod')",
+      "os.makedirs(moddir, exist_ok=True)",
+      "wbname=os.path.splitext(os.path.basename(src))[0] or 'CustomWB'",
+      "try:",
+      "  with zipfile.ZipFile(src) as z:",
+      "    names=[n for n in z.namelist() if not n.startswith('/') and '..' not in n and not n.endswith('/')]",
+      "    # A workbench must live in its OWN dir under Mod/. If every entry already shares a single",
+      "    # top-level folder, keep it as-is (Mod/<top>/...). If the zip is flat, wrap it in Mod/<wbname>/.",
+      "    tops=set(n.split('/')[0] for n in names)",
+      "    flat = not all('/' in n for n in names) or len(tops)!=1",
+      "    for n in names:",
+      "      rel = (wbname+'/'+n) if flat else n",
+      "      dst=os.path.join(moddir, rel)",
+      "      os.makedirs(os.path.dirname(dst), exist_ok=True)",
+      "      with z.open(n) as fsrc, open(dst,'wb') as fdst: fdst.write(fsrc.read())",
+      "    FreeCAD.Console.PrintMessage('workbench extracted to %s\\n'%moddir)",
+      "except Exception as e:",
+      "  import sys; sys.__stderr__.write('zip install error: %s\\n'%e)"
+    ].join('\n'));
+    loadUserMods();
+  }
+
+  // Browser-native addon install from GitHub: no git/subprocess (unavailable in wasm). Uses the
+  // GitHub REST tree API + raw.githubusercontent (both send CORS *), so it works from the page.
+  // Only codeload zipballs lack CORS, which we avoid by fetching individual files.
+  async function installAddonFromGitHub(spec){
+    if(!ready()){ logmsg('not ready'); return; }
+    var mm=spec.replace(/^https?:\/\/github\.com\//,'').replace(/\.git$/,'').split('/');
+    var owner=mm[0], repo=mm[1]; if(!owner||!repo){ logmsg('bad repo spec: '+spec); return; }
+    logmsg('fetching '+owner+'/'+repo+' from GitHub ...');
+    try{
+      var meta=await (await fetch('https://api.github.com/repos/'+owner+'/'+repo)).json();
+      var branch=meta.default_branch||'master';
+      var tree=await (await fetch('https://api.github.com/repos/'+owner+'/'+repo+'/git/trees/'+branch+'?recursive=1')).json();
+      if(!tree.tree){ logmsg('could not list files (rate limited?)'); return; }
+      var files=tree.tree.filter(function(t){return t.type==='blob';});
+      if(tree.truncated) logmsg('note: large repo, file list truncated by GitHub');
+      if(files.length>1200){ logmsg('repo has '+files.length+' files — too large to install in-browser; aborting'); return; }
+      var m=window.fcInstance, FS=m.FS;
+      // resolve the real user Mod dir from FreeCAD (don't assume the XDG path)
+      py("import os, FreeCAD\nopen('/tmp/_fcmoddir','w').write(os.path.join(FreeCAD.getUserAppDataDir(),'Mod'))");
+      var moddir='/home/web_user/.local/share/FreeCAD/Mod';
+      try{ moddir=new TextDecoder().decode(FS.readFile('/tmp/_fcmoddir'))||moddir; }catch(e){}
+      var base=moddir+'/'+repo;
+      try{ FS.mkdirTree(base); }catch(e){}
+      var n=0;
+      for(var i=0;i<files.length;i++){
+        var fp=files[i].path;
+        var r=await fetch('https://raw.githubusercontent.com/'+owner+'/'+repo+'/'+branch+'/'+fp);
+        if(!r.ok) continue;
+        var bytes=new Uint8Array(await r.arrayBuffer());
+        var dst=base+'/'+fp, d=dst.replace(/\/[^\/]*$/,'');
+        try{ FS.mkdirTree(d); }catch(e){}
+        FS.writeFile(dst, bytes); n++;
+        if(n%15===0) logmsg('  '+n+'/'+files.length+' files...');
+      }
+      logmsg('downloaded '+n+' files -> Mod/'+repo);
+      loadUserMods();
+    }catch(e){ logmsg('addon install failed: '+e); }
+  }
+
+  window.fcwebDownload=download; window.fcwebOpen=openFile; window.fcwebRegisterSave=registerSave;
+  window.fcInstallAddon=installAddonFromGitHub; window.fcLoadUserMods=loadUserMods;
+  window.fcInstallWorkbenchZip=installWorkbenchZip;
+
+  // Bridge FreeCAD.installAddon('owner/repo') (Python console) -> the JS GitHub fetcher.
+  setInterval(function(){
+    if(!ready()) return;
+    var FS=window.fcInstance.FS, spec;
+    try{ spec=new TextDecoder().decode(FS.readFile('/tmp/_fcaddonreq')).trim(); }catch(e){ return; }
+    try{ FS.unlink('/tmp/_fcaddonreq'); }catch(e){}
+    if(spec) installAddonFromGitHub(spec);
+  },700);
+
+  // Ctrl+S / Ctrl+O convenience -> same bridge (capture phase so a stray native dialog never runs)
   window.addEventListener('keydown',function(e){
     var k=(e.key||'').toLowerCase();
     if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); download(); }
     else if((e.metaKey||e.ctrlKey)&&k==='o'){ e.preventDefault(); e.stopImmediatePropagation(); openFile(); }
   },true);
-  var t=setInterval(function(){ if(ready()){ clearInterval(t); addUI(); } },500);
 })();
 </script>
 </body></html>
