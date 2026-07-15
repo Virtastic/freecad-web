@@ -5,16 +5,33 @@ because it is multi-GB vendored source. This directory snapshots every source
 change made on top of those pristine checkouts so the work is preserved
 independently of the working copy.
 
-## Apply
+## Apply / regenerate (one command each)
 
-The vendored trees are plain git checkouts, so the diffs apply with `git apply`
-from inside each tree:
+- **`bash patches/apply.sh`** — apply every stored patch onto pristine `deps/src/*`
+  checkouts (idempotent: already-applied patches are detected and skipped) and copy the
+  PySide package glue into `deps/wasm/`. Run once after cloning the deps trees at their
+  pinned commits, before configuring.
+- **`bash patches/regen.sh`** — regenerate every `.patch` from the current tree state.
+  **Run this after ANY edit under `deps/src/*`** so the fix is captured (deps/ is
+  gitignored, so an uncaptured edit is lost on a fresh checkout). Then commit the
+  updated patch files.
+
+Covered trees: `freecad`, `pyside-setup`, `occt`, `cpython`, `numpy`. Each patch is
+verified coherent with `git -C deps/src/<repo> apply --reverse --check patches/<x>.patch`
+(passes = the patch exactly reproduces the current source). Manual equivalent:
 
 ```bash
 git -C deps/src/freecad       apply /path/to/patches/freecad.patch
 git -C deps/src/pyside-setup  apply /path/to/patches/pyside-setup.patch
 git -C deps/src/occt          apply /path/to/patches/occt.patch
+git -C deps/src/cpython       apply /path/to/patches/cpython-ctypes-wasm.patch
+git -C deps/src/numpy         apply /path/to/patches/numpy.patch
 ```
+
+`freecad.patch` bundles the full wasm C++ port including the crash-fix set (OCC serial
+thread-pool in `Mod/Part/App/AppPart.cpp`, TechDraw lazy static-init in `Rez.cpp`/
+`QGIViewPart.cpp`, MEFISTO f2c signature fixes) and the native browser File-dialog
+routing in `Gui/FileDialog.cpp`.
 
 - **freecad.patch** — the wasm port of FreeCAD's C++/CMake: heap-allocated
   MainWindow/QApplication, 3D viewport gating, NavigationStyle camera fix,
