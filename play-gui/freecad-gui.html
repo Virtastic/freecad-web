@@ -233,6 +233,11 @@
       " from PySide6 import QtWidgets, QtCore",
       "import FreeCAD as _f, FreeCADGui as _g, json as _j, sys as _s",
       "_mw=_g.getMainWindow()",
+      // Browser app: Qt-wasm draws a vestigial window title bar (dark, near-unreadable
+      // title text) with min/max/close buttons that do nothing in a tab AND overlap our
+      // UI. showFullScreen() drops the frame so the app fills the viewport cleanly. Once.
+      "if _mw is not None and not getattr(_f,'_fcweb_fs_done',False):",
+      " _mw.showFullScreen(); _f._fcweb_fs_done=True",
       "_md=_mw.findChild(QtWidgets.QMdiArea) if _mw else None",
       "_sub=_md.activeSubWindow() if _md else None",
       "_w=_sub.widget() if _sub else None",
