@@ -406,4 +406,101 @@
 <script src="FreeCAD.js"></script>
 <script src="qtloader.js"></script>
 <script>init();</script>
+<script>
+/* FCWEB file bridge: Qt-for-WebAssembly's native Open/Save-As dialogs need ASYNCIFY
+   (absent in this multithread build) — they abort with "emscripten_sleep needs async".
+   So bridge file I/O through the browser directly: Save = write the doc to the IDBFS
+   home, read the bytes, download a Blob; Open = HTML file input -> write to the FS ->
+   openDocument/insert. Wired to on-screen buttons AND Ctrl+S / Ctrl+O (capture phase,
+   so the broken native dialog never fires). Work also persists across reloads via the
+   IDBFS home, so nothing is lost regardless. */
+(function(){
+  function py(code){ var m=window.fcInstance; if(!m||!m._fcweb_run_python) return false;
+    var n=new TextEncoder().encode(code).length+1, q=m._malloc(n); m.stringToUTF8(code,q,n);
+    try{ m._fcweb_run_python(q); } finally{ m._free(q); } return true; }
+  function ready(){ var m=window.fcInstance; return m && m._fcweb_run_python && m.FS; }
+
+  async function download(){
+    if(!ready()){ return; }
+    var m=window.fcInstance, FS=m.FS, dir='/home/web_user/_dl';
+    try{ FS.mkdirTree ? FS.mkdirTree(dir) : FS.mkdir(dir); }catch(e){}
+    try{ FS.unlink(dir+'/done'); }catch(e){}
+    py([
+      "import FreeCAD, os",
+      "d = FreeCAD.ActiveDocument",
+      "o = "+JSON.stringify(dir),
+      "os.makedirs(o, exist_ok=True)",
+      "err=''",
+      "try:",
+      "  if d is None: err='no active document'",
+      "  else:",
+      "    lbl=''.join(c for c in (d.Label or 'document') if c.isalnum() or c in '-_ ').strip() or 'document'",
+      "    fp=os.path.join(o, lbl+'.FCStd')",
+      "    d.saveAs(fp)",
+      "    open(os.path.join(o,'name'),'w').write(lbl+'.FCStd')",
+      "except Exception as e: err=str(e)",
+      "open(os.path.join(o,'done'),'w').write(err)"
+    ].join('\n'));
+    for(var i=0;i<80;i++){
+      await new Promise(function(r){setTimeout(r,150);});
+      var err; try{ err=new TextDecoder().decode(FS.readFile(dir+'/done')); }catch(e){ continue; }
+      if(err){ alert('Save failed: '+err); return; }
+      var name=new TextDecoder().decode(FS.readFile(dir+'/name'));
+      var bytes=FS.readFile(dir+'/'+name);
+      var blob=new Blob([bytes],{type:'application/octet-stream'});
+      var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){URL.revokeObjectURL(a.href);},15000);
+      return;
+    }
+    alert('Save timed out');
+  }
+
+  function openFile(){
+    if(!ready()){ return; }
+    var inp=document.createElement('input'); inp.type='file';
+    inp.accept='.FCStd,.fcstd,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj';
+    inp.style.cssText='position:fixed;left:-9999px;'; document.body.appendChild(inp);
+    inp.onchange=async function(){
+      try{
+      var f=inp.files&&inp.files[0]; if(!f){ inp.remove(); return; }
+      var buf=new Uint8Array(await f.arrayBuffer());
+      var m=window.fcInstance, FS=m.FS, dir='/home/web_user/_up';
+      try{ FS.mkdirTree ? FS.mkdirTree(dir) : FS.mkdir(dir); }catch(e){}
+      var safe=f.name.replace(/[^A-Za-z0-9._-]/g,'_'), path=dir+'/'+safe;
+      FS.writeFile(path, buf);
+      var ext=(f.name.split('.').pop()||'').toLowerCase();
+      if(ext==='fcstd'){
+        py("import FreeCAD, FreeCADGui as Gui\nD=FreeCAD.openDocument("+JSON.stringify(path)+")\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
+      } else {
+        py("import FreeCAD, Part, FreeCADGui as Gui\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\nPart.insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
+      }
+      } finally { inp.remove(); }
+    };
+    inp.click();
+  }
+  window.fcwebDownload=download; window.fcwebOpen=openFile;
+
+  // on-screen buttons (top-right, above the Qt canvas)
+  function addUI(){
+    if(document.getElementById('fcweb-fileui')) return;
+    var bar=document.createElement('div'); bar.id='fcweb-fileui';
+    bar.style.cssText='position:absolute;top:6px;right:12px;z-index:30;display:flex;gap:6px;font:12px system-ui;';
+    function mk(label,title,fn){ var btn=document.createElement('button'); btn.textContent=label; btn.title=title;
+      btn.style.cssText='background:#2b2b3a;color:#dcdce6;border:1px solid #454560;border-radius:4px;padding:4px 9px;cursor:pointer;';
+      btn.onmouseenter=function(){btn.style.background='#3a3a4e';}; btn.onmouseleave=function(){btn.style.background='#2b2b3a';};
+      btn.onclick=fn; return btn; }
+    bar.appendChild(mk('\u{1F4C2} Open','Open a .FCStd / STEP / STL / IGES from your computer (Ctrl+O)',openFile));
+    bar.appendChild(mk('\u{1F4BE} Save','Download the active document as .FCStd (Ctrl+S)',download));
+    document.body.appendChild(bar);
+  }
+  // Ctrl+S / Ctrl+O -> our bridge, in capture phase so Qt's broken native dialog never runs
+  window.addEventListener('keydown',function(e){
+    var k=(e.key||'').toLowerCase();
+    if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); download(); }
+    else if((e.metaKey||e.ctrlKey)&&k==='o'){ e.preventDefault(); e.stopImmediatePropagation(); openFile(); }
+  },true);
+  var t=setInterval(function(){ if(ready()){ clearInterval(t); addUI(); } },500);
+})();
+</script>
 </body></html>
