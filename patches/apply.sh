@@ -26,6 +26,7 @@ apply_one pyside-setup  pyside-setup.patch
 apply_one occt          occt.patch
 apply_one cpython       cpython-ctypes-wasm.patch
 apply_one numpy         numpy.patch
+apply_one coin3d        coin3d.patch
 
 echo "Copying PySide package glue (deps/wasm must already exist):"
 if [ -d deps/wasm/pyside-pkg ]; then

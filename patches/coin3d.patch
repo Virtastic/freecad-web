@@ -1,0 +1,21 @@
+diff --git a/src/glue/gl.cpp b/src/glue/gl.cpp
+index 66273c2..29b07a0 100644
+--- a/src/glue/gl.cpp
++++ b/src/glue/gl.cpp
+@@ -1391,8 +1391,16 @@ glglue_resolve_symbols(cc_glglue * w)
+         !w->glIsBuffer ||
+         !w->glBufferData ||
+         !w->glBufferSubData ||
++#ifndef __EMSCRIPTEN__
++        /* GLES/WebGL has no glMapBuffer or glGetBufferSubData. Coin's VBO implementation
++           (SoVBO.cpp) never calls either one — it only uses glGenBuffers, glBindBuffer,
++           glBufferData and glDeleteBuffers, all of which emscripten provides. Demanding
++           them here would null glBindBuffer, making cc_glglue_has_vertex_buffer_object()
++           return FALSE and pushing every scene down Coin's immediate-mode glBegin/glVertex
++           path — which stalls the main thread for minutes on a large assembly. */
+         !w->glGetBufferSubData ||
+         !w->glMapBuffer ||
++#endif
+         !w->glUnmapBuffer ||
+         !w->glGetBufferParameteriv ||
+         !w->glGetBufferPointerv) {
