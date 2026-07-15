@@ -316,6 +316,13 @@ rep('shading-headlight',
 # texture-env sends; GL semantics are error+ignore, so ignore quietly)
 s,_nt=_re.subn(r'err\("WARNING: Unhandled `pname` in call to `glTexEnv[fiv]+`\."\)','0',s)
 out.append('texenv-warn:'+str(_nt))
+
+# silence the LEGACY_GL_EMULATION disclaimer. err() -> console.error, so this prints RED
+# once per pthread (PTHREAD_POOL_SIZE=16 => 16 identical red lines every boot). We opt into
+# the emulation deliberately (Coin renders fixed-function/immediate-mode GL, which WebGL
+# lacks), so the notice carries no information and only buries real errors in the console.
+s,_ne=_re.subn(r'err\("WARNING: using emscripten GL emulation\. This is a collection of limited workarounds, do not expect it to work\."\)','0',s)
+out.append('glemu-disclaimer:'+str(_ne))
 if s!=orig: open(p,'w').write(s)
 print('[minified GL patches] '+' | '.join(out))
 PYMIN
