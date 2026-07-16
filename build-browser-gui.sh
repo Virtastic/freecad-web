@@ -24,6 +24,10 @@ export FC_LINK_MODE_FLAGS="\
 --preload-file $ROOT/deps/src/freecad/data/examples@/freecad/share/examples \
 --preload-file $ROOT/deps/wasm/pyside-pkg@/pyside-pkg"
 
+# Rename matplotlib freetype symbols that clash with Qt's bundled freetype (signature
+# mismatch: FT_Request_Metrics / ft_module_get_service). Must run before the link.
+if [ -x patches/fix-freetype-symbols.sh ]; then bash patches/fix-freetype-symbols.sh; fi
+
 echo "=== reconfigure GUI for browser + relink ==="
 # Reconfiguring re-runs cmake, which re-dirties the whole object tree. Skip it
 # when build.ninja already carries the intended link flags (set FC_SKIP_CONFIGURE=1).
