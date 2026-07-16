@@ -309,11 +309,20 @@
       // and the edit geometry (EditRoot) sits under that visibility switch — which,
       // under the emscripten GL emulation, culls the whole subtree so you sketch
       // 'blind'. Force the in-edit ViewProvider visible so its edit scene renders.
+      // Flipping Visibility alone doesn't repaint the viewport, so the sketch would only
+      // appear on the user's next camera move; nudge a redraw once so it shows immediately.
       "try:",
       " _ad=_g.activeDocument()",
       " _ie=_ad.getInEdit() if _ad else None",
       " if _ie is not None and not bool(_ie.Visibility):",
       "  _ie.Visibility=True",
+      // This branch runs exactly once per edit session (the guard flips Visibility to True).
+      // Just flipping Visibility repaints nothing, and a plain redraw() populates the FBO but
+      // doesn't reposition/show the overlay — only a ViewFit fully re-renders AND republishes
+      // the widget rect so the compositor shows it. A one-time fit also frames the sketch,
+      // which is the right thing on entering edit.
+      "  try: _g.SendMsgToActiveView('ViewFit')",
+      "  except Exception: pass",
       "except Exception: pass",
       ""
     ].join("\n");
