@@ -10,7 +10,9 @@ PATCHES="$PWD/patches"
 apply_one() {
   local tree="deps/src/$1" patch="$PATCHES/$2"
   [ -d "$tree/.git" ] || { echo "  !! $1: missing checkout $tree — clone it first"; return 1; }
-  [ -f "$patch" ] || { echo "  !! $1: missing $patch"; return 1; }
+  # An empty patch is legitimate: the repo is registered (so regen.sh keeps capturing any
+  # future fix) but currently carries no local changes.
+  [ -s "$patch" ] || { echo "  == $1: no local changes to apply"; return 0; }
   if git -C "$tree" apply --reverse --check "$patch" 2>/dev/null; then
     echo "  == $1: already applied (skip)"
   elif git -C "$tree" apply --check "$patch" 2>/dev/null; then
