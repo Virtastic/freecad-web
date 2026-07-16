@@ -407,16 +407,22 @@
         var _sp=[_px(1,1),_px(w-2,1),_px(1,h-2),_px(w-2,h-2),_px(w>>1,1),_px(w>>1,h-2),_px(1,h>>1),_px(w-2,h>>1)];
         function _med(ch){ var a=_sp.map(function(s){return s[ch];}).sort(function(x,y){return x-y;}); return (a[3]+a[4])>>1; }
         var keyR=_med(0), keyG=_med(1), keyB=_med(2), TOL=24;
+        // The overlay sits EXACTLY over the 3D widget (FBO size == widget rect), and the FBO
+        // already holds the complete rendered view (its own background + the model/geometry).
+        // So paint it OPAQUE — show the FBO's own background rather than keying it out. Keying
+        // the background transparent exposed the dark Qt canvas behind the overlay, and thin
+        // dark geometry (notably Sketcher edit-mode lines) then vanished on that dark canvas.
+        // We still COUNT non-background pixels (via the border-median key) purely to skip
+        // background-only passes below, but every pixel is drawn opaque so the viewport shows
+        // the true render for BOTH normal 3D and sketch-edit.
         for (var row=0; row<h; row++){
           var src=(h-1-row)*w*4, dst=row*w*4;   // flip GL bottom-up -> top-down
           for (var col=0; col<w*4; col+=4){ var rr=buf[src+col],gg=buf[src+col+1],bb=buf[src+col+2];
             d[dst+col]=rr; d[dst+col+1]=gg; d[dst+col+2]=bb;
-            // Transparent where the render matches the viewport background (so the
-            // FreeCAD UI/viewport shows through everywhere except the 3D model).
             var isBg=(Math.abs(rr-keyR)<=TOL && Math.abs(gg-keyG)<=TOL && Math.abs(bb-keyB)<=TOL);
-            d[dst+col+3]= isBg ? 0 : 255; if(!isBg)opaque++; }
+            d[dst+col+3]= 255; if(!isBg)opaque++; }
         }
-        window.__ovOpaque = opaque;  // non-zero alpha pixel count (diagnostic)
+        window.__ovOpaque = opaque;  // non-background pixel count (diagnostic)
         // Only PAINT a pass that has substantial geometry, so a background-only pass
         // doesn't wipe the frame that had the model. `opaque` is the full-res count.
         var nonbg=opaque;
