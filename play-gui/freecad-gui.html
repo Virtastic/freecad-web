@@ -38,7 +38,16 @@
  const __NOISE=/\[deps\] remaining|Downloading data|\bRunning\.\.\.|\[FCWEB-MARK|\[BOOTTIME|\[SPE \d|\[FCWEB\]|InitApplications|InitGui \d|all InitGui|activateWorkbench:|showMainWindow:|setBranding:|loadOpenInventor:|checkParameters:|execute:(begin|end)|mw wrapper singleton|pyside warmup|emscripten GL emulation/;
  function __setBoot(msg,isErr){ if(!__bootStatus) return; __bootStatus.textContent=msg;
    __bootStatus.classList.toggle('berr',!!isErr); }
- function __hideBoot(){ if(__bootEl) __bootEl.classList.add('done'); }
+ // Reveal the app only once BOTH the loader says it's ready AND the Qt window has gone
+ // fullscreen. Qt-wasm paints a vestigial title bar; if we reveal first and strip it after,
+ // the user sees the title bar flash away (it used to be visible ~2.5s: overlay dropped at
+ // ~1.5s, showFullScreen ran at 4s). Gate the reveal on both, with a timeout so the overlay
+ // can never get stuck covering a working app.
+ var __bootReady=false, __fsReady=false;
+ function __maybeReveal(){ if(__bootReady && __fsReady && __bootEl) __bootEl.classList.add('done'); }
+ function __hideBoot(){ __bootReady=true; __maybeReveal(); }
+ function __fsApplied(){ __fsReady=true; __maybeReveal(); }
+ setTimeout(function(){ __fsReady=true; __maybeReveal(); }, 15000); // safety net
  // FCWEB: append() was THE boot bottleneck. FreeCAD prints thousands of lines at
  // startup; the old impl created a DOM node per line AND forced a synchronous
  // reflow every line (scrollTop=scrollHeight), making boot O(n^2) — ~90s of pure
@@ -83,6 +92,27 @@
    if(/execute:end/.test(l) || (window.fcInstance&&window.fcInstance._malloc)){
      setTimeout(__hideBoot,1500); clearInterval(iv); } },1000);
    setTimeout(()=>{ __hideBoot(); clearInterval(iv); },90000); })();
+ // Go fullscreen the moment the main window exists (fast poll), NOT on the 1.5s rect
+ // publisher's first 4s tick — the reveal is gated on this, so the title bar is dropped
+ // before the app is ever shown and never flashes.
+ (function(){
+   const FS_PY=[
+     "import FreeCAD as _f, FreeCADGui as _g, sys as _s",
+     "_mw=_g.getMainWindow()",
+     "if _mw is not None and not getattr(_f,'_fcweb_fs_done',False):",
+     " _mw.showFullScreen(); _f._fcweb_fs_done=True",
+     " _s.__stderr__.write('FCFS-DONE\\n'); _s.__stderr__.flush()",
+     ""].join("\n");
+   const iv=setInterval(()=>{
+     try{
+       const m=window.fcInstance; if(!m||!m._fcweb_run_python) return;
+       if(/FCFS-DONE/.test(logEl.textContent||'')){ clearInterval(iv); __fsApplied(); return; }
+       const n=new TextEncoder().encode(FS_PY).length+1, q=m._malloc(n);
+       m.stringToUTF8(FS_PY,q,n); m._fcweb_run_python(q); m._free(q);
+     }catch(e){}
+   },200);
+   setTimeout(()=>clearInterval(iv), 60000);
+ })();
  async function init(){
    try { globalThis.__FCWEB_SEARCH = location.search || ''; } catch(e){}
    const screen=document.getElementById('screen');
@@ -421,6 +451,43 @@
       };
     });
     console.log('[fcweb] 3D overlay compositor active');
+
+    // --- Readable window decorations -------------------------------------------------
+    // Qt-wasm draws each top-level window's frame as DOM inside #qt-shadow-container's
+    // shadow root (.qt-decorated-window > .title-bar > .window-name), styled by Qt's own
+    // stylesheet. Its defaults are unusable over FreeCAD's dark theme: the title text is
+    // #dddddd while the frame behind it is #d3d3d3 — a ~1.06:1 contrast ratio, i.e. the
+    // dialog title is invisible ("Active Body Required" reads as a blank bar). The same
+    // light frame is what shows as the big grey slab around a dialog before its canvas
+    // paints. Restyle the decoration to match the app's dark theme and give the title real
+    // contrast. Shadow DOM is isolated, so page CSS can't reach it — inject a stylesheet
+    // into the shadow root itself.
+    (function(){
+      var CSS = [
+        '.qt-decorated-window { background-color:#31363b !important;',
+        '  border:1px solid #21262b !important; border-radius:4px !important; }',
+        '.title-bar { background-color:#3a4046 !important; height:22px !important;',
+        '  padding:2px 4px 4px 4px !important; border-bottom:1px solid #21262b !important; }',
+        '.title-bar .window-name { color:#f2f4f6 !important; font-weight:600 !important;',
+        "  font-family:'Segoe UI',system-ui,-apple-system,sans-serif !important; font-size:12px !important; }",
+        // Qt marks unfocused windows .inactive — keep those legible too, just dimmer.
+        '.qt-decorated-window.inactive .title-bar { background-color:#33383d !important; }',
+        '.qt-decorated-window.inactive .title-bar .window-name { color:#c2c8ce !important; }',
+        // the close/max glyphs are dark-on-dark by default
+        '.title-bar .image-button { filter:invert(92%) !important; opacity:.9 !important; }'
+      ].join('\n');
+      function inject(){
+        var host=document.getElementById('qt-shadow-container');
+        if(!host || !host.shadowRoot) return false;
+        if(host.shadowRoot.getElementById('fcweb-decor')) return true;
+        var st=document.createElement('style'); st.id='fcweb-decor'; st.textContent=CSS;
+        host.shadowRoot.appendChild(st);
+        console.log('[fcweb] window decoration style injected');
+        return true;
+      }
+      if(!inject()){ var iv=setInterval(function(){ if(inject()) clearInterval(iv); },300);
+        setTimeout(function(){ clearInterval(iv); },120000); }
+    })();
   })();
 })();
 </script>
@@ -526,13 +593,51 @@
   // getSaveFileName) hands us a staging path under /home/web_user/_dl and writes the file there
   // in whatever format the user chose. We watch each registered path and download it to the
   // user's machine when it appears or changes (mtime/size), so every Save/Export menu path works.
-  var pendingSaves={};  // path -> last {mtime,size} we downloaded
+  var pendingSaves={};  // path -> last {mtime,size} we handled
+  var saveTargets={};   // path -> Promise<FileSystemFileHandle|'cancelled'|null> (chosen destination)
+  // Ask the user WHERE to put the file, using the real OS save dialog (File System Access API)
+  // so they choose folder + filename instead of it silently landing in Downloads. This MUST be
+  // called synchronously from the menu click: showSaveFilePicker() requires transient user
+  // activation, and registerSave() is invoked straight from FileDialog.cpp's EM_ASM during the
+  // click. The handle is used later, once FreeCAD has finished writing the staging file.
+  function pickSaveTarget(path){
+    if(!window.showSaveFilePicker) return null;   // Firefox/Safari -> download fallback
+    var name=path.replace(/^.*\//,'');
+    var ext=(name.match(/\.[^.]+$/)||[''])[0].toLowerCase();
+    var opts={suggestedName:name};
+    if(ext){ var acc={}; acc['application/octet-stream']=[ext];
+      opts.types=[{description:ext.slice(1).toUpperCase()+' file', accept:acc}]; }
+    try{
+      return window.showSaveFilePicker(opts).catch(function(){ return 'cancelled'; });
+    }catch(e){ return null; }
+  }
   function registerSave(path){
     if(!ready()) return;
     var m=window.fcInstance, FS=m.FS, dir=path.replace(/\/[^\/]*$/,'');
     try{ FS.mkdirTree ? FS.mkdirTree(dir) : FS.mkdir(dir); }catch(e){}
     if(!(path in pendingSaves)) pendingSaves[path]=null;
+    // Only prompt when we don't already have a destination for this path: FreeCAD calls
+    // getSaveFileName for Save As/Export/first save, then writes the same path on later
+    // Ctrl+S without asking — matching desktop, those re-saves go to the chosen file silently.
+    if(!(path in saveTargets)) saveTargets[path]=pickSaveTarget(path);
     ensureSaveWatcher();
+  }
+  // Write bytes to the user's chosen file; falls back to a download when the picker is
+  // unavailable (non-Chromium). Returns true if handled, false to use the download path.
+  function writeToTarget(path, bytes){
+    var t=saveTargets[path];
+    if(!t) return false;
+    t.then(function(h){
+      if(!h || h==='cancelled') return;            // user cancelled -> don't write anywhere
+      return Promise.resolve(h.queryPermission && h.queryPermission({mode:'readwrite'}))
+        .then(function(st){ return (st && st!=='granted' && h.requestPermission)
+          ? h.requestPermission({mode:'readwrite'}) : st; })
+        .then(function(){ return h.createWritable(); })
+        .then(function(w){ return Promise.resolve(w.write(bytes)).then(function(){ return w.close(); }); })
+        .then(function(){ logmsg('saved to '+(h.name||path.replace(/^.*\//,''))); })
+        .catch(function(e){ logmsg('save failed: '+e); });
+    });
+    return true;
   }
   var saveWatch=null;
   function ensureSaveWatcher(){
@@ -550,6 +655,9 @@
         (function(p,size){
           var bytes; try{ bytes=FS.readFile(p); }catch(e){ return; }
           if(bytes.length!==size) { pendingSaves[p]=null; return; } // mid-write; retry next tick
+          // Preferred: write straight into the file the user picked in the OS save dialog.
+          if(writeToTarget(p, bytes)) return;
+          // Fallback (no File System Access API): download it.
           var name=p.replace(/^.*\//,'');
           var blob=new Blob([bytes],{type:'application/octet-stream'});
           var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;

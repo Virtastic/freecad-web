@@ -1,21 +1,94 @@
 diff --git a/src/glue/gl.cpp b/src/glue/gl.cpp
-index 66273c2..29b07a0 100644
+index 66273c2..f973ba9 100644
 --- a/src/glue/gl.cpp
 +++ b/src/glue/gl.cpp
-@@ -1391,8 +1391,16 @@ glglue_resolve_symbols(cc_glglue * w)
+@@ -186,6 +186,7 @@
+ 
+ #ifdef HAVE_CONFIG_H
+ #include "config.h"
++
+ #endif /* HAVE_CONFIG_H */
+ 
+ // *************************************************************************
+@@ -610,6 +611,24 @@ cc_glglue_getprocaddress(const cc_glglue * glue, const char * symname)
+ {
+   void * ptr = NULL;
+ 
++#ifdef __EMSCRIPTEN__
++  /* Coin resolves every GL entry point past the 1.1 core through a platform-specific
++     getprocaddress backend (WGL/EGL/GLX). None of those are compiled in for a wasm build,
++     so all three calls below return NULL and cc_dl_sym() has no library handle either --
++     meaning EVERY dynamically-resolved symbol came back NULL. Coin therefore concluded the
++     driver has no VBOs, no FBOs and no shaders, and fell back to the immediate-mode
++     glBegin/glVertex path, re-uploading all geometry to the GPU on every single frame.
++     emscripten resolves GL entry points by name via emscripten_GetProcAddress() (the same
++     resolver it exposes as eglGetProcAddress/glfwGetProcAddress in system/lib/gl/
++     libprocaddr.c), which is available whenever GL_ENABLE_GET_PROC_ADDRESS is on
++     (the default). */
++  {
++    extern void * emscripten_GetProcAddress(const char * name);
++    ptr = emscripten_GetProcAddress(symname);
++    if (ptr) goto returnpoint;
++  }
++#endif
++
+   // FIXME: also supply 'glue' to coin_[x]gl_getprocaddress()
+   ptr = coin_wgl_getprocaddress(glue, symname);
+   if (ptr) goto returnpoint;
+@@ -691,6 +710,7 @@ glglue_set_glVersion(cc_glglue * w)
+ {
+   char buffer[256];
+   char * dotptr;
++  char * verstart;
+ 
+   /* NB: if you are getting a crash here, it's because an attempt at
+    * setting up a cc_glglue instance was made when there is no current
+@@ -706,10 +726,20 @@ glglue_set_glVersion(cc_glglue * w)
+ 
+   (void)strncpy(buffer, (const char *)w->versionstr, 255);
+   buffer[255] = '\0'; /* strncpy() will not null-terminate if strlen > 255 */
+-  dotptr = strchr(buffer, '.');
++  verstart = buffer;
++  /* Desktop GL reports GL_VERSION as "<major>.<minor>[.<release>] <vendor info>", but
++     OpenGL ES / WebGL report "OpenGL ES <major>.<minor> <vendor info>" (emscripten:
++     "OpenGL ES 3.0 (WebGL 2.0 (OpenGL ES 3.0 Chromium))"). atoi() on that leading text
++     returns 0, so the version parsed as 0.0 and EVERY version-gated feature was disabled
++     -- notably the GL 1.5 vertex-buffer-object block, which left glBindBuffer NULL and
++     forced Coin down the immediate-mode glBegin/glVertex path (geometry re-uploaded to
++     the GPU on every single frame). Skip any leading non-numeric prefix so the version
++     number is actually parsed. */
++  while (*verstart && (*verstart < '0' || *verstart > '9')) verstart++;
++  dotptr = strchr(verstart, '.');
+   if (dotptr) {
+     char * spaceptr;
+-    char * start = buffer;
++    char * start = verstart;
+     *dotptr = '\0';
+     w->version.major = atoi(start);
+     start = ++dotptr;
+@@ -1391,11 +1421,24 @@ glglue_resolve_symbols(cc_glglue * w)
          !w->glIsBuffer ||
          !w->glBufferData ||
          !w->glBufferSubData ||
 +#ifndef __EMSCRIPTEN__
-+        /* GLES/WebGL has no glMapBuffer or glGetBufferSubData. Coin's VBO implementation
-+           (SoVBO.cpp) never calls either one — it only uses glGenBuffers, glBindBuffer,
-+           glBufferData and glDeleteBuffers, all of which emscripten provides. Demanding
-+           them here would null glBindBuffer, making cc_glglue_has_vertex_buffer_object()
-+           return FALSE and pushing every scene down Coin's immediate-mode glBegin/glVertex
-+           path — which stalls the main thread for minutes on a large assembly. */
++        /* Require these only off-wasm. Coin's VBO implementation (SoVBO.cpp) calls exactly
++           four entry points -- glGenBuffers, glBindBuffer, glBufferData, glDeleteBuffers --
++           and never any of the five below; they exist here only as unused wrappers. On wasm
++           they cannot resolve anyway: glMapBuffer/glGetBufferSubData don't exist in
++           GLES/WebGL at all, and the rest are absent from the binary (emscripten's
++           GetProcAddress can only hand back entry points that something actually links, and
++           nothing references them). Demanding them nulls glBindBuffer, so
++           cc_glglue_has_vertex_buffer_object() returns FALSE and every scene falls back to
++           the immediate-mode glBegin/glVertex path -- re-uploading all geometry to the GPU
++           on EVERY frame, which is what stalls the viewport on a large assembly. */
          !w->glGetBufferSubData ||
          !w->glMapBuffer ||
-+#endif
          !w->glUnmapBuffer ||
          !w->glGetBufferParameteriv ||
-         !w->glGetBufferPointerv) {
+-        !w->glGetBufferPointerv) {
++        !w->glGetBufferPointerv ||
++#endif
++        !w->glDeleteBuffers) {
+       w->glBindBuffer = NULL; /* so that cc_glglue_has_vertex_buffer_object() will return FALSE */
+       if (COIN_DEBUG || coin_glglue_debug()) {
+         cc_debugerror_postwarning("glglue_init",
