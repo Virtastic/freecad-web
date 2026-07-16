@@ -317,6 +317,18 @@ rep('shading-headlight',
 s,_nt=_re.subn(r'err\("WARNING: Unhandled `pname` in call to `glTexEnv[fiv]+`\."\)','0',s)
 out.append('texenv-warn:'+str(_nt))
 
+# Coin queries legacy fixed-function GL state via glGetIntegerv (CULL_FACE_MODE 0x0B12,
+# POLYGON_MODE 0x0B22, MAX_LIGHTS 0x0D31, and 0x0C31). WebGL has no such state, so
+# emscriptenWebGLGet falls through to GLctx.getParameter(name_), which the browser rejects
+# with a red "WebGL: INVALID_ENUM: getParameter: invalid parameter name" warning every
+# frame. Return the desktop DEFAULTS for these enums before the fallthrough — Coin already
+# only got null here (WebGL never supported the read), so a sane default is strictly better
+# and drops the per-frame warning.
+rep('legacy-getparam',
+ 'if(ret===undefined){var result=GLctx.getParameter(name_);',
+ 'if(ret===undefined){if(name_===2834){ret=1029}else if(name_===2850){ret=6914}else if(name_===3377){ret=8}else if(name_===3121){ret=0}}if(ret===undefined){var result=GLctx.getParameter(name_);',
+ 'name_===2834){ret=1029}')
+
 # GL_QUAD_STRIP / GL_POLYGON support. emscripten's immediate-mode emulation only handles
 # GL_QUADS above GL_TRIANGLE_FAN and *throws* on anything else ("unsupported immediate mode 8"),
 # which aborts the whole draw -- and, since the exception unwinds through the document load,

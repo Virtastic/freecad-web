@@ -279,6 +279,17 @@
       "  _fd=_os.path.join(_f.getResourceDir(),'Mod','TechDraw','Resources','fonts','osifont-lgpl3fe.ttf')",
       "  if _os.path.exists(_fd): _fp.SetString('FontFile',_fd)",
       "except Exception: pass",
+      // Disable the navigation cube. It renders with the fixed-function client-array path
+      // (glEnableClientState(GL_VERTEX_ARRAY)+glVertexPointer+glDrawArrays, NaviCube.cpp), and
+      // under emscripten's LEGACY_GL_EMULATION that enable doesn't stick, so glDrawArrays takes
+      // the raw no-program branch (library_glemu.js: totalEnabledClientAttributes==0): the cube
+      // draws NOTHING and emits ~80 "WebGL: no valid shader program in use" warnings per frame.
+      // It's invisible either way, so turn it off to keep the console clean. (Re-enable once the
+      // fixed-function client-state emulation is fixed at rebuild level.)
+      "try:",
+      " _vp=_f.ParamGet('User parameter:BaseApp/Preferences/View')",
+      " if _vp.GetBool('ShowNaviCube',True): _vp.SetBool('ShowNaviCube',False)",
+      "except Exception: pass",
       // Expose FreeCAD.installAddon('owner/repo') in the Python console: it drops a request
       // file that the JS watcher picks up and installs via GitHub fetch (no git in wasm). Once.
       "if not getattr(_f,'_fcweb_addon_api',False):",
