@@ -268,6 +268,17 @@
       // UI. showFullScreen() drops the frame so the app fills the viewport cleanly. Once.
       "if _mw is not None and not getattr(_f,'_fcweb_fs_done',False):",
       " _mw.showFullScreen(); _f._fcweb_fs_done=True",
+      // Default ShapeString/annotation font. On desktop the user browses their system fonts;
+      // in a tab there is no host filesystem, so an unset FontFile leaves Draft ShapeString
+      // (and anything else asking for a font path) dead on arrival. Point it at a font we
+      // actually ship. Only set it if empty, so a user's own choice is never overwritten.
+      "try:",
+      " import os as _os",
+      " _fp=_f.ParamGet('User parameter:BaseApp/Preferences/Mod/Draft')",
+      " if not _fp.GetString('FontFile',''):",
+      "  _fd=_os.path.join(_f.getResourceDir(),'Mod','TechDraw','Resources','fonts','osifont-lgpl3fe.ttf')",
+      "  if _os.path.exists(_fd): _fp.SetString('FontFile',_fd)",
+      "except Exception: pass",
       // Expose FreeCAD.installAddon('owner/repo') in the Python console: it drops a request
       // file that the JS watcher picks up and installs via GitHub fetch (no git in wasm). Once.
       "if not getattr(_f,'_fcweb_addon_api',False):",

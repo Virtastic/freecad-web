@@ -15622,6 +15622,72 @@ index 74a5af0..24a62ee 100644
  }
  
  void DlgCAMSimulator::checkInitialization()
+diff --git a/src/Mod/Draft/draftobjects/shapestring.py b/src/Mod/Draft/draftobjects/shapestring.py
+index 8d5352e..e52907e 100644
+--- a/src/Mod/Draft/draftobjects/shapestring.py
++++ b/src/Mod/Draft/draftobjects/shapestring.py
+@@ -40,6 +40,35 @@ from draftutils.translate import translate
+ from draftobjects.base import DraftObject
+ 
+ 
++
++def _fcweb_resolve_font(fontfile):
++    """Resolve a ShapeString font path, falling back to a bundled font.
++
++    A .FCStd stores FontFile as an ABSOLUTE path from the machine that authored it (e.g.
++    "D:/BKG_Tmp/.../osifont-lgpl3fe.ttf"), which cannot exist elsewhere -- and in the
++    browser build there is no host filesystem to point it at, so the object just fails
++    with "Cannot open file" and goes Invalid. FreeCAD ships the fonts it needs, so prefer
++    the identically-named bundled font, then any bundled font, before giving up.
++    """
++    import os
++    import FreeCAD
++    if fontfile and os.path.exists(fontfile):
++        return fontfile
++    bundled = os.path.join(FreeCAD.getResourceDir(), "Mod", "TechDraw", "Resources", "fonts")
++    if not os.path.isdir(bundled):
++        return fontfile
++    if fontfile:
++        same = os.path.join(bundled, os.path.basename(fontfile))
++        if os.path.exists(same):
++            return same
++    for name in ("osifont-lgpl3fe.ttf", "osifont-italic.ttf"):
++        cand = os.path.join(bundled, name)
++        if os.path.exists(cand):
++            return cand
++    fonts = sorted(f for f in os.listdir(bundled) if f.lower().endswith((".ttf", ".otf")))
++    return os.path.join(bundled, fonts[0]) if fonts else fontfile
++
++
+ class ShapeString(DraftObject):
+     """The ShapeString object"""
+ 
+@@ -128,6 +157,7 @@ class ShapeString(DraftObject):
+ 
+         if obj.String and obj.FontFile:
+             plm = obj.Placement
++            font_file = _fcweb_resolve_font(obj.FontFile)
+ 
+             fill = obj.MakeFace
+             if fill is True:
+@@ -136,7 +166,7 @@ class ShapeString(DraftObject):
+                 # The 0.03 total area minimum is based on tests with:
+                 # 1CamBam_Stick_0.ttf and 1CamBam_Stick_0C.ttf.
+                 # See the make_faces function for more information.
+-                char = Part.makeWireString("L", obj.FontFile, 1, 0)[0]
++                char = Part.makeWireString("L", font_file, 1, 0)[0]
+                 shapes = self.make_faces(char)  # char is list of wires
+                 if not shapes:
+                     fill = False
+@@ -146,7 +176,7 @@ class ShapeString(DraftObject):
+                                              Part.Compound(shapes).BoundBox.DiagonalLength,
+                                              rel_tol=1e-7)
+ 
+-            chars = Part.makeWireString(obj.String, obj.FontFile, obj.Size, obj.Tracking)
++            chars = Part.makeWireString(obj.String, font_file, obj.Size, obj.Tracking)
+             shapes = []
+ 
+             for char in chars:
 diff --git a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 index 606e748..52a3159 100644
 --- a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
