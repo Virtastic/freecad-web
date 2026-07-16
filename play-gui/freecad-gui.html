@@ -453,10 +453,16 @@
         // isolates the clean 3D scene and drops the UI entirely (no ghosting).
         if (fbo && vp) (window.__fboDraws=window.__fboDraws||[]).length<60 && window.__fboDraws.push(vp[2]+'x'+vp[3]);
         if (fbo && vp && vp[2]>=200 && vp[3]>=150) {
-          var prev=this.getParameter(this.READ_FRAMEBUFFER_BINDING);
-          this.bindFramebuffer(this.READ_FRAMEBUFFER, fbo);
-          blit(this, vp[0], vp[1], vp[2], vp[3]);
-          this.bindFramebuffer(this.READ_FRAMEBUFFER, prev);
+          // COALESCE: do NOT readPixels+blit on every draw — a complex scene emits
+          // thousands of draws per frame (immediate-mode BIMExample: 25k+ per second),
+          // and each blit() does a full-viewport gl.readPixels (a GPU->CPU sync, the most
+          // expensive GL op) plus a full-image CPU pixel scan. That was O(draws*pixels)
+          // and made a 14k-face model take minutes. Instead just remember the FBO+viewport
+          // and schedule ONE blit on the next animation frame, which fires after this whole
+          // synchronous draw batch completes — the FBO still holds the finished frame.
+          // O(frames*pixels), the correct cost.
+          capGl=this; capFbo=fbo; capVP=vp;
+          if(!rafPending){ rafPending=true; requestAnimationFrame(frameBlit); }
         }
         return r;
       };
