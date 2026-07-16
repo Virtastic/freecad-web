@@ -15623,7 +15623,7 @@ index 74a5af0..24a62ee 100644
  
  void DlgCAMSimulator::checkInitialization()
 diff --git a/src/Mod/Draft/draftobjects/shapestring.py b/src/Mod/Draft/draftobjects/shapestring.py
-index 8d5352e..e52907e 100644
+index 8d5352e..08a72eb 100644
 --- a/src/Mod/Draft/draftobjects/shapestring.py
 +++ b/src/Mod/Draft/draftobjects/shapestring.py
 @@ -40,6 +40,35 @@ from draftutils.translate import translate
@@ -15688,6 +15688,15 @@ index 8d5352e..e52907e 100644
              shapes = []
  
              for char in chars:
+@@ -160,7 +190,7 @@ class ShapeString(DraftObject):
+                     ss_shape = faces.concatenate(ss_shape)
+                 else:
+                     ss_shape = Part.Compound(shapes)
+-                cap_char = Part.makeWireString("M", obj.FontFile, obj.Size, obj.Tracking)[0]
++                cap_char = Part.makeWireString("M", font_file, obj.Size, obj.Tracking)[0]
+                 cap_height = Part.Compound(cap_char).BoundBox.YMax
+                 if obj.ScaleToSize:
+                     ss_shape.scale(obj.Size / cap_height)
 diff --git a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 index 606e748..52a3159 100644
 --- a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
