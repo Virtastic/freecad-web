@@ -1,0 +1,93 @@
+diff --git a/src/glue/gl.cpp b/src/glue/gl.cpp
+index 66273c2..9de4199 100644
+--- a/src/glue/gl.cpp
++++ b/src/glue/gl.cpp
+@@ -610,6 +610,23 @@ cc_glglue_getprocaddress(const cc_glglue * glue, const char * symname)
+ {
+   void * ptr = NULL;
+ 
++#ifdef __EMSCRIPTEN__
++  /* Coin resolves every GL entry point past the 1.1 core through a platform getprocaddress
++     backend (WGL/EGL/GLX). None are compiled in for wasm and cc_dl_sym() has no library
++     handle, so EVERY dynamic lookup returned NULL. That is not just a missing-feature
++     problem: Coin calls some of those pointers unconditionally, e.g.
++     SoGLMultiTextureImageElement::updateGL() -> cc_glglue_glActiveTexture(), which trapped
++     with "RuntimeError: null function" on any textured model (BIMExample). emscripten
++     resolves GL entry points by name via emscripten_GetProcAddress() (the resolver it also
++     exposes as eglGetProcAddress/glfwGetProcAddress in system/lib/gl/libprocaddr.c),
++     available whenever GL_ENABLE_GET_PROC_ADDRESS is on (the default). */
++  {
++    extern void * emscripten_GetProcAddress(const char * name);
++    ptr = emscripten_GetProcAddress(symname);
++    if (ptr) goto returnpoint;
++  }
++#endif
++
+   // FIXME: also supply 'glue' to coin_[x]gl_getprocaddress()
+   ptr = coin_wgl_getprocaddress(glue, symname);
+   if (ptr) goto returnpoint;
+@@ -691,6 +708,7 @@ glglue_set_glVersion(cc_glglue * w)
+ {
+   char buffer[256];
+   char * dotptr;
++  char * verstart;
+ 
+   /* NB: if you are getting a crash here, it's because an attempt at
+    * setting up a cc_glglue instance was made when there is no current
+@@ -706,10 +724,17 @@ glglue_set_glVersion(cc_glglue * w)
+ 
+   (void)strncpy(buffer, (const char *)w->versionstr, 255);
+   buffer[255] = '\0'; /* strncpy() will not null-terminate if strlen > 255 */
+-  dotptr = strchr(buffer, '.');
++  verstart = buffer;
++  /* Desktop GL reports "<major>.<minor>[.<release>] <vendor>", but OpenGL ES / WebGL report
++     "OpenGL ES <major>.<minor> <vendor>" (emscripten: "OpenGL ES 3.0 (WebGL 2.0 (OpenGL ES
++     3.0 Chromium))"). atoi() on that leading text returns 0, so the version parsed as 0.0 and
++     EVERY version-gated block was skipped -- including the GL 1.3 multitexture block, leaving
++     glActiveTexture NULL and trapping on any textured model. Skip the non-numeric prefix. */
++  while (*verstart && (*verstart < '0' || *verstart > '9')) verstart++;
++  dotptr = strchr(verstart, '.');
+   if (dotptr) {
+     char * spaceptr;
+-    char * start = buffer;
++    char * start = verstart;
+     *dotptr = '\0';
+     w->version.major = atoi(start);
+     start = ++dotptr;
+@@ -1369,6 +1394,19 @@ glglue_resolve_symbols(cc_glglue * w)
+     if (env && (atoi(env) > 0)) { w->glBindBuffer = NULL; }
+   }
+ 
++#ifdef __EMSCRIPTEN__
++  /* Keep VBO rendering OFF on wasm -- deliberately, and MEASURED. Now that the lookups above
++     actually resolve, Coin would take its VBO path; that is a large regression here. A/B on a
++     quiet machine with a 15MB/626-solid STEP assembly: immediate mode is responsive at 245s,
++     while the VBO build never became responsive within 600s and a repeat run killed the tab
++     (scene-build uploads went 7.3MB -> 36.7MB). emscripten's GLImmediate emulation is well
++     optimised for this workload, whereas Coin's VBO path allocates a buffer per scene node
++     across hundreds of solids. Nulling glBindBuffer makes cc_glglue_has_vertex_buffer_object()
++     return FALSE, which is exactly the pre-existing (fast) behaviour -- while everything else,
++     notably glActiveTexture, now resolves properly. */
++  w->glBindBuffer = NULL;
++#endif
++
+   /*
+     Sylvain Carette reported problems with some old 3DLabs drivers and VBO rendering.
+     The drivers were from 2006, so we disable VBO rendering if 3DLabs and that driver
+@@ -2958,6 +2996,16 @@ void
+ cc_glglue_glActiveTexture(const cc_glglue * w,
+                           GLenum texture)
+ {
++  /* Selecting unit 0 when multitexturing is unavailable is a no-op: unit 0 is already the
++     active one. Without this, callers that (incorrectly) invoke this unconditionally crash
++     instead of degrading to single-texturing -- SoGLMultiTextureImageElement::updateGL()
++     does exactly that, which trapped with "RuntimeError: null function" on any textured
++     model under wasm. glActiveTexture is NULL there because Coin nulls the whole
++     multitexture family when a sibling is missing, and emscripten's GL emulation implements
++     no glMultiTexCoord* at all. This mirrors the guard cc_glglue_glClientActiveTexture()
++     below already has. */
++  if (!w->glActiveTexture && texture == GL_TEXTURE0)
++    return;
+   assert(w->glActiveTexture);
+   w->glActiveTexture(texture);
+ }

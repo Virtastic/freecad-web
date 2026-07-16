@@ -317,6 +317,20 @@ rep('shading-headlight',
 s,_nt=_re.subn(r'err\("WARNING: Unhandled `pname` in call to `glTexEnv[fiv]+`\."\)','0',s)
 out.append('texenv-warn:'+str(_nt))
 
+# GL_QUAD_STRIP / GL_POLYGON support. emscripten's immediate-mode emulation only handles
+# GL_QUADS above GL_TRIANGLE_FAN and *throws* on anything else ("unsupported immediate mode 8"),
+# which aborts the whole draw -- and, since the exception unwinds through the document load,
+# takes the file open with it (draft_test_objects.FCStd failed to open; BIMExample threw).
+# Both modes have exact triangle equivalents, so remap them in glBegin before anything reads
+# the mode:
+#   GL_QUAD_STRIP(8) -> GL_TRIANGLE_STRIP(5): identical vertex layout. A quad strip's quad k is
+#     (2k, 2k+1, 2k+3, 2k+2); a triangle strip over the same sequence emits (0,1,2),(2,1,3),...
+#     which tessellates exactly those quads.
+#   GL_POLYGON(9) -> GL_TRIANGLE_FAN(6): the GL spec only defines GL_POLYGON for CONVEX polygons,
+#     and a fan is the standard convex tessellation, so this is exact for all conforming input.
+s,_nq=_re.subn(r'_glBegin=mode=>\{', '_glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;', s)
+out.append('quadstrip-poly:'+str(_nq))
+
 # silence the LEGACY_GL_EMULATION disclaimer. err() -> console.error, so this prints RED
 # once per pthread (PTHREAD_POOL_SIZE=16 => 16 identical red lines every boot). We opt into
 # the emulation deliberately (Coin renders fixed-function/immediate-mode GL, which WebGL

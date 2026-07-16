@@ -15623,10 +15623,38 @@ index 74a5af0..24a62ee 100644
  
  void DlgCAMSimulator::checkInitialization()
 diff --git a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
-index 606e748..4772474 100644
+index 606e748..52a3159 100644
 --- a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 +++ b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
-@@ -103,10 +103,20 @@ void ViewProviderFemConstraint::loadSymbol(const char* fileName)
+@@ -58,6 +58,17 @@ ViewProviderFemConstraint::ViewProviderFemConstraint()
+     , pExtraTrans(nullptr)
+     , ivFile(nullptr)
+ {
++    // Fill the symbol dir on first construction, NOT at namespace scope: a file-scope
++    // initializer runs in __wasm_call_ctors before App::Application exists, so
++    // getResourceDir() returned an incomplete path and every constraint then logged
++    // "Coin read error: Could not find 'share/Mod/Fem/Resources/symbols/...'" before
++    // falling back. Every subclass runs this base constructor before its own body builds
++    // the path, so this is populated in time. (Same static-init-order class of bug as the
++    // TechDraw Rez.cpp fix.)
++    if (resourceSymbolDir.empty()) {
++        resourceSymbolDir = App::Application::getResourceDir() + "Mod/Fem/Resources/symbols/";
++    }
++
+     pShapeSep = new SoSeparator();
+     pShapeSep->ref();
+     pMultCopy = new SoMultipleCopy();
+@@ -96,17 +107,28 @@ void ViewProviderFemConstraint::attach(App::DocumentObject* pcObject)
+     addDisplayMaskMode(sep, "Base");
+ }
+ 
+-std::string ViewProviderFemConstraint::resourceSymbolDir =
+-    App::Application::getResourceDir() + "Mod/Fem/Resources/symbols/";
++// Deliberately EMPTY here — populated lazily in the constructor (see above). Initialising it
++// at namespace scope would run before App::Application exists under wasm.
++std::string ViewProviderFemConstraint::resourceSymbolDir;
+ 
+ void ViewProviderFemConstraint::loadSymbol(const char* fileName)
  {
      ivFile = fileName;
      SoInput in;
