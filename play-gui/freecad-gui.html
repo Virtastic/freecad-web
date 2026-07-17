@@ -279,16 +279,14 @@
       "  _fd=_os.path.join(_f.getResourceDir(),'Mod','TechDraw','Resources','fonts','osifont-lgpl3fe.ttf')",
       "  if _os.path.exists(_fd): _fp.SetString('FontFile',_fd)",
       "except Exception: pass",
-      // Disable the navigation cube. It renders with the fixed-function client-array path
-      // (glEnableClientState(GL_VERTEX_ARRAY)+glVertexPointer+glDrawArrays, NaviCube.cpp), and
-      // under emscripten's LEGACY_GL_EMULATION that enable doesn't stick, so glDrawArrays takes
-      // the raw no-program branch (library_glemu.js: totalEnabledClientAttributes==0): the cube
-      // draws NOTHING and emits ~80 "WebGL: no valid shader program in use" warnings per frame.
-      // It's invisible either way, so turn it off to keep the console clean. (Re-enable once the
-      // fixed-function client-state emulation is fixed at rebuild level.)
+      // Navigation cube: now renders natively. NaviCube.cpp's client-array draws
+      // (glVertexPointer+glDrawArrays) don't work under emscripten LEGACY_GL_EMULATION
+      // (the enabled-array count never sticks -> raw no-program path -> nothing drawn),
+      // so they were converted to immediate mode (glBegin/glEnd) on wasm, and the 3D
+      // viewport composites natively into the Qt canvas — so keep the cube ON (1:1).
       "try:",
       " _vp=_f.ParamGet('User parameter:BaseApp/Preferences/View')",
-      " if _vp.GetBool('ShowNaviCube',True): _vp.SetBool('ShowNaviCube',False)",
+      " _vp.SetBool('ShowNaviCube',True)",
       "except Exception: pass",
       // Expose FreeCAD.installAddon('owner/repo') in the Python console: it drops a request
       // file that the JS watcher picks up and installs via GitHub fetch (no git in wasm). Once.
@@ -459,6 +457,7 @@
       blit(gl, capVP[0], capVP[1], capVP[2], capVP[3]);
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prev);
     }
+    var USE_OVERLAY = /[?&]overlay=1/.test(location.search);  // legacy readback path, opt-in only
     ['drawArrays','drawElements'].forEach(function(nm){
       var orig = WebGL2RenderingContext.prototype[nm];
       WebGL2RenderingContext.prototype[nm] = function(){
@@ -478,6 +477,12 @@
         // framebuffer (fbo === null). So blit ONLY when a real FBO is bound — that
         // isolates the clean 3D scene and drops the UI entirely (no ghosting).
         if (fbo && vp) (window.__fboDraws=window.__fboDraws||[]).length<60 && window.__fboDraws.push(vp[2]+'x'+vp[3]);
+        // NATIVE COMPOSITE: the C++ now blits Coin's private FBO straight into the
+        // QOpenGLWidget's own backing FBO, and Qt's wasm compositor presents it to
+        // the page canvas exactly like desktop — no readback, no overlay, no CSS.
+        // Leave the legacy overlay path here only as an opt-in fallback (?overlay=1);
+        // it is inert once C++ sets __fcNativeComposite (from the first frame).
+        if (window.__fcNativeComposite && !USE_OVERLAY) return r;
         if (fbo && vp && vp[2]>=200 && vp[3]>=150) {
           // COALESCE: do NOT readPixels+blit on every draw — a complex scene emits
           // thousands of draws per frame (immediate-mode BIMExample: 25k+ per second),
@@ -493,7 +498,7 @@
         return r;
       };
     });
-    console.log('[fcweb] 3D overlay compositor active');
+    console.log('[fcweb] 3D presentation: native Qt composite (overlay '+(USE_OVERLAY?'forced ON':'inert')+')');
 
     // --- Readable window decorations -------------------------------------------------
     // Qt-wasm draws each top-level window's frame as DOM inside #qt-shadow-container's
