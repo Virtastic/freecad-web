@@ -245,9 +245,17 @@ _pat=_re.compile(r'throw"gl(Materialfv|Lightfv|LightModelf|LightModelfv|TexCoord
 s,_n=_pat.subn('0',s)
 out.append('gl-throws:'+str(_n))
 # Implement glMaterialfv(GL_AMBIENT_AND_DIFFUSE=5634): that's how Coin sends the
-# shape color; without it every solid renders white/gray.
+# shape color; without it every solid renders white/gray. ALSO implement
+# GL_EMISSION=5632: Coin sets emissive to the selection/preselection colour
+# (SoBrepFaceSet::renderSelection -> SoLazyElement::setEmissive), and the emulated
+# lit shader reads u_materialEmission (v_color.xyz = emission) — without the 5632
+# case emission stays black and selection/hover highlight is INVISIBLE.
 mad_old='else if(pname==5633){GLEmulation.materialShininess[0]=GROWABLE_HEAP_F32()[param>>>2>>>0]}else{0}}var _emscripten_glMaterialfv'
 mad_new=('else if(pname==5633){GLEmulation.materialShininess[0]=GROWABLE_HEAP_F32()[param>>>2>>>0]}'
+ 'else if(pname==5632){GLEmulation.materialEmission[0]=GROWABLE_HEAP_F32()[param>>>2>>>0];'
+ 'GLEmulation.materialEmission[1]=GROWABLE_HEAP_F32()[param+4>>>2>>>0];'
+ 'GLEmulation.materialEmission[2]=GROWABLE_HEAP_F32()[param+8>>>2>>>0];'
+ 'GLEmulation.materialEmission[3]=GROWABLE_HEAP_F32()[param+12>>>2>>>0]}'
  'else if(pname==5634){var _r=GROWABLE_HEAP_F32()[param>>>2>>>0],_g=GROWABLE_HEAP_F32()[param+4>>>2>>>0],_b=GROWABLE_HEAP_F32()[param+8>>>2>>>0],_a=GROWABLE_HEAP_F32()[param+12>>>2>>>0];'
  'GLEmulation.materialAmbient[0]=_r;GLEmulation.materialAmbient[1]=_g;GLEmulation.materialAmbient[2]=_b;GLEmulation.materialAmbient[3]=_a;'
  'GLEmulation.materialDiffuse[0]=_r;GLEmulation.materialDiffuse[1]=_g;GLEmulation.materialDiffuse[2]=_b;GLEmulation.materialDiffuse[3]=_a}'
