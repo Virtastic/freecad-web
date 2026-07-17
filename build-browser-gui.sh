@@ -321,6 +321,17 @@ rep('flush-useprogram',
  'flush(numProvidedIndexes,startIndex=0,ptr=0){var renderer=GLImmediate.getRenderer();var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;',
  'flush(numProvidedIndexes,startIndex=0,ptr=0){var renderer=GLImmediate.getRenderer();if(renderer&&renderer.program){GLctx.useProgram(renderer.program)}var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;',
  'useProgram(renderer.program)}var numVertices')
+# wasm: some overlay draws emitted while the Draft/BIM workbench is ACTIVE (their
+# working-plane / tray render pass) reach the immediate-mode flush with a corrupted
+# stride, so numVertices comes out FRACTIONAL -> vertices are read at wrong offsets
+# -> a garbage radiating "fan" is drawn over the real geometry (the geometry itself
+# is fine; deactivating the workbench recovered it). Skip any flush whose stride does
+# not divide evenly into a whole vertex count. Valid draws always yield an integer, so
+# this only drops the corrupted ones.
+rep('flush-fractional-guard',
+ 'var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;if(!numVertices)return;',
+ 'var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;if(!numVertices)return;if(numVertices!==(numVertices|0))return;',
+ 'if(!numVertices)return;if(numVertices!==(numVertices|0))return;')
 # never adopt Qt's currently-bound shader as the immediate-mode renderer (it has no
 # u_modelView -> geometry transforms to garbage). Always build the generated program.
 rep('createrenderer-nocurr',
