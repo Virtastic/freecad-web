@@ -8248,6 +8248,44 @@ index dfc5424..f351911 100644
      }
  }
  
+diff --git a/src/Gui/PythonEditor.cpp b/src/Gui/PythonEditor.cpp
+index 7a46064..4f5f28d 100644
+--- a/src/Gui/PythonEditor.cpp
++++ b/src/Gui/PythonEditor.cpp
+@@ -155,8 +155,14 @@ void PythonEditor::contextMenuEvent ( QContextMenuEvent * e )
+         uncomment->setShortcut(QKeySequence(QString::fromLatin1("ALT+U")));
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    // wasm: exec() deadlocks the single-threaded event loop. Show non-blocking.
++    menu->setAttribute(Qt::WA_DeleteOnClose);
++    menu->popup(e->globalPos());
++#else
+     menu->exec(e->globalPos());
+     delete menu;
++#endif
+ }
+ 
+ void PythonEditor::keyPressEvent(QKeyEvent* e)
+diff --git a/src/Gui/ReportView.cpp b/src/Gui/ReportView.cpp
+index d81540f..1b4cbbb 100644
+--- a/src/Gui/ReportView.cpp
++++ b/src/Gui/ReportView.cpp
+@@ -671,8 +671,14 @@ void ReportOutput::contextMenuEvent ( QContextMenuEvent * e )
+     menu->addSeparator();
+     menu->addAction(tr("Save As..."), this, &ReportOutput::onSaveAs);
+ 
++#if defined(__EMSCRIPTEN__)
++    // wasm: exec() deadlocks the single-threaded event loop. Show non-blocking.
++    menu->setAttribute(Qt::WA_DeleteOnClose);
++    menu->popup(e->globalPos());
++#else
+     menu->exec(e->globalPos());
+     delete menu;
++#endif
+ }
+ 
+ void ReportOutput::onSaveAs()
 diff --git a/src/Gui/SoFCDB.cpp b/src/Gui/SoFCDB.cpp
 index ec58e5f..7a5f729 100644
 --- a/src/Gui/SoFCDB.cpp
@@ -12115,6 +12153,227 @@ index 43f2dcf..8440e64 100644
  
      void undock();
      void updateCustomGripVisibility();
+diff --git a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
+index 877d82f..dc1d9f2 100644
+--- a/src/Gui/Tree.cpp
++++ b/src/Gui/Tree.cpp
+@@ -983,15 +983,20 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+     view << "Std_Properties" << "Separator" << "Std_Expressions";
+     Workbench::createLinkMenu(&view);
+ 
+-    QMenu contextMenu;
+-
+-    QMenu subMenu;
+-    QMenu editMenu;
+-    QActionGroup subMenuGroup(&subMenu);
+-    subMenuGroup.setExclusive(true);
+-    connect(&subMenuGroup, &QActionGroup::triggered,
++    // Heap-allocate the menu (and its sub-objects, parented to it) rather than on
++    // the stack: under single-threaded Qt-for-WebAssembly (no ASYNCIFY) QMenu::exec()
++    // would DEADLOCK the event loop, so the menu is shown non-blocking with popup()
++    // and must outlive this function. WA_DeleteOnClose frees the whole tree when the
++    // menu closes; desktop keeps the same lifetime via exec() + WA_DeleteOnClose.
++    QMenu* contextMenu = new QMenu(this);
++
++    QMenu* subMenu = new QMenu(contextMenu);
++    QMenu* editMenu = new QMenu(contextMenu);
++    QActionGroup* subMenuGroup = new QActionGroup(subMenu);
++    subMenuGroup->setExclusive(true);
++    connect(subMenuGroup, &QActionGroup::triggered,
+             this, &TreeWidget::onActivateDocument);
+-    MenuManager::getInstance()->setupContextMenu(&view, contextMenu);
++    MenuManager::getInstance()->setupContextMenu(&view, *contextMenu);
+ 
+     // get the current item
+     this->contextItem = itemAt(e->pos());
+@@ -1005,28 +1010,28 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+         // App::GetApplication().setActiveDocument(doc);
+ 
+         showHiddenAction->setChecked(docitem->showHidden());
+-        contextMenu.addAction(this->showHiddenAction);
+-        contextMenu.addAction(this->searchObjectsAction);
+-        contextMenu.addAction(this->closeDocAction);
++        contextMenu->addAction(this->showHiddenAction);
++        contextMenu->addAction(this->searchObjectsAction);
++        contextMenu->addAction(this->closeDocAction);
+         if (doc->testStatus(App::Document::PartialDoc))
+-            contextMenu.addAction(this->reloadDocAction);
++            contextMenu->addAction(this->reloadDocAction);
+         else {
+             for (auto d : doc->getDependentDocuments()) {
+                 if (d->testStatus(App::Document::PartialDoc)) {
+-                    contextMenu.addAction(this->reloadDocAction);
++                    contextMenu->addAction(this->reloadDocAction);
+                     break;
+                 }
+             }
+-            contextMenu.addAction(this->selectDependentsAction);
++            contextMenu->addAction(this->selectDependentsAction);
+             this->skipRecomputeAction->setChecked(doc->testStatus(App::Document::SkipRecompute));
+-            contextMenu.addAction(this->skipRecomputeAction);
++            contextMenu->addAction(this->skipRecomputeAction);
+             this->allowPartialRecomputeAction->setChecked(doc->testStatus(App::Document::AllowPartialRecompute));
+             if (doc->testStatus(App::Document::SkipRecompute))
+-                contextMenu.addAction(this->allowPartialRecomputeAction);
+-            contextMenu.addAction(this->markRecomputeAction);
+-            contextMenu.addAction(this->createGroupAction);
++                contextMenu->addAction(this->allowPartialRecomputeAction);
++            contextMenu->addAction(this->markRecomputeAction);
++            contextMenu->addAction(this->createGroupAction);
+         }
+-        contextMenu.addSeparator();
++        contextMenu->addSeparator();
+     }
+     else if (this->contextItem && this->contextItem->type() == ObjectType) {
+         auto objitem = static_cast<DocumentObjectItem*>
+@@ -1045,40 +1050,40 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+         }
+ 
+         showHiddenAction->setChecked(doc->ShowHidden.getValue());
+-        contextMenu.addAction(this->showHiddenAction);
+-        contextMenu.addAction(this->toggleVisibilityInTreeAction);
++        contextMenu->addAction(this->showHiddenAction);
++        contextMenu->addAction(this->toggleVisibilityInTreeAction);
+ 
+         if (!acrossDocuments) { // is only sensible for selections within one document
+             if (objitem->object()->getObject()->isDerivedFrom(App::DocumentObjectGroup::getClassTypeId()))
+-                contextMenu.addAction(this->createGroupAction);
++                contextMenu->addAction(this->createGroupAction);
+             // if there are dependent objects in the selection, add context menu to add them to selection
+             if (CheckForDependents())
+-                contextMenu.addAction(this->selectDependentsAction);
++                contextMenu->addAction(this->selectDependentsAction);
+         }
+ 
+-        contextMenu.addSeparator();
+-        contextMenu.addAction(this->markRecomputeAction);
+-        contextMenu.addAction(this->recomputeObjectAction);
+-        contextMenu.addSeparator();
++        contextMenu->addSeparator();
++        contextMenu->addAction(this->markRecomputeAction);
++        contextMenu->addAction(this->recomputeObjectAction);
++        contextMenu->addSeparator();
+ 
+         // relabeling is only possible for a single selected document
+         if (SelectedObjectsList.size() == 1)
+-            contextMenu.addAction(this->relabelObjectAction);
++            contextMenu->addAction(this->relabelObjectAction);
+ 
+         auto selItems = this->selectedItems();
+         // if only one item is selected, setup the edit menu
+         if (selItems.size() == 1) {
+-            objitem->object()->setupContextMenu(&editMenu, this, SLOT(onStartEditing()));
+-            QList<QAction*> editAct = editMenu.actions();
++            objitem->object()->setupContextMenu(editMenu, this, SLOT(onStartEditing()));
++            QList<QAction*> editAct = editMenu->actions();
+             if (!editAct.isEmpty()) {
+-                QAction* topact = contextMenu.actions().constFirst();
++                QAction* topact = contextMenu->actions().constFirst();
+                 for (QList<QAction*>::iterator it = editAct.begin(); it != editAct.end(); ++it)
+-                    contextMenu.insertAction(topact, *it);
++                    contextMenu->insertAction(topact, *it);
+                 QAction* first = editAct.front();
+-                contextMenu.setDefaultAction(first);
++                contextMenu->setDefaultAction(first);
+                 if (objitem->object()->isEditing())
+-                    contextMenu.insertAction(topact, this->finishEditingAction);
+-                contextMenu.insertSeparator(topact);
++                    contextMenu->insertAction(topact, this->finishEditingAction);
++                contextMenu->insertSeparator(topact);
+             }
+         }
+     }
+@@ -1087,14 +1092,14 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+     // add a submenu to active a document if two or more exist
+     std::vector<App::Document*> docs = App::GetApplication().getDocuments();
+     if (docs.size() >= 2) {
+-        contextMenu.addSeparator();
++        contextMenu->addSeparator();
+         App::Document* activeDoc = App::GetApplication().getActiveDocument();
+-        subMenu.setTitle(tr("Activate document"));
+-        contextMenu.addMenu(&subMenu);
++        subMenu->setTitle(tr("Activate document"));
++        contextMenu->addMenu(subMenu);
+         QAction* active = nullptr;
+         for (auto it = docs.begin(); it != docs.end(); ++it) {
+             QString label = QString::fromUtf8((*it)->Label.getValue());
+-            QAction* action = subMenuGroup.addAction(label);
++            QAction* action = subMenuGroup->addAction(label);
+             action->setCheckable(true);
+             action->setStatusTip(tr("Activate document %1").arg(label));
+             action->setData(QByteArray((*it)->getName()));
+@@ -1103,14 +1108,14 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+ 
+         if (active)
+             active->setChecked(true);
+-        subMenu.addActions(subMenuGroup.actions());
++        subMenu->addActions(subMenuGroup->actions());
+     }
+ 
+     // add a submenu to present the settings of the tree.
+-    QMenu settingsMenu;
+-    settingsMenu.setTitle(tr("Tree settings"));
+-    contextMenu.addSeparator();
+-    contextMenu.addMenu(&settingsMenu);
++    QMenu* settingsMenu = new QMenu(contextMenu);
++    settingsMenu->setTitle(tr("Tree settings"));
++    contextMenu->addSeparator();
++    contextMenu->addMenu(settingsMenu);
+ 
+     QAction* action = new QAction(tr("Show description"), this);
+     QAction* internalNameAction = new QAction(tr("Show internal name"), this);
+@@ -1120,7 +1125,7 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+     ParameterGrp::handle hGrp = App::GetApplication().GetParameterGroupByPath("User parameter:BaseApp/Preferences/TreeView");
+     action->setChecked(!hGrp->GetBool("HideColumn", true));
+ 
+-    settingsMenu.addAction(action);
++    settingsMenu->addAction(action);
+     QObject::connect(action, &QAction::triggered, this, [this, action, internalNameAction, hGrp]() {
+         bool show = action->isChecked();
+         hGrp->SetBool("HideColumn", !show);
+@@ -1134,7 +1139,7 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+ 
+     internalNameAction->setChecked(!hGrp->GetBool("HideInternalNames", true));
+ 
+-    settingsMenu.addAction(internalNameAction);
++    settingsMenu->addAction(internalNameAction);
+ 
+     QObject::connect(internalNameAction, &QAction::triggered, this, [this, action, internalNameAction, hGrp]() {
+         bool show = internalNameAction->isChecked();
+@@ -1143,9 +1148,18 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+         header()->setVisible(action->isChecked()||internalNameAction->isChecked());
+     });
+ 
+-    if (contextMenu.actions().count() > 0) {
++    if (contextMenu->actions().count() > 0) {
++#if defined(__EMSCRIPTEN__)
++        // wasm: exec() would deadlock the single-threaded event loop. Show the menu
++        // non-blocking (it lives on the heap so it survives this function returning),
++        // free it on close, and clear contextItem when it closes (not immediately,
++        // so the triggered actions still see the right item).
++        contextMenu->setAttribute(Qt::WA_DeleteOnClose);
++        connect(contextMenu, &QMenu::aboutToHide, this, [this]() { contextItem = nullptr; });
++        contextMenu->popup(QCursor::pos());
++#else
+         try {
+-            contextMenu.exec(QCursor::pos());
++            contextMenu->exec(QCursor::pos());
+         }
+         catch (Base::Exception& e) {
+             e.ReportException();
+@@ -1157,6 +1171,12 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
+             FC_ERR("Unknown exception");
+         }
+         contextItem = nullptr;
++        delete contextMenu;
++#endif
++    }
++    else {
++        delete contextMenu;
++        contextItem = nullptr;
+     }
+ }
+ 
 diff --git a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 index 694f834..aacfd2d 100644
 --- a/src/Gui/View3DInventorViewer.cpp
