@@ -91,3 +91,28 @@ index 66273c2..9de4199 100644
    assert(w->glActiveTexture);
    w->glActiveTexture(texture);
  }
+diff --git a/src/shapenodes/SoIndexedLineSet.cpp b/src/shapenodes/SoIndexedLineSet.cpp
+index 07007af..c56d66f 100644
+--- a/src/shapenodes/SoIndexedLineSet.cpp
++++ b/src/shapenodes/SoIndexedLineSet.cpp
+@@ -307,6 +307,20 @@ SoIndexedLineSet::GLRender(SoGLRenderAction * action)
+ 
+   mb.sendFirst(); // make sure we have the correct material
+ 
++#if defined(__EMSCRIPTEN__)
++  // wasm: Coin's lazy diffuse send does not reach the emulated fixed-function GL
++  // for the base line render, so edges/wireframe render a stale grey regardless
++  // of LineColor/ShapeColor (same class as the SoBrepFaceSet face fix). Lines are
++  // unlit, so the emulation takes the colour from the constant current colour —
++  // emit the live diffuse here (OVERALL binding; per-vertex colour arrays below
++  // still override). getDiffuse reads the correct live value.
++  if (mbind == OVERALL) {
++    const SbColor& lcol = SoLazyElement::getDiffuse(state, 0);
++    float ltr = SoLazyElement::getTransparency(state, 0);
++    glColor4f(lcol[0], lcol[1], lcol[2], 1.0F - ltr);
++  }
++#endif
++
+   if (!sendNormals) nbind = OVERALL;
+   else if (nbind == OVERALL) {
+     glNormal3fv((const GLfloat *)normals);
