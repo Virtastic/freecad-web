@@ -15789,6 +15789,23 @@ index d56d1a8..300618e 100644
 +    // http://blog.kalmbachnet.de/?postid=75
 +}
 +#endif
+diff --git a/src/Mod/BIM/nativeifc/ifc_observer.py b/src/Mod/BIM/nativeifc/ifc_observer.py
+index bf4e7ad..f090141 100644
+--- a/src/Mod/BIM/nativeifc/ifc_observer.py
++++ b/src/Mod/BIM/nativeifc/ifc_observer.py
+@@ -82,10 +82,9 @@ class ifc_observer:
+     def slotChangedDocument(self, doc, prop):
+         """Watch document IFC properties"""
+ 
+-        from nativeifc import ifc_tools  # lazy import
+-        from nativeifc import ifc_status
+-
+         if prop == "Schema" and "IfcFilePath" in doc.PropertiesList:
++            from nativeifc import ifc_tools  # lazy import (only for IFC docs)
++
+             schema = doc.Schema
+             ifcfile = ifc_tools.get_ifcfile(doc)
+             if ifcfile:
 diff --git a/src/Mod/CAM/PathSimulator/AppGL/DlgCAMSimulator.cpp b/src/Mod/CAM/PathSimulator/AppGL/DlgCAMSimulator.cpp
 index 74a5af0..24a62ee 100644
 --- a/src/Mod/CAM/PathSimulator/AppGL/DlgCAMSimulator.cpp

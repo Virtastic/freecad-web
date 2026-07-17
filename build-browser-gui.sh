@@ -27,6 +27,7 @@ export FC_LINK_MODE_FLAGS="\
 # Rename matplotlib freetype symbols that clash with Qt's bundled freetype (signature
 # mismatch: FT_Request_Metrics / ft_module_get_service). Must run before the link.
 if [ -x patches/fix-freetype-symbols.sh ]; then bash patches/fix-freetype-symbols.sh; fi
+if [ -x patches/fix-ifc-wasm-deps.sh ]; then bash patches/fix-ifc-wasm-deps.sh; fi
 
 # Belt-and-suspenders: stale install trees can miss Python SUBpackages that the
 # workbenches import at boot (their CMake INSTALL rules are conditional / were

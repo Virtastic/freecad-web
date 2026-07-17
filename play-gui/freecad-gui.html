@@ -288,6 +288,12 @@
       " _vp=_f.ParamGet('User parameter:BaseApp/Preferences/View')",
       " _vp.SetBool('ShowNaviCube',True)",
       "except Exception: pass",
+      // BIM workbench: its Activated() shows a first-run 'BIM_Welcome' dialog when
+      // FirstTime=True, and modal dialogs need ASYNCIFY (absent) -> emscripten_sleep
+      // abort on activation. Mark it seen so BIM activates cleanly.
+      "try:",
+      " _f.ParamGet('User parameter:BaseApp/Preferences/Mod/BIM').SetBool('FirstTime',False)",
+      "except Exception: pass",
       // Expose FreeCAD.installAddon('owner/repo') in the Python console: it drops a request
       // file that the JS watcher picks up and installs via GitHub fetch (no git in wasm). Once.
       "if not getattr(_f,'_fcweb_addon_api',False):",
