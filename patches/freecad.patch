@@ -8037,7 +8037,7 @@ index 73d671d..fd95b2b 100644
      // when running in verbose mode no splasher
      if (!(App::Application::Config()["Verbose"] == "Strict") &&
 diff --git a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
-index 354cbab..59eeb71 100644
+index 354cbab..dc5e607 100644
 --- a/src/Gui/NaviCube.cpp
 +++ b/src/Gui/NaviCube.cpp
 @@ -733,6 +733,31 @@ void NaviCubeImplementation::handleResize() {
@@ -8160,6 +8160,24 @@ index 354cbab..59eeb71 100644
      }
  
      // Restore original state.
+@@ -951,7 +1008,17 @@ bool NaviCubeImplementation::mousePressed(short x, short y) {
+ }
+ 
+ void NaviCubeImplementation::handleMenu() {
++#if defined(__EMSCRIPTEN__)
++    // wasm: QMenu::exec() runs a BLOCKING nested event loop, which deadlocks the
++    // single-threaded Qt-for-WebAssembly event loop (the menu needs the loop to
++    // process input, but the loop is blocked waiting for the menu) -> the whole
++    // app freezes. popup() shows the same menu non-blocking; the menu entries are
++    // FreeCAD commands wired via addTo(), so they fire on click through the normal
++    // signal path without needing exec()'s return value.
++    m_Menu->popup(QCursor::pos());
++#else
+     m_Menu->exec(QCursor::pos());
++#endif
+ }
+ 
+ SbRotation NaviCubeImplementation::getNearestOrientation(PickId pickId) {
 diff --git a/src/Gui/NavigationStyle.cpp b/src/Gui/NavigationStyle.cpp
 index 44bd585..40876b8 100644
 --- a/src/Gui/NavigationStyle.cpp
