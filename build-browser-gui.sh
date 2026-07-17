@@ -28,6 +28,18 @@ export FC_LINK_MODE_FLAGS="\
 # mismatch: FT_Request_Metrics / ft_module_get_service). Must run before the link.
 if [ -x patches/fix-freetype-symbols.sh ]; then bash patches/fix-freetype-symbols.sh; fi
 
+# Belt-and-suspenders: the PartDesign Shaft Wizard (WizardShaft/*.py) is installed
+# only under BUILD_FEM; if a stale install tree misses it, PartDesign logs
+# "Wizard shaft module cannot be loaded" at boot. Ensure it is preloaded.
+if [ -d deps/src/freecad/src/Mod/PartDesign/WizardShaft ] && \
+   [ ! -f "$INST/Mod/PartDesign/WizardShaft/WizardShaft.py" ]; then
+  mkdir -p "$INST/Mod/PartDesign/WizardShaft"
+  cp deps/src/freecad/src/Mod/PartDesign/WizardShaft/*.py \
+     deps/src/freecad/src/Mod/PartDesign/WizardShaft/*.svg \
+     "$INST/Mod/PartDesign/WizardShaft/" 2>/dev/null || true
+  echo "[build] copied WizardShaft into install tree"
+fi
+
 echo "=== reconfigure GUI for browser + relink ==="
 # Reconfiguring re-runs cmake, which re-dirties the whole object tree. Skip it
 # when build.ninja already carries the intended link flags (set FC_SKIP_CONFIGURE=1).
