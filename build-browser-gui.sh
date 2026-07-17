@@ -28,16 +28,24 @@ export FC_LINK_MODE_FLAGS="\
 # mismatch: FT_Request_Metrics / ft_module_get_service). Must run before the link.
 if [ -x patches/fix-freetype-symbols.sh ]; then bash patches/fix-freetype-symbols.sh; fi
 
-# Belt-and-suspenders: the PartDesign Shaft Wizard (WizardShaft/*.py) is installed
-# only under BUILD_FEM; if a stale install tree misses it, PartDesign logs
-# "Wizard shaft module cannot be loaded" at boot. Ensure it is preloaded.
-if [ -d deps/src/freecad/src/Mod/PartDesign/WizardShaft ] && \
-   [ ! -f "$INST/Mod/PartDesign/WizardShaft/WizardShaft.py" ]; then
-  mkdir -p "$INST/Mod/PartDesign/WizardShaft"
-  cp deps/src/freecad/src/Mod/PartDesign/WizardShaft/*.py \
-     deps/src/freecad/src/Mod/PartDesign/WizardShaft/*.svg \
-     "$INST/Mod/PartDesign/WizardShaft/" 2>/dev/null || true
-  echo "[build] copied WizardShaft into install tree"
+# Belt-and-suspenders: stale install trees can miss Python SUBpackages that the
+# workbenches import at boot (their CMake INSTALL rules are conditional / were
+# skipped), which surfaces as "No module named X" / "module cannot be loaded".
+# Sync every source Python package (dir with __init__.py) that is absent from the
+# installed Mod tree. Covers PartDesign/WizardShaft, BIM/{bimcommands,importers,
+# nativeifc,Dice3DS,utils}, etc. Skips test-only dirs.
+_FCSRCMOD="deps/src/freecad/src/Mod"
+if [ -d "$_FCSRCMOD" ]; then
+  find "$_FCSRCMOD" -name "__init__.py" 2>/dev/null | while read -r _initf; do
+    _pkg=$(dirname "$_initf"); _rel=${_pkg#"$_FCSRCMOD"/}; _mod=${_rel%%/*}
+    case "$_rel" in *[Tt]est*|*/SCL) continue;; esac
+    [ -d "$INST/Mod/$_mod" ] || continue          # only mods that were installed
+    if [ ! -d "$INST/Mod/$_rel" ]; then
+      mkdir -p "$INST/Mod/$_rel"
+      cp -R "$_pkg/." "$INST/Mod/$_rel/" 2>/dev/null || true
+      echo "[build] synced missing package Mod/$_rel"
+    fi
+  done
 fi
 
 echo "=== reconfigure GUI for browser + relink ==="
