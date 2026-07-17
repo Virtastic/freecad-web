@@ -17209,7 +17209,7 @@ index 1050760..9470f19 100644
 +}
 +// clang-format on
 diff --git a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
-index 7610c2d..ce8d88a 100644
+index 7610c2d..d8f2593 100644
 --- a/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 @@ -493,6 +493,16 @@ void SoBrepFaceSet::renderColoredArray(SoMaterialBundle *const materials)
@@ -17305,6 +17305,31 @@ index 7610c2d..ce8d88a 100644
      // Can we use vertex buffer objects?
      if (hasVBO) {
          int nbinding = nbind;
+@@ -1746,6 +1801,24 @@ void SoBrepFaceSet::renderShape(SoGLRenderAction * action,
+             matindices++;
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    // wasm: Coin's SoGLLazyElement does not reliably emit the OVERALL diffuse to
++    // the emulated fixed-function GL for this immediate-mode path — the shape's
++    // colour is left at whatever the previous draw set (faces render a stale grey
++    // regardless of ShapeColor/ShapeAppearance; verified by tracing glColor/
++    // glMaterialfv: only ambient+specular are sent, never the diffuse). The lit
++    // emulation shader takes the face colour from the current glColor (mirrored
++    // into its materialDiffuse uniform), so emit the live diffuse explicitly right
++    // before the triangle stream. For per-vertex/per-face bindings the loop below
++    // still overrides per element; this fixes the common single-colour case
++    // (solids, selection/preselection highlight, coloured parts).
++    {
++        SoState* rsstate = action->getState();
++        const SbColor& fcdiff = SoLazyElement::getDiffuse(rsstate, 0);
++        float fctransp = SoLazyElement::getTransparency(rsstate, 0);
++        glColor4f(fcdiff[0], fcdiff[1], fcdiff[2], 1.0F - fctransp);
++    }
++#endif
+     glBegin(GL_TRIANGLES);
+     while (viptr + 2 < viendptr) {
+                 v1 = *viptr++;
 diff --git a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProviderExt.cpp
 index 0c11550..fe8aa82 100644
 --- a/src/Mod/Part/Gui/ViewProviderExt.cpp
