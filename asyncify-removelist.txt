@@ -1,0 +1,10 @@
+Sbk*
+Shiboken*
+Ifc4*
+Ifc2x3*
+IfcParse*
+IfcGeom*
+IfcUtil*
+Py*
+_Py*
+npy_*
