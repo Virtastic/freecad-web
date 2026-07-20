@@ -309,6 +309,12 @@
       "try:",
       " _f.ParamGet('User parameter:BaseApp/Preferences/Mod/Draft').SetBool('dxfShowDialog',False)",
       "except Exception: pass",
+      // Same trap for IFC (BIM/architecture interop): importers/exportIFC + nativeifc
+      // readPreferences pop FreeCADGui.showPreferences() when Arch 'ifcShowDialog' is
+      // unset (default True). Pin False so IFC import/export don't crash.
+      "try:",
+      " _f.ParamGet('User parameter:BaseApp/Preferences/Mod/Arch').SetBool('ifcShowDialog',False)",
+      "except Exception: pass",
       // Expose FreeCAD.installAddon('owner/repo') in the Python console: it drops a request
       // file that the JS watcher picks up and installs via GitHub fetch (no git in wasm). Once.
       "if not getattr(_f,'_fcweb_addon_api',False):",
