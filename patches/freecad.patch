@@ -23838,6 +23838,23 @@ index 7b93c64..9b6349f 100644
          if len(plt.get_fignums()) > 0:
              plt.close()
          plt.ioff()  # disable interactive mode so we have full control when plot is shown
+diff --git a/src/Mod/Mesh/App/Core/Functional.h b/src/Mod/Mesh/App/Core/Functional.h
+index 63d64d5..f4b681d 100644
+--- a/src/Mod/Mesh/App/Core/Functional.h
++++ b/src/Mod/Mesh/App/Core/Functional.h
+@@ -32,6 +32,12 @@ namespace MeshCore
+ template<class Iter, class Pred>
+ static void parallel_sort(Iter begin, Iter end, Pred comp, int threads)
+ {
++#if defined(__EMSCRIPTEN__)
++    // std::async + wait() from the main thread deadlocks on wasm: a freshly
++    // spawned pthread only starts once the main thread yields to the browser,
++    // but wait() never yields. Always sort single-threaded here.
++    threads = 0;
++#endif
+     if (threads < 2 || end - begin < 2) {
+         std::sort(begin, end, comp);
+     }
 diff --git a/src/Mod/Mesh/Gui/CMakeLists.txt b/src/Mod/Mesh/Gui/CMakeLists.txt
 index 036001d..cc694b6 100644
 --- a/src/Mod/Mesh/Gui/CMakeLists.txt
@@ -28759,6 +28776,60 @@ index f5449bf..961a698 100644
 +    else
 +        pPickStyle->style = SoPickStyle::UNPICKABLE;
 +}
+diff --git a/src/Mod/Sketcher/App/planegcs/GCS.cpp b/src/Mod/Sketcher/App/planegcs/GCS.cpp
+index b630489..1365967 100644
+--- a/src/Mod/Sketcher/App/planegcs/GCS.cpp
++++ b/src/Mod/Sketcher/App/planegcs/GCS.cpp
+@@ -5070,12 +5070,25 @@ int System::diagnose(Algorithm alg)
+             //
+             // identifyDependentParametersDenseQR(J, jacobianconstraintmap, pdiagnoselist, true)
+             //
++#if defined(__EMSCRIPTEN__)
++            // On wasm a default-policy async may spawn a pthread the main thread
++            // then wait()s on before it can start (pool-dependent deadlock).
++            // deferred runs it inline at wait(), which is also console-safe.
++            auto fut = std::async(std::launch::deferred,
++                                  &System::identifyDependentParametersDenseQR,
++                                  this,
++                                  J,
++                                  jacobianconstraintmap,
++                                  pdiagnoselist,
++                                  true);
++#else
+             auto fut = std::async(&System::identifyDependentParametersDenseQR,
+                                   this,
+                                   J,
+                                   jacobianconstraintmap,
+                                   pdiagnoselist,
+                                   true);
++#endif
+ 
+             makeDenseQRDecomposition(J, jacobianconstraintmap, qrJT, rank, R);
+ 
+@@ -5143,12 +5156,23 @@ int System::diagnose(Algorithm alg)
+             // auto fut =
+             // std::async(std::launch::deferred,&System::identifyDependentParametersSparseQR, this,
+             // J, jacobianconstraintmap, pdiagnoselist, false);
++#if defined(__EMSCRIPTEN__)
++            // See DenseQR note above: deferred avoids a pool-dependent deadlock.
++            auto fut = std::async(std::launch::deferred,
++                                  &System::identifyDependentParametersSparseQR,
++                                  this,
++                                  J,
++                                  jacobianconstraintmap,
++                                  pdiagnoselist,
++                                  /*silent=*/true);
++#else
+             auto fut = std::async(&System::identifyDependentParametersSparseQR,
+                                   this,
+                                   J,
+                                   jacobianconstraintmap,
+                                   pdiagnoselist,
+                                   /*silent=*/true);
++#endif
+ 
+             makeSparseQRDecomposition(J,
+                                       jacobianconstraintmap,
 diff --git a/src/Mod/Sketcher/Gui/EditModeCoinManager.cpp b/src/Mod/Sketcher/Gui/EditModeCoinManager.cpp
 index abdacaa..9ea8364 100644
 --- a/src/Mod/Sketcher/Gui/EditModeCoinManager.cpp
