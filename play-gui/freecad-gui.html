@@ -301,6 +301,14 @@
       "try:",
       " _f.ParamGet('User parameter:BaseApp/Preferences/Mod/BIM').SetBool('FirstTime',False)",
       "except Exception: pass",
+      // DXF import/export: importDXF.readPreferences() calls FreeCADGui.showPreferences()
+      // (a modal C++ preferences dialog) when the Draft 'dxfShowDialog' pref is unset —
+      // and its draftutils default is True. A C++ QDialog::exec() launched from the Python
+      // call stack traps (asyncify can't unwind across the CPython interpreter frame), which
+      // crashed every DXF read/write. Pin it False so DXF just uses the current settings.
+      "try:",
+      " _f.ParamGet('User parameter:BaseApp/Preferences/Mod/Draft').SetBool('dxfShowDialog',False)",
+      "except Exception: pass",
       // Expose FreeCAD.installAddon('owner/repo') in the Python console: it drops a request
       // file that the JS watcher picks up and installs via GitHub fetch (no git in wasm). Once.
       "if not getattr(_f,'_fcweb_addon_api',False):",
