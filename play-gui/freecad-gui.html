@@ -12,19 +12,66 @@
  #logtoggle{position:absolute;right:6px;bottom:6px;z-index:11;background:#1e1e2e;color:#8087a2;
       border:1px solid #45475a;border-radius:4px;padding:1px 7px;font:11px ui-monospace,Menlo,monospace;cursor:pointer;opacity:.45}
  #logtoggle:hover{opacity:1}
- /* Full-screen loading overlay so the first ~4s of boot reads as "loading", not frozen. */
- #boot{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;
-      justify-content:center;gap:18px;background:#2b2b2b}
- #boot.done{opacity:0;pointer-events:none;transition:opacity .4s;display:flex}
- #boot .spin{width:46px;height:46px;border:4px solid #45475a;border-top-color:#89b4fa;border-radius:50%;animation:fcsp 1s linear infinite}
+ /* --- Themed loading overlay (Virtastic house style, shared with openmw-web / ja2-web:
+    deep-slate ground + a cool CAD-blue glow). Covers the app during download/boot;
+    fades out on the first frame. --- */
+ #boot{position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;
+      padding:24px;text-align:center;background:#0d0f12;color:#e3e9f2;
+      font:16px/1.6 "Inter","Segoe UI",-apple-system,Roboto,"Helvetica Neue",sans-serif;
+      transition:opacity .6s ease}
+ #boot.done{opacity:0;pointer-events:none}
+ #boot::before{content:'';position:absolute;inset:0;pointer-events:none;
+      background:radial-gradient(150% 74% at 50% 134%, rgba(74,158,255,.28), rgba(74,158,255,.05) 34%, transparent 60%),
+        radial-gradient(90% 60% at 50% 136%, rgba(127,196,255,.12), transparent 56%);
+      animation:fcGlow 9s ease-in-out infinite}
+ @keyframes fcGlow{0%,100%{opacity:.8}50%{opacity:1}}
+ #boot .ld-inner{position:relative;width:100%;max-width:440px}
+ #boot .ld-glyph{width:60px;height:60px;margin:0 auto 26px;color:#4a9eff;animation:fcsp 7s linear infinite}
+ #boot .ld-glyph svg{width:100%;height:100%;display:block;
+      filter:drop-shadow(0 0 14px rgba(74,158,255,.35))}
  @keyframes fcsp{to{transform:rotate(360deg)}}
- #boot .bt{font-size:16px;color:#cdd6f4;letter-spacing:.5px}
- #boot .bs{font-size:12px;color:#9399b2;max-width:70vw;text-align:center;min-height:1.2em}
+ #boot .bt{margin:0 0 10px;font-family:"Inter","Segoe UI",Roboto,sans-serif;font-weight:600;
+      font-size:clamp(28px,5vw,42px);letter-spacing:.005em;color:#eef3fa;
+      text-shadow:0 1px 0 rgba(0,0,0,.5),0 0 34px rgba(74,158,255,.14)}
+ #boot .bt .accent{color:#4a9eff;text-shadow:0 0 22px rgba(74,158,255,.45)}
+ #boot .bs{margin:0 0 22px;font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;
+      font-weight:600;color:#7fb2e6;min-height:1.4em}
+ #boot .ld-bar{position:relative;height:4px;border-radius:3px;overflow:hidden;background:rgba(74,158,255,.16)}
+ #boot .ld-fill{height:100%;width:0;border-radius:3px;
+      background:linear-gradient(90deg,#2f6fb0,#4a9eff,#8fc7ff);transition:width .3s ease}
+ #boot.indet .ld-fill{width:34%;animation:ldSlide 1.25s ease-in-out infinite}
+ @keyframes ldSlide{0%{transform:translateX(-110%)}100%{transform:translateX(330%)}}
+ #boot .ld-detail{margin-top:13px;min-height:16px;font:12px/1.4 ui-monospace,Menlo,monospace;color:#6b7686}
+ #boot .ld-credit{margin-top:28px;font-size:11px;letter-spacing:.08em;color:#5c6675}
+ #boot .ld-credit a{color:#4a9eff;text-decoration:none;border-bottom:1px solid rgba(74,158,255,.4)}
  #boot .berr{color:#f38ba8}
+ #boot.err .ld-glyph{animation:none;color:#f38ba8}
+ #boot.err .bs{color:#f38ba8}
+ @media (prefers-reduced-motion:reduce){
+   #boot::before,#boot .ld-glyph{animation:none}
+   #boot.indet .ld-fill{animation:none;width:100%}
+ }
 </style></head>
 <body>
 <div id="screen"></div>
-<div id="boot"><div class="spin"></div><div class="bt">Loading FreeCAD</div><div class="bs" id="bootstatus">starting… (first load downloads ~450 MB)</div></div>
+<div id="boot" class="indet">
+  <div class="ld-inner">
+    <div class="ld-glyph" aria-hidden="true">
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+        <!-- isometric CAD cube -->
+        <path d="M24 5 41 14.5 41 33.5 24 43 7 33.5 7 14.5Z"/>
+        <path d="M24 5 24 24 41 14.5M24 24 7 14.5M24 24 24 43"/>
+        <circle cx="24" cy="24" r="2" fill="currentColor" stroke="none"/>
+      </svg>
+    </div>
+    <div class="bt">Free<span class="accent">CAD</span></div>
+    <div class="bs" id="bootstatus">starting… (first load downloads ~450 MB)</div>
+    <div class="ld-bar"><div class="ld-fill" id="bootfill"></div></div>
+    <div class="ld-detail" id="bootdetail"></div>
+    <div class="ld-credit">FreeCAD-Web by <a href="https://virtastic.app" target="_blank" rel="noopener">Virtastic</a>
+      &middot; LGPL &middot; <a href="https://github.com/Virtastic/freecad-wasm" target="_blank" rel="noopener">Source</a></div>
+  </div>
+</div>
 <div id="log" class="hidden"><span id="status">loading…</span></div>
 <button id="logtoggle" title="show/hide boot log">log</button>
 <script>
@@ -35,9 +82,29 @@
  // Boot-progress noise: emscripten download/dep counters + our own diagnostic
  // markers. Never shown in the log unless ?debug; instead summarized in the
  // loading overlay. This is what looked like "tons of errors": pure progress spam.
- const __NOISE=/\[deps\] remaining|Downloading data|\bRunning\.\.\.|\[FCWEB-MARK|\[BOOTTIME|\[SPE \d|\[FCWEB\]|InitApplications|InitGui \d|all InitGui|activateWorkbench:|showMainWindow:|setBranding:|loadOpenInventor:|checkParameters:|execute:(begin|end)|mw wrapper singleton|pyside warmup|emscripten GL emulation/;
- function __setBoot(msg,isErr){ if(!__bootStatus) return; __bootStatus.textContent=msg;
-   __bootStatus.classList.toggle('berr',!!isErr); }
+ const __NOISE=/\[deps\] remaining|Downloading data|\bRunning\.\.\.|\[FCWEB-MARK|\[BOOTTIME|\[SPE \d|\[FCWEB\]|InitApplications|InitGui \d|all InitGui|activateWorkbench:|showMainWindow:|setBranding:|loadOpenInventor:|checkParameters:|execute:(begin|end)|mw wrapper singleton|pyside warmup|emscripten GL emulation|immediate mode emulation/;
+ const __bootFill=document.getElementById('bootfill'), __bootDetail=document.getElementById('bootdetail');
+ // Drive the themed overlay: uppercase phase label (#bootstatus), progress bar (#bootfill),
+ // and a monospace detail line (#bootdetail). A numeric "… NN%" switches the bar to
+ // determinate; otherwise it stays indeterminate. Errors turn the whole overlay red.
+ function __setBoot(msg,isErr){
+   if(isErr){ if(__bootEl) __bootEl.classList.add('err'); if(__bootStatus){ __bootStatus.textContent='Error'; __bootStatus.classList.add('berr'); } if(__bootDetail) __bootDetail.textContent=String(msg).slice(0,140); return; }
+   if(!__bootStatus) return;
+   const m=/(.*?)\s*(\d+)\s*%/.exec(String(msg));
+   if(m){
+     if(__bootEl) __bootEl.classList.remove('indet');
+     if(__bootFill) __bootFill.style.width=Math.max(2,Math.min(100,+m[2]))+'%';
+     __bootStatus.textContent=(m[1]||'Downloading').replace(/[…\.\s]+$/,'')||'Downloading';
+     if(__bootDetail) __bootDetail.textContent=m[2]+'% of ~450 MB';
+   } else {
+     if(__bootEl) __bootEl.classList.add('indet');
+     // strip trailing "(…)" into the detail line so the label stays short + uppercase-clean
+     const paren=/^(.*?)\s*\((.*)\)\s*$/.exec(String(msg));
+     if(paren){ __bootStatus.textContent=paren[1].replace(/[…\.\s]+$/,'')||paren[1]; if(__bootDetail) __bootDetail.textContent=paren[2]; }
+     else { __bootStatus.textContent=String(msg).replace(/…$/,''); if(__bootDetail) __bootDetail.textContent=''; }
+   }
+   __bootStatus.classList.remove('berr'); if(__bootEl) __bootEl.classList.remove('err');
+ }
  // Reveal the app only once BOTH the loader says it's ready AND the Qt window has gone
  // fullscreen. Qt-wasm paints a vestigial title bar; if we reveal first and strip it after,
  // the user sees the title bar flash away (it used to be visible ~2.5s: overlay dropped at
@@ -75,7 +142,12 @@
      if(!__flushQueued){ __flushQueued=true; requestAnimationFrame(__flushLog); }
    }
    // Surface real errors in the loading overlay so a boot failure isn't invisible.
-   if(cls==='err' && !noise && __bootEl && !__bootEl.classList.contains('done')) __setBoot(String(t).slice(0,140),true);
+   // Only genuinely-fatal boot messages turn the overlay red — stderr WARNING/INFO
+   // lines (e.g. the benign "using emscripten GL immediate mode emulation") must not
+   // hijack the loading screen. Anything not fatal is dropped (it's boot noise).
+   if(cls==='err' && !noise && __bootEl && !__bootEl.classList.contains('done')
+      && /\b(abort|aborted|fatal|uncaught|RuntimeError|cannot|failed to|out of memory|not supported)\b/i.test(String(t))
+      && !/\bWARNING\b/i.test(String(t))) __setBoot(String(t).slice(0,140),true);
    // Optional: persist FCWEB diagnostic markers to the server synchronously (for
    // trap localization). Gated on ?fcmark to avoid slowing normal runs.
    try { if(window.__FCMARK && typeof t==='string' && t.indexOf('FCWEB-')>=0){
