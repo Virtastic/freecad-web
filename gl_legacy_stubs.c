@@ -125,6 +125,30 @@ void glInterleavedArrays(GLenum format, GLsizei stride, const void* pointer) {
     glEnableClientState(GL_VERTEX_ARRAY_); glVertexPointer(vc, GL_FLOAT_, str, base+voff);
 }
 
+/* fcwasm_draw_text_tris: draw SoAsciiText glyph triangles through the GL
+ * emulation's CLIENT-ARRAY path instead of glBegin/glEnd. The immediate-mode
+ * assembly of Coin's per-glyph text batches comes out corrupt under
+ * LEGACY_GL_EMULATION (glyph triangles paint as a screen-spanning fan), while
+ * client-side vertex arrays render correctly. This file is compiled WITHOUT
+ * the gl_compat.h force-include, so the calls below bind to the real
+ * emulation entry points (Coin sources see no-op shims for these). */
+extern void glNormal3f(GLfloat, GLfloat, GLfloat);
+extern void glDrawArrays(GLenum, GLint, GLsizei);
+void fcwasm_draw_text_tris(const float* verts, int nverts) {
+    const GLenum GL_VERTEX_ARRAY_ = 0x8074, GL_NORMAL_ARRAY_ = 0x8075,
+                 GL_COLOR_ARRAY_ = 0x8076, GL_TEXTURE_COORD_ARRAY_ = 0x8078;
+    const GLenum GL_FLOAT_ = 0x1406, GL_TRIANGLES_ = 0x0004;
+    if (!verts || nverts < 3) return;
+    glDisableClientState(GL_NORMAL_ARRAY_);
+    glDisableClientState(GL_COLOR_ARRAY_);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY_);
+    glEnableClientState(GL_VERTEX_ARRAY_);
+    glVertexPointer(3, GL_FLOAT_, 0, verts);
+    glNormal3f(0.0f, 0.0f, 1.0f);
+    glDrawArrays(GL_TRIANGLES_, 0, nverts);
+    glDisableClientState(GL_VERTEX_ARRAY_);
+}
+
 /* ARB VBO suffix aliases used by PartGui's Coin SoBrepFaceSet (map to core). */
 #include <GLES2/gl2.h>
 void glBindBufferARB(GLenum target, GLuint buffer) { glBindBuffer(target, buffer); }

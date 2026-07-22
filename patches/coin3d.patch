@@ -91,6 +91,142 @@ index 66273c2..9de4199 100644
    assert(w->glActiveTexture);
    w->glActiveTexture(texture);
  }
+diff --git a/src/shapenodes/SoAsciiText.cpp b/src/shapenodes/SoAsciiText.cpp
+index da4fca8..fafc9b2 100644
+--- a/src/shapenodes/SoAsciiText.cpp
++++ b/src/shapenodes/SoAsciiText.cpp
+@@ -315,11 +315,36 @@ SoAsciiText::initClass(void)
+   SO_NODE_INTERNAL_INIT_CLASS(SoAsciiText, SO_FROM_INVENTOR_2_1|SoNode::VRML1);
+ }
+ 
+-// Doc in parent.
++#if defined(__EMSCRIPTEN__)
++#include <vector>
++// Defined in the FreeCAD-Web harness (gl_legacy_stubs.c): draws text triangles
++// through the GL emulation's client-array path, bypassing the immediate-mode
++// batch assembly that corrupts these draws. See SoAsciiText::GLRender.
++extern "C" void fcwasm_draw_text_tris(const float * verts, int nverts);
++#endif
++
++// Reject glyph triangles whose (normalized, ~[0,1]) font-space coordinates are
++// non-finite or absurdly out of range. Guards against a wasm FreeType glyph
++// tessellator that occasionally emits stray vertices, which immediate-mode GL
++// emulation then paints as a screen-spanning fan. See call sites below.
++static inline SbBool
++coin_soascii_glyphtri_ok(const SbVec2f & a, const SbVec2f & b, const SbVec2f & c)
++{
++  const float LIMIT = 32.0f;
++  const SbVec2f * vv[3] = { &a, &b, &c };
++  for (int k = 0; k < 3; k++) {
++    const float x = (*vv[k])[0];
++    const float y = (*vv[k])[1];
++    if (x != x || y != y) { return FALSE; }              // NaN
++    if (x > LIMIT || x < -LIMIT || y > LIMIT || y < -LIMIT) { return FALSE; }  // +/-inf and out-of-range
++  }
++  return TRUE;
++}
++
+ void
+ SoAsciiText::GLRender(SoGLRenderAction * action)
+-{  
+-  if (!this->shouldGLRender(action)) 
++{
++  if (!this->shouldGLRender(action))
+     return;
+ 
+   PRIVATE(this)->lock();
+@@ -368,9 +393,22 @@ SoAsciiText::GLRender(SoGLRenderAction * action)
+ 
+   SoMaterialBundle mb(action);
+   mb.sendFirst();
+-  
++
++#if defined(__EMSCRIPTEN__)
++  // wasm: emscripten's LEGACY_GL_EMULATION immediate-mode (glBegin/glEnd)
++  // mis-assembles these text batches — the flushed vertex stream comes out
++  // corrupt and the glyph triangles paint as a screen-spanning fan of flat
++  // wedges over the whole 3D view (Draft dimension/axis labels). Client-side
++  // vertex arrays are the code path every other Coin shape uses under the
++  // emulation and render correctly, so collect the glyph triangles and emit
++  // them via glVertexPointer/glDrawArrays instead.
++  std::vector<GLfloat> fcwasm_tris;
++  fcwasm_tris.reserve(1024);
++  #define FCWASM_TEXT_VERTEX(vx, vy) fcwasm_tris.push_back(vx); fcwasm_tris.push_back(vy); fcwasm_tris.push_back(0.0f);
++#else
+   glBegin(GL_TRIANGLES);
+   glNormal3f(0.0f, 0.0f, 1.0f);
++#endif
+ 
+   float ypos = 0.0f;
+   int i, n = this->string.getNum();
+@@ -426,6 +464,22 @@ SoAsciiText::GLRender(SoGLRenderAction * action)
+         v1 = coords[*ptr++];
+         v0 = coords[*ptr++];
+ 
++        // wasm: the dynamically-probed FreeType glyph tessellator can emit
++        // non-finite / wildly out-of-range coordinates for a subset of the
++        // triangles making up a glyph. In immediate-mode GL emulation those
++        // stray vertices land at ~infinity and paint a huge screen-spanning
++        // fan over the whole 3D view. Font-space glyph coords are normalized
++        // to roughly [0,1]; anything far outside that is corrupt -- drop the
++        // triangle so the remaining (valid) glyph geometry still renders.
++        if (!coin_soascii_glyphtri_ok(v0, v1, v2)) { continue; }
++
++#if defined(__EMSCRIPTEN__)
++        // Collect for the client-array draw after the loops (see above).
++        // Text is untextured on the wasm build.
++        FCWASM_TEXT_VERTEX(v0[0] * fontspec->size + xpos, v0[1] * fontspec->size + ypos)
++        FCWASM_TEXT_VERTEX(v1[0] * fontspec->size + xpos, v1[1] * fontspec->size + ypos)
++        FCWASM_TEXT_VERTEX(v2[0] * fontspec->size + xpos, v2[1] * fontspec->size + ypos)
++#else
+         // FIXME: Is the text textured correctly when stretching is
+         // applied (when width values have been given that are
+         // not the same as the length of the string)? jornskaa 20040716
+@@ -433,16 +487,17 @@ SoAsciiText::GLRender(SoGLRenderAction * action)
+           glTexCoord2f(v0[0] + xpos/fontspec->size, v0[1] + ypos/fontspec->size);
+         }
+         glVertex3f(v0[0] * fontspec->size + xpos, v0[1] * fontspec->size + ypos, 0.0f);
+-        
++
+         if (do2Dtextures) {
+           glTexCoord2f(v1[0] + xpos/fontspec->size, v1[1] + ypos/fontspec->size);
+         }
+         glVertex3f(v1[0] * fontspec->size + xpos, v1[1] * fontspec->size + ypos, 0.0f);
+-        
++
+         if (do2Dtextures) {
+           glTexCoord2f(v2[0] + xpos/fontspec->size, v2[1] + ypos/fontspec->size);
+         }
+         glVertex3f(v2[0] * fontspec->size + xpos, v2[1] * fontspec->size + ypos, 0.0f);
++#endif
+ 
+       }
+ 
+@@ -457,7 +512,14 @@ SoAsciiText::GLRender(SoGLRenderAction * action)
+ 
+     ypos -= fontspec->size * this->spacing.getValue();
+   }
++#if defined(__EMSCRIPTEN__)
++  #undef FCWASM_TEXT_VERTEX
++  if (!fcwasm_tris.empty()) {
++    fcwasm_draw_text_tris(fcwasm_tris.data(), (int)(fcwasm_tris.size() / 3));
++  }
++#else
+   glEnd();
++#endif
+ 
+   PRIVATE(this)->unlock();
+ 
+@@ -770,6 +832,9 @@ SoAsciiText::generatePrimitives(SoAction * action)
+         v1 = coords[*ptr++];
+         v0 = coords[*ptr++];
+ 
++        // wasm: skip corrupt glyph triangles (see coin_soascii_glyphtri_ok).
++        if (!coin_soascii_glyphtri_ok(v0, v1, v2)) { continue; }
++
+         // FIXME: Is the text textured correctly when stretching is
+         // applied (when width values have been given that are
+         // not the same as the length of the string)? jornskaa 20040716
 diff --git a/src/shapenodes/SoIndexedLineSet.cpp b/src/shapenodes/SoIndexedLineSet.cpp
 index 07007af..c56d66f 100644
 --- a/src/shapenodes/SoIndexedLineSet.cpp
