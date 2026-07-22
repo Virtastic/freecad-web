@@ -256,6 +256,33 @@
   var vap=WebGL2RenderingContext.prototype.vertexAttribPointer;
   WebGL2RenderingContext.prototype.vertexAttribPointer=function(i){ if(i<0||i===4294967295) return; return vap.apply(this,arguments); };
 })();
+// FCWEB PERF: during interactive redraw Coin queries FRAMEBUFFER_BINDING + VIEWPORT
+// ~29x per draw (~380k JS<->GPU round-trips per orbit) and the immediate-mode flush
+// re-binds the same shader program every batch. Those round-trips dominated the frame
+// (~17 FPS). Cache framebuffer + viewport (tracked via bindFramebuffer/viewport) and
+// skip redundant useProgram. Correct because every state change flows through these same
+// wrapped methods; per-context state lives on the context object, so context loss/reuse
+// re-initialises cleanly. Restores interactive orbit toward 30+ FPS.
+(function(){
+  var P=WebGL2RenderingContext.prototype;
+  var FB_BINDING=0x8CA6, VIEWPORT=0x0BA2, TARGET_FRAMEBUFFER=0x8D40;
+  var _gp=P.getParameter;
+  P.getParameter=function(pn){
+    if(pn===FB_BINDING && this._fcFB!==undefined) return this._fcFB;
+    if(pn===VIEWPORT && this._fcVP) return this._fcVP;
+    return _gp.apply(this,arguments);
+  };
+  var _bf=P.bindFramebuffer;
+  P.bindFramebuffer=function(target,fb){ this._fcFB=(target===TARGET_FRAMEBUFFER)?fb:undefined; return _bf.apply(this,arguments); };
+  var _vp=P.viewport;
+  P.viewport=function(x,y,w,h){ var a=this._fcVP||(this._fcVP=new Int32Array(4)); a[0]=x;a[1]=y;a[2]=w;a[3]=h; return _vp.apply(this,arguments); };
+  var _up=P.useProgram;
+  P.useProgram=function(prog){ if(this._fcProg===prog) return; this._fcProg=prog; return _up.apply(this,arguments); };
+  // Skip redundant ARRAY_BUFFER re-binds (global state, not VAO-scoped, so safe to cache).
+  var ARRAY_BUFFER=0x8892;
+  var _bb=P.bindBuffer;
+  P.bindBuffer=function(target,buf){ if(target===ARRAY_BUFFER){ if(this._fcAB===buf) return; this._fcAB=buf; } return _bb.apply(this,arguments); };
+})();
 </script>
 <script>
 // FCWEB GL tracer: wrap WebGL2 draw calls to see what actually reaches the GPU.
