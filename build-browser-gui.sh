@@ -339,15 +339,21 @@ rep('createrenderer-nocurr',
  'createRenderer(renderer){var useCurrProgram=false;',
  'createRenderer(renderer){var useCurrProgram=false;')
 # validate cached renderers still own a live GL program (contexts get recreated in
-# Qt-wasm; a stale renderer.program -> INVALID_OPERATION drawArrays)
+# Qt-wasm; a stale renderer.program -> INVALID_OPERATION drawArrays).
+# PERF: getRenderer()/keyView run on EVERY immediate-mode flush, and GLctx.isProgram()
+# forces a synchronous GPU round-trip under ANGLE/Metal -> during real mouse interaction
+# (thousands of small immediate-mode batches per redraw) it dominated the frame at ~1 FPS
+# (36s of a 40-move CPU profile). isProgram's answer only changes when the GL context is
+# recreated, so cache the result per-renderer tagged with the current GLctx and re-validate
+# only on a context swap. Restores interactive orbit/hover to ~12-26 FPS with no regression.
 rep('getrenderer-validate',
  'getRenderer(){if(GLImmediate.currentRenderer){return GLImmediate.currentRenderer}',
- 'getRenderer(){if(GLImmediate.currentRenderer){var _vp0;try{_vp0=GLImmediate.currentRenderer.program&&GLctx.isProgram(GLImmediate.currentRenderer.program)}catch(_e){_vp0=false}if(_vp0){return GLImmediate.currentRenderer}GLImmediate.currentRenderer=null}',
- '_vp0')
+ 'getRenderer(){if(GLImmediate.currentRenderer){var _r0=GLImmediate.currentRenderer,_vp0;if(_r0._fcProgOK===_r0.program&&_r0._fcCtx===GLctx){_vp0=true}else{try{_vp0=_r0.program&&GLctx.isProgram(_r0.program)}catch(_e){_vp0=false}if(_vp0){_r0._fcProgOK=_r0.program;_r0._fcCtx=GLctx}}if(_vp0){return _r0}GLImmediate.currentRenderer=null}',
+ '_fcProgOK')
 rep('keyview-validate',
  'var renderer=keyView.get();if(!renderer){renderer=GLImmediate.createRenderer();',
- 'var renderer=keyView.get();if(renderer){var _vp1;try{_vp1=renderer.program&&GLctx.isProgram(renderer.program)}catch(_e){_vp1=false}if(!_vp1)renderer=null}if(!renderer){renderer=GLImmediate.createRenderer();',
- '_vp1')
+ 'var renderer=keyView.get();if(renderer){var _vp1;if(renderer._fcProgOK===renderer.program&&renderer._fcCtx===GLctx){_vp1=true}else{try{_vp1=renderer.program&&GLctx.isProgram(renderer.program)}catch(_e){_vp1=false}if(_vp1){renderer._fcProgOK=renderer.program;renderer._fcCtx=GLctx}}if(!_vp1)renderer=null}if(!renderer){renderer=GLImmediate.createRenderer();',
+ 'renderer._fcProgOK')
 # SHADING: the emulation ships a ready headlight (lightPosition[0]=[0,0,1,0],
 # lightDiffuse[0]=white) but Coin never enables GL_LIGHTING/GL_LIGHT0 in wasm, so
 # solids render FLAT single-color. Enable lighting for draws that carry normals
