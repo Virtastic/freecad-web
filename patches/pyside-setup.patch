@@ -22,3 +22,44 @@ index 5cd12b6..84991af 100644
          set(shiboken_framework_include_dir_list ${QT_FRAMEWORK_INCLUDE_DIR})
          make_path(shiboken_framework_include_dirs ${shiboken_framework_include_dir_list})
          list(APPEND shiboken_command "--framework-include-paths=${shiboken_framework_include_dirs}")
+diff --git a/sources/shiboken6/libshiboken/bufferprocs_py37.cpp b/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
+index 4ccf970..03b517c 100644
+--- a/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
++++ b/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
+@@ -12,6 +12,8 @@
+ #ifdef Py_LIMITED_API
+ 
+ #include "sbkpython.h"
++
++
+ /* Buffer C-API for Python 3.0 */
+ 
+ int
+diff --git a/sources/shiboken6/libshiboken/pep384impl.cpp b/sources/shiboken6/libshiboken/pep384impl.cpp
+index bd7a4c5..ce743c1 100644
+--- a/sources/shiboken6/libshiboken/pep384impl.cpp
++++ b/sources/shiboken6/libshiboken/pep384impl.cpp
+@@ -15,6 +15,23 @@
+ #include <cstdlib>
+ #include <cstring>
+ 
++// FCWEB: this build links FULL libpython alongside limited-API shiboken. The
++// limited-API reimplementations below of CPython-standard functions then COLLIDE
++// with libpython's real ones; with -Wl,--allow-multiple-definition the linker
++// may bind CPython's own core init (type_ready -> PyStaticMethod_New) to
++// shiboken's version, which dereferences a not-yet-initialized PepStaticMethod_TypePtr
++// (NULL) and segfaults. Rename shiboken's definitions to local names so the real
++// libpython versions satisfy every external reference; shiboken's own calls still
++// resolve to the (identical-behaviour) local copies.
++#ifdef FCWEB_REAL_CPYTHON
++#  define PyRun_String       fcweb_shib_PyRun_String
++#  define PyMethod_New       fcweb_shib_PyMethod_New
++#  define PyMethod_Function  fcweb_shib_PyMethod_Function
++#  define PyMethod_Self      fcweb_shib_PyMethod_Self
++#  define PyStaticMethod_New fcweb_shib_PyStaticMethod_New
++#endif
++
++
+ extern "C"
+ {
+ 

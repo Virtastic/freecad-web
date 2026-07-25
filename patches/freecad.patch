@@ -207,10 +207,26 @@ index 8571676..d73dbe9 100644
  #else
  #error "no supported OS platform defined"
 diff --git a/src/3rdParty/salomesmesh/CMakeLists.txt b/src/3rdParty/salomesmesh/CMakeLists.txt
-index 144edf1..1f6292e 100644
+index 144edf1..84f2baa 100644
 --- a/src/3rdParty/salomesmesh/CMakeLists.txt
 +++ b/src/3rdParty/salomesmesh/CMakeLists.txt
-@@ -320,6 +320,16 @@ SET_BIN_DIR(SMESHDS SMESHDS)
+@@ -193,7 +193,14 @@ ENDIF(${CMAKE_SIZEOF_VOID_P} MATCHES "8")
+ ######################################################
+ IF(UNIX)
+     # Same settings are used for both MacOSX and Unix/Linux
+-    ADD_DEFINITIONS(-DHAVE_CONFIG_H -DHAVE_LIMITS_H -DCSFDB -DLIN -DOCC_CONVERT_SIGNALS)
++    IF(EMSCRIPTEN)
++        # OCC_CONVERT_SIGNALS makes OCC_CATCH_SIGNALS use setjmp; mixing wasm
++        # setjmp with wasm-EH in one function makes LLVM emit invalid wasm.
++        # No POSIX signals in wasm, so drop the conversion there.
++        ADD_DEFINITIONS(-DHAVE_CONFIG_H -DHAVE_LIMITS_H -DCSFDB -DLIN)
++    ELSE(EMSCRIPTEN)
++        ADD_DEFINITIONS(-DHAVE_CONFIG_H -DHAVE_LIMITS_H -DCSFDB -DLIN -DOCC_CONVERT_SIGNALS)
++    ENDIF(EMSCRIPTEN)
+ ELSE(UNIX)
+   IF(WIN32)
+     ######### Windows ###########
+@@ -320,6 +327,16 @@ SET_BIN_DIR(SMESHDS SMESHDS)
  # SMESH #
  #########
  FILE(GLOB SMESH_source_files src/SMESH/*.c src/SMESH/*.cpp src/Controls/*.cpp inc/SMESH_*.h*)
@@ -7680,7 +7696,7 @@ index 9384790..b40ef9c 100644
 +# error "std::string Application::FindHomePath(const char*) not implemented"
 +#endif
 diff --git a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
-index 2bdc54c..60a096f 100644
+index 2bdc54c..c6238bc 100644
 --- a/src/Base/Interpreter.cpp
 +++ b/src/Base/Interpreter.cpp
 @@ -595,6 +595,21 @@ void initInterpreter(int argc, char* argv[])
@@ -7705,15 +7721,68 @@ index 2bdc54c..60a096f 100644
      status = PyConfig_SetBytesArgv(&config, argc, argv);
      if (PyStatus_Exception(status)) {
          throw Base::RuntimeError("Failed to set config");
-@@ -602,6 +617,8 @@ void initInterpreter(int argc, char* argv[])
+@@ -602,7 +617,20 @@ void initInterpreter(int argc, char* argv[])
  
      status = Py_InitializeFromConfig(&config);
      if (PyStatus_Exception(status)) {
+-        throw Base::RuntimeError("Failed to init from config");
 +        fprintf(stderr, "[FCWEB] Py_InitializeFromConfig failed: func=%s err=%s\n",
 +                status.func ? status.func : "?", status.err_msg ? status.err_msg : "?");
-         throw Base::RuntimeError("Failed to init from config");
++        if (Py_IsInitialized() && PyErr_Occurred()) {
++            fprintf(stderr, "[FCWEB] pending Python exception:\n");
++            PyErr_Print();
++        } else {
++            fprintf(stderr, "[FCWEB] no pending Python exception (Py_IsInitialized=%d)\n",
++                    Py_IsInitialized());
++        }
++        std::string msg = std::string("Failed to init from config [func=")
++            + (status.func ? status.func : "?") + " err="
++            + (status.err_msg ? status.err_msg : "?")
++            + " pylib=" + (pylib ? pylib : "(null)") + "]";
++        throw Base::RuntimeError(msg);
      }
  
+     // If FreeCAD was run from within a Python virtual environment, ensure that the site-packages
+diff --git a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
+index b2308a7..bbe3517 100644
+--- a/src/Base/Parameter.cpp
++++ b/src/Base/Parameter.cpp
+@@ -1769,6 +1769,9 @@ int ParameterManager::LoadDocument(const char* sFileName)
+ {
+     try {
+         Base::FileInfo file(sFileName);
++#ifndef __EMSCRIPTEN__
++        // Skip QLockFile on single-instance wasm (its tryLock() fsync()s, which
++        // suspends and traps under JSPI from non-promising stacks).
+         QLockFile lock(getLockFile(file));
+         if (!lock.tryLock(getTimeout())) {
+             // Continue with empty config
+@@ -1777,6 +1780,7 @@ int ParameterManager::LoadDocument(const char* sFileName)
+             std::cerr << "Failed to access file for reading: " << sFileName << std::endl;
+             return 1;
+         }
++#endif
+ #if defined(FC_OS_WIN32)
+         std::wstring name = file.toStdWString();
+         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+@@ -1868,11 +1872,17 @@ void ParameterManager::SaveDocument(const char* sFileName) const
+ {
+     try {
+         Base::FileInfo file(sFileName);
++#ifndef __EMSCRIPTEN__
++        // QLockFile is meaningless on single-instance wasm, and its tryLock()
++        // fsync()s — which suspends. When SaveDocument runs from a non-promising
++        // stack (e.g. a boot-time widget constructor), that suspend traps under
++        // JSPI ("suspend without WebAssembly.promising"). Skip the lock on wasm.
+         QLockFile lock(getLockFile(file));
+         if (!lock.tryLock(getTimeout())) {
+             std::cerr << "Failed to access file for writing: " << sFileName << std::endl;
+             return;
+         }
++#endif
+         //
+         // Plug in a format target to receive the resultant
+         // XML stream from the serializer.
 diff --git a/src/FCConfig.h b/src/FCConfig.h
 index 294d16a..69a6af9 100644
 --- a/src/FCConfig.h
@@ -7734,7 +7803,7 @@ index 294d16a..69a6af9 100644
  #   ifndef FC_OS_LINUX
  #   define FC_OS_LINUX
 diff --git a/src/Gui/Application.cpp b/src/Gui/Application.cpp
-index 08b3eb2..deba940 100644
+index 08b3eb2..777f79a 100644
 --- a/src/Gui/Application.cpp
 +++ b/src/Gui/Application.cpp
 @@ -27,6 +27,7 @@
@@ -7762,7 +7831,7 @@ index 08b3eb2..deba940 100644
              wc.setWaitCursor();
          }
      }
-@@ -1928,6 +1936,14 @@ _qt_msg_handler_old old_qtmsg_handler = nullptr;
+@@ -1928,6 +1936,22 @@ _qt_msg_handler_old old_qtmsg_handler = nullptr;
  
  void messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
  {
@@ -7773,11 +7842,19 @@ index 08b3eb2..deba940 100644
 +    if (msg.contains(QLatin1String("sharing OpenGL contexts is limited"))) {
 +        return;
 +    }
++    // Under JSPI, a modal dialog suspends (unwinds) the C stack out of the
++    // nested QEventLoop::exec() before it returns normally, so QEventLoop's
++    // RAII guard fires this notice on the way out even though nothing actually
++    // threw. It is harmless (the dialog works and returns the real result);
++    // suppress it so the Report view stays meaningful.
++    if (msg.contains(QLatin1String("caught an exception thrown from an event handler"))) {
++        return;
++    }
 +#endif
      QByteArray output;
      if (context.category && strcmp(context.category, "default") != 0) {
          output.append('(');
-@@ -2252,7 +2268,31 @@ void Application::runApplication()
+@@ -2252,7 +2276,31 @@ void Application::runApplication()
  
      // if application not yet created by the splasher
      int argc = App::Application::GetARGC();
@@ -7809,7 +7886,7 @@ index 08b3eb2..deba940 100644
      // https://forum.freecad.org/viewtopic.php?f=3&t=15540
      QApplication::setAttribute(Qt::AA_DontShowIconsInMenus, false);
  
-@@ -2272,8 +2312,13 @@ void Application::runApplication()
+@@ -2272,8 +2320,13 @@ void Application::runApplication()
      StartupProcess process;
      process.execute();
  
@@ -8806,6 +8883,51 @@ index b91c19a..ae37757 100644
      });
  
      connect(ui->wbList->model(), &QAbstractItemModel::rowsMoved, this, &DlgSettingsWorkbenchesImp::wbItemMoved);
+diff --git a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
+index d8e5897..16fbe79 100644
+--- a/src/Gui/ProgressBar.cpp
++++ b/src/Gui/ProgressBar.cpp
+@@ -169,7 +169,11 @@ void SequencerBar::checkAbort()
+         if(d->checkAbortTime.elapsed() < 500)
+             return;
+         d->checkAbortTime.restart();
++#ifndef __EMSCRIPTEN__
++        // FCWEB: see setProgress() below — processEvents() can suspend the current
++        // (JSPI-promising) call on Qt-for-WebAssembly and never resume it.
+         qApp->processEvents();
++#endif
+         return;
+     }
+     // restore cursor
+@@ -250,7 +254,9 @@ void SequencerBar::setValue(int step)
+             }
+             else {
+                 d->bar->setValueEx(d->bar->value()+1);
++#ifndef __EMSCRIPTEN__
+                 qApp->processEvents();
++#endif
+             }
+         }
+     }
+@@ -270,7 +276,18 @@ void SequencerBar::setValue(int step)
+                 if (d->bar->isVisible())
+                     showRemainingTime();
+                 d->bar->resetObserveEventFilter();
++#ifndef __EMSCRIPTEN__
++                // FCWEB: on Qt-for-WebAssembly with JSPI, processEvents() yields to the
++                // browser and can SUSPEND the promising call that is currently running.
++                // Document restore drives this sequencer from inside
++                // Base::XMLReader::readFiles ("Importing project files..."); when the
++                // suspend never resumes, everything after it silently never runs — most
++                // visibly GuiDocument.xml, so every ViewProvider's Proxy and Visibility
++                // stay unrestored (FEMExample opened with all objects hidden and
++                // Proxy=None). The progress bar cannot animate during synchronous wasm
++                // work anyway, so skip the pump entirely here.
+                 qApp->processEvents();
++#endif
+             }
+         }
+     }
 diff --git a/src/Gui/PythonConsole.cpp b/src/Gui/PythonConsole.cpp
 index 0722240..432efdb 100644
 --- a/src/Gui/PythonConsole.cpp
@@ -22528,10 +22650,10 @@ index ae23df7..49bf99c 100644
      const char* mingw_prefix = getenv("MINGW_PREFIX");
      const char* py_home = getenv("PYTHONHOME");
 diff --git a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
-index d56d1a8..300618e 100644
+index d56d1a8..df4f8b6 100644
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -1,457 +1,630 @@
+@@ -1,457 +1,632 @@
 -/***************************************************************************
 - *   Copyright (c) 2008 Jürgen Riegel <juergen.riegel@web.de>              *
 - *                                                                         *
@@ -23137,6 +23259,7 @@ index d56d1a8..300618e 100644
 +extern "C" PyObject* PyInit_QtWidgets();
 +extern "C" PyObject* PyInit_DraftUtils();
 +extern "C" PyObject* PyInit__coin();  // pivy (SWIG Coin3D bindings)
++extern "C" PyObject* PyInit__fcwebdlg();  // FreeCAD-Web blocking HTML dialogs
 +extern "C" PyObject* PyInit__ifcopenshell_wrapper();  // IfcOpenShell (SWIG IFC bindings)
 +// numpy C extensions (static; numpy/__init__.py aliases them to dotted names)
 +extern "C" PyObject* PyInit__multiarray_umath();
@@ -23238,6 +23361,7 @@ index d56d1a8..300618e 100644
 +    PyImport_AppendInittab("QtWidgets_fcweb", PyInit_QtWidgets);
 +    PyImport_AppendInittab("DraftUtils", PyInit_DraftUtils);
 +    PyImport_AppendInittab("_coin", PyInit__coin);
++    PyImport_AppendInittab("_fcwebdlg", PyInit__fcwebdlg);
 +    PyImport_AppendInittab("_ifcopenshell_wrapper", PyInit__ifcopenshell_wrapper);
 +    // Register under the FULL dotted names numpy's own C code imports itself by
 +    // (PyImport_ImportModule("numpy._core._multiarray_umath"), etc.). A meta-path
