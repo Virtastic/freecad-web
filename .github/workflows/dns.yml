@@ -4,7 +4,7 @@ name: dns (freecad.virtastic.app)
 # A record (-> the OVH VPS, proxied). Stateless so it needs no Terraform remote state; safe to run
 # any number of times. Uses the org/repo secret CLOUDFLARE_API_TOKEN (zone-scoped: Zone:Read,
 # DNS:Edit). Set it once (the token never touches anyone's shell logs):
-#     gh secret set CLOUDFLARE_API_TOKEN --org Virtastic --repos freecad-wasm
+#     gh secret set CLOUDFLARE_API_TOKEN --org Virtastic --repos freecad-web
 on:
   workflow_dispatch:
   push:
@@ -30,7 +30,7 @@ jobs:
       - name: Upsert A record (proxied) via Cloudflare API
         run: |
           set -euo pipefail
-          [ -n "${CF_TOKEN:-}" ] || { echo "::error::CLOUDFLARE_API_TOKEN secret not set — gh secret set CLOUDFLARE_API_TOKEN --org Virtastic --repos freecad-wasm"; exit 1; }
+          [ -n "${CF_TOKEN:-}" ] || { echo "::error::CLOUDFLARE_API_TOKEN secret not set — gh secret set CLOUDFLARE_API_TOKEN --org Virtastic --repos freecad-web"; exit 1; }
           auth=(-H "Authorization: Bearer ${CF_TOKEN}" -H "Content-Type: application/json")
           api=https://api.cloudflare.com/client/v4
 

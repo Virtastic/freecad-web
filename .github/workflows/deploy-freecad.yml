@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# Build the freecad-wasm container image and publish it to GHCR. The shared box then pulls it
+# Build the freecad-web container image and publish it to GHCR. The shared box then pulls it
 # (docker compose pull freecad && up -d), or Watchtower rolls it automatically. The box itself
 # is a manually-managed shared resource and is intentionally NOT touched by this workflow.
 #
@@ -49,7 +49,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}   # ghcr.io/virtastic/freecad-wasm (lowercased)
+          images: ghcr.io/${{ github.repository }}   # ghcr.io/virtastic/freecad-web (lowercased)
           tags: |
             type=raw,value=latest
             type=sha

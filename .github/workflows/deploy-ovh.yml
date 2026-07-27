@@ -28,7 +28,7 @@ jobs:
   deploy:
     # Public-repo hardening: never run on forks or PR-triggered events — this job
     # executes on the production VPS runner.
-    if: github.repository == 'Virtastic/freecad-wasm' && github.event_name != 'pull_request'
+    if: github.repository == 'Virtastic/freecad-web' && github.event_name != 'pull_request'
     runs-on: [self-hosted, ovh, virtastic]
     steps:
       - uses: actions/checkout@v4
@@ -124,7 +124,7 @@ jobs:
           ZONE: virtastic.app
         run: |
           if [ -z "$CF_TOKEN" ]; then
-            echo "CLOUDFLARE_API_TOKEN not set — skipping edge purge (set it: gh secret set CLOUDFLARE_API_TOKEN -R Virtastic/freecad-wasm)."
+            echo "CLOUDFLARE_API_TOKEN not set — skipping edge purge (set it: gh secret set CLOUDFLARE_API_TOKEN -R Virtastic/freecad-web)."
             exit 0
           fi
           api=https://api.cloudflare.com/client/v4
