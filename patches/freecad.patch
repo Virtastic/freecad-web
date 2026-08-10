@@ -23851,32 +23851,8 @@ index 8d5352e..08a72eb 100644
                  cap_height = Part.Compound(cap_char).BoundBox.YMax
                  if obj.ScaleToSize:
                      ss_shape.scale(obj.Size / cap_height)
-diff --git a/src/Mod/Fem/App/FemPostPipeline.cpp b/src/Mod/Fem/App/FemPostPipeline.cpp
-index 53ac272..4609dd8 100644
---- a/src/Mod/Fem/App/FemPostPipeline.cpp
-+++ b/src/Mod/Fem/App/FemPostPipeline.cpp
-@@ -138,6 +138,19 @@ void FemPostPipeline::read(Base::FileInfo File)
-         throw Base::FileException("File to load not existing or not readable", File);
-     }
- 
-+#if defined(__EMSCRIPTEN__)
-+    // ponytail: VTK's XML reader traps on wasm (see PropertyPostDataObject::RestoreDocFile).
-+    // A trap is not catchable, so it would take down the whole call instead of reporting a
-+    // failed import. Throw a normal exception the caller can report. The legacy .vtk reader
-+    // works, so it stays enabled.
-+    if (File.hasExtension({"vtu", "pvtu", "vtp", "vts", "vtr", "vti"})) {
-+        throw Base::FileException(
-+            "VTK XML files (.vtu/.vtp/.vts/.vtr/.vti) cannot be read in the browser build; "
-+            "use the legacy .vtk format instead",
-+            File);
-+    }
-+#endif
-+
-     if (File.hasExtension("vtu")) {
-         readXMLFile<vtkXMLUnstructuredGridReader>(File.filePath());
-     }
 diff --git a/src/Mod/Fem/App/FemVTKTools.cpp b/src/Mod/Fem/App/FemVTKTools.cpp
-index 4c952e3..50e8010 100644
+index 4c952e3..8524ef2 100644
 --- a/src/Mod/Fem/App/FemVTKTools.cpp
 +++ b/src/Mod/Fem/App/FemVTKTools.cpp
 @@ -57,6 +57,7 @@
@@ -23887,27 +23863,7 @@ index 4c952e3..50e8010 100644
  #include <vtkXMLUnstructuredGridReader.h>
  #include <vtkXMLUnstructuredGridWriter.h>
  #endif
-@@ -81,6 +82,19 @@ template<class TReader>
- vtkDataSet* readVTKFile(const char* fileName)
- {
-     vtkSmartPointer<TReader> reader = vtkSmartPointer<TReader>::New();
-+#if defined(__EMSCRIPTEN__)
-+    // ponytail: VTK's XML reader traps on wasm (see PropertyPostDataObject::RestoreDocFile);
-+    // the trap is not catchable and would kill the caller outright. Every reader here that
-+    // derives from vtkXMLReader is affected; the legacy vtkDataSetReader is not, so it still
-+    // works. One check in the shared template covers all call sites.
-+    if (vtkXMLReader::SafeDownCast(reader)) {
-+        Base::Console().Error(
-+            "FEM: cannot read '%s' -- VTK XML files are not supported in the browser build; "
-+            "use the legacy .vtk format instead.\n",
-+            fileName);
-+        return nullptr;
-+    }
-+#endif
-     reader->SetFileName(fileName);
-     reader->Update();
-     auto output = reader->GetOutput();
-@@ -591,6 +605,13 @@ App::DocumentObject* FemVTKTools::readResult(const char* filename, App::Document
+@@ -591,6 +592,13 @@ App::DocumentObject* FemVTKTools::readResult(const char* filename, App::Document
          Base::Console().Error("file name extension is not supported\n");
      }
  
@@ -23921,37 +23877,6 @@ index 4c952e3..50e8010 100644
      App::Document* pcDoc = App::GetApplication().getActiveDocument();
      if (!pcDoc) {
          Base::Console().Message("No active document is found thus created\n");
-diff --git a/src/Mod/Fem/App/PropertyPostDataObject.cpp b/src/Mod/Fem/App/PropertyPostDataObject.cpp
-index f416dd7..1d4e566 100644
---- a/src/Mod/Fem/App/PropertyPostDataObject.cpp
-+++ b/src/Mod/Fem/App/PropertyPostDataObject.cpp
-@@ -384,6 +384,26 @@ void PropertyPostDataObject::RestoreDocFile(Base::Reader& reader)
-     if (ulSize > 0) {
-         std::string extension = xml.extension();
- 
-+#if defined(__EMSCRIPTEN__)
-+        // ponytail: VTK's XML reader traps on wasm ("RuntimeError: unreachable" inside
-+        // vtkXMLParser); VTK core, the data model and the LEGACY vtkDataSetReader are all
-+        // fine, it is only the vtkIOXML/expat path. A wasm trap cannot be caught by
-+        // try/catch, so letting it run kills the whole document restore: readFiles never
-+        // reaches GuiDocument.xml, and every ViewProvider loses its Proxy, Visibility and
-+        // the saved camera (FEMExample opened blank with nothing selectable, and
-+        // App.openDocument never returned). Skipping the read costs only the cached
-+        // post-processing dataset -- which cannot be recomputed in the browser anyway,
-+        // since that needs the external CalculiX/gmsh binaries -- and lets the rest of
-+        // the document restore correctly.
-+        // Upgrade path: fix the vtkIOXMLParser build for wasm, then delete this block.
-+        Base::Console().Warning(
-+            "FEM: skipping VTK XML dataset '%s' (the VTK XML reader is not usable in the "
-+            "browser build); the rest of the document is restored normally.\n",
-+            xml.fileName().c_str());
-+        fi.deleteFile();
-+        return;
-+#endif
-+
-         // TODO: read in of composite data structures need to be coded,
-         // including replace of "GetOutputAsDataSet()"
-         vtkSmartPointer<vtkXMLReader> xmlReader;
 diff --git a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 index 606e748..52a3159 100644
 --- a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp

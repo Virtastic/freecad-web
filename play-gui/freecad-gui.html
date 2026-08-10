@@ -1,4 +1,8 @@
 <!doctype html><html><head><meta charset="utf-8"><title>FreeCAD — WebAssembly (GUI)</title><link rel="icon" href="data:,">
+<!-- Without this a tablet renders the canvas at a fake 980px width and then scales it,
+     so the UI is tiny and every hit-test is offset. user-scalable=no because the 3D view
+     does its own pinch-zoom; letting the browser zoom the page too fights it. -->
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <style>
  html,body{margin:0;height:100%;background:#2b2b2b;color:#ddd;font:13px ui-monospace,Menlo,monospace;overflow:hidden}
  /* Qt fills the ENTIRE browser window. The boot log is an optional overlay, not
@@ -152,6 +156,126 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
     }catch(e){ resolve(0); }
   });
 };
+
+// ---- touch input ---------------------------------------------------------
+// Qt-for-WebAssembly listens for mouse/wheel on its canvas; a bare touch produces
+// none of those on its own, so the 3D view was dead on tablets. Map the gestures
+// people expect onto the events Coin's navigation already handles:
+//   1 finger drag  -> left-drag   (rotate)
+//   2 finger drag  -> middle-drag (pan)
+//   2 finger pinch -> wheel       (zoom)
+//   tap            -> click       (select)
+// Attached in capture phase on #screen so it also sees the canvas inside Qt's
+// shadow DOM. Passive:false because we must preventDefault to stop the browser
+// scrolling/zooming the page out from under the canvas.
+(function () {
+  if (typeof window === 'undefined' || !('ontouchstart' in window)) { return; }
+  var TAP_MS = 250, TAP_SLOP = 8;
+  var mode = 0, last = null, startT = 0, startPt = null, pinch0 = 0, moved = 0;
+  var mid = function (t) {
+    return { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 };
+  };
+  var dist = function (t) {
+    return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  };
+  var send = function (el, type, x, y, btn, extra) {
+    var init = { bubbles: true, cancelable: true, clientX: x, clientY: y,
+                 button: btn, buttons: btn === 0 ? 1 : (btn === 1 ? 4 : 0) };
+    if (extra) { for (var k in extra) { init[k] = extra[k]; } }
+    el.dispatchEvent(new (extra && 'deltaY' in extra ? WheelEvent : MouseEvent)(
+      type, init));
+  };
+  var target = function () { return document.getElementById('screen') || document.body; };
+  var attach = function (el) {
+    el.addEventListener('touchstart', function (e) {
+      var t = e.touches; moved = 0; startT = Date.now();
+      if (t.length === 1) {
+        mode = 1; last = { x: t[0].clientX, y: t[0].clientY }; startPt = last;
+        send(el, 'mousedown', last.x, last.y, 0);
+      } else if (t.length === 2) {
+        if (mode === 1 && last) { send(el, 'mouseup', last.x, last.y, 0); }
+        mode = 2; last = mid(t); pinch0 = dist(t);
+        send(el, 'mousedown', last.x, last.y, 1);
+      }
+      e.preventDefault();
+    }, { passive: false, capture: true });
+
+    el.addEventListener('touchmove', function (e) {
+      var t = e.touches;
+      if (mode === 1 && t.length === 1) {
+        var p = { x: t[0].clientX, y: t[0].clientY };
+        moved += Math.hypot(p.x - last.x, p.y - last.y); last = p;
+        send(el, 'mousemove', p.x, p.y, 0);
+      } else if (mode === 2 && t.length === 2) {
+        var m = mid(t), d = dist(t);
+        moved += Math.hypot(m.x - last.x, m.y - last.y);
+        send(el, 'mousemove', m.x, m.y, 1);
+        // pinch -> wheel; 1 wheel notch per ~8px of separation change
+        if (pinch0 > 0 && Math.abs(d - pinch0) > 8) {
+          send(el, 'wheel', m.x, m.y, 0, { deltaY: (pinch0 - d) * 2, deltaMode: 0 });
+          pinch0 = d;
+        }
+        last = m;
+      }
+      e.preventDefault();
+    }, { passive: false, capture: true });
+
+    var end = function (e) {
+      if (mode === 1 && last) {
+        send(el, 'mouseup', last.x, last.y, 0);
+        if (Date.now() - startT < TAP_MS && moved < TAP_SLOP && startPt) {
+          send(el, 'click', startPt.x, startPt.y, 0);   // tap = select
+        }
+      } else if (mode === 2 && last) {
+        send(el, 'mouseup', last.x, last.y, 1);
+      }
+      if (!e.touches || e.touches.length === 0) { mode = 0; last = null; }
+      if (e.cancelable) { e.preventDefault(); }
+    };
+    el.addEventListener('touchend', end, { passive: false, capture: true });
+    el.addEventListener('touchcancel', end, { passive: false, capture: true });
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { attach(target()); });
+  } else { attach(target()); }
+})();
+
+// ---- user-facing notices -------------------------------------------------
+// Failures used to go only to the console or FreeCAD's Report view, so a user
+// clicking "mesh this" just saw nothing happen (gmsh's QProcess path fails
+// silently when the binary is absent). Anything the user should know about
+// goes through here instead.
+window.fcwebNotify = function (text, kind) {
+  try {
+    var host = document.getElementById('fcweb-toasts');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'fcweb-toasts';
+      host.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:2147483100;' +
+        'display:flex;flex-direction:column;gap:8px;max-width:min(420px,90vw);pointer-events:none';
+      document.body.appendChild(host);
+    }
+    var bg = kind === 'error' ? '#5b2333' : (kind === 'warn' ? '#4a3a1c' : '#243043');
+    var bd = kind === 'error' ? '#a13d55' : (kind === 'warn' ? '#8a6d2f' : '#3c5578');
+    var t = document.createElement('div');
+    t.style.cssText = 'pointer-events:auto;background:' + bg + ';border:1px solid ' + bd + ';' +
+      'color:#e8e8e8;border-radius:8px;padding:11px 13px;font:13px -apple-system,Segoe UI,Roboto,sans-serif;' +
+      'box-shadow:0 8px 28px rgba(0,0,0,.45);line-height:1.45;opacity:0;transition:opacity .15s';
+    var msg = document.createElement('div');
+    msg.textContent = String(text == null ? '' : text);
+    var x = document.createElement('button');
+    x.textContent = '×';
+    x.setAttribute('aria-label', 'Dismiss');
+    x.style.cssText = 'float:right;margin:-4px -4px 0 8px;background:none;border:none;color:#cfcfcf;' +
+      'font-size:17px;line-height:1;cursor:pointer';
+    var kill = function () { try { t.remove(); } catch (e) {} };
+    x.addEventListener('click', kill);
+    t.appendChild(x); t.appendChild(msg);
+    host.appendChild(t);
+    requestAnimationFrame(function () { t.style.opacity = '1'; });
+    if (kind !== 'error') { setTimeout(function () { t.style.opacity = '0'; setTimeout(kill, 200); }, 9000); }
+  } catch (e) { try { console.warn('[fcweb] notify failed', e, text); } catch (_) {} }
+};
 </script>
 <script>
  const logEl=document.getElementById('log');
@@ -205,12 +329,32 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
    if(__logBuf.length>__LOG_CAP) __logBuf=__logBuf.slice(-__LOG_CAP);
    logEl.textContent=__logBuf.join('\n'); if(__errPending){logEl.classList.add('err');__errPending=false;}
    logEl.scrollTop=logEl.scrollHeight; }
+ // Failures FreeCAD reports on its Console land in this log, which the user never
+ // reads (it is hidden by default). Promote the ones that mean "the thing you just
+ // asked for did not happen" into a visible toast. Matched once each so a retry loop
+ // cannot spam.
+ const __NOTIFY_RULES = [
+   [/Gmsh binary .* not found|Gmsh executable not found|No standard location implemented/i,
+    'Mesh generation is unavailable: the Gmsh mesher is not part of the browser build.'],
+   [/CalculiX binary .* not found|No or wrong CalculiX binary|CalculiX binary has not been found/i,
+    'Solving is unavailable: the CalculiX solver is not part of the browser build.'],
+   [/doesn't contain expected phrase/i,
+    'The configured solver binary did not respond as expected, so the solve was skipped.'],
+ ];
+ const __notified = new Set();
+ function __maybeNotify(t){
+   if (typeof t !== 'string' || typeof window.fcwebNotify !== 'function') return;
+   for (const [re, msg] of __NOTIFY_RULES) {
+     if (re.test(t) && !__notified.has(msg)) { __notified.add(msg); window.fcwebNotify(msg, 'warn'); return; }
+   }
+ }
  function append(t,cls){
    // FCWEB: the 3D widget's on-screen rect (CSS px, in-window) is published from
    // Python (only Qt knows the MDI layout). Capture it for the overlay compositor
    // and don't spam the log with it.
    if(typeof t==='string'){ const mR=t.indexOf('FCRECT '); if(mR>=0){
      try{ window.__fcWidgetRect=JSON.parse(t.slice(mR+7)); }catch(e){} return; } }
+   try { __maybeNotify(t); } catch(e){}
    const noise = typeof t==='string' && __NOISE.test(t);
    // Progress noise (incl. our stderr diagnostic markers) is dropped unless
    // ?debug; genuine errors/messages are never noise, so they still show. The log
@@ -263,7 +407,17 @@ function fcRunPy(m, ptr){
                   // is how the FEM .vtu failure hid for so long. Always surface it.
                   try { (window.__fcPyErrors = window.__fcPyErrors || []).push(String(e)); } catch(_){}
                   try { console.error('[fcweb] python call rejected:', e); } catch(_){}
-                  try { if (typeof err === 'function') err('[fcweb] python call rejected: ' + e); } catch(_){} });
+                  try { if (typeof err === 'function') err('[fcweb] python call rejected: ' + e); } catch(_){}
+                  // A rejection here means the C++ side trapped, so the operation the
+                  // user asked for silently did nothing. Say so rather than leaving them
+                  // to wonder whether the click registered.
+                  try {
+                    if (typeof window.fcwebNotify === 'function') {
+                      window.fcwebNotify('That operation failed and was stopped (' +
+                        String(e && e.message ? e.message : e) +
+                        '). Your document is unchanged — please report this.', 'error');
+                    }
+                  } catch(_){} });
   } else { m._free(ptr); window.__fcPyBusy = false; }
   return r;
 }

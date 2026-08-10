@@ -51,21 +51,51 @@ Module['preRun'].push(function () {
           removeRunDependency('fcweb-idbfs-restore');
         });
         var syncing = false;
+        var dirty = false;                          // a write happened since the last flush
         var flush = function (cb) {
           if (syncing) { if (cb) cb('busy'); return; }
           syncing = true;
           FS.syncfs(false, function (e) {
             syncing = false;
+            dirty = false;
             if (e && typeof err === 'function') err('[pre-gui] IDBFS persist failed: ' + e);
             if (cb) cb(e);
           });
         };
         Module.fcwebSyncFS = flush;                 // explicit flush for the harness/UI
-        setInterval(flush, 15000);                  // periodic autosave of /home/web_user
+
+        // Persist as soon as something under the persisted home actually changes.
+        // The old behaviour was a bare 15s timer, so "edit, then hit refresh" lost the
+        // work: anything written inside the window never reached IndexedDB (measured —
+        // a write + immediate reload was gone, the same write + 20s wait survived).
+        // syncfs is async and unload handlers cannot await it, so the fix is to start
+        // the write early rather than to try to squeeze it into unload: debounce a
+        // flush ~1.2s after each change to the home tree.
+        var timer = null;
+        var touch = function () {
+          dirty = true;
+          if (timer) { return; }
+          timer = setTimeout(function () { timer = null; if (dirty) flush(); }, 1200);
+        };
+        Module.fcwebTouchFS = touch;
+        try {
+          // Hook the FS write paths that can reach the mounted home. Cheap: they only
+          // set a flag; the debounce does the real work.
+          ['write', 'unlink', 'rmdir', 'mkdir', 'rename', 'truncate', 'symlink'].forEach(function (op) {
+            var orig = FS[op];
+            if (typeof orig !== 'function') { return; }
+            FS[op] = function () { var r = orig.apply(FS, arguments); try { touch(); } catch (e) {} return r; };
+          });
+        } catch (eh) { if (typeof err === 'function') err('[pre-gui] IDBFS hook: ' + eh); }
+
+        setInterval(function () { if (dirty) flush(); }, 15000);   // backstop
         if (typeof window !== 'undefined') {
+          // pagehide fires on reload/close/back-forward-cache where visibilitychange
+          // alone does not; both are best-effort (the browser may cut us off).
           window.addEventListener('visibilitychange', function () {
             if (document.visibilityState === 'hidden') flush();
           });
+          window.addEventListener('pagehide', function () { flush(); });
         }
       }
     } catch (e3) { if (typeof err === 'function') err('[pre-gui] IDBFS setup: ' + e3); }
