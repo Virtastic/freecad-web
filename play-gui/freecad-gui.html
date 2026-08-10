@@ -265,24 +265,51 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
   var dist = function (t) {
     return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
   };
+  // Qt 6.9-for-wasm listens for pointerdown/pointermove/pointerup (grep qwasmwindow.cpp)
+  // -- NOT mouse events -- so dispatching MouseEvent did nothing at all. And a real
+  // finger produces pointerType "touch", which Qt turns into a QTouchEvent that Coin's
+  // 3D navigation ignores. So synthesize POINTER events and label them "mouse": Qt then
+  // delivers QMouseEvent, which is the path the viewport actually handles.
+  var PTR = { pointerdown: 'pointerdown', pointermove: 'pointermove', pointerup: 'pointerup' };
   var send = function (el, type, x, y, btn, extra) {
-    var init = { bubbles: true, cancelable: true, clientX: x, clientY: y,
-                 button: btn, buttons: btn === 0 ? 1 : (btn === 1 ? 4 : 0) };
+    var init = { bubbles: true, cancelable: true, composed: true,
+                 clientX: x, clientY: y, screenX: x, screenY: y,
+                 button: (type === 'pointermove' ? -1 : btn),
+                 buttons: (type === 'pointerup') ? 0 : (btn === 0 ? 1 : (btn === 1 ? 4 : 0)),
+                 pointerId: 1, pointerType: 'mouse', isPrimary: true,
+                 width: 1, height: 1, pressure: (type === 'pointerup') ? 0 : 0.5 };
+    if (extra && 'deltaY' in extra) {
+      el.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true, cancelable: true, composed: true,
+        clientX: x, clientY: y, deltaY: extra.deltaY, deltaMode: 0
+      }));
+      return;
+    }
     if (extra) { for (var k in extra) { init[k] = extra[k]; } }
-    el.dispatchEvent(new (extra && 'deltaY' in extra ? WheelEvent : MouseEvent)(
-      type, init));
+    var name = PTR[type] || type;
+    try { el.dispatchEvent(new PointerEvent(name, init)); }
+    catch (e) { el.dispatchEvent(new MouseEvent(type, init)); }   // very old browsers
   };
-  var target = function () { return document.getElementById('screen') || document.body; };
+  // Qt renders into a canvas inside the shadow root of #qt-shadow-container -- it is NOT
+  // a child of #screen (verified: screenContainsCanvas === false). Listening on #screen
+  // therefore never sees the touches, and mouse events dispatched there never reach Qt.
+  // Both listeners and synthesized events have to go on the canvas itself. It appears
+  // some time after boot, so poll for it.
+  var findCanvas = function () {
+    var host = document.getElementById('qt-shadow-container');
+    var sr = host && host.shadowRoot;
+    return (sr && sr.querySelector('canvas')) || document.querySelector('canvas') || null;
+  };
   var attach = function (el) {
     el.addEventListener('touchstart', function (e) {
       var t = e.touches; moved = 0; startT = Date.now();
       if (t.length === 1) {
         mode = 1; last = { x: t[0].clientX, y: t[0].clientY }; startPt = last;
-        send(el, 'mousedown', last.x, last.y, 0);
+        send(el, 'pointerdown', last.x, last.y, 0);
       } else if (t.length === 2) {
-        if (mode === 1 && last) { send(el, 'mouseup', last.x, last.y, 0); }
+        if (mode === 1 && last) { send(el, 'pointerup', last.x, last.y, 0); }
         mode = 2; last = mid(t); pinch0 = dist(t);
-        send(el, 'mousedown', last.x, last.y, 1);
+        send(el, 'pointerdown', last.x, last.y, 1);
       }
       e.preventDefault();
     }, { passive: false, capture: true });
@@ -292,11 +319,11 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
       if (mode === 1 && t.length === 1) {
         var p = { x: t[0].clientX, y: t[0].clientY };
         moved += Math.hypot(p.x - last.x, p.y - last.y); last = p;
-        send(el, 'mousemove', p.x, p.y, 0);
+        send(el, 'pointermove', p.x, p.y, 0);
       } else if (mode === 2 && t.length === 2) {
         var m = mid(t), d = dist(t);
         moved += Math.hypot(m.x - last.x, m.y - last.y);
-        send(el, 'mousemove', m.x, m.y, 1);
+        send(el, 'pointermove', m.x, m.y, 1);
         // pinch -> wheel; 1 wheel notch per ~8px of separation change
         if (pinch0 > 0 && Math.abs(d - pinch0) > 8) {
           send(el, 'wheel', m.x, m.y, 0, { deltaY: (pinch0 - d) * 2, deltaMode: 0 });
@@ -309,12 +336,12 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
 
     var end = function (e) {
       if (mode === 1 && last) {
-        send(el, 'mouseup', last.x, last.y, 0);
+        send(el, 'pointerup', last.x, last.y, 0);
         if (Date.now() - startT < TAP_MS && moved < TAP_SLOP && startPt) {
           send(el, 'click', startPt.x, startPt.y, 0);   // tap = select
         }
       } else if (mode === 2 && last) {
-        send(el, 'mouseup', last.x, last.y, 1);
+        send(el, 'pointerup', last.x, last.y, 1);
       }
       if (!e.touches || e.touches.length === 0) { mode = 0; last = null; }
       if (e.cancelable) { e.preventDefault(); }
@@ -322,9 +349,53 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
     el.addEventListener('touchend', end, { passive: false, capture: true });
     el.addEventListener('touchcancel', end, { passive: false, capture: true });
   };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () { attach(target()); });
-  } else { attach(target()); }
+  // FreeCAD's default CAD navigation makes LEFT-drag "select", not "rotate" (verified:
+  // a real left-drag leaves the camera untouched while a middle-drag pans). So feeding
+  // one-finger gestures in as a left-drag correctly does nothing. FreeCAD ships
+  // GestureNavigationStyle for exactly this input model -- "Drag screen with one finger
+  // OR press left mouse button" -- so switch to it on touch devices and let FreeCAD's own
+  // touch-oriented navigation interpret the gestures.
+  window.__fcwebUseGestureNav = function () {
+    try {
+      var m = window.fcInstance;
+      if (!m || !m._fcweb_run_python) { return false; }
+      var py = [
+        "import FreeCAD as App",
+        "try:",
+        "    import FreeCADGui as Gui",
+        "    App.ParamGet('User parameter:BaseApp/Preferences/View')"
+          + ".SetString('NavigationStyle','Gui::GestureNavigationStyle')",
+        "    for _d in Gui.listDocuments():",
+        "        _gd = Gui.getDocument(_d)",
+        "        for _v in (_gd.ActiveView,) if _gd and _gd.ActiveView else ():",
+        "            try: _v.setNavigationType('Gui::GestureNavigationStyle')",
+        "            except Exception: pass",
+        "except Exception:",
+        "    pass",
+        ""
+      ].join('\n');
+      var n = new TextEncoder().encode(py).length + 1, q = m._malloc(n);
+      m.stringToUTF8(py, q, n);
+      (window.fcRunPy || function (mm, pp) { mm._fcweb_run_python(pp); mm._free(pp); })(m, q);
+      return true;
+    } catch (e) { return false; }
+  };
+
+  // Wait for Qt to create its canvas, then bind once.
+  var bound = null;
+  var iv = setInterval(function () {
+    var c = findCanvas();
+    if (!c || c === bound) { return; }
+    bound = c;
+    attach(c);
+    // Give FreeCAD the navigation style built for finger input.
+    try { window.__fcwebUseGestureNav(); } catch (e) {}
+    if (typeof console !== 'undefined' && console.debug) {
+      console.debug('[fcweb] touch bound to Qt canvas');
+    }
+    clearInterval(iv);
+  }, 300);
+  setTimeout(function () { clearInterval(iv); }, 120000);
 })();
 
 // ---- user-facing notices -------------------------------------------------
