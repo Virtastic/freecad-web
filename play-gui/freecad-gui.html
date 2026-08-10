@@ -82,6 +82,93 @@
 // Blocking HTML confirm used by the JSPI dialog bridge (_fcwebdlg.confirm ->
 // fcweb_html_confirm EM_ASYNC_JS -> here). Returns a Promise resolving to the
 // clicked button index; the wasm side suspends (JSPI) until then.
+// ---- gmsh bridge ---------------------------------------------------------
+// gmsh is a SEPARATE wasm module (play-gui/gmsh.wasm) with its own filesystem, loaded
+// the first time someone meshes so the 152 MB main binary does not grow. FreeCAD writes
+// the .brep + .geo into ITS FS and calls _fcwebgmsh.run(...), which suspends via JSPI
+// until this resolves; we ferry the bytes across, run the script, and copy the .unv back
+// so Fem.read() on the FreeCAD side finds it exactly where the .geo's Save line put it.
+(function () {
+  var modP = null;                       // cached module promise (load once)
+  function load() {
+    if (modP) { return modP; }
+    modP = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'gmsh.js';
+      s.onload = function () {
+        if (typeof GmshModule !== 'function') { reject(new Error('gmsh.js did not define GmshModule')); return; }
+        GmshModule().then(resolve, reject);
+      };
+      s.onerror = function () { reject(new Error('failed to fetch gmsh.js')); };
+      document.head.appendChild(s);
+    });
+    modP.catch(function () { modP = null; });   // let a later attempt retry
+    return modP;
+  }
+  var base = function (p) { return String(p).replace(/^.*\//, ''); };
+
+  window.fcwebGmshRun = async function (geoPath, brepPath, unvPath, verbosity) {
+    var fc = window.fcInstance;
+    if (!fc || !fc.FS) { return 1; }
+    var G;
+    try {
+      if (typeof window.fcwebNotify === 'function' && !modP) {
+        window.fcwebNotify('Loading the mesher…', 'info');
+      }
+      G = await load();
+    } catch (e) {
+      if (typeof window.fcwebNotify === 'function') {
+        window.fcwebNotify('Could not load the mesher: ' + e.message, 'error');
+      }
+      return 1;
+    }
+    try {
+      // gmsh resolves the .geo's Merge/Save paths relative to the script, so keep
+      // everything in one flat working dir inside the gmsh module's FS.
+      var wd = '/work';
+      try { G.FS.mkdir(wd); } catch (e) {}
+      var geoName = base(geoPath), brepName = base(brepPath), unvName = base(unvPath);
+      G.FS.writeFile(wd + '/' + brepName, fc.FS.readFile(brepPath));
+      G.FS.writeFile(wd + '/' + geoName, fc.FS.readFile(geoPath));
+      try { G.FS.chdir(wd); } catch (e) {}
+
+      var rc = G.ccall('fcweb_gmsh_run', 'number', ['string', 'number'],
+                       [wd + '/' + geoName, verbosity | 0]);
+      if (rc !== 0) {
+        if (typeof window.fcwebNotify === 'function') {
+          window.fcwebNotify('Meshing failed (gmsh returned ' + rc + ').', 'error');
+        }
+        return rc;
+      }
+      var out;
+      try { out = G.FS.readFile(wd + '/' + unvName); }
+      catch (e) {
+        if (typeof window.fcwebNotify === 'function') {
+          window.fcwebNotify('The mesher produced no output file.', 'error');
+        }
+        return 1;
+      }
+      fc.FS.writeFile(unvPath, out);      // hand it back where Fem.read() expects it
+      // Don't let one run's files confuse the next.
+      try { G.FS.unlink(wd + '/' + brepName); G.FS.unlink(wd + '/' + geoName); G.FS.unlink(wd + '/' + unvName); } catch (e) {}
+      return 0;
+    } catch (e) {
+      try { console.error('[fcweb] gmsh bridge', e); } catch (_) {}
+      if (typeof window.fcwebNotify === 'function') {
+        window.fcwebNotify('Meshing failed: ' + (e && e.message ? e.message : e), 'error');
+      }
+      return 1;
+    }
+  };
+
+  window.fcwebGmshVersion = async function () {
+    try {
+      var G = await load();
+      return G.ccall('fcweb_gmsh_version', 'string', [], []);
+    } catch (e) { return null; }
+  };
+})();
+
 window.fcwebColor = function(title, initialRgb){
   return new Promise(function(resolve){
     try{

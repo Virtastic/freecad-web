@@ -110,6 +110,40 @@ Gotchas that cost real time:
 - Set `-DCMAKE_STRIP=/usr/bin/true`. Apple `strip` corrupts the archives and
   `emstrip` drops the symbol table.
 
+## Editing FreeCAD's Python (a trap)
+
+The link preloads `freecad-gui-install/Mod@/freecad/Mod`, **not** the source tree. So
+editing `deps/src/freecad/src/Mod/**/*.py` changes nothing at runtime until you copy the
+file into `freecad-gui-install/Mod/...` (or re-run the install) **and relink**, because
+the `.py` files live inside `FreeCAD.data`. The symptom is silent: your patch is in the
+source and in `patches/freecad.patch`, the feature just behaves as if you never touched
+it. Check with:
+
+```bash
+diff deps/src/freecad/src/Mod/Fem/femmesh/gmshtools.py \
+     freecad-gui-install/Mod/Fem/femmesh/gmshtools.py
+```
+
+## Meshing (gmsh) — a second wasm module
+
+`configure-gmsh-weh.sh` + `build-gmsh-weh.sh` produce `play-gui/gmsh.{js,wasm}` (~28 MB),
+fetched on first use so the main binary does not grow. It links the same wasm OCCT as
+everything else, which is what lets gmsh `Merge` the `.brep` FreeCAD writes.
+
+Two cross-compile gotchas, both already handled in the configure script:
+- Do **not** pass `-DOCC_LIBS_REQUIRED=` — gmsh builds that list itself from the OCCT
+  version and then `find_library`s each entry; overriding it to empty makes gmsh's count
+  check silently disable OpenCASCADE (the build log then omits `OpenCASCADE` from
+  "Build options", and `.brep` import is gone).
+- emscripten's toolchain sets `CMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY`, so `find_library`
+  ignores `CASROOT`/hints outside the sysroot. Needs `CMAKE_FIND_ROOT_PATH=$PREFIX` plus
+  `..._MODE_LIBRARY=BOTH`.
+
+FreeCAD reaches it through the `_fcwebgmsh` builtin (`fcweb_gmsh_module.cpp`, registered
+in `MainGui.cpp`'s inittab, object in `weh-objs/`), which suspends via JSPI while the JS
+side (`window.fcwebGmshRun` in `freecad-gui.html`) copies the `.geo`/`.brep` into the gmsh
+module's separate filesystem, runs it, and copies the `.unv` back.
+
 ## Front-end
 
 `play-gui/freecad-gui.html` is the app shell and **is** the served page
