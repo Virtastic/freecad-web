@@ -15,5 +15,7 @@ COPY infra/nginx.conf /etc/nginx/conf.d/freecad.conf
 COPY play-gui/freecad-gui.html play-gui/qtloader.js /usr/share/nginx/html/
 # Build artifacts (fetched into play-gui/ by CI from the release).
 COPY play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data /usr/share/nginx/html/
+# The mesher, fetched by the page on first use (FEM meshing 404s without it).
+COPY play-gui/gmsh.js play-gui/gmsh.wasm /usr/share/nginx/html/
 
 EXPOSE 80

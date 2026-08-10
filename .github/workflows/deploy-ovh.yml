@@ -49,13 +49,14 @@ jobs:
           tag=$(printf '%s' "$json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tag_name"])')
           echo "using release: $tag"
           mkdir -p play-gui
-          for name in FreeCAD.js FreeCAD.wasm FreeCAD.data; do
+          for name in FreeCAD.js FreeCAD.wasm FreeCAD.data gmsh.js gmsh.wasm; do
             aid=$(printf '%s' "$json" | python3 -c "import sys,json;print(next(a['id'] for a in json.load(sys.stdin)['assets'] if a['name']=='$name'))")
             echo "downloading $name (asset $aid)"
             curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
               "$api/assets/$aid" -o "play-gui/$name"
           done
           test -s play-gui/FreeCAD.wasm && test -s play-gui/FreeCAD.data \
+            && test -s play-gui/gmsh.wasm \
             || { echo "FATAL: artifacts missing/empty after download" >&2; exit 1; }
 
       - name: Build image
