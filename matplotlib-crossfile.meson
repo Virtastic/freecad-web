@@ -13,10 +13,10 @@ cpu = 'wasm32'
 endian = 'little'
 
 [built-in options]
-c_args = ['-fexceptions', '-pthread', '-O2', '-I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/Include', '-I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/builddir/emscripten-mt']
-cpp_args = ['-fexceptions', '-pthread', '-O2', '-I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/Include', '-I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/builddir/emscripten-mt']
-c_link_args = ['-fexceptions', '-pthread']
-cpp_link_args = ['-fexceptions', '-pthread']
+c_args = ['-fwasm-exceptions', '-pthread', '-O2', '-I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/Include', '-I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/builddir/emscripten-mt']
+cpp_args = ['-fwasm-exceptions', '-pthread', '-O2', '-I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/Include', '-I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/builddir/emscripten-mt']
+c_link_args = ['-fwasm-exceptions', '-pthread']
+cpp_link_args = ['-fwasm-exceptions', '-pthread']
 
 [properties]
 needs_exe_wrapper = true
