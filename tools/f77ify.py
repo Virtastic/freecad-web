@@ -312,6 +312,12 @@ RE_OPEN_POSITION = re.compile(r"(\bopen\s*\(.*?)\bposition\s*=", re.I)
 RE_FLUSH = re.compile(r'^(\s{6,})flush\s*\(\s*\d+\s*\)\s*$', re.I | re.M)
 
 
+# F2003 spells a one-element array constructor [x]; arpack-ng passes scalars that way
+# (`call ivout(logfil, 1, [mxiter], ...)`). For a single scalar the address handed over
+# is the same, so the brackets just come off. Only applied to code, never comments, and
+# only to a lone identifier/number -- multi-element constructors would need a temporary.
+RE_BRACKET_SCALAR = re.compile(r'\[\s*([A-Za-z_]\w*|\d+)\s*\]')
+
 RE_INCLUDE = re.compile(r'^\s{5,}include\s', re.I)
 RE_DATA_STMT = re.compile(r'^\s{5,}data\s', re.I)
 
@@ -375,6 +381,7 @@ def convert(text):
                 out.append(label + cont + code)
             continue
 
+        code = RE_BRACKET_SCALAR.sub(r'\1', code)
         stmt = code.strip()
         is_cont = cont not in (' ', '0')
 
@@ -508,6 +515,7 @@ def selftest():
     # labels stay 4-digit: f2c mis-resolves 5-digit ones
     for lab in re.findall(r'^\s*(\d+) continue', conv(["do", "cycle", "enddo"]), re.M):
         assert len(lab) <= 4, lab
+    assert 'ivout(logfil, 1, mxiter, n)' in conv(["call ivout(logfil, 1, [mxiter], n)"])
     print('f77ify selftest OK')
 
 

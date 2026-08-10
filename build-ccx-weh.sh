@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Build CalculiX (ccx) as a wasm static library.
+#
+# Pipeline per Fortran file:  tools/f77ify.py (F90 -> F77)  ->  f2c  ->  emcc
+# The native .c files compile directly. Unconvertible Fortran is recorded, not hidden:
+# UNCONVERTED.txt lists it, and anything the link actually reaches is either fixed in
+# the source (calcstabletimeincvol.f) or aborts with a named message (bridge/ccx_stubs.c).
+#
+# Requires deps/wasm/lib/{libspooles.a,libf2c.a} -- build-spooles-weh.sh, build-libf2c-weh.sh.
+# Output: deps/wasm/lib/libccx.a
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+CCX="$ROOT/deps/src/ccx/ccx_2.22/src"
+SPOOLES="$ROOT/deps/src/spooles/SPOOLES.2.2"
+PREFIX="$ROOT/deps/wasm"
+BUILD="$ROOT/build-ccx-weh"
+F2C="$ROOT/deps/src/f2c/src/f2c"
+
+test -x "$F2C" || { echo "missing f2c translator at $F2C" >&2; exit 1; }
+test -f "$PREFIX/lib/libarpack.a" || { echo "build libarpack first" >&2; exit 1; }
+test -f "$PREFIX/lib/libf2c.a" || { echo "build libf2c first" >&2; exit 1; }
+
+rm -rf "$BUILD"; mkdir -p "$BUILD/c" "$BUILD/obj"
+: > "$BUILD/UNCONVERTED.txt"
+
+# --- Fortran -----------------------------------------------------------------
+# f2c resolves INCLUDE relative to cwd, and ccx includes gauss.f, so the rewritten
+# sources have to sit together in one directory and be translated from inside it.
+mkdir -p "$BUILD/f77"
+for f in "$CCX"/*.f; do
+  python3 "$ROOT/tools/f77ify.py" "$f" "$BUILD/f77/$(basename "$f")"
+done
+
+cd "$BUILD/f77"
+nf=0
+for f in *.f; do
+  if "$F2C" -a -A -d"$BUILD/c" "$f" >/dev/null 2>"$BUILD/f2c-$f.log" \
+     && ! grep -q '^Error' "$BUILD/f2c-$f.log"; then
+    nf=$((nf+1))
+  else
+    echo "$f" >> "$BUILD/UNCONVERTED.txt"
+    rm -f "$BUILD/c/${f%.f}.c"
+  fi
+  rm -f "$BUILD/f2c-$f.log"
+done
+cd "$ROOT"
+
+# wasm is strictly typed and CalculiX.h declares Fortran subroutines `void`, while f2c
+# emits them returning int -- wasm-ld turns that mismatch into a hard link error.
+python3 "$ROOT/tools/f2c_subroutine_void.py" "$BUILD/c"
+
+# ccx's C callers omit f2c's hidden CHARACTER-length arguments; on wasm that arity
+# mismatch becomes a trapping stub rather than a harmless ignored register.
+python3 "$ROOT/tools/f2c_strip_ftnlen.py" "$BUILD/c"
+
+# --- compile -----------------------------------------------------------------
+# ARCH must be the bare token `Linux`, not a string: CalculiX.h:25 does
+# `#if ARCH == Linux`. (ccx's Makefile writes -DARCH="Linux" and relies on make
+# handing it to the shell, which strips the quotes; $CFLAGS expansion does not.)
+# -DINTEGER_STAR_8 must match how libf2c was built (it only adds `longint`).
+# ARPACK is required, not optional: feasibledirection.c -- called unconditionally
+# from ccx_2.22.c -- is entirely inside `#ifdef ARPACK`.
+CFLAGS="-fwasm-exceptions -O2 -fcommon -DINTEGER_STAR_8 -I$PREFIX/include -I$SPOOLES -I$CCX
+  -DARCH=Linux -DSPOOLES -DARPACK -DMATRIXSTORAGE -DNETWORKOUT
+  -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion
+  -Wno-return-type -Wno-parentheses -Wno-format -Wno-deprecated-non-prototype"
+
+nc=0; failed=0
+compile() {  # $1=source $2=objname
+  if emcc $CFLAGS -c "$1" -o "$BUILD/obj/$2.o" 2>>"$BUILD/compile-errors.log"; then
+    return 0
+  fi
+  echo "CC-FAIL $1" >> "$BUILD/UNCONVERTED.txt"; return 1
+}
+
+for f in "$BUILD"/c/*.c; do
+  compile "$f" "f_$(basename "$f" .c)" && nf2=$((${nf2:-0}+1)) || failed=$((failed+1))
+done
+# routines that cannot be translated at all -- see bridge/ccx_stubs.c
+compile "$ROOT/bridge/ccx_stubs.c" "c_ccx_stubs" && nc=$((nc+1)) || failed=$((failed+1))
+
+for f in "$CCX"/*.c; do
+  b="$(basename "$f" .c)"
+  [ "$b" = "ccx_2.22" ] && continue        # main(); the bridge supplies its own entry
+  compile "$f" "c_$b" && nc=$((nc+1)) || failed=$((failed+1))
+done
+
+emar rcs "$PREFIX/lib/libccx.a" "$BUILD"/obj/*.o
+echo "fortran translated : $nf / $(ls "$CCX"/*.f | wc -l | tr -d ' ')"
+echo "fortran compiled   : ${nf2:-0}"
+echo "native C compiled  : $nc"
+echo "failed             : $failed  (see $BUILD/UNCONVERTED.txt)"
+ls -la "$PREFIX/lib/libccx.a"

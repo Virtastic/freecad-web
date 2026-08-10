@@ -23,7 +23,7 @@ OBJ="$ROOT/build-spooles-weh"
 test -d "$SRC" || { echo "missing $SRC -- extract spooles.2.2.tgz first" >&2; exit 1; }
 rm -rf "$OBJ"; mkdir -p "$OBJ" "$PREFIX/lib"
 
-CFLAGS="-fwasm-exceptions -O2 -I$SRC -DARCH=\"Linux\"
+CFLAGS="-fwasm-exceptions -O2 -I$SRC -DARCH=Linux
   -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion
   -Wno-return-type -Wno-parentheses -Wno-format -Wno-deprecated-non-prototype"
 

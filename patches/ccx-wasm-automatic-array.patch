@@ -1,0 +1,29 @@
+--- a/src/calcstabletimeincvol.f
++++ b/src/calcstabletimeincvol.f
+@@ -66,7 +66,7 @@
+ !     
+       real*8 stiff(21),wavespeed(*),rhcon(0:1,ntmat_,*),volfac,
+      &     alcon(0:6,ntmat_,*),coords(3),orab(7,*),rho,alzero(*),
+-     &     t0l,t1l,elconloc(ncmat_),eth(6),plicon(0:2*npmat_,ntmat_,*),
++     &     t0l,t1l,elconloc(1000),eth(6),plicon(0:2*npmat_,ntmat_,*),
+      &     plkcon(0:2*npmat_,ntmat_,*),plconloc(802),dtime,
+      &     xstiff(27,mi(1),*),elcon(0:ncmat_,ntmat_,*),aa,bb,cc,
+      &     t0(*),t1(*),shp(4,20),vold(0:mi(2),*),tt,
+@@ -93,6 +93,17 @@
+ !     
+       include "gauss.f"
+ !     
++C
++C     elconloc is an F90 automatic array (elconloc(ncmat_)) in the original.
++C     FORTRAN 77 -- which is all f2c implements -- has no such thing, so it is given
++C     a fixed bound here. ncmat_ is the material-constant count and is small in
++C     practice; the check below stops the run rather than overrun the array.
++C
++      if(ncmat_.gt.1000) then
++         write(*,*) '*ERROR: ncmat_ > 1000 (elconloc bound'
++         write(*,*) '        in the WebAssembly build)'
++         call exit(201)
++      endif
+       iflag=2
+       dtvol=1.d30
+ !     
