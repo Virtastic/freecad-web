@@ -256,7 +256,14 @@ function fcRunPy(m, ptr){
   catch(e){ window.__fcPyBusy = false; m._free(ptr); throw e; }
   if (r && typeof r.then === 'function') {
     r.then(()=>{ m._free(ptr); window.__fcPyBusy = false; },
-           ()=>{ m._free(ptr); window.__fcPyBusy = false; });
+           (e)=>{ m._free(ptr); window.__fcPyBusy = false;
+                  // A rejected JSPI call means the C++ side threw or trapped out of
+                  // _fcweb_run_python. Swallowing it silently makes that look exactly
+                  // like a hang (the Python simply stops, no traceback, no error), which
+                  // is how the FEM .vtu failure hid for so long. Always surface it.
+                  try { (window.__fcPyErrors = window.__fcPyErrors || []).push(String(e)); } catch(_){}
+                  try { console.error('[fcweb] python call rejected:', e); } catch(_){}
+                  try { if (typeof err === 'function') err('[fcweb] python call rejected: ' + e); } catch(_){} });
   } else { m._free(ptr); window.__fcPyBusy = false; }
   return r;
 }
