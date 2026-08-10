@@ -82,6 +82,22 @@ patches and must be applied to a fresh checkout:
   above the `#include <Python.h>`, so pyconfig.h's define never reaches it and
   a plain rebuild silently produces an empty 273-byte object.
 
+**VTK is not a git checkout**, so `patches/regen.sh` skips it (its MAP only covers
+freecad/pyside-setup/occt/cpython/numpy/coin3d). Its one delta is kept as a standalone
+patch that must be applied by hand before configuring VTK:
+
+```bash
+patch -p1 -d deps/src/VTK-9.3.1 < patches/vtk-expat-wasm-xmlsize.patch
+```
+
+Without it, VTK's bundled expat compiles `XML_Index` as 32-bit (its own CMakeLists forces
+`EXPAT_LARGE_SIZE=OFF` for Emscripten) while every consumer's `vtk_expat.h` declares the
+same functions 64-bit. wasm is strictly typed, so `wasm-ld` turns that mismatch into a
+trapping stub and **every `.vtu` parse dies with `RuntimeError: unreachable`**, taking the
+caller with it — which silently aborted FEM document restore. If you ever rebuild VTK,
+also refresh the installed copy of the header, since FreeCAD compiles against it:
+`deps/wasm/include/vtk-9.3/vtk_expat.h`.
+
 Gotchas that cost real time:
 
 - **OCCT** `OCC_CONVERT_SIGNALS` uses `setjmp`; combined with wasm-EH in one

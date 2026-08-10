@@ -1,0 +1,19 @@
+--- a/ThirdParty/expat/CMakeLists.txt
++++ b/ThirdParty/expat/CMakeLists.txt
+@@ -27,7 +27,15 @@
+ endif ()
+ 
+ # match setting of EXPAT_LARGE_SIZE in our build
+-if(NOT VTK_MODULE_USE_EXTERNAL_vtkexpat)
++# NOTE: vtkexpat/CMakeLists.txt forces EXPAT_LARGE_SIZE OFF for Emscripten, so the
++# library compiles XML_Index as `long` (32-bit on wasm32). Defining XML_LARGE_SIZE for
++# consumers there too would make them declare the same functions as returning `long long`
++# (64-bit). wasm is strictly typed: wasm-ld resolves that signature mismatch to a
++# trapping stub, so XML_GetCurrentByteIndex / ColumnNumber / LineNumber blew up with
++# "RuntimeError: unreachable" on the first .vtu parsed, taking the caller with it (the
++# legacy vtkDataSetReader never touches expat, which is why only XML readers failed).
++# Keep the two halves in agreement.
++if(NOT VTK_MODULE_USE_EXTERNAL_vtkexpat AND NOT EMSCRIPTEN)
+   set(XML_LARGE_SIZE 1)
+ endif()
+ 
