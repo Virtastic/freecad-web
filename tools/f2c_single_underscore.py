@@ -53,9 +53,25 @@ def unit_names(fdir):
     return names
 
 
+# CalculiX implements a few Fortran-callable routines in C, spelled the gfortran way
+# (call_external_umat_). They have no .f file, so the Fortran side would keep f2c's
+# double underscore and never resolve.
+RE_C_DEF = re.compile(r'(?m)^[A-Za-z_][\w \t\*]*?\b(\w+)_\s*\(')
+
+
+def c_defined_names(cdir):
+    names = set()
+    for p in sorted(cdir.glob('*.c')):
+        names |= set(RE_C_DEF.findall(p.read_text(errors='replace')))
+    return names
+
+
 def main():
     cdir, fdir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-    table = renames(unit_names(fdir))
+    names = unit_names(fdir)
+    if '--c-names' in sys.argv:
+        names |= c_defined_names(pathlib.Path(sys.argv[sys.argv.index('--c-names') + 1]))
+    table = renames(names)
     n = 0
     for p in sorted(cdir.glob('*.c')):
         t = p.read_text(errors='replace')
@@ -81,6 +97,14 @@ def selftest():
                      '      subroutine ini_ran(b)\n      end\n')
         got = unit_names(pathlib.Path(d))
     assert 'ini_ran' in got and 'ranuwh' in got, got   # not just the filename
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as d:
+        (pathlib.Path(d) / 'x.c').write_text(
+            'void call_external_umat_(double *a)\n{\n}\n'
+            'static int helper(int q) { return q; }\n')
+        cn = c_defined_names(pathlib.Path(d))
+    assert 'call_external_umat' in cn, cn
+    assert renames(cn).get('call_external_umat__') == 'call_external_umat_'
     print('f2c_single_underscore selftest OK')
 
 

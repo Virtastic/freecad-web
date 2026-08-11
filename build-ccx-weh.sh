@@ -78,7 +78,7 @@ PYEOF
 abi_passes() {
   # f2c appends two underscores to names containing one; gfortran (which ccx's C
   # files are written against) appends one.
-  python3 "$ROOT/tools/f2c_single_underscore.py" "$BUILD/c" "$BUILD/f77"
+  python3 "$ROOT/tools/f2c_single_underscore.py" "$BUILD/c" "$BUILD/f77" --c-names "$CCX"
   python3 "$ROOT/tools/f2c_subroutine_void.py" "$BUILD/c" --exclude-from "$BUILD/keep-int.txt"
 
 # ccx's C callers omit f2c's hidden CHARACTER-length arguments; on wasm that arity
@@ -151,6 +151,10 @@ done
 compile "$ROOT/bridge/ccx_stubs.c" "c_ccx_stubs" && nc=$((nc+1)) || failed=$((failed+1))
 # real implementations of things f2c does not provide (dnrm2, xerbla, F90 intrinsics)
 compile "$ROOT/bridge/ccx_fortran_rt.c" "c_ccx_fortran_rt" && nc=$((nc+1)) || failed=$((failed+1))
+# ccx runs assembly and stress recovery on pthreads; link with
+#   -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join
+# or the workers never run and every matrix comes out zero. See bridge/ccx_threads.c.
+compile "$ROOT/bridge/ccx_threads.c" "c_ccx_threads" && nc=$((nc+1)) || failed=$((failed+1))
 
 for f in "$CCX"/*.c; do
   b="$(basename "$f" .c)"

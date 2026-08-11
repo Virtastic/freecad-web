@@ -55,6 +55,38 @@ ALLOCATABLES = {
     ],
 }
 
+# Pattern rule, not an exact-declaration key: ccx declares a whole family of small
+# per-element work arrays as NAME(0:mi(2),N) -- vl, q, veoldl, voldl, vconl. mi(2) is the
+# highest DOF number per node (3 for mechanical, up to 7 with temperature/EM), so 20 is
+# generous; the array stays a few kB either way. The guard makes an underestimate loud.
+RE_MI2_DECL = re.compile(r'\b([a-z]\w*)\(0:mi\(2\),(\d+)\)', re.I)
+MI2_BOUND = 20
+
+
+def patch_mi2(text):
+    """Bound every NAME(0:mi(2),N) local in one file, with a single shared guard."""
+    if not RE_MI2_DECL.search(text) or 'mi(2) bound' in text:
+        return None
+    lines = text.split('\n')
+    idx = first_executable(lines)
+    if idx is None:
+        return None
+    lines = [RE_MI2_DECL.sub(r'\1(0:%d,\2)' % MI2_BOUND, l) for l in lines]
+    lines[idx:idx] = [
+        'C',
+        'C     The 0:mi(2) work arrays are F90 automatic arrays upstream; FORTRAN 77',
+        'C     has no such thing, so they get a fixed mi(2) bound in the WebAssembly',
+        'C     build and the run stops rather than overrun them.',
+        'C',
+        '      if(mi(2).gt.%d) then' % MI2_BOUND,
+        "         write(*,*) '*ERROR: mi(2) > %d (mi(2) bound'" % MI2_BOUND,
+        "         write(*,*) '        in the WebAssembly build)'",
+        '         call exit(201)',
+        '      endif',
+    ]
+    return '\n'.join(lines)
+
+
 RE_DECL_KEYWORD = re.compile(
     r'^\s{6,}(real|integer|logical|character|double\s+precision|complex|dimension|'
     r'common|data|implicit|parameter|external|intrinsic|save|equivalence|include)\b', re.I)
@@ -150,6 +182,9 @@ def main():
         src = p.read_text(errors='replace', newline='')
         entries = ALLOCATABLES.get(p.name)
         new = patch_allocatable(src, entries) if entries else src
+        m2 = patch_mi2(new)
+        if m2 is not None:
+            new = m2
         if any(spec in new for spec in BOUNDS):
             bounded = patch(new)
             if bounded is not None:
@@ -194,6 +229,13 @@ def selftest():
     for l in a.split('\n'):
         if l[:1] not in 'cC*!':
             assert len(l) <= 72, repr(l)
+    mi2 = ('      subroutine r(mi)\n      integer mi(*)\n'
+           '      real*8 vl(0:mi(2),20),q(0:mi(2),8)\n      x=1\n      end\n')
+    g = patch_mi2(mi2)
+    assert 'vl(0:20,20)' in g and 'q(0:20,8)' in g, g
+    assert g.count('mi(2).gt.20') == 1, 'one guard per file'
+    assert g.index('mi(2).gt.20') < g.index('x=1'), g
+    assert patch_mi2(g) is None, 'must be idempotent'
     print('ccx_bound_automatic selftest OK')
 
 
