@@ -90,9 +90,7 @@ python3 "$ROOT/tools/f2c_dedupe_commons.py" "$BUILD/c" --extern debug_,timing_
   # ccx calls a few of its own routines with more arguments than they declare; harmless
   # natively, a trapping stub on wasm. Arities come from a recorded wasm-ld log so this
   # reflects what the linker actually saw rather than a hand-maintained list.
-  if [ -f "$ROOT/ccx-arity.log" ]; then
-    python3 "$ROOT/tools/f2c_pad_arity.py" "$BUILD/c" "$ROOT/ccx-arity.log"
-  fi
+  python3 "$ROOT/tools/f2c_pad_arity.py" "$BUILD/c" "$ROOT/ccx-arity.log" --defs-also "$CCX"
 }
 
 stub_round() {  # $1 = file listing .f basenames to replace with aborting stubs

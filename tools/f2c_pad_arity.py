@@ -12,10 +12,14 @@ definitions and declarations gain ignored trailing parameters, and calls that pa
 gain null arguments. The callee cannot read them -- it never declared them -- so this
 changes no behaviour that was defined to begin with.
 
-Arities come from the wasm-ld log, so this describes what the linker actually saw
-instead of a hand-maintained list.
+The target arity comes primarily from each routine's own DEFINITION, which is the only
+authoritative source. The wasm-ld log is merged in as a supplement because it reports
+cases where the callers agree with each other but not with the definition -- and it is
+not sufficient on its own: wasm-ld stayed silent about umat_compression_only_ (declared
+with 28 in umat_main.c, defined with 30), which was enough to make the whole module fail
+to instantiate.
 
-Usage: f2c_pad_arity.py <dir-of-generated-.c> <wasm-ld-log>
+Usage: f2c_pad_arity.py <dir-of-generated-.c> [wasm-ld-log] [--defs-also <dir>]
 """
 import re
 import sys
@@ -114,9 +118,38 @@ def pad(text, arities):
     return ''.join(out)
 
 
+RE_DEF = re.compile(
+    r'(?m)^(?:/\* Subroutine \*/ )?(?:void|int|doublereal|integer|logical|real|char)'
+    r'[ \t\*]+(\w+_)\s*\(')
+
+
+def definition_arities(dirs):
+    """name -> parameter count, taken from the definition (the authoritative source)."""
+    out = {}
+    for d in dirs:
+        for p in sorted(pathlib.Path(d).glob('*.c')):
+            t = p.read_text(errors='replace')
+            for m in RE_DEF.finditer(t):
+                close = match_paren(t, m.end() - 1)
+                if close < 0:
+                    continue
+                if not t[close + 1:close + 60].lstrip().startswith('{'):
+                    continue                       # a declaration, not a definition
+                out[m.group(1)] = len(split_top(t[m.end():close]))
+    return out
+
+
 def main():
-    d, log = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-    arities = target_arities(log.read_text(errors='replace'))
+    d = pathlib.Path(sys.argv[1])
+    extra = []
+    if '--defs-also' in sys.argv:
+        extra = [sys.argv[sys.argv.index('--defs-also') + 1]]
+    arities = definition_arities([d] + extra)
+    for a in sys.argv[2:]:
+        p = pathlib.Path(a)
+        if p.is_file():
+            for name, n in target_arities(p.read_text(errors='replace')).items():
+                arities[name] = max(arities.get(name, 0), n)
     if not arities:
         print('no arity mismatches to pad')
         return
@@ -129,8 +162,7 @@ def main():
         if new != t:
             p.write_text(new)
             n += 1
-    print('padded %d symbols across %d files: %s'
-          % (len(arities), n, ' '.join(sorted(arities))))
+    print('normalised arity for %d symbols across %d files' % (len(arities), n))
 
 
 def selftest():
@@ -149,6 +181,14 @@ def selftest():
     assert 'void cload_(integer *x,integer *y,integer *fcweb_pad2);' in got, got
     assert 'cload_(&p,&q,(integer *)0)' in got, got
     assert 'cload_(&p, &q, &r)' in got or 'cload_(&p,&q,&r)' in got, got
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        (pathlib.Path(td) / 'z.c').write_text(
+            'void umat_compression_only_(int *a, int *b, int *c)\n{\n}\n'
+            'void other_(int *a);\n')
+        da = definition_arities([td])
+    assert da['umat_compression_only_'] == 3, da
+    assert 'other_' not in da, 'declarations are not definitions'
     print('f2c_pad_arity selftest OK')
 
 

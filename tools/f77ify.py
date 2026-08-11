@@ -278,16 +278,29 @@ def expand_array_ctors(text):
             except ValueError:
                 out.extend(originals)
                 continue
-            if len(d) == 2 and len(v) == d[0] * d[1]:
-                pairs, k = [], 0
-                for j in range(1, d[1] + 1):        # column-major
-                    for i in range(1, d[0] + 1):
-                        pairs.append(('%d,%d' % (i, j), v[k]))
-                        k += 1
-                out.extend(_emit_assigns(name, pairs))
-                continue
-            if len(d) == 1 and len(v) == d[0]:
-                out.extend(_emit_assigns(name, [(str(i + 1), v[i]) for i in range(d[0])]))
+            total = 1
+            for x in d:
+                total *= x
+            if d and len(v) == total:
+                # Column-major: the FIRST subscript varies fastest. Any rank -- ccx has
+                # rank-3 tables (xlocal.f reshapes into (/3,1,6/)).
+                subs = [[]]
+                for dim in d:
+                    subs = [pre + [i] for i in range(1, dim + 1) for pre in subs]
+                # the comprehension above varies `pre` fastest, which is what we want
+                # only once it is rebuilt in index order:
+                subs = []
+                idx = [1] * len(d)
+                for _ in range(total):
+                    subs.append(list(idx))
+                    for axis in range(len(d)):
+                        idx[axis] += 1
+                        if idx[axis] <= d[axis]:
+                            break
+                        idx[axis] = 1
+                out.extend(_emit_assigns(
+                    name, [(','.join(str(x) for x in sub), v[k])
+                           for k, sub in enumerate(subs)]))
                 continue
             out.extend(originals)
             continue
@@ -498,6 +511,12 @@ def selftest():
     # reshape -> DATA, column-major
     out = conv(["g=reshape((/1.d0,2.d0,3.d0,4.d0/),(/2,2/))"])
     assert 'data g(2,1) /2.d0/' in out and 'data g(1,2) /3.d0/' in out, out
+    # rank 3, column-major: first subscript fastest
+    r3 = conv(["h=reshape((/1.d0,2.d0,3.d0,4.d0,5.d0,6.d0/),(/3,1,2/))"])
+    assert 'data h(1,1,1) /1.d0/' in r3, r3
+    assert 'data h(3,1,1) /3.d0/' in r3, r3
+    assert 'data h(1,1,2) /4.d0/' in r3, r3
+    assert 'data h(3,1,2) /6.d0/' in r3, r3
     # non-constant values stay executable
     assert 'x(1)=a' in conv(["x=(/a,b/)"])
     # `;` inside a literal continued from the previous line is not a separator
