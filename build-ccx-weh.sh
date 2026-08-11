@@ -48,18 +48,85 @@ cd "$ROOT"
 
 # wasm is strictly typed and CalculiX.h declares Fortran subroutines `void`, while f2c
 # emits them returning int -- wasm-ld turns that mismatch into a hard link error.
-# f2c appends two underscores to names containing one; gfortran (which ccx's C
-# files are written against) appends one.
-python3 "$ROOT/tools/f2c_single_underscore.py" "$BUILD/c" "$BUILD/f77"
+CFLAGS="-fwasm-exceptions -O2 -DINTEGER_STAR_8 -I$PREFIX/include -I$SPOOLES -I$CCX
+  -DARCH=Linux -DSPOOLES -DARPACK -DMATRIXSTORAGE -DNETWORKOUT
+  -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion
+  -Wno-return-type -Wno-parentheses -Wno-format -Wno-deprecated-non-prototype"
 
-python3 "$ROOT/tools/f2c_subroutine_void.py" "$BUILD/c"
+# The ABI passes. All four are idempotent, so the second stub round can simply re-run
+# them over the whole directory rather than trying to patch one file consistently.
+# libf2c's routines really do return int, so their declarations must be left alone.
+# Only libf2c: the hand-written C in bridge/ returns void deliberately, precisely so the
+# generated declarations (which this pass rewrites to void) match it. llvm-nm reports no
+# return type, so anything listed here is asserted to be int-returning, not discovered.
+keep_int_list() {
+  # Which libf2c routines really return int, read from their ANSI definitions. It is
+  # genuinely mixed -- s_stop returns int, s_copy returns void -- so this cannot be
+  # assumed either way, and llvm-nm does not report return types.
+  python3 - "$ROOT/deps/src/f2c/libf2c" > "$BUILD/keep-int.txt" <<'PYEOF'
+import pathlib, re, sys
+# libf2c writes the return type on its own line as often as not, so a line-anchored
+# grep misses roughly half of them (system_ among them).
+pat = re.compile(r'(?:^|\n)\s*(?:int|integer)\s*\n?\s*([a-z_0-9]+)\s*\(', re.M)
+names = set()
+for f in sorted(pathlib.Path(sys.argv[1]).glob('*.c')):
+    names |= set(pat.findall(f.read_text(errors='replace')))
+print('\n'.join(sorted(names)))
+PYEOF
+}
+
+abi_passes() {
+  # f2c appends two underscores to names containing one; gfortran (which ccx's C
+  # files are written against) appends one.
+  python3 "$ROOT/tools/f2c_single_underscore.py" "$BUILD/c" "$BUILD/f77"
+  python3 "$ROOT/tools/f2c_subroutine_void.py" "$BUILD/c" --exclude-from "$BUILD/keep-int.txt"
 
 # ccx's C callers omit f2c's hidden CHARACTER-length arguments; on wasm that arity
 # mismatch becomes a trapping stub rather than a harmless ignored register.
-python3 "$ROOT/tools/f2c_strip_ftnlen.py" "$BUILD/c"
+python3 "$ROOT/tools/f2c_strip_ftnlen.py" "$BUILD/c" --also "$PREFIX/lib/ccx-abi-arpack.txt"
 # debug_/timing_ are ARPACK's COMMON blocks; ccx's Fortran declares them only to talk
 # to it, so libarpack.a owns the definition and every copy here is extern.
 python3 "$ROOT/tools/f2c_dedupe_commons.py" "$BUILD/c" --extern debug_,timing_
+  # ccx calls a few of its own routines with more arguments than they declare; harmless
+  # natively, a trapping stub on wasm. Arities come from a recorded wasm-ld log so this
+  # reflects what the linker actually saw rather than a hand-maintained list.
+  if [ -f "$ROOT/ccx-arity.log" ]; then
+    python3 "$ROOT/tools/f2c_pad_arity.py" "$BUILD/c" "$ROOT/ccx-arity.log"
+  fi
+}
+
+stub_round() {  # $1 = file listing .f basenames to replace with aborting stubs
+  python3 "$ROOT/tools/ccx_make_stubs.py" "$1" "$BUILD/f77" "$BUILD/stubs"
+  ( cd "$BUILD/stubs" && for f in *.f; do
+      [ -f "$f" ] || continue
+      "$F2C" -a -A -d"$BUILD/c" "$f" >/dev/null 2>&1 || echo "STUB-FAIL $f" >> "$BUILD/UNCONVERTED.txt"
+    done )
+  abi_passes
+}
+
+# compiled early: keep_int_list reads their symbols, and the ABI passes need that list
+mkdir -p "$BUILD/obj"
+emcc $CFLAGS -c "$ROOT/bridge/ccx_stubs.c" -o "$BUILD/obj/c_ccx_stubs.o" 2>/dev/null || true
+emcc $CFLAGS -c "$ROOT/bridge/ccx_fortran_rt.c" -o "$BUILD/obj/c_ccx_fortran_rt.o" 2>/dev/null || true
+keep_int_list
+
+stub_round "$BUILD/UNCONVERTED.txt"
+
+# A file can translate cleanly and still not compile. Those need stubbing too, and a
+# syntax-only pass finds them without paying for codegen twice.
+: > "$BUILD/needs-stub.txt"
+for f in "$BUILD"/c/*.c; do
+  emcc $CFLAGS -fsyntax-only "$f" 2>/dev/null || {
+    b="$(basename "$f" .c)"
+    echo "$b.f" >> "$BUILD/needs-stub.txt"
+    echo "CC-FAIL $b (stubbed)" >> "$BUILD/UNCONVERTED.txt"
+    rm -f "$f"
+  }
+done
+if [ -s "$BUILD/needs-stub.txt" ]; then
+  echo "stubbing $(wc -l < "$BUILD/needs-stub.txt" | tr -d ' ') routines that translated but did not compile"
+  stub_round "$BUILD/needs-stub.txt"
+fi
 
 # --- compile -----------------------------------------------------------------
 # ARCH must be the bare token `Linux`, not a string: CalculiX.h:25 does
@@ -68,10 +135,6 @@ python3 "$ROOT/tools/f2c_dedupe_commons.py" "$BUILD/c" --extern debug_,timing_
 # -DINTEGER_STAR_8 must match how libf2c was built (it only adds `longint`).
 # ARPACK is required, not optional: feasibledirection.c -- called unconditionally
 # from ccx_2.22.c -- is entirely inside `#ifdef ARPACK`.
-CFLAGS="-fwasm-exceptions -O2 -DINTEGER_STAR_8 -I$PREFIX/include -I$SPOOLES -I$CCX
-  -DARCH=Linux -DSPOOLES -DARPACK -DMATRIXSTORAGE -DNETWORKOUT
-  -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion
-  -Wno-return-type -Wno-parentheses -Wno-format -Wno-deprecated-non-prototype"
 
 nc=0; failed=0
 compile() {  # $1=source $2=objname
@@ -86,6 +149,8 @@ for f in "$BUILD"/c/*.c; do
 done
 # routines that cannot be translated at all -- see bridge/ccx_stubs.c
 compile "$ROOT/bridge/ccx_stubs.c" "c_ccx_stubs" && nc=$((nc+1)) || failed=$((failed+1))
+# real implementations of things f2c does not provide (dnrm2, xerbla, F90 intrinsics)
+compile "$ROOT/bridge/ccx_fortran_rt.c" "c_ccx_fortran_rt" && nc=$((nc+1)) || failed=$((failed+1))
 
 for f in "$CCX"/*.c; do
   b="$(basename "$f" .c)"

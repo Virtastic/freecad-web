@@ -148,17 +148,35 @@ def rewrite(text, counts):
     return ''.join(out)
 
 
+def arg(flag):
+    return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else None
+
+
 def main():
     d = pathlib.Path(sys.argv[1])
     files = sorted(d.glob('*.c'))
     texts = {p: p.read_text(errors='replace') for p in files}
     counts = strippable_counts(texts.values())
+    # lengths another library already stripped. Without this the two disagree: ARPACK
+    # strips lsame_'s two hidden lengths, ccx's dgesv keeps passing them, and the call
+    # becomes a trapping stub.
+    also = arg('--also')
+    if also and pathlib.Path(also).exists():
+        for l in pathlib.Path(also).read_text().split('\n'):
+            if l.startswith('strip '):
+                _, name, k = l.split()
+                counts.setdefault(name, int(k))
     n = 0
     for p, t in texts.items():
         new = rewrite(t, counts)
         if new != t:
             p.write_text(new)
             n += 1
+    emit = arg('--emit')
+    if emit:
+        with open(emit, 'a') as f:
+            for name, k in sorted(counts.items()):
+                f.write('strip %s %d\n' % (name, k))
     print('stripped hidden lengths from %d symbols across %d files' % (len(counts), n))
 
 

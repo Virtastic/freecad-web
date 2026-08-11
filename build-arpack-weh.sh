@@ -64,8 +64,19 @@ cd "$ROOT"
 # files are written against) appends one.
 python3 "$ROOT/tools/f2c_single_underscore.py" "$BUILD/c" "$BUILD/f77"
 
-python3 "$ROOT/tools/f2c_subroutine_void.py" "$BUILD/c"
-python3 "$ROOT/tools/f2c_strip_ftnlen.py" "$BUILD/c"
+# Same treatment as CalculiX: anything f2c rejected gets a same-signature stub that
+# aborts, so an unconvertible routine is a named runtime error rather than a link
+# failure. second.f is the common case (it calls the etime intrinsic).
+python3 "$ROOT/tools/ccx_make_stubs.py" "$BUILD/UNCONVERTED.txt" "$BUILD/f77" "$BUILD/stubs"
+( cd "$BUILD/stubs" 2>/dev/null && for f in *.f; do
+    [ -f "$f" ] || continue
+    "$F2C" -a -A -d"$BUILD/c" "$f" >/dev/null 2>&1 || true
+  done )
+
+ABI="$PREFIX/lib/ccx-abi-arpack.txt"
+rm -f "$ABI"
+python3 "$ROOT/tools/f2c_subroutine_void.py" "$BUILD/c" --emit "$ABI"
+python3 "$ROOT/tools/f2c_strip_ftnlen.py" "$BUILD/c" --emit "$ABI"
 python3 "$ROOT/tools/f2c_dedupe_commons.py" "$BUILD/c"
 
 CFLAGS="-fwasm-exceptions -O2 -DINTEGER_STAR_8 -I$PREFIX/include
@@ -81,7 +92,9 @@ done
 
 # emar appends: without removing it first, members from an earlier run survive
 # and reappear as duplicate symbols at link time.
+OBJ_STUB="$BUILD/obj/zz_ccx_stubs.o"
 rm -f "$PREFIX/lib/libarpack.a"
+emcc $CFLAGS -c "$ROOT/bridge/ccx_stubs.c" -o "$OBJ_STUB" 2>/dev/null || true
 emar rcs "$PREFIX/lib/libarpack.a" "$BUILD"/obj/*.o
 echo "translated : $n (f2c rejected $bad)"
 echo "compiled   : $nc"

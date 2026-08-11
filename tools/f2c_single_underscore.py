@@ -35,9 +35,27 @@ def apply(text, table):
     return re.sub(r'\b(\w+__)\s*\(', sub, text)
 
 
+RE_UNIT = re.compile(
+    r'^\s{6,}(?:[a-z]+\*?\d*\s+)?(?:subroutine|function)\s+(\w+)\s*\(', re.I | re.M)
+
+
+def unit_names(fdir):
+    """Every program unit defined under fdir.
+
+    Not the filenames: a file may define a routine with a different name (iniran lives
+    in ranuwh.f, arscnd in second.f), and keying on the filename silently misses those,
+    leaving the definition double-underscored while its callers get renamed.
+    """
+    names = set()
+    for p in sorted(fdir.glob('*.f')):
+        names.add(p.stem)
+        names |= set(RE_UNIT.findall(p.read_text(errors='replace')))
+    return names
+
+
 def main():
     cdir, fdir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-    table = renames(p.stem for p in fdir.glob('*.f'))
+    table = renames(unit_names(fdir))
     n = 0
     for p in sorted(cdir.glob('*.c')):
         t = p.read_text(errors='replace')
@@ -56,6 +74,13 @@ def selftest():
     assert 'void op_corio_(int *a);' in got and 'op_corio_(&b)' in got, got
     # a renamed local, and a name that really ends in _, must both survive untouched
     assert 'arr__[i]' in got and 'trailing__' in got, got
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = pathlib.Path(d) / 'ranuwh.f'
+        p.write_text('      subroutine ranuwh(a)\n      end\n'
+                     '      subroutine ini_ran(b)\n      end\n')
+        got = unit_names(pathlib.Path(d))
+    assert 'ini_ran' in got and 'ranuwh' in got, got   # not just the filename
     print('f2c_single_underscore selftest OK')
 
 
