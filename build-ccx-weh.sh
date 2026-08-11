@@ -48,11 +48,18 @@ cd "$ROOT"
 
 # wasm is strictly typed and CalculiX.h declares Fortran subroutines `void`, while f2c
 # emits them returning int -- wasm-ld turns that mismatch into a hard link error.
+# f2c appends two underscores to names containing one; gfortran (which ccx's C
+# files are written against) appends one.
+python3 "$ROOT/tools/f2c_single_underscore.py" "$BUILD/c" "$BUILD/f77"
+
 python3 "$ROOT/tools/f2c_subroutine_void.py" "$BUILD/c"
 
 # ccx's C callers omit f2c's hidden CHARACTER-length arguments; on wasm that arity
 # mismatch becomes a trapping stub rather than a harmless ignored register.
 python3 "$ROOT/tools/f2c_strip_ftnlen.py" "$BUILD/c"
+# debug_/timing_ are ARPACK's COMMON blocks; ccx's Fortran declares them only to talk
+# to it, so libarpack.a owns the definition and every copy here is extern.
+python3 "$ROOT/tools/f2c_dedupe_commons.py" "$BUILD/c" --extern debug_,timing_
 
 # --- compile -----------------------------------------------------------------
 # ARCH must be the bare token `Linux`, not a string: CalculiX.h:25 does
@@ -61,7 +68,7 @@ python3 "$ROOT/tools/f2c_strip_ftnlen.py" "$BUILD/c"
 # -DINTEGER_STAR_8 must match how libf2c was built (it only adds `longint`).
 # ARPACK is required, not optional: feasibledirection.c -- called unconditionally
 # from ccx_2.22.c -- is entirely inside `#ifdef ARPACK`.
-CFLAGS="-fwasm-exceptions -O2 -fcommon -DINTEGER_STAR_8 -I$PREFIX/include -I$SPOOLES -I$CCX
+CFLAGS="-fwasm-exceptions -O2 -DINTEGER_STAR_8 -I$PREFIX/include -I$SPOOLES -I$CCX
   -DARCH=Linux -DSPOOLES -DARPACK -DMATRIXSTORAGE -DNETWORKOUT
   -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion
   -Wno-return-type -Wno-parentheses -Wno-format -Wno-deprecated-non-prototype"
@@ -86,6 +93,9 @@ for f in "$CCX"/*.c; do
   compile "$f" "c_$b" && nc=$((nc+1)) || failed=$((failed+1))
 done
 
+# emar appends: without removing it first, members from an earlier run survive
+# and reappear as duplicate symbols at link time.
+rm -f "$PREFIX/lib/libccx.a"
 emar rcs "$PREFIX/lib/libccx.a" "$BUILD"/obj/*.o
 echo "fortran translated : $nf / $(ls "$CCX"/*.f | wc -l | tr -d ' ')"
 echo "fortran compiled   : ${nf2:-0}"

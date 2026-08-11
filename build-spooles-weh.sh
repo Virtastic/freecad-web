@@ -35,6 +35,9 @@ while IFS= read -r f; do
   n=$((n+1))
 done < <(find "$SRC" -path "$SRC/*/src/*.c" ! -path "$SRC/MPI/*" ! -path "$SRC/MT/*" | sort)
 
+# emar appends: without removing it first, members from an earlier run survive
+# and reappear as duplicate symbols at link time.
+rm -f "$PREFIX/lib/libspooles.a"
 emar rcs "$PREFIX/lib/libspooles.a" "$OBJ"/*.o
 echo "compiled $n objects -> $PREFIX/lib/libspooles.a"
 ls -la "$PREFIX/lib/libspooles.a"

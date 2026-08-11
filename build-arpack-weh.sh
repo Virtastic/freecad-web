@@ -60,14 +60,15 @@ rm -f "$BUILD/e.log"
 cd "$ROOT"
 
 # same ABI adjustments as CalculiX -- see the two tools for why
+# f2c appends two underscores to names containing one; gfortran (which ccx's C
+# files are written against) appends one.
+python3 "$ROOT/tools/f2c_single_underscore.py" "$BUILD/c" "$BUILD/f77"
+
 python3 "$ROOT/tools/f2c_subroutine_void.py" "$BUILD/c"
 python3 "$ROOT/tools/f2c_strip_ftnlen.py" "$BUILD/c"
+python3 "$ROOT/tools/f2c_dedupe_commons.py" "$BUILD/c"
 
-# -fcommon: f2c emits a Fortran COMMON block as a tentative definition in every file
-# that declares it (ARPACK's debug_/timing_ are in most of them). The legacy
-# common-symbol model merges those; clang defaults to -fno-common, which makes each
-# one a hard definition and the link a pile of duplicate symbols.
-CFLAGS="-fwasm-exceptions -O2 -fcommon -DINTEGER_STAR_8 -I$PREFIX/include
+CFLAGS="-fwasm-exceptions -O2 -DINTEGER_STAR_8 -I$PREFIX/include
   -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion
   -Wno-return-type -Wno-parentheses -Wno-format -Wno-deprecated-non-prototype"
 
@@ -78,6 +79,9 @@ for f in "$BUILD"/c/*.c; do
     || echo "CC-FAIL $b" >> "$BUILD/UNCONVERTED.txt"
 done
 
+# emar appends: without removing it first, members from an earlier run survive
+# and reappear as duplicate symbols at link time.
+rm -f "$PREFIX/lib/libarpack.a"
 emar rcs "$PREFIX/lib/libarpack.a" "$BUILD"/obj/*.o
 echo "translated : $n (f2c rejected $bad)"
 echo "compiled   : $nc"

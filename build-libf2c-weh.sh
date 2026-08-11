@@ -51,6 +51,9 @@ for f in "$SRC"/*.c; do
   n=$((n+1))
 done
 
+# emar appends: without removing it first, members from an earlier run survive
+# and reappear as duplicate symbols at link time.
+rm -f "$PREFIX/lib/libf2c.a"
 emar rcs "$PREFIX/lib/libf2c.a" "$OBJ"/*.o
 cp "$SRC/f2c.h" "$PREFIX/include/"
 echo "compiled $n objects -> $PREFIX/lib/libf2c.a"
