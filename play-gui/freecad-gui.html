@@ -169,6 +169,100 @@
   };
 })();
 
+// ---------------------------------------------------------------------------
+// CalculiX. FreeCAD's FEM solver writes <job>.inp and runs `ccx -i <job>`, then reads
+// back <job>.frd and <job>.dat. ccx is a separate wasm module with its own filesystem,
+// so the files are ferried across here.
+//
+// A FRESH module instance is created per solve, unlike the mesher: ccx keeps state in
+// globals and was written as a one-shot process, so reusing an instance would carry the
+// previous run's state into the next one. The cost is re-instantiating ~4 MB, which is
+// small next to the solve itself.
+(function () {
+  var scriptP = null;
+
+  function loadScript() {
+    if (scriptP) { return scriptP; }
+    scriptP = new Promise(function (resolve, reject) {
+      if (typeof CcxModule === 'function') { resolve(); return; }
+      var s = document.createElement('script');
+      s.src = 'ccx.js';
+      s.onload = function () {
+        if (typeof CcxModule !== 'function') { reject(new Error('ccx.js did not define CcxModule')); return; }
+        resolve();
+      };
+      s.onerror = function () { reject(new Error('failed to fetch ccx.js')); };
+      document.head.appendChild(s);
+    });
+    scriptP.catch(function () { scriptP = null; });   // let a later attempt retry
+    return scriptP;
+  }
+
+  function dirOf(p) { var i = String(p).lastIndexOf('/'); return i < 0 ? '.' : p.slice(0, i); }
+  function base(p) { return String(p).split('/').pop(); }
+
+  // Everything ccx may write. Missing ones are skipped: which appear depends on the
+  // analysis type and on what the deck asked to be printed.
+  var OUTPUTS = ['.frd', '.dat', '.sta', '.cvg', '.12d', '.out'];
+
+  window.fcwebCcxRun = async function (inpPath) {
+    var fc = window.fcInstance;
+    if (!fc || !fc.FS) { return 1; }
+    try {
+      if (typeof window.fcwebNotify === 'function') {
+        window.fcwebNotify('Loading the solver\u2026', 'info');
+      }
+      await loadScript();
+    } catch (e) {
+      if (typeof window.fcwebNotify === 'function') {
+        window.fcwebNotify('Could not load the solver: ' + e.message, 'error');
+      }
+      return 1;
+    }
+
+    var job = base(inpPath).replace(/\.inp$/i, '');
+    var outDir = dirOf(inpPath);
+    try {
+      var M = await CcxModule();
+      var wd = '/work';
+      try { M.FS.mkdir(wd); } catch (e) {}
+      try { M.FS.chdir(wd); } catch (e) {}
+      M.FS.writeFile(wd + '/' + job + '.inp', fc.FS.readFile(inpPath));
+
+      var rc = M.ccall('fcweb_ccx_run', 'number', ['string'], [job]);
+
+      var wrote = 0;
+      for (var i = 0; i < OUTPUTS.length; i++) {
+        var name = job + OUTPUTS[i];
+        try {
+          fc.FS.writeFile(outDir + '/' + name, M.FS.readFile(wd + '/' + name));
+          wrote++;
+        } catch (e) { /* this analysis did not produce that file */ }
+      }
+      if (rc !== 0 && typeof window.fcwebNotify === 'function') {
+        window.fcwebNotify('The solver reported an error (ccx returned ' + rc + ').', 'error');
+      } else if (!wrote && typeof window.fcwebNotify === 'function') {
+        window.fcwebNotify('The solver produced no result files.', 'error');
+      }
+      return rc | 0;
+    } catch (e) {
+      try { console.error('[fcweb] ccx failed', e); } catch (_) {}
+      if (typeof window.fcwebNotify === 'function') {
+        window.fcwebNotify('The solver failed: ' + (e && e.message ? e.message : e), 'error');
+      }
+      return 1;
+    }
+  };
+
+  window.fcwebCcxVersion = async function () {
+    try {
+      await loadScript();
+      var M = await CcxModule();
+      return M.ccall('fcweb_ccx_version', 'string', [], []);
+    } catch (e) { return null; }
+  };
+})();
+
 window.fcwebColor = function(title, initialRgb){
   return new Promise(function(resolve){
     try{

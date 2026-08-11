@@ -164,3 +164,42 @@ git push origin dev:ovhcloud     # triggers .github/workflows/deploy-ovh.yml
 
 Verify live: `curl -sI https://freecad.virtastic.app/FreeCAD.wasm` — the
 `content-length` must equal the local `play-gui/FreeCAD.wasm`.
+
+## Relinking FreeCAD: two things the link does NOT do for you
+
+1. **Re-apply the GL patches.** Two fixes live only in the linked `FreeCAD.js`, because
+   they patch emscripten's generated GL-emulation code -- `pre-gui.js` is inlined
+   *before* it, so they cannot go there. Every relink silently drops them:
+
+   ```bash
+   python3 tools/patch-freecad-js.py build-freecad-gui-weh/bin/FreeCAD.js
+   ```
+
+   Without it you get a boot-time storm of `Cannot read properties of null (reading
+   '0')` from `getCurTexUnit`, and the 3D view never comes up. The script is
+   idempotent and fails loudly if a patch site no longer matches.
+
+2. **Check the .wasm size.** A correct link lands at ~152 MB. One link produced 234 MB
+   with an exit status of 0 and nothing in the log -- `wasm-opt` had been skipped.
+   Running it by hand afterwards is NOT equivalent to emcc's own post-link pipeline;
+   relink instead.
+
+### Known-broken: relinking from a clean tree
+
+As of 2026-08-11 a relink of this tree reproduces a binary in which
+`FreeCAD.newDocument()` never returns, while the shipped `build-20260810-gmsh`
+artifacts work. This was isolated with `scratchpad/ccxe2e/probe.js`, which runs small
+Python snippets one at a time:
+
+| build | newDocument |
+| --- | --- |
+| release build-20260810-gmsh | works |
+| relink + CalculiX bridge | hangs |
+| relink, no CalculiX at all | hangs |
+| relink, original .py files | hangs |
+
+So it is the relink itself, not any particular change. The link inputs on disk are
+unchanged since the release (no `.a` is newer), and `FreeCAD.js` is byte-identical to
+the released one once the preload manifest and the GL patches are accounted for --
+which points at the recorded link line in `scratchpad/linkcmds/` not being what
+actually produced the release. **Resolve this before relinking for a release.**

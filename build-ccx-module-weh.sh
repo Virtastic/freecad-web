@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Link the CalculiX wasm module that FreeCAD-Web calls instead of the ccx binary.
+# Run build-{spooles,libf2c,arpack,ccx}-weh.sh first.
+#
+# Produces play-gui/ccx.{js,wasm}: a MODULARIZEd module fetched on first use, so the
+# main FreeCAD.wasm does not grow.
+#
+# Two link flags are load-bearing:
+#   --wrap=pthread_create/join  ccx runs assembly and stress recovery on threads; this
+#                               module is not built with -pthread, so without the wrap
+#                               the workers never run and every matrix comes out zero.
+#   --start-group               libccx and libarpack reference each other.
+# ENVIRONMENT includes node so the module can be exercised outside a browser.
+# -sWASM_BIGINT avoids the i64 legalization pass, which invokes emsdk 3.1.70's
+# wasm-emscripten-finalize (binaryen v119) -- and that cannot parse wasm-EH.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+PREFIX="$ROOT/deps/wasm"
+CCX="$ROOT/deps/src/ccx/ccx_2.22/src"
+OUT="$ROOT/play-gui"
+OBJ="$ROOT/build-ccx-weh/module"
+
+for l in libccx libarpack libspooles libf2c; do
+  test -f "$PREFIX/lib/$l.a" || { echo "missing $PREFIX/lib/$l.a" >&2; exit 1; }
+done
+mkdir -p "$OBJ"
+
+CFLAGS="-fwasm-exceptions -O2 -DINTEGER_STAR_8 -I$PREFIX/include -I$CCX
+  -Ideps/src/spooles/SPOOLES.2.2 -DARCH=Linux -DSPOOLES -DARPACK -DMATRIXSTORAGE
+  -DNETWORKOUT -w"
+
+# ccx's main() becomes a callable entry point
+emcc $CFLAGS -Dmain=fcweb_ccx_main -c "$CCX/ccx_2.22.c" -o "$OBJ/ccx_main.o"
+emcc $CFLAGS -c "$ROOT/ccx_wasm_main.c" -o "$OBJ/wrapper.o"
+
+emcc -fwasm-exceptions -O2 "$OBJ/ccx_main.o" "$OBJ/wrapper.o" \
+  -Wl,--start-group "$PREFIX/lib/libccx.a" "$PREFIX/lib/libarpack.a" \
+                    "$PREFIX/lib/libspooles.a" "$PREFIX/lib/libf2c.a" -Wl,--end-group \
+  -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join \
+  -o "$OUT/ccx.js" \
+  -sMODULARIZE=1 \
+  -sEXPORT_NAME=CcxModule \
+  -sWASM_BIGINT=1 \
+  -sEXPORTED_FUNCTIONS=_fcweb_ccx_run,_fcweb_ccx_version,_malloc,_free \
+  -sEXPORTED_RUNTIME_METHODS=FS,ccall,cwrap,stringToUTF8,UTF8ToString,lengthBytesUTF8 \
+  -sFORCE_FILESYSTEM=1 \
+  -sALLOW_MEMORY_GROWTH=1 \
+  -sINITIAL_MEMORY=268435456 \
+  -sSTACK_SIZE=16MB \
+  -sEXIT_RUNTIME=0 \
+  -sASSERTIONS=0 \
+  -sENVIRONMENT=web,worker,node \
+  -sERROR_ON_UNDEFINED_SYMBOLS=0
+
+ls -la "$OUT/ccx.js" "$OUT/ccx.wasm"
+echo "CalculiX module -> $OUT/ccx.{js,wasm}"
