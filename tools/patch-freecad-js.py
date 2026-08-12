@@ -65,6 +65,7 @@ pipeline in ways emscripten warns about on every call, which floods the console)
 
 Usage: patch-freecad-js.py <FreeCAD.js> [--check]
 """
+import re
 import sys
 import pathlib
 
@@ -214,6 +215,35 @@ def apply(text, _passes=3):
     return _apply_once(text)
 
 
+# Invariants a correctly patched file must satisfy, checked AFTER everything runs.
+#
+# The per-patch status cannot be trusted on its own. Every throw-removal patch replaces
+# its site with the literal "0", and "0" occurs all over minified JS, so the
+# "elif new in text -> already applied" arm fires for ANY of them whose search text stops
+# matching. Building with ALLOW_MEMORY_GROWTH did exactly that: heap access became
+# GROWABLE_HEAP_F32()[x>>>2>>>0] instead of HEAPF32[x>>2], nine throw patches reported
+# "already applied", and the file still threw from nine GL entry points. A throw inside a
+# GL call unwinds through Coin and takes the viewport with it.
+#
+# So the invariant is checked against the thing itself, not against the status: none of
+# the exact throw sites may survive. (Other GL throws DO legitimately remain --
+# glDrawBuffer, glGetTexLevelParameteriv, glTexImage1D are not on Coin's path and are
+# deliberately untouched -- so this must be the specific list, not /throw"gl/.)
+def check_postconditions(text):
+    """Return a list of (what, why, count) for every invariant the file violates."""
+    bad = []
+    for t in _TODO_THROWS:
+        n = text.count(t)
+        if n:
+            bad.append((t, 'Coin calls this; a throw here kills the viewport', n))
+    n = len(re.findall(r'GROWABLE_HEAP_[A-Z0-9]+\(\)', text))
+    if n:
+        bad.append(('GROWABLE_HEAP accessors', 'built with ALLOW_MEMORY_GROWTH -- the '
+                    'heap-access form changed, so this patch table does not apply and '
+                    'must be re-derived for it', n))
+    return bad
+
+
 def _apply_once(text):
     status = []
     for name, old, new in PATCHES:
@@ -241,6 +271,13 @@ def main():
     if missing:
         print('ERROR: %d patch site(s) not found -- emscripten output changed, '
               'the fixes need re-deriving' % len(missing), file=sys.stderr)
+        return 1
+    violations = check_postconditions(out)
+    for pat, why, n in violations:
+        print('ERROR: %d x /%s/ still present -- %s' % (n, pat, why), file=sys.stderr)
+    if violations:
+        print('ERROR: the per-patch status above is NOT sufficient; these invariants '
+              'are what the patches exist to guarantee', file=sys.stderr)
         return 1
     if not check and out != src:
         p.write_text(out)

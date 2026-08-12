@@ -717,6 +717,13 @@ window.fcwebNotify = function (text, kind, actions) {
     'Solving is unavailable: the CalculiX solver is not part of the browser build.'],
    [/doesn't contain expected phrase/i,
     'The configured solver binary did not respond as expected, so the solve was skipped.'],
+   // Out of wasm memory. The heap is a FIXED 2 GB (growth is deliberately off -- see
+   // scratchpad/linkcmds/fc-linkcmd-weh-grow.sh and the note in BUILD-WEH.md), so a big
+   // enough model aborts. Say so in words instead of dying silently.
+   [/Cannot enlarge memory|OOM|out of memory|Aborted\(OOM\)|memory allocation failed/i,
+    'This model needs more memory than the browser build has (the limit is 2 GB). ' +
+    'Try simplifying it, meshing more coarsely, or closing other documents. ' +
+    'Your open work has been autosaved.'],
    // pre-gui.js emits this when FS.syncfs fails -- browser storage full, evicted, or
    // blocked. Autosave is writing into a void from this point on.
    [/IDBFS persist failed|QuotaExceeded/i,
@@ -874,7 +881,15 @@ window.fcRunPy = fcRunPy;
        monitorRunDependencies:(n)=>{ append('[deps] remaining='+n);
          if(n>0) __setBoot('Unpacking application data… ('+n+' left)'); },
        onAbort:(w)=>{ append('[ABORT] '+w,'err');
-         try { window.fcwebCrash && window.fcwebCrash('wasm abort', w); } catch(e){} },
+         // An out-of-memory abort is not a bug report, it is a limit the user can
+         // work around, so it gets its own wording rather than 'something went wrong'.
+         try {
+           if (/memory|OOM/i.test(String(w))) {
+             window.fcwebNotify && window.fcwebNotify(
+               'Out of memory: this model is larger than the browser build can hold ' +
+               '(2 GB limit). Your work has been autosaved — reload to get it back.', 'error');
+           } else if (window.fcwebCrash) { window.fcwebCrash('wasm abort', w); }
+         } catch(e){} },
        qt: {
          onLoaded: () => { const st=document.getElementById('status'); if(st) st.textContent='FreeCAD loaded';
            // App is up: reveal the full-window FreeCAD UI and drop the loader.

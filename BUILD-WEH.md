@@ -165,6 +165,39 @@ git push origin dev:ovhcloud     # triggers .github/workflows/deploy-ovh.yml
 Verify live: `curl -sI https://freecad.virtastic.app/FreeCAD.wasm` — the
 `content-length` must equal the local `play-gui/FreeCAD.wasm`.
 
+## Memory: the heap is a fixed 2 GB, deliberately
+
+`-sINITIAL_MEMORY=2147483648 -sALLOW_MEMORY_GROWTH=0`. Growth was built and measured
+(`scratchpad/linkcmds/fc-linkcmd-weh-grow.sh`, initial 1 GB / maximum 4 GB) and **not
+shipped**, for a reason worth knowing before anyone tries again:
+
+- With growth, emscripten can no longer hold a heap view across a grow, so every heap
+  access in the JS glue becomes an accessor call: `GROWABLE_HEAP_F32()[x>>>2>>>0]`
+  instead of `HEAPF32[x>>2]`. **841 sites** change form.
+- That invalidates the hand-derived patch set in `tools/patch-freecad-js.py`, whose
+  search text embeds the old form.
+- emscripten warns about it directly: `-pthread + ALLOW_MEMORY_GROWTH may run non-wasm
+  code slowly`. On this build the hot path IS non-wasm code -- Coin renders through the
+  JS GL emulation, touching the heap per vertex -- and the heavy scene is already
+  draw-call bound at ~11 fps.
+
+So growth trades a permanent cost on the render path for a ceiling that measurement says
+is not close: gmsh meshes a box to 77k nodes / 429k tets inside 2 GB. What the fixed heap
+DID need was a civil failure, and it has one now: an out-of-memory abort says so in
+words, instead of the app dying with nothing on screen.
+
+If you do revisit it, re-derive every heap-touching patch for the accessor form first,
+then A/B the render path before believing it is free.
+
+## Reproducibility
+
+Verified 2026-08-12: `scratchpad/linkcmds/fc-linkcmd-weh.sh` reproduces the shipped
+binaries **byte for byte** -- `FreeCAD.wasm` md5 `01a524cd310ca88e31c6a5e44bc32e1b`, and
+`FreeCAD.js` md5 `063d08a6fb27e2fb4993f600c6801e54` after `tools/patch-freecad-js.py`.
+The recorded link line had gone stale (it predated CalculiX and was missing
+`weh-objs/fcweb_ccx_module.o`, so it failed with `undefined symbol: PyInit__fcwebccx`);
+that object is now in it.
+
 ## Relinking FreeCAD: two things the link does NOT do for you
 
 1. **Re-apply the GL patches.** Two fixes live only in the linked `FreeCAD.js`, because
