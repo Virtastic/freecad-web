@@ -10,7 +10,7 @@ const click=async(p,l)=>{const bb=await p.evaluate((x)=>{const bs=[...document.q
  const p=(await b.pages())[0];
  p.on('pageerror',e=>{perr++;R.push('  PAGEERR '+String(e.message||e).slice(0,120));});
  p.on('console',m=>{const t=m.text();if(/unreachable|null function|Aborted|RuntimeError/i.test(t)){crash++;R.push('  CRASH '+t.slice(0,120));}});
- await p.goto('http://localhost:8799/index.html',{waitUntil:'domcontentloaded',timeout:200000});
+ await p.goto('http://localhost:8791/index.html',{waitUntil:'domcontentloaded',timeout:200000});
  const t0=Date.now();while(Date.now()-t0<200000){if(await p.evaluate(()=>!!(window.fcInstance&&window.fcInstance._malloc)))break;await sl(500);}
  await runG(p,"import sys\nsys.__stderr__.write('RDY\\n')"); await pw(p,'RDY',180000); await sl(8000);
  const bootErr=perr;
