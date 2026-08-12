@@ -43,6 +43,12 @@ BOUNDS = {
     'coords(3,mi(1))':   ('coords(3,100)',   'mi(1)',   100,  'coords'),
     # mi(3) is the layer count; 8 keeps this local at ~1.3 MB instead of tens of MB
     'field(999,20*mi(3))': ('field(999,160)', 'mi(3)',   8,    'field'),
+    # shell/beam/2D path: gen3dfrom2d expands S3/S4/S6/S8 shells, beams and
+    # plane-stress/strain/axisymmetric elements into solids, so it gates all of them.
+    'neworien(0:norien)': ('neworien(0:1000)', 'norien',  1000, 'neworien'),
+    'pmean1(nfield)':     ('pmean1(100)',      'nfield',  100,  'pmean1'),
+    'pmean2(nfield)':     ('pmean2(100)',      'nfield',  100,  'pmean2'),
+    'yig(nfield,mi(1))':  ('yig(100,100)',     'max(nfield,mi(1))', 100, 'yig'),
 }
 
 # file -> [(array, declaration to replace, allocate expression, bound)]
