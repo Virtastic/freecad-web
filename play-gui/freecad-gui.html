@@ -1136,25 +1136,51 @@ window.fcRunPy = fcRunPy;
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prev);
     }
     var USE_OVERLAY = /[?&]overlay=1/.test(location.search);  // legacy readback path, opt-in only
+
+    // GL state shadow. The per-draw hook below needs the viewport and the bound
+    // framebuffer on EVERY draw call, and getParameter is a synchronous round-trip to the
+    // GPU process: measured at 2 per draw, 2513 of each per orbit and 25% of the wall
+    // clock while dragging EngineBlock (4170 draws/frame on BIMExample). Nothing outside
+    // this page changes these, so track them from the setters and never ask the GPU.
+    var __shVp = new WeakMap(), __shFbo = new WeakMap(), __shDepth = new WeakMap();
+    (function(){
+      var P = WebGL2RenderingContext.prototype;
+      var vp = P.viewport;
+      P.viewport = function(x,y,w,h){ __shVp.set(this,[x,y,w,h]); return vp.apply(this,arguments); };
+      var bf = P.bindFramebuffer;
+      P.bindFramebuffer = function(t,f){
+        // FRAMEBUFFER_BINDING reports the DRAW binding; a READ_FRAMEBUFFER bind (frameBlit)
+        // must not disturb it.
+        if (t===this.FRAMEBUFFER || t===this.DRAW_FRAMEBUFFER) __shFbo.set(this,f||null);
+        return bf.apply(this,arguments);
+      };
+      var en = P.enable, di = P.disable;
+      P.enable  = function(c){ if(c===this.DEPTH_TEST) __shDepth.set(this,true);  return en.apply(this,arguments); };
+      P.disable = function(c){ if(c===this.DEPTH_TEST) __shDepth.set(this,false); return di.apply(this,arguments); };
+    })();
+    // Seed from the real state the first time only: a draw can happen before the app has
+    // called viewport()/bindFramebuffer() at all.
+    function shVp(gl){ var v=__shVp.get(gl); if(!v){ v=gl.getParameter(gl.VIEWPORT); __shVp.set(gl,v); } return v; }
+    function shFbo(gl){ if(!__shFbo.has(gl)) __shFbo.set(gl, gl.getParameter(gl.FRAMEBUFFER_BINDING)); return __shFbo.get(gl); }
+    function shDepth(gl){ if(!__shDepth.has(gl)) __shDepth.set(gl, gl.isEnabled(gl.DEPTH_TEST)); return __shDepth.get(gl); }
     ['drawArrays','drawElements'].forEach(function(nm){
       var orig = WebGL2RenderingContext.prototype[nm];
       WebGL2RenderingContext.prototype[nm] = function(){
         var r = orig.apply(this, arguments);
-        var vp = this.getParameter(this.VIEWPORT);
-        var fbo=this.getParameter(this.FRAMEBUFFER_BINDING);
+        var vp = shVp(this);
+        var fbo = shFbo(this);
         // Depth fix: Qt re-binds its widget FBO mid-render, so the C++ depth clear
         // lands on the wrong buffer → frame 2+ geometry fails the depth test and
         // vanishes (renders once, then blank). The Coin background quad (count=4,
         // depth-test OFF, big viewport) is always the FIRST draw of a frame on the
         // real target — clear depth right after it, on whatever FBO is truly bound.
-        if (nm==='drawArrays' && arguments[2]===4 && fbo && vp && vp[2]>=300 && !this.isEnabled(this.DEPTH_TEST)) {
+        if (nm==='drawArrays' && arguments[2]===4 && fbo && vp && vp[2]>=300 && !shDepth(this)) {
           this.clearDepth(1); this.clear(this.DEPTH_BUFFER_BIT);
         }
         // Coin renders into a DEDICATED offscreen FBO (window.__fcCoinFbo, set by
         // View3DInventorViewer::renderScene); Qt's UI draws go to the default
         // framebuffer (fbo === null). So blit ONLY when a real FBO is bound — that
         // isolates the clean 3D scene and drops the UI entirely (no ghosting).
-        if (fbo && vp) (window.__fboDraws=window.__fboDraws||[]).length<60 && window.__fboDraws.push(vp[2]+'x'+vp[3]);
         // NATIVE COMPOSITE: the C++ now blits Coin's private FBO straight into the
         // QOpenGLWidget's own backing FBO, and Qt's wasm compositor presents it to
         // the page canvas exactly like desktop — no readback, no overlay, no CSS.
