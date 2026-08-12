@@ -1,0 +1,23 @@
+const puppeteer = require('puppeteer-core');
+const fs = require('fs');
+const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const sl = (ms) => new Promise((r) => setTimeout(r, ms));
+const CODE = fs.readFileSync('/tmp/navq.py', 'utf8');
+const run = (p, c) => p.evaluate((c) => { const m = window.fcInstance;
+  const n = new TextEncoder().encode(c).length + 1; const q = m._malloc(n); m.stringToUTF8(c, q, n);
+  (window.fcRunPy || ((mm, pp) => { mm._fcweb_run_python(pp); mm._free(pp); }))(m, q); }, c);
+(async () => {
+  const b = await puppeteer.launch({ executablePath: CHROME, headless: false, defaultViewport: null,
+    args: ['--no-sandbox', '--use-gl=angle', '--use-angle=metal', '--window-size=1200,800'],
+    protocolTimeout: 1200000, userDataDir: '/tmp/fc-navq-' + Date.now() });
+  const p = (await b.pages())[0];
+  await p.goto('http://localhost:8791/index.html', { waitUntil: 'domcontentloaded', timeout: 300000 });
+  const t0 = Date.now();
+  while (Date.now() - t0 < 300000) { if (await p.evaluate(() => !!(window.fcInstance && window.fcInstance._malloc))) break; await sl(1000); }
+  await sl(11000);
+  await run(p, CODE);
+  await sl(2500);
+  const log = await p.evaluate(() => document.getElementById('log').textContent);
+  console.log((log.match(/PARAM [^\n]*/g) || ['(no PARAM line)']).pop());
+  await b.close().catch(() => {}); process.exit(0);
+})().catch((e) => { console.log('DRIVER ' + String(e).slice(0, 200)); process.exit(0); });

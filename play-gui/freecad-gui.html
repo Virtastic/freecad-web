@@ -947,6 +947,22 @@ window.fcRunPy = fcRunPy;
       // BIM workbench: its Activated() shows a first-run 'BIM_Welcome' dialog when
       // FirstTime=True, and modal dialogs need ASYNCIFY (absent) -> emscripten_sleep
       // abort on activation. Mark it seen so BIM activates cleanly.
+      // Navigation style. FreeCAD's default (CAD) binds rotate to a two-button chord and
+      // pan to the middle button -- neither of which a laptop trackpad can produce, so on
+      // the web the default leaves a user able to zoom and select but never to turn the
+      // model around. Gesture navigation rotates on a plain left-drag (verified against the
+      // camera, scratchpad/navstyles.js) and still selects on a click. Only set when the
+      // user has not chosen one: the value persists in the IDBFS home, so an explicit
+      // choice must survive the next boot.
+      // FreeCAD writes 'Gui::CADNavigationStyle' into the user parameters itself, so
+      // "only set when unset" never fires -- apply it once and record that, which leaves
+      // a user who later picks a different style alone on every subsequent boot.
+      "try:",
+      " _vp=_f.ParamGet('User parameter:BaseApp/Preferences/View')",
+      " if not _vp.GetBool('_fcwebNavDefault',False):",
+      "  _vp.SetString('NavigationStyle','Gui::GestureNavigationStyle')",
+      "  _vp.SetBool('_fcwebNavDefault',True)",
+      "except Exception: pass",
       "try:",
       " _f.ParamGet('User parameter:BaseApp/Preferences/Mod/BIM').SetBool('FirstTime',False)",
       "except Exception: pass",
