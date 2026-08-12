@@ -24,22 +24,6 @@ static void unavailable(const char *name, const char *why)
     abort();
 }
 
-/* effectivemodalmass(neq,nactdof,mi,adb,aub,jq,irow,nev,z,co,nk) -- 11 arguments, all by
- * reference, no CHARACTER arguments (so f2c adds no hidden lengths). Called only from
- * arpack.c and arpackcs.c, both C, so there is exactly one arity to match.
- *
- * Blocked by `real*8 x(neq(2)),y(neq(2))`: work arrays sized by the equation count,
- * which is a runtime value in the millions -- no fixed bound is defensible.
- */
-void effectivemodalmass_(void *neq, void *nactdof, void *mi, void *adb, void *aub,
-                         void *jq, void *irow, void *nev, void *z, void *co, void *nk)
-{
-    (void)neq; (void)nactdof; (void)mi; (void)adb; (void)aub;
-    (void)jq; (void)irow; (void)nev; (void)z; (void)co; (void)nk;
-    unavailable("Effective modal mass (frequency analysis)",
-                "It needs runtime-sized local arrays, which FORTRAN 77 cannot express.");
-}
-
 /* Fortran-callable abort used by the generated stubs (tools/ccx_make_stubs.py).
  * f2c passes a hidden length for the character literal, so this takes two parameters.
  */

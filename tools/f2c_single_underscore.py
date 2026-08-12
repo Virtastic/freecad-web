@@ -30,9 +30,12 @@ def renames(fortran_names):
 
 
 def apply(text, table):
+    # Every occurrence, not just call sites: ccx passes routines as arguments
+    # (`dqag_((D_fp)f_k__, ...)`, `matvec_struct__` into dsluom_), and renaming only
+    # `name__(` leaves those bare uses pointing at a name nothing defines any more.
     def sub(m):
-        return table.get(m.group(1), m.group(1)) + '('
-    return re.sub(r'\b(\w+__)\s*\(', sub, text)
+        return table.get(m.group(1), m.group(1))
+    return re.sub(r'\b(\w+__)\b', sub, text)
 
 
 RE_UNIT = re.compile(
@@ -105,6 +108,9 @@ def selftest():
         cn = c_defined_names(pathlib.Path(d))
     assert 'call_external_umat' in cn, cn
     assert renames(cn).get('call_external_umat__') == 'call_external_umat_'
+    t = apply('dqag_((D_fp)f_k__, &a);\ndoublereal f_k__(void){return 0;}\n',
+              {'f_k__': 'f_k_'})
+    assert 'f_k__' not in t and t.count('f_k_') == 2, t
     print('f2c_single_underscore selftest OK')
 
 

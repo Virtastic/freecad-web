@@ -31,6 +31,10 @@ collect() {  # copy sources into one flat dir; f2c resolves INCLUDE relative to 
   for f in "$@"; do [ -f "$f" ] && cp -n "$f" "$BUILD/f77/" 2>/dev/null || true; done
 }
 collect "$A"/UTIL/*.f "$L"/BLAS/SRC/*.f
+# second.f times itself with the ETIME intrinsic, which f2c cannot translate, so it
+# gets stubbed -- and the stub aborts the moment ARPACK starts an eigenvalue solve.
+# arpack-ng ships second_NONE.f for exactly this case; keep that one only.
+rm -f "$BUILD/f77/second.f"
 # double-precision + auxiliary only: drop the c/s/z (complex/single) trees, in both
 # ARPACK and LAPACK. ccx is double-only, and f2c chokes on the complex sources anyway.
 for f in "$A"/SRC/*.f "$L"/SRC/*.f; do

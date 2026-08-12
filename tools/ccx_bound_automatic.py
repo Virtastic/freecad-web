@@ -65,6 +65,68 @@ BOUNDS = {
     'r(k+6)':  ('r(1006)',  'k', 1000, 'r'),
     'ir(k+4)': ('ir(1004)', 'k', 1000, 'ir'),
     'r(k+4)':  ('r(1004)',  'k', 1000, 'r'),
+    # --- mesh-sized locals. Every one of these is `static` (save): at these sizes they
+    # would blow the module stack as true locals, and none of them is recursive.
+    # frequency: effective modal mass, printed for every *FREQUENCY step.
+    'x(neq(2))':      ('x(200000)',      'neq(2)', 200000, 'x',      True),
+    'y(neq(2))':      ('y(200000)',      'neq(2)', 200000, 'y',      True),
+    'part(nev,6)':      ('part(500,6)',      'nev', 500, 'part',      True),
+    'effmodmass(nev,6)':('effmodmass(500,6)','nev', 500, 'effmodmass',True),
+    # Zienkiewicz-Zhu error estimator (*ERROR ESTIMATOR output)
+    'inum(nk)':    ('inum(50000)',    'nk', 50000, 'inum',   True),
+    'members(ne)': ('members(50000)', 'ne', 50000, 'members', True),
+    'scpav(6,nk)': ('scpav(6,50000)', 'nk', 50000, 'scpav',  True),
+    # tetrahedral remeshing / cavity refinement
+    'node(netet)':      ('node(100000)',      'netet', 100000, 'node',      True),
+    'idummy1(netet)':   ('idummy1(100000)',   'netet', 100000, 'idummy1',   True),
+    'idummy2(netet)':   ('idummy2(100000)',   'netet', 100000, 'idummy2',   True),
+    'iparentel(netet)': ('iparentel(100000)', 'netet', 100000, 'iparentel', True),
+    'iecav(netet_)':   ('iecav(50000)',    'netet_', 50000, 'iecav',   True),
+    'ige(netet_)':     ('ige(50000)',      'netet_', 50000, 'ige',     True),
+    'inewel(netet_)':  ('inewel(50000)',   'netet_', 50000, 'inewel',  True),
+    'ifcav(4*netet_)': ('ifcav(200000)',   'netet_', 50000, 'ifcav',   True),
+    'ig(4*netet_)':    ('ig(200000)',      'netet_', 50000, 'ig',      True),
+    'incav(4,netet_)': ('incav(4,50000)',  'netet_', 50000, 'incav',   True),
+    'ikboun(nktet)':   ('ikboun(50000)',   'nktet',  50000, 'ikboun',  True),
+    'ikcav(nktet)':    ('ikcav(50000)',    'nktet',  50000, 'ikcav',   True),
+    'qualnod(nktet)':  ('qualnod(100000)', 'nktet', 100000, 'qualnod', True),
+    'iperm(3*nk)':     ('iperm(300000)',   'nk',    100000, 'iperm',   True),
+    # crack propagation: the front is a curve through the mesh, far smaller than the mesh
+    'x(nfront)':  ('x(20000)',  'nfront', 20000, 'x',  True),
+    'y(nfront)':  ('y(20000)',  'nfront', 20000, 'y',  True),
+    'z(nfront)':  ('z(20000)',  'nfront', 20000, 'z',  True),
+    'x0(nfront)': ('x0(20000)', 'nfront', 20000, 'x0', True),
+    'y0(nfront)': ('y0(20000)', 'nfront', 20000, 'y0', True),
+    'z0(nfront)': ('z0(20000)', 'nfront', 20000, 'z0', True),
+    'nx(nfront)': ('nx(20000)', 'nfront', 20000, 'nx', True),
+    'ny(nfront)': ('ny(20000)', 'nfront', 20000, 'ny', True),
+    'nz(nfront)': ('nz(20000)', 'nfront', 20000, 'nz', True),
+    'neighbor(nfronteq)': ('neighbor(20000)', 'nfronteq', 20000, 'neighbor', True),
+    # CFD face interpolation: numpts is the point count on one face pair
+    'ibin(numpts)': ('ibin(10000)', 'numpts', 10000, 'ibin', True),
+    'ip(numpts)':   ('ip(10000)',   'numpts', 10000, 'ip',   True),
+    'list(numpts)': ('list(10000)', 'numpts', 10000, 'list', True),
+    'coi(2,numpts+3)':      ('coi(2,10003)',      'numpts', 10000, 'coi',      True),
+    'x(2*numpts+1)':        ('x(20001)',          'numpts', 10000, 'x',        True),
+    'y(2*numpts+1)':        ('y(20001)',          'numpts', 10000, 'y',        True),
+    'xo(2*numpts+1)':       ('xo(20001)',         'numpts', 10000, 'xo',       True),
+    'yo(2*numpts+1)':       ('yo(20001)',         'numpts', 10000, 'yo',       True),
+    'nx(2*numpts+1)':       ('nx(20001)',         'numpts', 10000, 'nx',       True),
+    'ny(2*numpts+1)':       ('ny(20001)',         'numpts', 10000, 'ny',       True),
+    'cg(2,2*numpts+1)':     ('cg(2,20001)',       'numpts', 10000, 'cg',       True),
+    'straight(9,2*numpts+1)':('straight(9,20001)','numpts', 10000, 'straight', True),
+    'koncont(3,2*numpts+1)':('koncont(3,20001)',  'numpts', 10000, 'koncont',  True),
+    'imastop(3,2*numpts+1)':('imastop(3,20001)',  'numpts', 10000, 'imastop',  True),
+    # least-squares patch fit (sensitivity/optimisation): a patch, not a mesh
+    'rv1(ipoints)':      ('rv1(300)',      'ipoints', 300, 'rv1',  True),
+    'pdat(ipoints,6)':   ('pdat(300,6)',   'ipoints', 300, 'pdat', True),
+    'z(ipoints,ipoints)':('z(300,300)',    'ipoints', 300, 'z',    True),
+    'pwrk(iterms)':      ('pwrk(100)',     'iterms',  100, 'pwrk', True),
+    'pp(ipoints,iterms)':('pp(300,100)',   [('ipoints',300),('iterms',100)], 300, 'pp',  True),
+    'pre(ipoints,iterms)':('pre(300,100)', [('ipoints',300),('iterms',100)], 300, 'pre', True),
+    # radiation view factors: ng is the integration order, tiny
+    'xy(ng)': ('xy(1000)', 'ng', 1000, 'xy'),
+    'turbini(0:mi(2))': ('turbini(0:20)', 'mi(2)', 20, 'turbini'),
 }
 
 # file -> [(array, declaration to replace, allocate expression, bound)]

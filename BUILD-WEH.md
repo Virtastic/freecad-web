@@ -184,22 +184,12 @@ Verify live: `curl -sI https://freecad.virtastic.app/FreeCAD.wasm` — the
    Running it by hand afterwards is NOT equivalent to emcc's own post-link pipeline;
    relink instead.
 
-### Known-broken: relinking from a clean tree
+### Resolved: "relinking from a clean tree is broken"
 
-As of 2026-08-11 a relink of this tree reproduces a binary in which
-`FreeCAD.newDocument()` never returns, while the shipped `build-20260810-gmsh`
-artifacts work. This was isolated with `scratchpad/ccxe2e/probe.js`, which runs small
-Python snippets one at a time:
-
-| build | newDocument |
-| --- | --- |
-| release build-20260810-gmsh | works |
-| relink + CalculiX bridge | hangs |
-| relink, no CalculiX at all | hangs |
-| relink, original .py files | hangs |
-
-So it is the relink itself, not any particular change. The link inputs on disk are
-unchanged since the release (no `.a` is newer), and `FreeCAD.js` is byte-identical to
-the released one once the preload manifest and the GL patches are accounted for --
-which points at the recorded link line in `scratchpad/linkcmds/` not being what
-actually produced the release. **Resolve this before relinking for a release.**
+Recorded here for a while as an unexplained defect -- a relink produced a binary where
+`FreeCAD.newDocument()` never returned, while the released artifacts worked. It was not
+the relink. A clean relink reproduces the release **byte for byte** (both the `.wasm`
+and the `.data` md5 match). What the relink drops is the 27 hand-applied patches in
+`FreeCAD.js`, which is what point 1 above is about; without them the GL emulation throws
+during the first document's viewport setup and the call never comes back. Run
+`tools/patch-freecad-js.py` after every link and there is nothing else to resolve.

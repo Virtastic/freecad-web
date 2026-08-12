@@ -31,6 +31,8 @@ mkdir -p "$BUILD/f77"
 for f in "$CCX"/*.f; do
   python3 "$ROOT/tools/f77ify.py" "$f" "$BUILD/f77/$(basename "$f")"
 done
+# already F77; f77ify rewrites maxval/sum into calls on these
+cp "$ROOT/bridge/ccx_reductions.f" "$BUILD/f77/"
 
 cd "$BUILD/f77"
 nf=0
@@ -136,9 +138,15 @@ fi
 
 nc=0; failed=0
 compile() {  # $1=source $2=objname
-  if emcc $CFLAGS -c "$1" -o "$BUILD/obj/$2.o" 2>>"$BUILD/compile-errors.log"; then
-    return 0
-  fi
+  # Retry once. A failure with nothing on stderr is emcc being killed under memory
+  # pressure, not a real error -- and a CC-FAIL silently stubs the routine, so twelve
+  # of them (subspace, e_c3d_rhs_th, stop ...) were being dropped from one build and
+  # not the next. A genuine error fails twice and still gets reported.
+  for attempt in 1 2; do
+    if emcc $CFLAGS -c "$1" -o "$BUILD/obj/$2.o" 2>>"$BUILD/compile-errors.log"; then
+      return 0
+    fi
+  done
   echo "CC-FAIL $1" >> "$BUILD/UNCONVERTED.txt"; return 1
 }
 

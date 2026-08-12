@@ -530,7 +530,7 @@ RE_SECTION_ASSIGN = re.compile(
     r'^(\s*)([a-z]\w*)\(([^()]*:[^()]*)\)\s*=\s*(\S.*)$', re.I)
 
 
-def section_assignments(code, counter, skip=()):
+def section_assignments(code, counter, skip=(), dims=None):
     """`field(1:nfield,1:20)=0.d0` -> nested DO loops. Only explicit lo:hi
     bounds; a bare `:` would need the declaration, which is not available here."""
     m = RE_SECTION_ASSIGN.match(code)
@@ -551,7 +551,14 @@ def section_assignments(code, counter, skip=()):
         if ':' in part:
             lo, hi = [x.strip() for x in part.split(':', 1)]
             if not lo or not hi:
-                return None              # bare ':' -- needs the declared bounds
+                # bare ':' -- take the extent from the declaration
+                decl = (dims or {}).get(m.group(2).lower())
+                axis = len(idx)
+                if not decl or axis >= len(decl):
+                    return None
+                d = decl[axis].strip()
+                lo, hi = (d.split(':', 1) if ':' in d else ('1', d))
+                lo, hi = lo.strip(), hi.strip()
             var = 'i_fcw%d' % next(counter)
             loops.append((var, lo, hi))
             idx.append(var)
@@ -596,7 +603,389 @@ def declare_generated(lines):
     return lines
 
 
+
+def wrap_long_lines(lines):
+    """Fold code lines past column 72 onto continuations.
+
+    Every rewrite here can lengthen a line -- `exit` becoming `goto 8012` pushed one
+    of rhsnodef's deeply indented statements to 77 columns, where fixed form simply
+    drops the tail. Breaks are chosen outside string literals; a line with no safe
+    break point is left alone rather than corrupted.
+    """
+    out = []
+    for l in lines:
+        if l[:1] in 'cC*!' or not l.strip():
+            out.append(l)
+            continue
+        if len(l) <= 72:
+            out.append(l)
+            continue
+        cur = l
+        while len(cur) > 72:
+            cut, quote = -1, None
+            for i, ch in enumerate(cur[:72]):
+                if quote:
+                    if ch == quote:
+                        quote = None
+                    continue
+                if ch in '"\'':
+                    quote = ch
+                elif i > 6 and ch in ' ,+-*/=()':
+                    cut = i + 1 if ch == ',' else i
+            if cut <= 6:
+                break                      # nothing safe to break on
+            out.append(cur[:cut])
+            cur = '     &' + cur[cut:].lstrip()
+        out.append(cur)
+    return out
+
+
+
+RE_ARRAY_DECL = re.compile(
+    r'^\s*(?:real|integer|logical|complex|double\s+precision)\s*(?:\*\s*\d+)?\s*(?:::)?\s*(.*)$',
+    re.I)
+
+
+def declared_dims(lines):
+    """name -> list of dimension strings, from the file's own declarations.
+
+    Needed for `x(:,:)=0.d0`: a bare ':' carries no bounds, so the only place to learn
+    the extent is the declaration.
+    """
+    dims = {}
+    for stmt, _ in join_continuations(lines):
+        if stmt is None or not is_declaration(stmt[5:]):
+            continue
+        m = RE_ARRAY_DECL.match(stmt[5:])
+        if not m:
+            continue
+        for part in split_top(m.group(1)):
+            dm = re.match(r'\s*([A-Za-z]\w*)\s*\((.*)\)\s*$', part.strip(), re.S)
+            if dm and ':' not in dm.group(2):
+                dims.setdefault(dm.group(1).lower(), split_top(dm.group(2)))
+    return dims
+
+
+
+# --- F90 ALLOCATABLE --------------------------------------------------------
+# f2c has no dynamic memory. Each allocatable becomes a fixed-size array in STATIC
+# storage (they are mesh-sized, so the stack is not an option), and the ALLOCATE
+# statement becomes the bounds check -- that is the point where the real extent is
+# finally known, so exceeding it stops the run instead of overrunning the array.
+ALLOC_BOUND = 200000
+# Only the LAST dimension gets the mesh-sized bound. `allocate(thickecp(mi(3),nkon))`
+# with ALLOC_BOUND on both is 4e10 elements, which clang rejects outright; the leading
+# dimensions of ccx's allocatables are always small per-element counts (layers, DOF).
+# Both still get a guard, so an underestimate stops the run.
+ALLOC_MINOR_BOUND = 20
+
+RE_ALLOCATABLE_DECL = re.compile(
+    r'^\s*((?:real|integer|logical|complex|double\s+precision)\s*(?:\*\s*\d+)?)\s*,\s*'
+    r'dimension\s*\(\s*(:(?:\s*,\s*:)*)\s*\)\s*,\s*allocatable\s*::\s*(.+)$', re.I)
+RE_ALLOCATE = re.compile(r'^\s*(de)?allocate\s*\((.*)\)\s*$', re.I)
+
+
+def _alloc_dims(text, name):
+    """Dimensions from the first `allocate(name(...))` for this array."""
+    for m in re.finditer(r'\ballocate\s*\(', text, re.I):
+        inner = text[m.end():]
+        depth, j = 1, 0
+        while j < len(inner) and depth:
+            if inner[j] == '(':
+                depth += 1
+            elif inner[j] == ')':
+                depth -= 1
+            j += 1
+        for item in split_top(inner[:j - 1]):
+            im = re.match(r'\s*([A-Za-z]\w*)\s*\((.*)\)\s*$', item.strip(), re.S)
+            if im and im.group(1).lower() == name:
+                return split_top(im.group(2))
+    return None
+
+
+def expand_allocatables(text):
+    """Turn F90 allocatables into bounded static arrays plus a guard."""
+    if 'allocatable' not in text.lower():
+        return text
+    lines = text.splitlines()
+    info = {}
+    for stmt, _ in join_continuations(lines):
+        if stmt is None:
+            continue
+        m = RE_ALLOCATABLE_DECL.match(stmt[5:])
+        if not m:
+            continue
+        for nm in split_top(m.group(3)):
+            nm = nm.strip().lower()
+            dims = _alloc_dims(text, nm)
+            if not dims or len(dims) != m.group(2).count(':'):
+                return text          # cannot see the extent: leave it to the stub
+            fixed, guards = [], []
+            for k, d in enumerate(dims):
+                d = d.strip()
+                if re.fullmatch(r'\d+', d):
+                    fixed.append(d)          # already a literal
+                    continue
+                last = k == len(dims) - 1
+                fixed.append(str(ALLOC_BOUND if last else ALLOC_MINOR_BOUND))
+                guards.append((d, ALLOC_BOUND if last else ALLOC_MINOR_BOUND))
+            info[nm] = (m.group(1).strip(), fixed, guards)
+    if not info:
+        return text
+
+    out = []
+    for raw in lines:
+        lab, cont, code, is_c = split_fixed(raw)
+        if is_c or not raw.strip():
+            out.append(raw)
+            continue
+        stripped = code.strip()
+        m = RE_ALLOCATABLE_DECL.match(stripped)
+        if m:
+            for nm in split_top(m.group(3)):
+                nm = nm.strip().lower()
+                typ, fixed, _ = info[nm]
+                out.append('      %s %s(%s)' % (typ, nm, ','.join(fixed)))
+                out.append('      save %s' % nm)
+            continue
+        a = RE_ALLOCATE.match(stripped)
+        if a:
+            if a.group(1):                    # deallocate: nothing to release
+                out.append('      continue')
+                continue
+            emitted = False
+            for item in split_top(a.group(2)):
+                im = re.match(r'\s*([A-Za-z]\w*)\s*\(', item.strip())
+                if not im or im.group(1).lower() not in info:
+                    continue
+                for g, bound in info[im.group(1).lower()][2]:
+                    out.extend(wrap_long_lines(
+                        ['      if((%s).gt.%d) then' % (g, bound)]))
+                    out.append("         write(*,*) '*ERROR: array too large for the'")
+                    out.append("         write(*,*) '        WebAssembly build'")
+                    out.append('         call exit(201)')
+                    out.append('      endif')
+                emitted = True
+            out.append('      continue' if not emitted else '      continue')
+            continue
+        out.append(raw)
+    return '\n'.join(out) + '\n'
+
+
+
+def sink_data_statements(text):
+    """Move DATA below the declarations it follows.
+
+    ccx interleaves them -- `real*8 cd_tab(12)` / `data cd_tab /.../` / `real*8
+    p2p1_tab(19)` / `data ...`. F90 permits that; FORTRAN 77 wants every declaration
+    before any DATA. Moving DATA later is always safe (it may not precede the
+    declaration of what it initialises), so the whole prologue's DATA is emitted at
+    the end of the prologue, in order.
+    """
+    lines = text.splitlines()
+    head, data, tail = [], [], []
+    in_prologue = True
+    for stmt, owned in join_continuations(lines):
+        if not in_prologue:
+            tail.extend(owned)
+            continue
+        if stmt is None:
+            (head if not data else data).extend(owned)
+            continue
+        body = stmt[5:].strip().lower()
+        if re.match(r'data\s*[(\w]', body):
+            data.extend(owned)
+            continue
+        if (is_declaration(stmt[5:]) or not body
+                or body.startswith(('subroutine', 'function', 'entry'))
+                or re.match(r'^[a-z]+\s+function\b', body)):
+            head.extend(owned)
+            continue
+        in_prologue = False
+        tail.extend(owned)
+    if not data:
+        return text
+    return '\n'.join(head + data + tail) + '\n'
+
+
+
+# OpenMP: the wasm build is single-threaded and `c$omp` directives are already comments,
+# so the module use and its header are dead weight that f2c cannot parse.
+RE_OMP_LINE = re.compile(
+    r'^\s{5,}(use\s+omp_lib\b.*|include\s*[\'"]omp_lib\.h[\'"].*)$', re.I | re.M)
+# INTENT as a free-standing statement (ccx writes `intent(in) a,b`) carries no meaning
+# for f2c's output; the argument is passed by reference either way.
+RE_INTENT_STMT = re.compile(r'^\s{5,}intent\s*\((in|out|inout)\)\s.*$', re.I | re.M)
+
+# `integer iexpbr1(2) /11,11/` -- an F90 initialiser inside a type declaration.
+RE_DECL_INIT = re.compile(r'(\b[a-z]\w*(?:\([^()]*\))?)\s*(/[^/]*/)')
+
+
+def split_decl_initialisers(text):
+    """`integer n(2) /11,11/` -> the declaration plus a separate DATA statement.
+
+    Runs before sink_data_statements, which then puts the DATA where F77 wants it.
+    """
+    out = []
+    for stmt, owned in join_continuations(text.splitlines()):
+        if (stmt is None or not is_declaration(stmt[5:]) or '/' not in stmt
+                or stmt[5:].strip().lower().startswith(('data ', 'common'))):
+            out.extend(owned)
+            continue
+        inits = RE_DECL_INIT.findall(stmt[5:])
+        if not inits:
+            out.extend(owned)
+            continue
+        stripped = RE_DECL_INIT.sub(r'\1', stmt)
+        out.extend(wrap_long_lines([stripped]))
+        for name, values in inits:
+            out.extend(wrap_long_lines(
+                ['      data %s %s' % (name.split('(')[0], values)]))
+    return '\n'.join(out) + '\n'
+
+
+RE_MAXVAL = re.compile(r'\bmaxval\s*\(\s*([a-z]\w*)\s*\)', re.I)
+RE_SUMABS = re.compile(
+    r'\bsum\s*\(\s*abs\s*\(\s*([a-z]\w*)\s*\(\s*:\s*,((?:[^()]|\([^()]*\))*)\)\s*\)\s*\)',
+    re.I)
+
+
+def expand_reductions(text, dims):
+    """F90 whole-array reductions -> calls into the Fortran runtime.
+
+    `maxval(edgelength)` and `sum(abs(g(:,j)))` are the only two shapes ccx uses. Both
+    become a length plus a first element, which is exact for `(:,j)` because Fortran is
+    column-major, so a column IS contiguous. Anything whose length cannot be read off the
+    declaration is left alone -- f2c then fails loudly rather than guessing a size.
+    """
+    used = set()
+
+    def sizeof(name):
+        d = dims.get(name.lower())
+        return '*'.join(d) if d else None
+
+    def rows(name):
+        d = dims.get(name.lower())
+        return d[0] if d and len(d) == 2 else None
+
+    out = []
+    for line in text.splitlines():
+        label, cont, code, is_comment = split_fixed(line)
+        if is_comment or not code:
+            out.append(line)
+            continue
+
+        def mx(m):
+            n = sizeof(m.group(1))
+            if not n:
+                return m.group(0)
+            used.add('fcwmxv')
+            return 'fcwmxv(%s,%s)' % (m.group(1), n)
+
+        def sm(m):
+            n = rows(m.group(1))
+            if not n:
+                return m.group(0)
+            used.add('fcwsab')
+            return 'fcwsab(%s(1,%s),%s)' % (m.group(1), m.group(2).strip(), n)
+
+        new = RE_SUMABS.sub(sm, RE_MAXVAL.sub(mx, code))
+        if new == code:
+            out.append(line)
+        else:
+            out.extend(wrap_long_lines([line[:6] + new]))
+    if not used:
+        return text
+    return _insert_decls('\n'.join(out) + '\n', sorted(used))
+
+
+def _insert_decls(text, names):
+    """Declare the reduction helpers just after the last existing declaration."""
+    out, done, buf = [], False, ['      real*8 ' + n for n in names]
+    stmts = list(join_continuations(text.splitlines()))
+    for i, (stmt, owned) in enumerate(stmts):
+        out.extend(owned)
+        if done or stmt is None:
+            continue
+        # after the FIRST declaration, not the last: ccx's `include "gauss.f"` brings
+        # DATA with it, and anything after that include is "declaration after DATA".
+        if is_declaration(stmt[5:]):
+            out.extend(buf)
+            done = True
+    return '\n'.join(out if done else buf + out) + '\n'
+
+
+
+RE_TRAILING_SEMI = re.compile(r';\s*$')
+
+
+def strip_inline_comments(text):
+    """Drop `! ...` tails and trailing `;` from code lines.
+
+    Both are F90. The comment matters beyond tidiness: a rewrite that lengthens the
+    statement pushes the comment past column 72, and folding it produces a continuation
+    line made of prose (relaxval_al). Quotes are tracked so a `!` inside a string stays.
+    """
+    out = []
+    quote = None            # carries across continuations: ccx has a string that opens
+    for line in text.splitlines():   # on one line and holds a `!` on the next
+        label, cont, code, is_comment = split_fixed(line)
+        if is_comment or not code:
+            out.append(line)
+            continue
+        if not is_cont_line(cont):
+            quote = None
+        cut = -1
+        for i, ch in enumerate(code):
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in '"\'':
+                quote = ch
+            elif ch == '!':
+                cut = i
+                break
+        new = code[:cut] if cut >= 0 else code
+        new = RE_TRAILING_SEMI.sub('', new)
+        if new.strip() == '' and cut >= 0:
+            out.append('C' + line[1:6] + code)
+            continue
+        out.append(line[:6] + new.rstrip() if new != code else line)
+    return '\n'.join(out) + '\n'
+
+
+
+# A sequence field is a bare tag: letters, digits, spaces. Requiring that (and a space
+# at column 72) keeps this off code that ccx_bound_automatic's longer array bounds
+# pushed past the margin -- truncating there silently renamed zienzhu's `maxcommon`.
+RE_SEQ_FIELD = re.compile(r'^[A-Za-z0-9 ]*$')
+
+
+def truncate_sequence_field(text):
+    """Drop columns 73+ of the *input*.
+
+    Fixed form ends code at column 72; hybsvd (netlib) keeps card sequence numbers
+    past it, and folding `GRS   10` onto a continuation splices it into an argument
+    list. This runs on the source only -- lines this tool generates are wrapped by
+    wrap_long_lines, which must keep everything it is given.
+    """
+    out = []
+    for l in text.splitlines():
+        seq = (len(l) > 72 and l[:1] not in 'cC*!' and l[71].isspace()
+               and RE_SEQ_FIELD.match(l[72:]))
+        out.append(l[:72].rstrip() if seq else l)
+    return '\n'.join(out) + '\n'
+
+
 def convert(text):
+    text = truncate_sequence_field(text)
+    text = strip_inline_comments(text)
+    text = RE_OMP_LINE.sub('C     omp removed', text)
+    text = RE_INTENT_STMT.sub('C     intent removed', text)
+    text = split_decl_initialisers(text)
+    text = expand_reductions(text, declared_dims(text.splitlines()))
+    text = expand_allocatables(text)
+    text = sink_data_statements(text)
     text = hoist_includes(text)
     text = RE_FLUSH.sub(r'\1continue', text)
     text = RE_OPEN_POSITION.sub(r"\1access=", text)
@@ -608,6 +997,7 @@ def convert(text):
     import itertools
     seccount = itertools.count(1)
     charnames = character_names(lines)
+    arraydims = declared_dims(lines)
 
     def new_label():
         while counter[0] in taken:
@@ -632,7 +1022,9 @@ def convert(text):
             out.append(raw)
             continue
 
-        code = strip_bang(code)
+        # strip_inline_comments already did this, and it tracks quotes ACROSS
+        # continuations -- doing it again per-line would eat the `!'` that closes
+        # zeta_calc's warning string on the following line.
         if not code.strip():
             # line was only a trailing comment
             if label.strip() or cont not in (' ', '0'):
@@ -646,7 +1038,7 @@ def convert(text):
         # would silently change the array's declared bounds.
         if (not is_cont_line(cont) and RE_SECTION.search(code)
                 and not is_declaration(code)):
-            expanded = section_assignments(code, seccount, charnames)
+            expanded = section_assignments(code, seccount, charnames, arraydims)
             if expanded is not None:
                 out.extend(expanded)
                 continue
@@ -749,7 +1141,7 @@ def convert(text):
 
         out.append(label + cont + code)
 
-    return '\n'.join(declare_generated(out)) + '\n'
+    return '\n'.join(wrap_long_lines(declare_generated(out))) + '\n'
 
 
 def pick_frame(stack, name):
@@ -840,6 +1232,78 @@ def selftest():
     assert is_declaration('  integer x(2)') and not is_declaration('call f(x(1:3,k))')
     dec = conv(["real*8 a(3),voldl(0:mi(2),8)"])
     assert 'voldl(0:mi(2),8)' in dec, dec
+    long_l = ' ' * 39 + 'if(ikactmech(idm).eq.jdof-1) goto 8012'
+    w = wrap_long_lines([long_l])
+    assert all(len(x) <= 72 for x in w), [len(x) for x in w]
+    assert w[1].startswith('     &'), w
+    assert ''.join(x[6:] if x.startswith('     &') else x for x in w).replace(' ', '') \
+        == long_l.replace(' ', ''), w
+    # a line with no safe break point is left intact rather than mangled
+    nobreak = '      ' + 'a' * 80
+    assert wrap_long_lines([nobreak]) == [nobreak]
+    dd = declared_dims(['      real*8 tm(4,6),other(3)'])
+    assert dd['tm'] == ['4', '6'], dd
+    bare = section_assignments('      tm(:,:) = 0.d0', c, (), dd)
+    assert bare is not None and sum('do i_fcw' in l for l in bare) == 2, bare
+    assert any('1,4' in l for l in bare) and any('1,6' in l for l in bare), bare
+    # still declined when the declaration is unknown
+    assert section_assignments('      zz(:,:)=0.d0', c, (), dd) is None
+    al = expand_allocatables('\n'.join([
+        '      integer,dimension(:),allocatable::koncp',
+        '      allocate(koncp(nkon))',
+        '      koncp(1)=2',
+        '      deallocate(koncp)']))
+    assert 'integer koncp(200000)' in al and 'save koncp' in al, al
+    assert '(nkon).gt.200000' in al and 'deallocate' not in al, al
+    # a literal dimension is preserved rather than blown up to the bound
+    al2 = expand_allocatables('\n'.join([
+        '      integer,dimension(:,:),allocatable::iponorcp',
+        '      allocate(iponorcp(2,nkon))']))
+    assert 'iponorcp(2,200000)' in al2, al2
+    sk = sink_data_statements('\n'.join([
+        '      subroutine t()',
+        '      real*8 a(2)',
+        '      data a /1.d0,2.d0/',
+        '      real*8 b(2)',
+        '      data b /3.d0,4.d0/',
+        '      x=1',
+        '      end']))
+    sl = [l.strip() for l in sk.strip().split('\n')]
+    assert sl.index('real*8 b(2)') < sl.index('data a /1.d0,2.d0/'), sl
+    assert sl.index('data b /3.d0,4.d0/') < sl.index('x=1'), sl
+    im = sink_data_statements('\n'.join([
+        '      subroutine u()', '      DATA((z(i,j),i=1,2),j=1,2) /1,2,3,4/',
+        '      real*8 z(2,2)', '      end']))
+    assert im.index('real*8 z(2,2)') < im.index('DATA(('), im
+    assert sl.index('data a /1.d0,2.d0/') < sl.index('data b /3.d0,4.d0/'), 'order kept'
+    di = split_decl_initialisers(
+        '      subroutine t()\n      integer iexpbr1(2) /11,11/\n      end\n')
+    assert 'iexpbr1(2)' in di and 'data iexpbr1 /11,11/' in di, di
+    assert '/11,11/' not in di.split('data')[0], di
+    keep = '      subroutine t()\n      integer q(2)\n      data q /4,3/\n      end\n'
+    assert split_decl_initialisers(keep).count('/4,3/') == 1, 'DATA is not a declaration'
+    rd = expand_reductions('      hmax=maxval(edge)\n', {'edge': ['6']})
+    assert 'fcwmxv(edge,6)' in rd, rd
+    assert 'real*8 fcwmxv' in rd, rd
+    rs = expand_reductions('      d=sum(abs(g(:,i)))\n', {'g': ['n', 'm']})
+    assert 'fcwsab(g(1,i),n)' in rs, rs
+    assert 'maxval(z)' in expand_reductions('      a=maxval(z)\n', {}), 'no dims: leave'
+    seq = truncate_sequence_field('      SUBROUTINE G(A, B, C,' + ' ' * 45 + 'GRS   10')
+    assert 'GRS' not in seq and 'SUBROUTINE G(A, B, C,' in seq, seq
+    over = '     & jj,mi(*),ii,ncount,nope,itypflag,inum(50000),nen(3,8),maxcommon,'
+    assert truncate_sequence_field(over).strip() == over.strip(), 'code is not a seq field'
+    ic = strip_inline_comments('      x=1 ! note\n      call f(a);\n      y="a!b"\n')
+    assert '! note' not in ic and ic.count(';') == 0 and '"a!b"' in ic, ic
+    cont2 = strip_inline_comments(
+        "      write(*,*) 'warning: reynolds outside\n     & valid range !'\n")
+    assert cont2.count(chr(39)) == 2, cont2
+    al = expand_allocatables('\n'.join([
+        '      subroutine t(mi,nkon)',
+        '      real*8,dimension(:,:),allocatable::thickecp',
+        '      allocate(thickecp(mi(3),nkon))',
+        '      deallocate(thickecp)', '      end']))
+    assert 'thickecp(20,200000)' in al, al
+    assert '(mi(3)).gt.20' in al and '(nkon).gt.200000' in al, al
     print('f77ify selftest OK')
 
 
