@@ -166,6 +166,9 @@ PATCHES = [
         'glEnd clears a stale ARRAY_BUFFER binding',
         'GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);GLImmediate.flush();',
         'GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}GLImmediate.flush();',
+        # line batching inserts between this clause and flush(), so the whole
+        # replacement no longer appears contiguously -- detect the clause itself
+        'if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}',
     ),
     (
         'glMaterialfv: EMISSION and AMBIENT_AND_DIFFUSE',
@@ -215,6 +218,42 @@ def apply(text, _passes=3):
     return _apply_once(text)
 
 
+# ---- immediate-mode line batching -------------------------------------------------
+# Coin draws every EDGE as its own glBegin(GL_LINE_STRIP)/glEnd. On BIMExample that is
+# 80,030 of 86,122 draws -- 93 percent -- each carrying a full bufferSubData + attribute
+# setup + draw + teardown, and the frame is draw-call bound (a CPU profile shows the main
+# thread 68 percent IDLE). Deferring a two-vertex block so the next identical one appends
+# to the same accumulator, then flushing once as GL_LINES, takes the heavy scene from
+# ~4100 draws and ~10 fps to ~470 draws and 21-34 fps, p95 frame 119 ms -> 20 ms.
+#
+# THE ONE COST, measured and deliberate: GL_LINE_STRIP(2) and GL_LINES(2) do NOT
+# rasterise identically on ANGLE/Metal. 128 pixels of 4,032,000 shift by one from the
+# mode conversion ALONE, with zero batching -- proved by disabling the merge and keeping
+# the conversion. Merging brings it to 279, i.e. 0.0069 percent, confined to hairline
+# axis markers and leader lines which stay present and legible. No geometry, dimension or
+# measurement is affected. ?nomerge=1 turns it off at runtime.
+# Pixel-identical batching would need indexed draws with PRIMITIVE_RESTART so the
+# primitive stays a real LINE_STRIP; that is the path if those 279 pixels ever matter.
+#
+# The merge key covers everything renderer.prepare() applies late (both matrices by
+# CONTENT not just version, material and lighting state), a block that turns out to have
+# more than two vertices is split back out, and a deferred block tears down exactly like
+# an undeferred one -- each of those was a real bug found by pixel diff.
+OLD_END_MERGE = 'var _glEnd=()=>{GLImmediate.prepareClientAttributes(GLImmediate.rendererComponents[GLImmediate.VERTEX],true);GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}GLImmediate.flush();GLImmediate.disableBeginEndClientAttributes();GLImmediate.mode=-1;GLImmediate.enabledClientAttributes=GLImmediate.enabledClientAttributes_preBegin;GLImmediate.clientAttributes=GLImmediate.clientAttributes_preBegin;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true}'
+NEW_END_MERGE = 'GLImmediate.__mrgN=0;GLImmediate.__mrgPend=false;GLImmediate.__mrgPrevVC=0;GLImmediate.__mrgSnap=null;GLImmediate.__mrgOn=!/[?&]nomerge=1/.test(location.search);globalThis.__GLI=GLImmediate;GLImmediate.__mrgPrev=new Float64Array(128);GLImmediate.__mrgHave=false;GLImmediate.__mrgCmp=function(commit){var E=(typeof GLEmulation!=="undefined")?GLEmulation:null;var a=GLImmediate.__mrgPrev,n=0,same=GLImmediate.__mrgHave,v,i,j;function put(x){x=+x||0;if(a[n]!==x){same=false;if(commit)a[n]=x}n++}put(GLImmediate.matrixVersion[0]);put(GLImmediate.matrixVersion[1]);for(i=0;i<2;i++){v=GLImmediate.matrix[i];if(v)for(j=0;j<16;j++)put(v[j])}if(E){put(E.lightingEnabled?1:0);put(E.lightModelTwoSide);var ks=["materialAmbient","materialDiffuse","materialEmission","materialSpecular","materialShininess","lightModelAmbient"];for(i=0;i<ks.length;i++){v=E[ks[i]];if(v)for(j=0;j<v.length;j++)put(v[j])}if(E.lightEnabled)for(i=0;i<E.lightEnabled.length;i++)put(E.lightEnabled[i]?1:0)}if(commit)GLImmediate.__mrgHave=true;return same};GLImmediate.__mf=function(){if(GLImmediate.__mrgPend)GLImmediate.__flushMerged()};GLImmediate.__flushMerged=()=>{if(!GLImmediate.__mrgPend)return;var S=GLImmediate.__mrgSnap;GLImmediate.__mrgPend=false;GLImmediate.__mrgN=0;GLImmediate.__mrgSnap=null;GLImmediate.__mrgHave=false;var kCA=GLImmediate.clientAttributes,kECA=GLImmediate.enabledClientAttributes,kRC=GLImmediate.rendererComponents,kMode=GLImmediate.mode,kStride=GLImmediate.stride;GLImmediate.clientAttributes=S.ca;GLImmediate.enabledClientAttributes=S.eca;GLImmediate.rendererComponents=S.rc;GLImmediate.stride=S.stride;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);GLImmediate.mode=1;GLImmediate.flush();GLImmediate.disableBeginEndClientAttributes();GLImmediate.clientAttributes=kCA;GLImmediate.enabledClientAttributes=kECA;GLImmediate.rendererComponents=kRC;GLImmediate.stride=kStride;GLImmediate.mode=kMode;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;GLImmediate.vertexCounter=0;GLImmediate.__mrgPrevVC=0};var _glEnd=()=>{GLImmediate.prepareClientAttributes(GLImmediate.rendererComponents[GLImmediate.VERTEX],true);GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}if(GLImmediate.__mrgOn&&GLImmediate.mode===3&&GLImmediate.stride&&!(typeof GLEmulation!=="undefined"&&GLEmulation.lightingEnabled)&&(GLImmediate.vertexCounter-GLImmediate.__mrgPrevVC)/(GLImmediate.stride>>2)===2){GLImmediate.__mrgPend=true;GLImmediate.__mrgN++;GLImmediate.__mrgSnap={ca:GLImmediate.clientAttributes,eca:GLImmediate.enabledClientAttributes,rc:GLImmediate.rendererComponents,stride:GLImmediate.stride};GLImmediate.__mrgCmp(true);GLImmediate.disableBeginEndClientAttributes();GLImmediate.mode=-1;GLImmediate.enabledClientAttributes=GLImmediate.enabledClientAttributes_preBegin;GLImmediate.clientAttributes=GLImmediate.clientAttributes_preBegin;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;return;}if(GLImmediate.__mrgPend){var __m=GLImmediate.mode,__vc=GLImmediate.vertexCounter,__base=GLImmediate.__mrgPrevVC;GLImmediate.vertexCounter=__base;GLImmediate.__flushMerged();if(__vc>__base){GLImmediate.vertexData.copyWithin(0,__base,__vc);}GLImmediate.vertexCounter=__vc-__base;GLImmediate.mode=__m;GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);}GLImmediate.flush();GLImmediate.disableBeginEndClientAttributes();GLImmediate.mode=-1;GLImmediate.enabledClientAttributes=GLImmediate.enabledClientAttributes_preBegin;GLImmediate.clientAttributes=GLImmediate.clientAttributes_preBegin;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true}'
+OLD_VC_MERGE = 'GLImmediate.mode=mode;GLImmediate.vertexCounter=0;'
+NEW_VC_MERGE = 'GLImmediate.mode=mode;if(GLImmediate.__mrgPend&&mode===3&&GLImmediate.__mrgSnap&&GLImmediate.__mrgCmp(false)){GLImmediate.__mrgPrevVC=GLImmediate.vertexCounter;}else{GLImmediate.__mf();GLImmediate.vertexCounter=0;GLImmediate.__mrgPrevVC=0;}'
+DRAINS_MERGE = [('var _glDrawArrays=(mode,first,count)=>{if(GLImmediate.totalEnabledClientAttribu', 'var _glDrawArrays=(mode,first,count)=>{GLImmediate.__mf();if(GLImmediate.totalEnabledClientAttribu'), ('var _glDrawElements=(mode,count,type,indices,start,end)=>{if(GLImmediate.totalEnabledClientAttribu', 'var _glDrawElements=(mode,count,type,indices,start,end)=>{GLImmediate.__mf();if(GLImmediate.totalEnabledClientAttribu'), ('var _glEnableClientState=cap=>{var attrib=GLEmulation.getAttributeFromC', 'var _glEnableClientState=cap=>{GLImmediate.__mf();var attrib=GLEmulation.getAttributeFromC'), ('var _glDisableClientState=cap=>{var attrib=GLEmulation.getAttributeFromC', 'var _glDisableClientState=cap=>{GLImmediate.__mf();var attrib=GLEmulation.getAttributeFromC')]
+
+MERGE_PATCHES = [
+    ('immediate-mode line batching: glEnd defers', OLD_END_MERGE, NEW_END_MERGE),
+    ('immediate-mode line batching: glBegin continues', OLD_VC_MERGE, NEW_VC_MERGE),
+]
+MERGE_PATCHES += [('line batching drain: ' + o.split('=')[0].replace('var _gl', 'gl'),
+                   o, n) for o, n in DRAINS_MERGE]
+PATCHES += MERGE_PATCHES
+
+
 # Invariants a correctly patched file must satisfy, checked AFTER everything runs.
 #
 # The per-patch status cannot be trusted on its own. Every throw-removal patch replaces
@@ -236,6 +275,8 @@ def check_postconditions(text):
         n = text.count(t)
         if n:
             bad.append((t, 'Coin calls this; a throw here kills the viewport', n))
+    if '__flushMerged' not in text:
+        bad.append(('immediate-mode line batching', 'absent -- the heavy-scene draw-call reduction is not in this build', 1))
     n = len(re.findall(r'GROWABLE_HEAP_[A-Z0-9]+\(\)', text))
     if n:
         bad.append(('GROWABLE_HEAP accessors', 'built with ALLOW_MEMORY_GROWTH -- the '
@@ -246,14 +287,18 @@ def check_postconditions(text):
 
 def _apply_once(text):
     status = []
-    for name, old, new in PATCHES:
+    for entry in PATCHES:
+        name, old, new = entry[0], entry[1], entry[2]
+        # a 4th field is the text that proves the fix is in effect, for when a
+        # LATER patch rewrites the surroundings so `new` no longer appears whole
+        marker = entry[3] if len(entry) > 3 else new
         # Check for the UNPATCHED site first. Testing "is the replacement present"
         # first would misfire for short replacements -- "0;" occurs throughout
         # minified JS -- and silently skip a patch that was never applied.
         if old in text:
             text = text.replace(old, new, 1)
             status.append((name, 'applied'))
-        elif new in text:
+        elif marker in text:
             status.append((name, 'already applied'))
         else:
             status.append((name, 'NOT FOUND'))
@@ -288,13 +333,14 @@ def main():
 def selftest():
     # Fixture is built from the patch table itself, so it cannot go stale as patches
     # are added. Each OLD string must be found and replaced exactly once.
-    src = ''.join(old for _, old, _ in PATCHES)
+    src = ''.join(e[1] for e in PATCHES)
     out, status = apply(src)
     # after the fixpoint loop the final pass reports 'already applied'; what matters
     # is that no site was missed
     bad = [(n, st) for n, st in status if st == 'NOT FOUND']
     assert not bad, bad
-    for name, old, new in PATCHES:
+    for e in PATCHES:
+        name, old, new = e[0], e[1], e[2]
         assert new in out, name
 
     # idempotent: a second pass must change nothing

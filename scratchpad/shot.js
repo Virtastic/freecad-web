@@ -16,7 +16,7 @@ const MODEL = process.argv[2], OUT = process.argv[3], QS = process.argv[4] || ''
     args: ['--no-sandbox', '--use-gl=angle', '--use-angle=metal', '--window-size=1400,900'],
     protocolTimeout: 2400000, userDataDir: '/tmp/fc-shot' });
   const p = (await b.pages())[0];
-  await p.goto('http://localhost:8791/index.html' + QS, { waitUntil: 'domcontentloaded', timeout: 300000 });
+  await p.goto('http://localhost:8792/index.html' + QS, { waitUntil: 'domcontentloaded', timeout: 300000 });
   const t0 = Date.now();
   while (Date.now() - t0 < 300000) { if (await p.evaluate(() => !!(window.fcInstance && window.fcInstance._malloc))) break; await sl(1000); }
   await sl(10000);

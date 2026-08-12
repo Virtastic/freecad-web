@@ -14,7 +14,7 @@ const MODEL = process.argv[2] || 'BIMExample';
 const TRIALS = +(process.argv[3] || 3);
 
 async function trial(p, off) {
-  await p.goto('http://localhost:8791/index.html' + (off ? '?noredundant=1' : ''),
+  await p.goto('http://localhost:8792/index.html' + (off ? '?noredundant=1' : ''),
     { waitUntil: 'domcontentloaded', timeout: 300000 });
   const t0 = Date.now();
   while (Date.now() - t0 < 300000) { if (await p.evaluate(() => !!(window.fcInstance && window.fcInstance._malloc))) break; await sl(1000); }
