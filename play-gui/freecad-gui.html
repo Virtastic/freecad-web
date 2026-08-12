@@ -870,7 +870,12 @@ window.fcRunPy = fcRunPy;
      try { __fcWasmBytes = await (await fetch('FreeCAD.wasm')).arrayBuffer(); } catch(e){ append('wasm prefetch failed: '+e,'err'); }
      const instance = window.fcInstance = await qtLoad({
        wasmBinary: __fcWasmBytes,
-       locateFile: (f) => (f === 'FreeCAD.data' ? 'FreeCAD.data.gz' : f),
+       // ?v= is not cosmetic: Cloudflare had already cached /FreeCAD.data.gz from a
+       // probe made BEFORE nginx served it with Content-Encoding, and that entry would
+       // hand the browser raw gzip bytes. A new query string is a new cache object, so
+       // this cannot collide with anything cached earlier. Bump it if the file changes
+       // in a way the immutable Cache-Control would otherwise hide.
+       locateFile: (f) => (f === 'FreeCAD.data' ? 'FreeCAD.data.gz?v=1' : f),
        // emscripten Module config merged by qtLoad:
        print:(t)=>append(t), printErr:(t)=>append(t,'err'),
        setStatus:(t)=>{ if(!t) return; append('[status] '+t);

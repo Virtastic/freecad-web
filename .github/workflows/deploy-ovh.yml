@@ -140,6 +140,7 @@ jobs:
               "https://freecad.virtastic.app/FreeCAD.js",
               "https://freecad.virtastic.app/FreeCAD.wasm",
               "https://freecad.virtastic.app/FreeCAD.data",
+              "https://freecad.virtastic.app/FreeCAD.data.gz",
               "https://freecad.virtastic.app/gmsh.js",
               "https://freecad.virtastic.app/gmsh.wasm",
               "https://freecad.virtastic.app/ccx.js",
