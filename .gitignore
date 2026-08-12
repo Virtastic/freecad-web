@@ -69,3 +69,4 @@ build-matplotlib/
 *.tfstate
 *.tfstate.*
 .terraform/
+tools/__pycache__/
