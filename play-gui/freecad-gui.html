@@ -1220,6 +1220,52 @@ window.fcRunPy = fcRunPy;
     });
     console.log('[fcweb] 3D presentation: native Qt composite (overlay '+(USE_OVERLAY?'forced ON':'inert')+')');
 
+    // ---- redundant GL state elimination ----------------------------------------------
+    // emscripten's GL emulation re-selects the SAME program, re-sets the SAME constant
+    // colour attribute and the SAME line width before every immediate-mode block. On
+    // BIMExample that is ~3500 useProgram and ~3000 vertexAttrib4fv calls per frame that
+    // change nothing. Dropping the ones whose value is unchanged removes the call without
+    // altering any state the GPU can observe.
+    //
+    // NOTE: merging the draw calls themselves was tried and REVERTED. 93% of this scene's
+    // draws are two-vertex edge segments and they do merge (2.8 per batch), but the
+    // emulation still emits bufferSubData + vertexAttribPointer + enable/disable for each
+    // segment either way, so batching only the draw adds work: it measured 3x SLOWER.
+    // Fixing that has to happen where the per-segment setup is generated -- emscripten's
+    // GLImmediate flush, or Coin emitting one GL_LINES batch per shape.
+    (function () {
+      if (/[?&]noredundant=1/.test(location.search)) return;
+      var P = WebGL2RenderingContext.prototype;
+      var realUseProgram = P.useProgram, realLineWidth = P.lineWidth;
+      var realVA4fv = P.vertexAttrib4fv, realVA4f = P.vertexAttrib4f;
+      var skipped = window.__glSkipped = { useProgram: 0, vertexAttrib: 0, lineWidth: 0 };
+      function stt(gl) { return gl.__rs || (gl.__rs = { va: {} }); }
+      P.useProgram = function (pr) {
+        var s = stt(this);
+        if (s.prog === pr) { skipped.useProgram++; return; }
+        s.prog = pr;
+        return realUseProgram.apply(this, arguments);
+      };
+      P.lineWidth = function (w) {
+        var s = stt(this);
+        if (s.lw === w) { skipped.lineWidth++; return; }
+        s.lw = w;
+        return realLineWidth.apply(this, arguments);
+      };
+      function constAttr(gl, idx, x, y, z, w, orig, args) {
+        var c = stt(gl).va, p = c[idx];
+        if (p && p[0] === x && p[1] === y && p[2] === z && p[3] === w) { skipped.vertexAttrib++; return; }
+        c[idx] = [x, y, z, w];
+        return orig.apply(gl, args);
+      }
+      P.vertexAttrib4fv = function (idx, v) {
+        return constAttr(this, idx, v[0], v[1], v[2], v[3], realVA4fv, arguments); };
+      P.vertexAttrib4f = function (idx, x, y, z, w) {
+        return constAttr(this, idx, x, y, z, w, realVA4f, arguments); };
+      console.log('[fcweb] redundant GL state elimination ON');
+    })();
+
+
     // --- Readable window decorations -------------------------------------------------
     // Qt-wasm draws each top-level window's frame as DOM inside #qt-shadow-container's
     // shadow root (.qt-decorated-window > .title-bar > .window-name), styled by Qt's own
