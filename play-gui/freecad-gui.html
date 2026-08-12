@@ -69,7 +69,7 @@
       </svg>
     </div>
     <div class="bt">Free<span class="accent">CAD</span></div>
-    <div class="bs" id="bootstatus">starting… (first load downloads ~450 MB)</div>
+    <div class="bs" id="bootstatus">starting… (first load downloads ~150 MB, then it is cached)</div>
     <div class="ld-bar"><div class="ld-fill" id="bootfill"></div></div>
     <div class="ld-detail" id="bootdetail"></div>
     <div class="ld-credit">FreeCAD-Web by <a href="https://virtastic.app" target="_blank" rel="noopener">Virtastic</a>
@@ -550,7 +550,7 @@ window.fcwebNotify = function (text, kind) {
      if(__bootEl) __bootEl.classList.remove('indet');
      if(__bootFill) __bootFill.style.width=Math.max(2,Math.min(100,+m[2]))+'%';
      __bootStatus.textContent=(m[1]||'Downloading').replace(/[…\.\s]+$/,'')||'Downloading';
-     if(__bootDetail) __bootDetail.textContent=m[2]+'% of ~450 MB';
+     if(__bootDetail) __bootDetail.textContent=m[2]+'% of ~150 MB';
    } else {
      if(__bootEl) __bootEl.classList.add('indet');
      // strip trailing "(…)" into the detail line so the label stays short + uppercase-clean
@@ -743,7 +743,7 @@ window.fcRunPy = fcRunPy;
        setStatus:(t)=>{ if(!t) return; append('[status] '+t);
          // Friendly loading-overlay text (no raw byte counts / spam).
          const m=/\((\d+)\/(\d+)\)/.exec(t);
-         if(/Downloading/.test(t)){ __setBoot(m?('Downloading… '+Math.floor(100*(+m[1])/(+m[2]))+'%'):'Downloading… (first load ~450 MB)'); }
+         if(/Downloading/.test(t)){ __setBoot(m?('Downloading… '+Math.floor(100*(+m[1])/(+m[2]))+'%'):'Downloading… (first load ~150 MB)'); }
          else if(/Running/.test(t)){ __setBoot('Starting FreeCAD…'); } },
        monitorRunDependencies:(n)=>{ append('[deps] remaining='+n);
          if(n>0) __setBoot('Unpacking application data… ('+n+' left)'); },
@@ -1217,9 +1217,70 @@ window.fcRunPy = fcRunPy;
   })();
 })();
 </script>
-<script src="FreeCAD.js"></script>
-<script src="qtloader.js"></script>
-<script>init();</script>
+<script>
+/* Browser support gate. This runs BEFORE FreeCAD.js, because loading that script starts
+   the ~150 MB download immediately -- and on a browser that cannot run this build the
+   user previously watched all of it arrive, saw "DOWNLOADING 100%", and then waited
+   forever with nothing logged anywhere.
+
+   JSPI (WebAssembly.Suspending) is the hard one: modal dialogs, the gmsh and CalculiX
+   bridges and every Python-triggered dialog suspend through it. As of today that means
+   Chrome/Edge 137+. SharedArrayBuffer needs COOP+COEP (served by infra/nginx.conf), and
+   Coin renders through WebGL2. */
+(function () {
+  function webgl2() {
+    try { return !!document.createElement('canvas').getContext('webgl2'); }
+    catch (e) { return false; }
+  }
+  var missing = [];
+  if (typeof WebAssembly === 'undefined' || typeof WebAssembly.Suspending !== 'function') {
+    missing.push(['JavaScript Promise Integration (JSPI)',
+                  'Chrome or Edge 137 and later. Firefox and Safari do not support it yet.']);
+  }
+  if (typeof SharedArrayBuffer === 'undefined' || !self.crossOriginIsolated) {
+    missing.push(['SharedArrayBuffer with cross-origin isolation',
+                  'the page must be served with COOP and COEP headers.']);
+  }
+  if (!webgl2()) {
+    missing.push(['WebGL2', 'hardware acceleration may be disabled in your browser settings.']);
+  }
+
+  if (!missing.length) {
+    ['FreeCAD.js', 'qtloader.js'].reduce(function (chain, src) {
+      return chain.then(function () {
+        return new Promise(function (ok, no) {
+          var s = document.createElement('script');
+          s.src = src; s.onload = ok; s.onerror = function () { no(new Error(src)); };
+          document.head.appendChild(s);
+        });
+      });
+    }, Promise.resolve()).then(function () { init(); }, function (e) {
+      var d = document.getElementById('bootstatus');
+      if (d) { d.textContent = 'could not load ' + e.message; }
+    });
+    return;
+  }
+
+  window.__FC_UNSUPPORTED = true;
+  var boot = document.getElementById('boot');
+  if (boot) { boot.className = ''; }
+  var st = document.getElementById('bootstatus');
+  if (st) { st.textContent = 'This browser cannot run FreeCAD-Web'; }
+  var fill = document.getElementById('bootfill');
+  if (fill && fill.parentNode) { fill.parentNode.style.display = 'none'; }
+  var det = document.getElementById('bootdetail');
+  if (det) {
+    var html = 'Nothing has been downloaded. FreeCAD-Web needs:<br><br>';
+    for (var i = 0; i < missing.length; i++) {
+      html += '<b>' + missing[i][0] + '</b> &mdash; ' + missing[i][1] + '<br>';
+    }
+    html += '<br>Please open this page in Chrome or Edge 137 or later on a desktop.';
+    det.innerHTML = html;
+    det.style.maxWidth = '34em';
+    det.style.lineHeight = '1.6';
+  }
+})();
+</script>
 <script>
 /* FCWEB file bridge: Qt-for-WebAssembly's native Open/Save-As dialogs need ASYNCIFY
    (absent in this multithread build) — they abort with "emscripten_sleep needs async".

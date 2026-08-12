@@ -15,6 +15,12 @@ COPY infra/nginx.conf /etc/nginx/conf.d/freecad.conf
 COPY play-gui/freecad-gui.html play-gui/qtloader.js /usr/share/nginx/html/
 # Build artifacts (fetched into play-gui/ by CI from the release).
 COPY play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data /usr/share/nginx/html/
+# FreeCAD.data is 341 MB and gzips to 83 MB. Cloudflare does not compress it (wrong
+# content type) so it used to go over the wire raw -- 84% of a first-time visitor's
+# download. nginx serves this copy to anything that accepts gzip; see infra/nginx.conf.
+# -6 rather than -9: within a megabyte of the same size for a fraction of the build time.
+RUN gzip -6 -k /usr/share/nginx/html/FreeCAD.data \
+ && test -s /usr/share/nginx/html/FreeCAD.data.gz
 # The mesher, fetched by the page on first use (FEM meshing 404s without it).
 COPY play-gui/gmsh.js play-gui/gmsh.wasm /usr/share/nginx/html/
 # CalculiX solver module, fetched on first solve.
