@@ -40,8 +40,23 @@ const click=async(p,l)=>{const bb=await p.evaluate((x)=>{const bs=[...document.q
   await sl(1500);}
  R.push('EXAMPLES ok='+exOk+'/'+avail.length);
  // dialogs
- await runG(p,["import sys","from PySide6 import QtWidgets","sys.__stderr__.write('DLG=%d\\n'%int(QtWidgets.QMessageBox.question(None,'R','ok?',QtWidgets.QMessageBox.Yes|QtWidgets.QMessageBox.No)))"].join('\n'));
- await sl(1500); const clicked=await click(p,'yes'); await pw(p,'DLG=',15000);
+ // Native Qt dialog: the HTML bridge is gone, so the button lives on the canvas.
+ // Publish its position from Qt, click the real pixels, and require the REAL return value.
+ await runG(p,["import sys","from PySide6 import QtWidgets, QtCore",
+   "mb=QtWidgets.QMessageBox(); mb.setWindowTitle('R'); mb.setText('ok?')",
+   "mb.setStandardButtons(QtWidgets.QMessageBox.Yes|QtWidgets.QMessageBox.No)",
+   "mb.show(); QtWidgets.QApplication.processEvents()",
+   "for _b in mb.buttons():",
+   "    _c=_b.mapToGlobal(QtCore.QPoint(_b.width()//2,_b.height()//2))",
+   "    sys.__stderr__.write('DLGBTN %s %d %d\\n'%(_b.text().replace('&',''),_c.x(),_c.y()))",
+   "sys.__stderr__.flush()",
+   "sys.__stderr__.write('DLG=%d\\n'%int(QtWidgets.QDialog.exec(mb))); sys.__stderr__.flush()"].join('\n'));
+ await sl(2500);
+ log=await p.evaluate(()=>document.getElementById('log').textContent);
+ const bm=/DLGBTN Yes (\d+) (\d+)/.exec(log);
+ let clicked=false;
+ if(bm){ await p.mouse.click(+bm[1],+bm[2]); clicked=true; }
+ await pw(p,'DLG=',15000);
  log=await p.evaluate(()=>document.getElementById('log').textContent);
  R.push('DIALOG clicked='+clicked+' '+((log.match(/DLG=\d+/)||['?'])[0])+' (16384=Yes)');
  // workflow
