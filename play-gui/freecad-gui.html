@@ -497,7 +497,7 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
 // clicking "mesh this" just saw nothing happen (gmsh's QProcess path fails
 // silently when the binary is absent). Anything the user should know about
 // goes through here instead.
-window.fcwebNotify = function (text, kind) {
+window.fcwebNotify = function (text, kind, actions) {
   try {
     var host = document.getElementById('fcweb-toasts');
     if (!host) {
@@ -523,11 +523,136 @@ window.fcwebNotify = function (text, kind) {
     var kill = function () { try { t.remove(); } catch (e) {} };
     x.addEventListener('click', kill);
     t.appendChild(x); t.appendChild(msg);
+    if (actions && actions.length) {
+      var row = document.createElement('div');
+      row.style.cssText = 'margin-top:9px;display:flex;gap:8px;flex-wrap:wrap';
+      actions.forEach(function (a) {
+        var btn = document.createElement('button');
+        btn.textContent = a.label;
+        btn.style.cssText = 'background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);' +
+          'color:#e8e8e8;border-radius:6px;padding:5px 10px;font:12px inherit;cursor:pointer';
+        btn.addEventListener('click', function () { try { a.onClick(btn); } catch (e) {} });
+        row.appendChild(btn);
+      });
+      t.appendChild(row);
+    }
     host.appendChild(t);
     requestAnimationFrame(function () { t.style.opacity = '1'; });
     if (kind !== 'error') { setTimeout(function () { t.style.opacity = '0'; setTimeout(kill, 200); }, 9000); }
   } catch (e) { try { console.warn('[fcweb] notify failed', e, text); } catch (_) {} }
 };
+</script>
+<script>
+// ---- crash reporting and storage health ------------------------------------------
+// Until now a trap reached the console and nowhere else: the user saw the app stop
+// responding with no explanation, and we never learned it happened. Two things are
+// needed for a public build -- the user has to be TOLD, and they need a way to hand us
+// something actionable.
+(function () {
+  var RING = [];                       // recent log lines, for the diagnostic report
+  var MAX_RING = 120;
+  var seen = new Set();                // one toast per distinct failure
+  window.fcwebLogRing = function (line) {
+    if (typeof line !== 'string') return;
+    RING.push(line.length > 400 ? line.slice(0, 400) + '…' : line);
+    if (RING.length > MAX_RING) RING.shift();
+  };
+
+  function report(kind, detail) {
+    var m = window.fcInstance;
+    var docs = '?';
+    try { docs = m && m.FS ? m.FS.readdir('/home/web_user/.fcweb-autosave')
+      .filter(function (f) { return f.endsWith('.FCStd'); }).join(',') : '?'; } catch (e) { docs = '?'; }
+    return [
+      'FreeCAD-Web diagnostic report',
+      'when:      ' + new Date().toISOString(),
+      'kind:      ' + kind,
+      'detail:    ' + String(detail).slice(0, 1500),
+      'page:      ' + location.href,
+      'browser:   ' + navigator.userAgent,
+      'memory:    ' + (m && m.HEAPU8 ? (m.HEAPU8.length / 1048576).toFixed(0) + ' MB heap' : 'n/a') +
+        (performance.memory ? ', js ' + (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + ' MB' : ''),
+      'autosaved: ' + docs,
+      '',
+      '--- last ' + RING.length + ' log lines ---',
+      RING.join('\n'),
+    ].join('\n');
+  }
+
+  // One toast per distinct failure, with the two things a user can actually do:
+  // take their work with them, and give us something to act on.
+  window.fcwebCrash = function (kind, detail) {
+    var key = kind + '|' + String(detail).slice(0, 120);
+    if (seen.has(key)) return;
+    seen.add(key);
+    var text = 'Something went wrong (' + kind + '). Your work is autosaved and will be ' +
+               'restored if you reload. If it keeps happening, please send us the report.';
+    if (typeof window.fcwebNotify !== 'function') { try { console.error(text, detail); } catch (e) {} return; }
+    window.fcwebNotify(text, 'error', [
+      { label: 'Copy report', onClick: function (btn) {
+          var txt = report(kind, detail);
+          var done = function () { btn.textContent = 'Copied'; };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(txt).then(done, function () { fallback(txt, done); });
+          } else { fallback(txt, done); }
+        } },
+      // The report goes on the clipboard, never into the URL -- it carries a user's
+      // document names and page state.
+      { label: 'Open issue tracker', onClick: function () {
+          window.open('https://github.com/Virtastic/freecad-web/issues/new', '_blank', 'noopener');
+        } },
+    ]);
+  };
+  function fallback(txt, done) {
+    var ta = document.createElement('textarea');
+    ta.value = txt; ta.style.cssText = 'position:fixed;left:-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) {}
+    ta.remove();
+  }
+
+  window.addEventListener('error', function (e) {
+    if (e && e.message) window.fcwebCrash('script error', e.message + ' @' + (e.filename || '?') + ':' + (e.lineno || 0));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    window.fcwebCrash('unhandled rejection', (r && (r.stack || r.message)) || String(r));
+  });
+
+  // ---- storage health --------------------------------------------------------------
+  // Everything the persistence work bought is void if the browser evicts the database or
+  // it fills up: saves then fail silently, which is the exact failure mode we just spent
+  // a day removing. Ask for persistent storage (a browser may evict non-persistent
+  // origins under pressure), and watch how full it is.
+  window.addEventListener('load', function () {
+    if (!navigator.storage) return;
+    try {
+      if (navigator.storage.persist) {
+        navigator.storage.persisted().then(function (already) {
+          if (already) { console.log('[fcweb] storage already persistent'); return; }
+          navigator.storage.persist().then(function (ok) {
+            console.log('[fcweb] persistent storage ' + (ok ? 'granted' : 'DENIED (work may be evicted)'));
+          });
+        });
+      }
+    } catch (e) {}
+    var warned = false;
+    setInterval(function () {
+      if (!navigator.storage.estimate) return;
+      navigator.storage.estimate().then(function (q) {
+        if (!q || !q.quota) return;
+        var pct = q.usage / q.quota;
+        if (pct > 0.85 && !warned && typeof window.fcwebNotify === 'function') {
+          warned = true;
+          window.fcwebNotify('Browser storage is ' + Math.round(pct * 100) + '% full (' +
+            (q.usage / 1048576).toFixed(0) + ' of ' + (q.quota / 1048576).toFixed(0) + ' MB). ' +
+            'Saving may start to fail — download anything you need to keep.', 'warn');
+        }
+        if (pct < 0.7) warned = false;
+      }).catch(function () {});
+    }, 60000);
+  });
+})();
 </script>
 <script>
  const logEl=document.getElementById('log');
@@ -592,6 +717,12 @@ window.fcwebNotify = function (text, kind) {
     'Solving is unavailable: the CalculiX solver is not part of the browser build.'],
    [/doesn't contain expected phrase/i,
     'The configured solver binary did not respond as expected, so the solve was skipped.'],
+   // pre-gui.js emits this when FS.syncfs fails -- browser storage full, evicted, or
+   // blocked. Autosave is writing into a void from this point on.
+   [/IDBFS persist failed|QuotaExceeded/i,
+    'Your work is NOT being saved: the browser refused to write to local storage ' +
+    '(it may be full, or private browsing may be blocking it). Use File \u2192 Save to ' +
+    'download a copy now.'],
  ];
  const __notified = new Set();
  function __maybeNotify(t){
@@ -607,6 +738,7 @@ window.fcwebNotify = function (text, kind) {
    if(typeof t==='string'){ const mR=t.indexOf('FCRECT '); if(mR>=0){
      try{ window.__fcWidgetRect=JSON.parse(t.slice(mR+7)); }catch(e){} return; } }
    try { __maybeNotify(t); } catch(e){}
+   try { if (window.fcwebLogRing) window.fcwebLogRing(t); } catch(e){}
    const noise = typeof t==='string' && __NOISE.test(t);
    // Progress noise (incl. our stderr diagnostic markers) is dropped unless
    // ?debug; genuine errors/messages are never noise, so they still show. The log
@@ -738,6 +870,7 @@ window.fcRunPy = fcRunPy;
      try { __fcWasmBytes = await (await fetch('FreeCAD.wasm')).arrayBuffer(); } catch(e){ append('wasm prefetch failed: '+e,'err'); }
      const instance = window.fcInstance = await qtLoad({
        wasmBinary: __fcWasmBytes,
+       locateFile: (f) => (f === 'FreeCAD.data' ? 'FreeCAD.data.gz' : f),
        // emscripten Module config merged by qtLoad:
        print:(t)=>append(t), printErr:(t)=>append(t,'err'),
        setStatus:(t)=>{ if(!t) return; append('[status] '+t);
@@ -747,7 +880,8 @@ window.fcRunPy = fcRunPy;
          else if(/Running/.test(t)){ __setBoot('Starting FreeCAD…'); } },
        monitorRunDependencies:(n)=>{ append('[deps] remaining='+n);
          if(n>0) __setBoot('Unpacking application data… ('+n+' left)'); },
-       onAbort:(w)=>append('[ABORT] '+w,'err'),
+       onAbort:(w)=>{ append('[ABORT] '+w,'err');
+         try { window.fcwebCrash && window.fcwebCrash('wasm abort', w); } catch(e){} },
        qt: {
          onLoaded: () => { const st=document.getElementById('status'); if(st) st.textContent='FreeCAD loaded';
            // App is up: reveal the full-window FreeCAD UI and drop the loader.
