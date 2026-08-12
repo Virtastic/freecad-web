@@ -27,3 +27,26 @@
        iflag=2
        dtvol=1.d30
  !     
+--- a/src/gencontelem_n2f.f
++++ b/src/gencontelem_n2f.f
+@@ -32,6 +32,7 @@
+ !     
+       character*8 lakon(*)
+       character*33 cfile
++      integer i_fcwdbg
+       character*81 tieset(3,*),slavset,set(*),noset,setname
+       character*87 filab(*)
+       character*132 jobnamef(*)
+@@ -652,7 +653,11 @@
+               write(88,*) nopes ! tot master nodes associated to slave node
+               write(88,*) node  ! slave node
+               write(88,'(I12)')  nodef(1:nopes) ! list master nodes
+-              write(88,'(E13.6)')  -ratio(iorder) ! list slave nodes
++C     Vector subscript (iorder is an integer array) -- F90 only. This is the
++C     *DEBUGDATA dump, and the extent is nopes, the same as the nodef write
++C     just above, so an implied-DO is an exact equivalent.
++              write(88,'(E13.6)') (-ratio(iorder(i_fcwdbg)),
++     &             i_fcwdbg=1,nopes) ! list slave nodes
+ !     write(*,'(E13.6)')  -ratio(iorder)! list slave nodes
+             endif
+ !     

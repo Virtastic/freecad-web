@@ -49,6 +49,22 @@ BOUNDS = {
     'pmean1(nfield)':     ('pmean1(100)',      'nfield',  100,  'pmean1'),
     'pmean2(nfield)':     ('pmean2(100)',      'nfield',  100,  'pmean2'),
     'yig(nfield,mi(1))':  ('yig(100,100)',     'max(nfield,mi(1))', 100, 'yig'),
+    # contact. ncont/nk are mesh-sized, so these carry generous bounds AND static
+    # storage -- as stack locals at this size they would blow the 16 MB module stack.
+    'iactiveline(3,3*ncont)': ('iactiveline(3,60000)', 'ncont', 20000, 'iactiveline', True),
+    'xslavnor(3,nk)':         ('xslavnor(3,100000)',   'nk',    100000, 'xslavnor', True),
+    'c_limit(2,nfield)':      ('c_limit(2,100)',      'nfield', 100, 'c_limit'),
+    'field(nfield,20*mi(3))': ('field(100,160)',
+                               [('nfield', 100), ('mi(3)', 8)], 100, 'field'),
+    'stn(6,nk)':              ('stn(6,100000)',       'nk', 100000, 'stn', True),
+    'icoveredmelem(3*ncont)': ('icoveredmelem(60000)', 'ncont', 20000, 'icoveredmelem', True),
+    # near3d/near2d spatial search: k is the number of neighbours requested, small.
+    # `ir` is listed before `r` because "r(k+6)" is a substring of "ir(k+6)" and the
+    # replacements are textual -- the more specific key has to win.
+    'ir(k+6)': ('ir(1006)', 'k', 1000, 'ir'),
+    'r(k+6)':  ('r(1006)',  'k', 1000, 'r'),
+    'ir(k+4)': ('ir(1004)', 'k', 1000, 'ir'),
+    'r(k+4)':  ('r(1004)',  'k', 1000, 'r'),
 }
 
 # file -> [(array, declaration to replace, allocate expression, bound)]
@@ -118,6 +134,13 @@ def first_executable(lines):
 
 
 def guard_lines(var, bound, arr):
+    """var may be a single expression or a list of (expression, bound) pairs, for
+    arrays whose dimensions are bounded independently."""
+    if isinstance(var, list):
+        out = []
+        for v, b in var:
+            out += guard_lines(v, b, arr)
+        return out
     return [
         'C',
         'C     %s(%s) is an F90 automatic array upstream; FORTRAN 77 has no' % (arr, var),
@@ -135,17 +158,24 @@ def guard_lines(var, bound, arr):
 def patch(text):
     """Return patched text, or None if there is nothing left to do."""
     changed = False
-    for spec, (repl, var, bound, arr) in BOUNDS.items():
+    for spec, entry in BOUNDS.items():
+        repl, var, bound, arr = entry[:4]
+        static = len(entry) > 4 and entry[4]
         if spec not in text:
             continue
         lines = text.split('\n')
-        if any('%s bound' % arr in l for l in lines):
+        if any('(%s bound' % arr in l for l in lines):
             continue                          # this array is already bounded
         idx = first_executable(lines)
         if idx is None:
             continue
         lines = [l.replace(spec, repl) for l in lines]
-        lines[idx:idx] = guard_lines(var, bound, arr)
+        guard = guard_lines(var, bound, arr)
+        if static:
+            # Too big for the stack once bounded, so give it static storage. SAVE is a
+            # declaration, hence it goes ahead of the guard (the first executable).
+            guard = ['      save %s' % arr] + guard
+        lines[idx:idx] = guard
         text = '\n'.join(lines)
         changed = True
     return text if changed else None
@@ -246,6 +276,8 @@ def selftest():
     assert g.count('mi(2).gt.20') == 1, 'one guard per file'
     assert g.index('mi(2).gt.20') < g.index('x=1'), g
     assert patch_mi2(g) is None, 'must be idempotent'
+    multi = guard_lines([('nfield', 100), ('mi(3)', 8)], 100, 'field')
+    assert sum('.gt.100' in l for l in multi) == 1 and sum('.gt.8' in l for l in multi) == 1, multi
     print('ccx_bound_automatic selftest OK')
 
 

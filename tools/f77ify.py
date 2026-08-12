@@ -82,6 +82,10 @@ def used_labels(lines):
 
 
 
+def is_cont_line(cont):
+    return cont not in (' ', '0')
+
+
 def split_top(text, sep=','):
     """Split on `sep` at paren depth 0, ignoring character literals."""
     parts, buf, depth, quote = [], [], 0, None
@@ -355,6 +359,243 @@ def hoist_includes(text):
 
 
 
+
+RE_CHAR_DECL = re.compile(
+    # length may be *132, *(*), (len=..) or absent
+    r'^\s{6,}character\s*(?:\*\s*\(\s*\*\s*\)|\*\s*\d+|\([^)]*\))?\s*(?:::)?\s*(.*)$',
+    re.I)
+
+
+def character_names(lines):
+    """Names declared CHARACTER.
+
+    `setname(1:15)='contactelements'` is a SUBSTRING assignment, not an array section --
+    rewriting it as a loop over elements silently corrupts the string. The only way to
+    tell the two apart is the declaration, so character names are collected up front and
+    excluded from every section rule.
+    """
+    names = set()
+    # joined statements, not raw lines: ccx wraps declarations, and a name on a
+    # continuation line (multistages' `indeptiet`) would otherwise be missed
+    for stmt, _owned in join_continuations(lines):
+        if stmt is None:
+            continue
+        m = RE_CHAR_DECL.match(stmt)
+        if not m:
+            continue
+        for part in split_top(strip_bang(m.group(1))):
+            nm = re.match(r'\s*([A-Za-z]\w*)', part)
+            if nm:
+                names.add(nm.group(1).lower())
+    return names
+
+
+
+RE_DECL_STMT = re.compile(
+    r'^(real|integer|logical|character|double\s+precision|complex|dimension|common|'
+    r'data|implicit|parameter|external|intrinsic|save|equivalence|include)\b', re.I)
+
+
+def is_declaration(code):
+    """True for a declaration statement.
+
+    `code` is the text from column 7 onward, so it has no leading fixed-form padding --
+    matching a column-anchored pattern against it silently never fires, which is how the
+    section rules got loose inside declarations and rewrote array bounds.
+    """
+    return bool(RE_DECL_STMT.match(code.strip()))
+
+
+
+# --- F90 array sections -----------------------------------------------------
+# ccx passes contiguous column slices around (`call attachline(xl2s,
+# pvertex(1:3,k), ...)`), writes them (`write(20,*) nodef(1:nopes)`), and zeroes
+# them (`field(1:nfield,1:20)=0.d0`). f2c knows none of it. Each has an exact F77
+# equivalent, and the three contexts need different ones -- which is why this is
+# done per context rather than with one blanket substitution.
+RE_SECTION = re.compile(
+    # subscripts may contain a call, e.g. xl2mp(1:3,modf(n,i))
+    r'\b([a-z]\w*)\(((?:[^()]|\([^()]*\))*:(?:[^()]|\([^()]*\))*)\)', re.I)
+
+
+def _has_range(subs):
+    """True if a subscript list contains a lo:hi range at depth 0."""
+    depth = 0
+    for ch in subs:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+        elif ch == ':' and depth == 0:
+            return True
+    return False
+
+
+def _first_of_range(subs):
+    """`1:3,k` -> `1,k`. The section starts at element (lo, ...), and Fortran
+    passes by reference, so handing over that address is exactly the slice."""
+    out = []
+    for part in split_top(subs):
+        if ':' in part:
+            lo = part.split(':', 1)[0].strip()
+            out.append(lo if lo else '1')
+        else:
+            out.append(part.strip())
+    return ','.join(out)
+
+
+def sections_as_arguments(code, skip=()):
+    """A section in an ARGUMENT position becomes the address of its first element."""
+    out, i = [], 0
+    for m in RE_SECTION.finditer(code):
+        if m.start() < i:
+            continue
+        if not _has_range(m.group(2)) or m.group(1).lower() in skip:
+            continue
+        before = code[:m.start()].rstrip()
+        # argument position: directly after '(' or ',' of an enclosing call
+        if not before.endswith(('(', ',')):
+            continue
+        after = code[m.end():].lstrip()
+        if not after.startswith((',', ')')):
+            continue
+        out.append(code[i:m.start()])
+        out.append('%s(%s)' % (m.group(1), _first_of_range(m.group(2))))
+        i = m.end()
+    out.append(code[i:])
+    return ''.join(out)
+
+
+RE_IO_HEAD = re.compile(r'^(\s*)(write|read)\s*\(', re.I)
+
+
+def _io_split(code):
+    """Split `write(88,'(I12)') items` into (header, items), or None.
+
+    The control list is matched by balancing parentheses with quote awareness -- a
+    format such as '(I12)' contains a ')' that a plain regex stops at, which silently
+    left those statements unconverted.
+    """
+    m = RE_IO_HEAD.match(code)
+    if not m:
+        return None
+    i = code.index('(', m.end() - 1)
+    depth, quote, j = 0, None, i
+    while j < len(code):
+        ch = code[j]
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in '"\'':
+            quote = ch
+        elif ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                return code[:j + 1], code[j + 1:]
+        j += 1
+    return None
+
+
+def sections_in_io(code, counter, skip=()):
+    """`write(20,*) x(1:n,k)` -> `write(20,*) (x(i_,k),i_=1,n)` (implied DO)."""
+    parts = _io_split(code)
+    if not parts:
+        return code
+    head, items = parts
+    if not RE_SECTION.search(items):
+        return code
+    new_items = []
+    for item in split_top(items):
+        sm = RE_SECTION.fullmatch(item.strip())
+        if sm and _has_range(sm.group(2)) and sm.group(1).lower() not in skip:
+            subs = split_top(sm.group(2))
+            rng = [k for k, p in enumerate(subs) if ':' in p]
+            if len(rng) == 1:
+                k = rng[0]
+                lo, hi = [x.strip() for x in subs[k].split(':', 1)]
+                var = 'i_fcw%d' % next(counter)
+                subs2 = list(subs)
+                subs2[k] = var
+                new_items.append('(%s(%s),%s=%s,%s)'
+                                 % (sm.group(1), ','.join(x.strip() for x in subs2),
+                                    var, lo or '1', hi))
+                continue
+        new_items.append(item.strip())
+    return head + ' ' + ','.join(new_items)
+
+
+RE_SECTION_ASSIGN = re.compile(
+    r'^(\s*)([a-z]\w*)\(([^()]*:[^()]*)\)\s*=\s*(\S.*)$', re.I)
+
+
+def section_assignments(code, counter, skip=()):
+    """`field(1:nfield,1:20)=0.d0` -> nested DO loops. Only explicit lo:hi
+    bounds; a bare `:` would need the declaration, which is not available here."""
+    m = RE_SECTION_ASSIGN.match(code)
+    if not m or not _has_range(m.group(3)):
+        return None
+    if m.group(2).lower() in skip:
+        return None          # CHARACTER substring assignment, not an array section
+    if m.group(4).lstrip()[:1] in ("'", '"'):
+        return None          # assigning a string literal: a substring, whatever the
+                             # declaration scan concluded
+    subs = split_top(m.group(3))
+    rhs = m.group(4).strip()
+    if RE_SECTION.search(rhs):
+        return None                      # section on both sides: not handled
+    loops, idx = [], []
+    for part in subs:
+        part = part.strip()
+        if ':' in part:
+            lo, hi = [x.strip() for x in part.split(':', 1)]
+            if not lo or not hi:
+                return None              # bare ':' -- needs the declared bounds
+            var = 'i_fcw%d' % next(counter)
+            loops.append((var, lo, hi))
+            idx.append(var)
+        else:
+            idx.append(part)
+    body = ['      do %s=%s,%s' % (v, lo, hi) for v, lo, hi in loops]
+    body.append('      %s(%s)=%s' % (m.group(2), ','.join(idx), rhs))
+    body += ['      enddo' for _ in loops]
+    return body
+
+
+
+RE_DECL_KW = re.compile(
+    r'^\s{6,}(real|integer|logical|character|double\s+precision|complex|dimension|'
+    r'common|data|implicit|parameter|external|intrinsic|save|equivalence|include)\b', re.I)
+
+
+def declare_generated(lines):
+    """Declare the loop variables the section rules invent.
+
+    ccx compiles with `implicit none`, so an undeclared i_fcwN is a hard error. They
+    are inserted just before the first executable statement, which is the last point
+    a declaration is still legal.
+    """
+    used = sorted({m.group(0) for l in lines for m in re.finditer(r'\bi_fcw\d+\b', l)},
+                  key=lambda x: int(x[5:]))
+    if not used:
+        return lines
+    for i, l in enumerate(lines):
+        if not l.strip() or l[:1] in 'cC*!' or (len(l) > 5 and l[5] not in ' 0'):
+            continue
+        head = l.strip().lower()
+        if head.startswith(('data ', 'include ')):
+            # F77 requires declarations before DATA -- and an include may pull DATA in
+            # (ccx's gauss.f does), so stop at whichever comes first rather than at the
+            # first executable statement
+            return lines[:i] + ['      integer ' + ','.join(used)] + lines[i:]
+        if head.startswith(('subroutine', 'function', 'end', 'entry')) or RE_DECL_KW.match(l):
+            continue
+        if re.match(r'^\s{6,}\S', l):
+            return lines[:i] + ['      integer ' + ','.join(used)] + lines[i:]
+    return lines
+
+
 def convert(text):
     text = hoist_includes(text)
     text = RE_FLUSH.sub(r'\1continue', text)
@@ -364,6 +605,9 @@ def convert(text):
     lines = text.splitlines()
     taken = used_labels(lines)
     counter = [8000]
+    import itertools
+    seccount = itertools.count(1)
+    charnames = character_names(lines)
 
     def new_label():
         while counter[0] in taken:
@@ -396,6 +640,19 @@ def convert(text):
             continue
 
         code = RE_BRACKET_SCALAR.sub(r'\1', code)
+
+        # Declarations are off-limits: `real*8 a(3),voldl(0:mi(2),8)` puts voldl( right
+        # after a comma, which looks exactly like an argument position -- rewriting it
+        # would silently change the array's declared bounds.
+        if (not is_cont_line(cont) and RE_SECTION.search(code)
+                and not is_declaration(code)):
+            expanded = section_assignments(code, seccount, charnames)
+            if expanded is not None:
+                out.extend(expanded)
+                continue
+            code = sections_in_io(code, seccount, charnames)
+            code = sections_as_arguments(code, charnames)
+
         stmt = code.strip()
         is_cont = cont not in (' ', '0')
 
@@ -492,7 +749,7 @@ def convert(text):
 
         out.append(label + cont + code)
 
-    return '\n'.join(out) + '\n'
+    return '\n'.join(declare_generated(out)) + '\n'
 
 
 def pick_frame(stack, name):
@@ -536,6 +793,53 @@ def selftest():
     for lab in re.findall(r'^\s*(\d+) continue', conv(["do", "cycle", "enddo"]), re.M):
         assert len(lab) <= 4, lab
     assert 'ivout(logfil, 1, mxiter, n)' in conv(["call ivout(logfil, 1, [mxiter], n)"])
+    import itertools
+    c = itertools.count(1)
+    # argument position: the slice becomes the address of its first element
+    assert sections_as_arguments('call f(xl2s,pvertex(1:3,k),n)') == 'call f(xl2s,pvertex(1,k),n)'
+    # ...but an assignment target must NOT be rewritten that way
+    assert sections_as_arguments('field(1:n,1:20)=0.d0') == 'field(1:n,1:20)=0.d0'
+    io = sections_in_io('      write(20,*) nodef(1:nopes)', c)
+    assert '(nodef(i_fcw1),i_fcw1=1,nopes)' in io, io
+    # a quoted format containing ')' must not truncate the control list
+    io2 = sections_in_io("      write(88,'(I12)')  nodef(1:nopes)", c)
+    assert io2.startswith("      write(88,'(I12)')") and 'i_fcw' in io2, io2
+    asg = section_assignments('      field(1:nfield,1:20)=0.d0', c)
+    assert asg is not None and any('do i_fcw' in l for l in asg), asg
+    assert any('=0.d0' in l for l in asg) and sum('enddo' in l for l in asg) == 2, asg
+    # a bare ':' has no bounds here, so it must be declined rather than guessed
+    assert section_assignments('      x(:,1)=0.d0', c) is None
+    # a CHARACTER substring must never become a loop
+    chars = character_names(['      character*81 setname,noset',
+                             '      character*(*) text',
+                             '      character*1 inpc(*)'])
+    assert {'setname', 'noset', 'text', 'inpc'} <= chars, chars
+    assert section_assignments("      setname(1:15)='contactelements'", c, chars) is None
+    # a name declared on a continuation line must still be recognised
+    cont_chars = character_names(['      character*81 set(*),temp,indepties,',
+                                  '     &     indeptiet'])
+    assert 'indeptiet' in cont_chars, cont_chars
+    # and a string-literal RHS is a substring even if the declaration was missed
+    assert section_assignments("      unknown(1:1)=' '", c) is None
+    assert sections_as_arguments("call f(setname(1:15))", chars) == 'call f(setname(1:15))'
+    decl = declare_generated(['      subroutine t(n)', '      implicit none',
+                              '      integer n', '      write(6,*) (x(i_fcw1),i_fcw1=1,n)',
+                              '      end'])
+    assert any(l.strip() == 'integer i_fcw1' for l in decl), decl
+    assert decl.index('      integer i_fcw1') == 3, decl
+    # must land BEFORE a DATA statement, which may not be preceded by declarations
+    d2 = declare_generated(['      subroutine t(n)', '      integer n',
+                            '      data k /1/', '      write(6,*) (x(i_fcw1),i_fcw1=1,n)',
+                            '      end'])
+    assert d2.index('      integer i_fcw1') == 2, d2
+    d3 = declare_generated(['      subroutine t(n)', '      integer n',
+                            '      include "gauss.f"', '      x=(y(i_fcw1))', '      end'])
+    assert d3.index('      integer i_fcw1') == 2, d3
+    # a declaration must never be touched by the section rules
+    assert is_declaration('real*8 a(3),voldl(0:mi(2),8)')
+    assert is_declaration('  integer x(2)') and not is_declaration('call f(x(1:3,k))')
+    dec = conv(["real*8 a(3),voldl(0:mi(2),8)"])
+    assert 'voldl(0:mi(2),8)' in dec, dec
     print('f77ify selftest OK')
 
 
