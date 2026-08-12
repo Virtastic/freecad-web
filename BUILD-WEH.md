@@ -165,6 +165,34 @@ git push origin dev:ovhcloud     # triggers .github/workflows/deploy-ovh.yml
 Verify live: `curl -sI https://freecad.virtastic.app/FreeCAD.wasm` — the
 `content-length` must equal the local `play-gui/FreeCAD.wasm`.
 
+## Releasing: the checklist, and the ways it bites
+
+1. **Release first, push second.** CI pulls assets by tag, so the release must exist
+   before the branch push.
+2. **Re-run `tools/patch-freecad-js.py` after every link**, and check its exit status --
+   it now verifies invariants, not just per-patch status. A relink plus that one tool
+   reproduces the shipped `FreeCAD.js` byte for byte.
+3. **Wait for the RIGHT workflow run.** Polling `gh run list --limit 1` right after a push
+   matches the PREVIOUS run and reports success for a deploy that has not started. Capture
+   the newest run id before pushing and wait for a different one to complete. This
+   silently reported a green deploy of code that was not live.
+4. **Verify the artifacts through the CDN, not locally** -- md5 what production actually
+   serves against the local file. Only that catches an edge cache serving something else.
+5. **Never hand-write a cache-busting version.** `FreeCAD.data.gz` is immutable for a
+   year; the image stamps the URL with the data's md5 so changed data is a new URL
+   automatically. A purge does not save you here: purge-by-URL must match the query
+   string exactly.
+6. **Beware probing a URL before it exists.** Cloudflare cached a 404 for `ccx.js` for a
+   year, and later cached `FreeCAD.data.gz` from a probe made before nginx served it with
+   `Content-Encoding` -- which would have broken every boot had the versioned URL not
+   sidestepped it.
+
+The gates worth running against production before announcing anything, all in
+`scratchpad/`: `reg-prod.js` (workbenches, examples, dialog), `workflows.js` (eight real
+CAD workflows), `guidrive.js` (menus and toolbars through Qt input), `datasafety.js`
+(work survives a reload), `ccxe2e/run-prod.js` (FEM end to end), `prodcheck.js` (boot,
+storage, bridges).
+
 ## Memory: the heap is a fixed 2 GB, deliberately
 
 `-sINITIAL_MEMORY=2147483648 -sALLOW_MEMORY_GROWTH=0`. Growth was built and measured
