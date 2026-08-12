@@ -139,5 +139,9 @@ jobs:
               "https://freecad.virtastic.app/freecad-gui.html",
               "https://freecad.virtastic.app/FreeCAD.js",
               "https://freecad.virtastic.app/FreeCAD.wasm",
-              "https://freecad.virtastic.app/FreeCAD.data"
+              "https://freecad.virtastic.app/FreeCAD.data",
+              "https://freecad.virtastic.app/gmsh.js",
+              "https://freecad.virtastic.app/gmsh.wasm",
+              "https://freecad.virtastic.app/ccx.js",
+              "https://freecad.virtastic.app/ccx.wasm"
             ]}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print("purge success:",d.get("success"))'
