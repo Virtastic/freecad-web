@@ -1039,39 +1039,103 @@ window.fcRunPy = fcRunPy;
         m.stringToUTF8(src,q,n); fcRunPy(m,q);
       }catch(e){}
     }
-    var AUTOSAVE_PY = [
+    // Autosave is driven by EDITS, not by a clock, and lives in its own directory.
+    //
+    // Three defects were measured here, each of which lost a user's work outright:
+    //   1. a 30 s timer meant "draw something, hit reload" lost everything -- the most
+    //      likely first five minutes anyone spends with this app. A document observer now
+    //      marks the session dirty and the tick saves only when there is something to save.
+    //   2. the copies lived in /home/web_user/.FreeCAD/recovery, which is FreeCAD's own
+    //      recovery folder. Its own directory now.
+    //   3. the prune that drops copies of closed documents ran BEFORE the restore pass, so
+    //      on every boot it deleted the autosaves while no document was open yet -- the
+    //      file read back from IndexedDB at +3 s and was gone by +8 s. It is now gated on
+    //      the restore having completed. (With the original 30 s tick the prune happened
+    //      to land after the 13 s restore, which is the only reason this ever worked.)
+    var AUTOSAVE_DIR = "/home/web_user/.fcweb-autosave";
+    var AUTOSAVE_INSTALL = [
       "import FreeCAD as _App, os as _os",
-      "_rec='/home/web_user/.FreeCAD/recovery'",
-      "_os.makedirs(_rec, exist_ok=True)",
-      "_open=set()",
-      "for _d in list(_App.listDocuments().values()):",
-      "    _open.add(_d.Name)",
-      "    try: _d.saveCopy(_os.path.join(_rec,_d.Name+'.FCStd'))",
-      "    except Exception: pass",
-      "for _f in _os.listdir(_rec):",           // drop recovery copies of closed docs
-      "    if _f.endswith('.FCStd') and _f[:-6] not in _open:",
-      "        try: _os.remove(_os.path.join(_rec,_f))",
-      "        except Exception: pass",
+      "if not getattr(_App, '_fcweb_saver', None):",
+      "    class _FcwebSaver(object):",
+      "        DIR = '" + AUTOSAVE_DIR + "'",
+      "        def __init__(self):",
+      "            self.dirty = True",
+      "        def _touch(self, *a):",
+      "            self.dirty = True",
+      "        slotChangedObject = _touch",
+      "        slotCreatedObject = _touch",
+      "        slotDeletedObject = _touch",
+      "        slotCreatedDocument = _touch",
+      "        slotDeletedDocument = _touch",
+      "        slotChangedDocument = _touch",
+      "        slotRedoDocument = _touch",
+      "        slotUndoDocument = _touch",
+      "        def save(self, force=False):",
+      "            if not (force or self.dirty):",
+      "                return",
+      "            _os.makedirs(self.DIR, exist_ok=True)",
+      "            names = set()",
+      "            for d in list(_App.listDocuments().values()):",
+      "                names.add(d.Name)",
+      "                try:",
+      "                    d.saveCopy(_os.path.join(self.DIR, d.Name + '.FCStd'))",
+      "                except Exception:",
+      "                    pass",
+      "            if getattr(_App, '_fcweb_restored', False):",
+      "                for f in _os.listdir(self.DIR):",
+      "                    if f.endswith('.FCStd') and f[:-6] not in names:",
+      "                        try:",
+      "                            _os.remove(_os.path.join(self.DIR, f))",
+      "                        except Exception:",
+      "                            pass",
+      "            self.dirty = False",
+      "    _App._fcweb_saver = _FcwebSaver()",
+      "    _App.addDocumentObserver(_App._fcweb_saver)",
       ""
     ].join("\n");
     var RESTORE_PY = [
       "import FreeCAD as _App, os as _os, sys as _s",
-      "_rec='/home/web_user/.FreeCAD/recovery'",
-      "_n=0",
+      "_rec = '" + AUTOSAVE_DIR + "'",
+      "_n = 0",
       "if _os.path.isdir(_rec):",
       "    for _f in sorted(_os.listdir(_rec)):",
       "        if _f.endswith('.FCStd'):",
       "            try:",
-      "                _App.openDocument(_os.path.join(_rec,_f)); _n+=1",
-      "            except Exception: pass",
-      "if _n: _s.__stderr__.write('[fcweb] restored %d recovered document(s) from last session\\n'%_n); _s.__stderr__.flush()",
+      "                _App.openDocument(_os.path.join(_rec, _f)); _n += 1",
+      "            except Exception:",
+      "                pass",
+      "_App._fcweb_restored = True",          // gates the prune; set even when nothing was found
+      "if _n: _s.__stderr__.write('[fcweb] restored %d document(s) from your last session\\n' % _n); _s.__stderr__.flush()",
       ""
     ].join("\n");
-    // Restore once after boot settles, then auto-save every 30s.
-    setTimeout(function(){ runPy(RESTORE_PY); }, 13000);
-    setInterval(function(){ runPy(AUTOSAVE_PY); }, 30000);
-    // Best-effort final save when the tab is hidden/closed (persists via IDBFS flush).
-    document.addEventListener('visibilitychange', function(){ if(document.hidden) runPy(AUTOSAVE_PY); });
+    var AUTOSAVE_PY = "import FreeCAD as _App\n" +
+      "try: _App._fcweb_saver.save()\n" +
+      "except Exception: pass\n";
+    var AUTOSAVE_FORCE = "import FreeCAD as _App\n" +
+      "try: _App._fcweb_saver.save(True)\n" +
+      "except Exception: pass\n";
+    // Sequence on READINESS, not on fixed timers. runPy is a no-op until the interpreter
+    // exists, and on a cold first load (empty HTTP cache) it does not by 11 s -- the
+    // observer was never installed, so nothing was ever saved, and the work of a user's
+    // very first session was the one thing guaranteed to be lost.
+    (function(){
+      var installed = false, restored = false;
+      function ready(){
+        var m = window.fcInstance;
+        return !!(m && m._fcweb_run_python && m.FS && !window.__fcPyBusy);
+      }
+      var poll = setInterval(function(){
+        if (!ready()) return;
+        if (!installed) { runPy(AUTOSAVE_INSTALL); installed = true; return; }   // next tick: restore
+        if (!restored) { runPy(RESTORE_PY); restored = true; return; }
+        clearInterval(poll);
+        setInterval(function(){ runPy(AUTOSAVE_PY); }, 1500);
+        setInterval(function(){ runPy(AUTOSAVE_FORCE); }, 120000);  // backstop for a missed notify
+      }, 1000);
+    })();
+    // Closing or hiding the tab: force a save. pagehide is the one that fires on reload.
+    document.addEventListener('visibilitychange', function(){ if(document.hidden) runPy(AUTOSAVE_FORCE); });
+    window.addEventListener('pagehide', function(){ runPy(AUTOSAVE_FORCE); });
     function ensureOverlay(){
       if (ov) return;
       var screen = document.getElementById('screen');

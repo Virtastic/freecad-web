@@ -75,7 +75,9 @@ Module['preRun'].push(function () {
         var touch = function () {
           dirty = true;
           if (timer) { return; }
-          timer = setTimeout(function () { timer = null; if (dirty) flush(); }, 1200);
+          // 400ms, not 1200: the autosave writes then the user may reload immediately,
+          // and every millisecond here is time the work exists only in memory.
+          timer = setTimeout(function () { timer = null; if (dirty) flush(); }, 400);
         };
         Module.fcwebTouchFS = touch;
         try {
