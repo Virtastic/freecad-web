@@ -50,7 +50,7 @@ done
 cd "$BUILD/f77"
 n=0; bad=0
 for f in *.f; do
-  if "$F2C" -a -A -d"$BUILD/c" "$f" >/dev/null 2>"$BUILD/e.log" && ! grep -q '^Error' "$BUILD/e.log"; then
+  if "$F2C" -a -A -NC1000 -d"$BUILD/c" "$f" >/dev/null 2>"$BUILD/e.log" && ! grep -q '^Error' "$BUILD/e.log"; then
     n=$((n+1))
   else
     echo "$f" >> "$BUILD/UNCONVERTED.txt"; rm -f "$BUILD/c/${f%.f}.c"; bad=$((bad+1))
@@ -70,7 +70,7 @@ python3 "$ROOT/tools/f2c_single_underscore.py" "$BUILD/c" "$BUILD/f77"
 python3 "$ROOT/tools/ccx_make_stubs.py" "$BUILD/UNCONVERTED.txt" "$BUILD/f77" "$BUILD/stubs"
 ( cd "$BUILD/stubs" 2>/dev/null && for f in *.f; do
     [ -f "$f" ] || continue
-    "$F2C" -a -A -d"$BUILD/c" "$f" >/dev/null 2>&1 || true
+    "$F2C" -a -A -NC1000 -d"$BUILD/c" "$f" >/dev/null 2>&1 || true
   done )
 
 ABI="$PREFIX/lib/ccx-abi-arpack.txt"

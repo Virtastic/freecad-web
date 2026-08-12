@@ -35,7 +35,7 @@ done
 cd "$BUILD/f77"
 nf=0
 for f in *.f; do
-  if "$F2C" -a -A -d"$BUILD/c" "$f" >/dev/null 2>"$BUILD/f2c-$f.log" \
+  if "$F2C" -a -A -NC1000 -d"$BUILD/c" "$f" >/dev/null 2>"$BUILD/f2c-$f.log" \
      && ! grep -q '^Error' "$BUILD/f2c-$f.log"; then
     nf=$((nf+1))
   else
@@ -97,7 +97,7 @@ stub_round() {  # $1 = file listing .f basenames to replace with aborting stubs
   python3 "$ROOT/tools/ccx_make_stubs.py" "$1" "$BUILD/f77" "$BUILD/stubs"
   ( cd "$BUILD/stubs" && for f in *.f; do
       [ -f "$f" ] || continue
-      "$F2C" -a -A -d"$BUILD/c" "$f" >/dev/null 2>&1 || echo "STUB-FAIL $f" >> "$BUILD/UNCONVERTED.txt"
+      "$F2C" -a -A -NC1000 -d"$BUILD/c" "$f" >/dev/null 2>&1 || echo "STUB-FAIL $f" >> "$BUILD/UNCONVERTED.txt"
     done )
   abi_passes
 }

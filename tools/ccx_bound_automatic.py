@@ -39,6 +39,10 @@ BOUNDS = {
     'voldl(0:mi(2),20)': ('voldl(0:20,20)',  'mi(2)',   20,   'voldl'),
     'ff(0:mi(2),8)':     ('ff(0:20,8)',      'mi(2)',   20,   'ff'),
     'bounds(nobject)':   ('bounds(100)',     'nobject', 100,  'bounds'),
+    'yiloc(6,mi(1))':    ('yiloc(6,100)',    'mi(1)',   100,  'yiloc'),
+    'coords(3,mi(1))':   ('coords(3,100)',   'mi(1)',   100,  'coords'),
+    # mi(3) is the layer count; 8 keeps this local at ~1.3 MB instead of tens of MB
+    'field(999,20*mi(3))': ('field(999,160)', 'mi(3)',   8,    'field'),
 }
 
 # file -> [(array, declaration to replace, allocate expression, bound)]
