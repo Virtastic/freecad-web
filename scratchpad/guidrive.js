@@ -95,7 +95,8 @@ const PY_POPUP = 'import sys\nfrom PySide6 import QtWidgets, QtCore\n' +
     const fit = items.find((i) => /^Fit all/i.test(i[0])) || items.find((i) => /Std views|Standard views/i.test(i[0]));
     if (fit) { await p.mouse.click(fit[1], fit[2]); await sl(2500); results.push('clicked menu item: ' + fit[0]); }
     else { await p.keyboard.press('Escape'); results.push('clicked menu item: none matched'); }
-    for (let i = 0; i < 4; i++) { await p.keyboard.press('Escape'); await sl(300); }
+    await p.keyboard.press('Escape'); await sl(400);
+    await p.mouse.click(700, 620); await sl(800);       // clicking away is what closes it
     const stillOpen = await ask(p, 'import sys\nfrom PySide6 import QtWidgets\n' +
       'sys.__stderr__.write("@@ popup=%s\\n" % (QtWidgets.QApplication.activePopupWidget() is not None))\n' +
       'sys.__stderr__.flush()\n', 'POPQ');
