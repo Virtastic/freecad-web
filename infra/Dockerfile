@@ -17,5 +17,7 @@ COPY play-gui/freecad-gui.html play-gui/qtloader.js /usr/share/nginx/html/
 COPY play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data /usr/share/nginx/html/
 # The mesher, fetched by the page on first use (FEM meshing 404s without it).
 COPY play-gui/gmsh.js play-gui/gmsh.wasm /usr/share/nginx/html/
+# CalculiX solver module, fetched on first solve.
+COPY play-gui/ccx.js play-gui/ccx.wasm /usr/share/nginx/html/
 
 EXPOSE 80
