@@ -7,7 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..', 'play-gui');
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
-                '.css': 'text/css', '.json': 'application/json' };
+                '.css': 'text/css', '.json': 'application/json', '.png': 'image/png',
+                '.webmanifest': 'application/manifest+json' };
 http.createServer((req, res) => {
   const url = req.url.split('?')[0];
   const file = path.join(ROOT, url === '/' ? 'index.html' : url);
@@ -20,6 +21,7 @@ http.createServer((req, res) => {
       'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
     };
     if (file.endsWith('.data.gz')) { h['Content-Encoding'] = 'gzip'; }
+    if (file.endsWith('sw.js')) { h['Service-Worker-Allowed'] = '/'; h['Cache-Control'] = 'no-cache'; }
     res.writeHead(200, h);
     res.end(buf);
   });

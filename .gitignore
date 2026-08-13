@@ -27,6 +27,11 @@
 /play-gui/*
 !/play-gui/freecad-gui.html
 !/play-gui/qtloader.js
+# installability assets: hand-authored / generated once, shipped in the image
+!/play-gui/manifest.webmanifest
+!/play-gui/sw.js
+!/play-gui/icon-192.png
+!/play-gui/icon-512.png
 
 # === Compiled artifacts ===
 *.o

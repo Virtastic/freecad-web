@@ -1,4 +1,6 @@
-<!doctype html><html><head><meta charset="utf-8"><title>FreeCAD — WebAssembly (GUI)</title><link rel="icon" href="data:,">
+<!doctype html><html><head><meta charset="utf-8"><title>FreeCAD — WebAssembly (GUI)</title><link rel="icon" href="/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2b2f36">
 <!-- Without this a tablet renders the canvas at a fake 980px width and then scales it,
      so the UI is tiny and every hit-test is offset. user-scalable=no because the 3D view
      does its own pinch-zoom; letting the browser zoom the page too fights it. -->
@@ -543,6 +545,54 @@ window.fcwebNotify = function (text, kind, actions) {
 };
 </script>
 <script>
+// ---- installability ----------------------------------------------------------------
+// Chrome grants persistent storage automatically to an INSTALLED app, and refuses it
+// otherwise (measured: three engaged visits, still denied). Persistent storage is what
+// stops the browser evicting a user's documents when the disk gets tight, so making the
+// app installable is a data-safety feature before it is a convenience.
+(function () {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').then(function (r) {
+        console.log('[fcweb] service worker registered, scope ' + r.scope);
+      }, function (e) {
+        console.log('[fcweb] service worker registration failed: ' + e.message);
+      });
+    });
+  }
+  var deferred = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferred = e;
+    window.__fcInstallable = true;
+    if (typeof window.fcwebNotify !== 'function') return;
+    window.fcwebNotify(
+      'Install FreeCAD as an app? Installed, the browser guarantees your saved documents ' +
+      'are never evicted to reclaim disk space, and it opens in its own window.',
+      'info',
+      [{ label: 'Install', onClick: function (btn) {
+          btn.textContent = 'Installing…';
+          deferred.prompt();
+          deferred.userChoice.then(function (c) {
+            btn.textContent = c.outcome === 'accepted' ? 'Installed' : 'Not now';
+            if (c.outcome === 'accepted' && navigator.storage && navigator.storage.persist) {
+              navigator.storage.persist().then(function (ok) {
+                console.log('[fcweb] persistent storage after install: ' + ok);
+              });
+            }
+          });
+        } }]);
+  });
+  window.addEventListener('appinstalled', function () {
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().then(function (ok) {
+        if (ok && typeof window.fcwebNotify === 'function') {
+          window.fcwebNotify('Installed. Your documents are now stored persistently.', 'info');
+        }
+      });
+    }
+  });
+})();
 // ---- crash reporting and storage health ------------------------------------------
 // Until now a trap reached the console and nowhere else: the user saw the app stop
 // responding with no explanation, and we never learned it happened. Two things are
@@ -1468,7 +1518,21 @@ window.fcRunPy = fcRunPy;
         return constAttr(this, idx, v[0], v[1], v[2], v[3], realVA4fv, arguments); };
       P.vertexAttrib4f = function (idx, x, y, z, w) {
         return constAttr(this, idx, x, y, z, w, realVA4f, arguments); };
-      console.log('[fcweb] redundant GL state elimination ON');
+      // Drain any pending immediate-mode line batch before ANY other GL call: while it
+      // accumulates, no GL call happens at all, which is the entire point.
+      (function () {
+        var busy = false;
+        Object.getOwnPropertyNames(P).forEach(function (k) {
+          var f; try { f = P[k]; } catch (e) { return; }
+          if (typeof f !== 'function') return;
+          P[k] = function () {
+            var G = globalThis.__GLI;
+            if (!busy && G && G.__mrgPend) { busy = true; try { G.__flushMerged(); } finally { busy = false; } }
+            return f.apply(this, arguments);
+          };
+        });
+      })();
+      console.log('[fcweb] redundant GL state elimination + line merging ON');
     })();
 
 

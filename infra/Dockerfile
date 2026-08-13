@@ -13,6 +13,9 @@ COPY infra/nginx.conf /etc/nginx/conf.d/freecad.conf
 
 # Front-end (in git).
 COPY play-gui/freecad-gui.html play-gui/qtloader.js /usr/share/nginx/html/
+# Installability: an installed app is the only case where Chrome grants persistent
+# storage without a prompt, which is what protects a user's documents from eviction.
+COPY play-gui/manifest.webmanifest play-gui/sw.js play-gui/icon-192.png play-gui/icon-512.png /usr/share/nginx/html/
 # Build artifacts (fetched into play-gui/ by CI from the release).
 COPY play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data /usr/share/nginx/html/
 # FreeCAD.data is 341 MB and gzips to 83 MB. Cloudflare does not compress it (wrong
