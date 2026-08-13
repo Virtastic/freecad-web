@@ -195,7 +195,11 @@ Artifacts are gitignored and shipped through a GitHub Release. The release
 must exist **before** the branch push, because CI pulls the assets by tag.
 
 ```bash
-gh release create build-YYYYMMDD-<slug> play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data
+# ALL SEVEN, always: CI hard-fails on a missing asset, and gmsh/ccx are separate
+# wasm modules that a FreeCAD-only relink does not rebuild -- re-upload them unchanged.
+gh release create build-YYYYMMDD-<slug> \
+  play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data \
+  play-gui/gmsh.js play-gui/gmsh.wasm play-gui/ccx.js play-gui/ccx.wasm
 git push origin dev:ovhcloud     # triggers .github/workflows/deploy-ovh.yml
 ```
 
