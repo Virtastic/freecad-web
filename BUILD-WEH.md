@@ -213,6 +213,70 @@ and are tested (`scratchpad/keyfix.js`):
 Verified end to end: Delete deletes, Cmd+Z restores, typing is not doubled, Escape still
 closes menus, regression 8/8 + 6/6 with 0 page errors.
 
+## JSPI: only the promising exports may suspend, and Qt's events were not among them
+
+The deepest defect in this port, and it was invisible to every test that used the Python
+bridge. Under `-sJSPI` only the exports listed in `ASYNCIFY_EXPORTS` are wrapped in
+`WebAssembly.promising`, and **only a promising stack may suspend**. The link listed one:
+`fcweb_run_python`. So anything driven from Python could suspend -- and every modal dialog
+"verified" so far was triggered by `Gui.runCommand` through exactly that bridge.
+
+Qt's own events take another route entirely: the browser calls
+`Module.QtEventListener.handleEvent` (`qstdweb.cpp:743-751`), an embind method that is not
+promising. Any nested event loop entered from real input therefore threw
+`SuspendError: trying to suspend without WebAssembly.promising` -- and, because the
+exception unwinds out of the handler, the action simply never happened:
+
+| interaction (real mouse) | what a user saw |
+|---|---|
+| Help > About, Preferences, any message box | no dialog opens at all |
+| drag a tree item onto a Group | nothing is reparented |
+
+Both are nested loops: `QDialog::exec`, and `QDrag::exec` (`qwasmdrag.cpp:94-99` -- Qt only
+attempts its wasm drag when JSPI is present, so this path exists *because* of JSPI).
+
+The fix is one export and one JS class:
+
+- `wasm_event_dispatch.cpp` exports `fcweb_dispatch_event(uintptr_t handler)`, added to
+  **both** `EXPORTED_FUNCTIONS` and `ASYNCIFY_EXPORTS` (emscripten wraps it in
+  `WebAssembly.promising` for us).
+- `pre-gui.js` replaces `Module.QtEventListener` at `onRuntimeInitialized` -- after embind
+  has registered its classes (initRuntime ran the ctors) and before `main` creates any
+  listener. Qt's registration is `val::module_property("QtEventListener").new_(ptr)`, so a
+  plain JS class with a `handleEvent` method is a drop-in.
+- The event value crosses through `Module.__fcwebEvent` instead of an embind handle, so
+  the JS side needs no access to emscripten's minified `Emval` internals. It is read
+  synchronously before anything can suspend, so an event delivered *during* a suspend
+  (which is the point -- a modal dialog keeps processing input) cannot clobber it.
+
+If the export is missing (older binary), the shim leaves Qt's own listener alone: dialogs
+and drag stay broken, but input keeps working.
+
+## Driving the GUI with real input, and how the harness lies to you
+
+The keyboard defect was invisible to every scripted-API test, so each ordinary
+interaction is now driven with real mouse and key events. All of these pass, with 0 page
+errors (`scratchpad/pick3d.js`, `propedit2.js`, `dragdoc.js`, `moreinput.js`, `wheeldbl.js`):
+
+| interaction | evidence |
+|---|---|
+| click a solid in the 3D view | selects it; clicking empty space clears; hover preselects |
+| rubber-band select (`Std_BoxSelection` + drag) | both solids selected |
+| wheel zoom | camera height 17.3 -> 2.3 |
+| double-click a tree item | the task editor opens |
+| arrow keys in the tree | current item moves A -> B |
+| type a dimension in the property editor | `Length` becomes 42.000 |
+| F2 rename in the tree | `Label` becomes `Renamed` |
+
+Two harness traps burned a run each; check both before believing a failure:
+
+- **Aim with FreeCAD's own projection.** Guessed click offsets found nothing and looked
+  like broken picking. `view.getPointOnScreen(x,y,z)` gives the exact pixel -- but its
+  origin is **bottom-left**, so flip Y against the subwindow height before clicking.
+- **Raise the Model dock first.** The tree and the property editor are tabbed together;
+  if that tab is not current, `isVisible()` is false for both and every lookup returns
+  "not locatable" -- which reads exactly like the panel being broken.
+
 ## Escape and the popup keyboard grab
 
 Escape now dismisses an open menu, and the route there is worth keeping because the

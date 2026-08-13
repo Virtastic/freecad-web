@@ -186,6 +186,62 @@ Module.preRun.push(function(){
     if (Module.wasmBinary) { Module.fcweb_install_pyem_countargs(Module.wasmBinary); }
   } catch(e){}
 });
+// Qt's DOM events must arrive on a stack that can suspend.
+//
+// With -sJSPI only ASYNCIFY_EXPORTS get WebAssembly.promising, and only a promising
+// stack may suspend. Qt delivers every browser event through Module.QtEventListener
+// (qstdweb.cpp EventCallback) -- an embind method, not promising -- so any nested event
+// loop reached from a real click, key or drag threw "SuspendError: trying to suspend
+// without WebAssembly.promising" and the action silently did nothing: Help > About
+// opened no dialog, dragging a tree item onto a Group did not reparent it.
+//
+// So Qt gets our listener instead, entering wasm through fcweb_dispatch_event, which IS
+// in ASYNCIFY_EXPORTS. Installed at onRuntimeInitialized: embind has registered its
+// classes by then (initRuntime ran the ctors) and Qt has not yet created any listener
+// (that happens inside main).
+(function () {
+  function install() {
+    if (Module.__fcwebEventDispatchInstalled) { return; }
+    var dispatch = Module._fcweb_dispatch_event;
+    if (typeof dispatch !== 'function') {
+      // Export missing (older binary): leave Qt's own listener in place rather than
+      // breaking all input -- dialogs and drag stay broken, everything else works.
+      if (typeof err === 'function') { err('[fcweb] no fcweb_dispatch_event; Qt events stay non-suspendable'); }
+      return;
+    }
+    Module.__fcwebEventDispatchInstalled = true;
+
+    function QtEventListener(handler) { this.handler = handler; }
+    QtEventListener.prototype.handleEvent = function (event) {
+      // Read synchronously by fcweb_dispatch_event before it can suspend, so an event
+      // delivered during a suspend (which is the whole point -- a modal dialog keeps
+      // processing input) cannot clobber this one.
+      Module.__fcwebEvent = event;
+      var r;
+      try {
+        r = dispatch(this.handler);
+      } catch (e) {
+        if (typeof err === 'function') { err('[fcweb] event handler threw: ' + e); }
+        return;
+      }
+      // A promising export returns a Promise; without this a rejection is invisible.
+      if (r && typeof r.catch === 'function') {
+        r.catch(function (e) {
+          if (typeof err === 'function') { err('[fcweb] event handler rejected: ' + e); }
+        });
+      }
+    };
+    Module.QtEventListener = QtEventListener;
+  }
+  var prev = Module.onRuntimeInitialized;
+  Module.onRuntimeInitialized = function () {
+    try { install(); } catch (e) {
+      if (typeof err === 'function') { err('[fcweb] event dispatch install failed: ' + e); }
+    }
+    if (prev) { prev.apply(this, arguments); }
+  };
+})();
+
 // Self-check (main thread, after instantiation): the worker fallback above uses
 // the exported function's `length`; confirm it agrees with the parsed wasm types
 // so a wrong arity can never silently corrupt a trampolined call. Logs one line.
