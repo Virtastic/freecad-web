@@ -162,6 +162,29 @@ without building a 1.6 GB model -- **do not** test it by faking `HEAPU8.buffer`,
 emscripten glue uses everywhere and which produces a cascade of aborts that looks exactly
 like the feature failing.
 
+## Timing anything: check the load average first, and diff the binary
+
+A relink that added ONE export appeared to slow the BIM example from 6.2 s to 10.2 s --
+about 50%, reproduced across several runs, and confirmed "independently" against
+production. All of it was wrong:
+
+- The two "independent environments" were local Chrome and production Chrome **running on
+  the same machine**. Only the server differed. That is not independence.
+- The load average was **25.8** during the slow readings (this box was linking, running
+  memory experiments and holding a dozen leftover Chrome profiles). At load ~6 the same
+  build opens BIM in 7.6 s; early in the session, on an idle box, 6.2 s.
+- The two binaries differed by **37 bytes** -- the export entry. No mechanism exists for
+  that to cost 50%.
+
+Before believing a performance change: `uptime` (this project's builds routinely push the
+load past 20), `ls -la` both wasm files (a 37-byte diff is not a regression; a 234 MB vs
+152 MB diff means wasm-opt did not run), and A/B back-to-back under the same conditions --
+never against a number measured hours earlier under different load.
+
+`tools/sync-play-artifacts.sh` now refuses a wasm over 200 MB, because killing a link
+mid-way leaves the un-optimized 234 MB intermediate in `bin/` looking finished, and
+shipping that IS a real, large regression.
+
 ## Escape and the popup keyboard grab
 
 Escape now dismisses an open menu, and the route there is worth keeping because the

@@ -8,6 +8,14 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/build-freecad-gui-weh/bin"
+# A correct link lands near 152 MB. 234 MB means wasm-opt did not run (or was killed
+# mid-link, which leaves the un-optimized intermediate sitting in bin/ looking finished).
+# Shipping that is a silent, large performance regression -- refuse it here.
+sz=$(stat -f %z "$BIN/FreeCAD.wasm" 2>/dev/null || stat -c %s "$BIN/FreeCAD.wasm")
+if [ "$sz" -gt 200000000 ]; then
+  echo "FreeCAD.wasm is ${sz} bytes -- that is the pre-wasm-opt size. Re-run the link." >&2
+  exit 1
+fi
 cp "$BIN/FreeCAD.js" "$BIN/FreeCAD.wasm" "$BIN/FreeCAD.data" "$ROOT/play-gui/"
 python3 "$ROOT/tools/patch-freecad-js.py" "$ROOT/play-gui/FreeCAD.js"
 rm -f "$ROOT/play-gui/FreeCAD.data.gz"
