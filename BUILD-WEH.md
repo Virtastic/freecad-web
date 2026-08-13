@@ -131,6 +131,26 @@ unzip the wheel) -- without it `importCSG` raises `No module named 'ply'` and Op
 import is dead. PySide6 ships Core/Gui/Widgets only; nothing in FreeCAD's own Python
 imports the rest.
 
+## Workbenches that fail their FIRST activation
+
+`Gui.activateWorkbench()` returns **False** when a workbench's `Initialize()` throws --
+it does not raise. A probe that only catches exceptions therefore reports success while
+the user clicks the workbench selector and nothing happens; the second click usually
+works, because the failed Initialize left enough behind. Two shipped this way and were
+found only by FreeCAD's own `Workbench.testActivate`, which walks every workbench:
+
+- **CAM**: `No module named 'area'`. `libarea`'s Python module (`area.a`, `PyInit_area`)
+  was built but absent from both the inittab and the link line, so `Path.Op.Adaptive`
+  could not import and `Path.GuiInit.Startup()` threw. Cost 22 of CAM's 51 commands.
+- **OpenSCAD**: `InitGui` calls `searchforopenscadexe()`, which shells out to
+  `which openscad`; emscripten raises `OSError(138)` and takes Initialize down with it.
+  Guarded on `sys.platform == "emscripten"` -- CSG import is pure Python and unaffected.
+
+Two habits from this: after adding any statically linked Python extension, check it is
+in **both** the inittab and the link line (`scratchpad/wbactivate.js` walks all 20
+workbenches and prints each failure's traceback), and treat a False return as a failure
+even when nothing was raised.
+
 ## FEM in the browser: never run its tasks on a thread
 
 The solver framework (`femsolver/task.py`) and the mesh task panel

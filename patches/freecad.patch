@@ -22650,10 +22650,10 @@ index ae23df7..49bf99c 100644
      const char* mingw_prefix = getenv("MINGW_PREFIX");
      const char* py_home = getenv("PYTHONHOME");
 diff --git a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
-index d56d1a8..7ec4ad7 100644
+index d56d1a8..f384025 100644
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -1,457 +1,638 @@
+@@ -1,457 +1,642 @@
 -/***************************************************************************
 - *   Copyright (c) 2008 Jürgen Riegel <juergen.riegel@web.de>              *
 - *                                                                         *
@@ -23252,6 +23252,7 @@ index d56d1a8..7ec4ad7 100644
 +extern "C" PyObject* PyInit_CAMSimulator();
 +extern "C" PyObject* PyInit_Web();
 +extern "C" PyObject* PyInit_QtUnitGui();
++extern "C" PyObject* PyInit_area();
 +// PySide6/Shiboken built as wasm static libs: register the C extension modules as
 +// builtins so `import PySide6.QtWidgets` (Draft/Arch etc.) resolves in the browser.
 +extern "C" PyObject* PyInit_Shiboken();
@@ -23355,6 +23356,9 @@ index d56d1a8..7ec4ad7 100644
 +    PyImport_AppendInittab("CAMSimulator", PyInit_CAMSimulator);
 +    PyImport_AppendInittab("Web", PyInit_Web);
 +    PyImport_AppendInittab("QtUnitGui", PyInit_QtUnitGui);
++    // libarea: CAM's Adaptive operations import it, and without it
++    // Path.GuiInit.Startup() throws and the whole workbench fails to activate.
++    PyImport_AppendInittab("area", PyInit_area);
 +    // Register PySide/Shiboken extension modules as builtins under safe
 +    // underscore names (dotted inittab names break CPython's importlib
 +    // bootstrap on this build); the preloaded PySide6/shiboken6 packages'
@@ -24398,6 +24402,23 @@ index f1c8383..733312a 100644
  if (FREECAD_WARN_ERROR)
      target_compile_warn_error(MeshPartGui)
  endif()
+diff --git a/src/Mod/OpenSCAD/OpenSCADUtils.py b/src/Mod/OpenSCAD/OpenSCADUtils.py
+index 36bf78a..8487cb2 100644
+--- a/src/Mod/OpenSCAD/OpenSCADUtils.py
++++ b/src/Mod/OpenSCAD/OpenSCADUtils.py
+@@ -75,6 +75,12 @@ def searchforopenscadexe():
+     py3_find = shutil.which("openscad")
+     if py3_find:
+         return py3_find
++    if sys.platform == "emscripten":
++        # No processes in the browser, so there is no binary to find and the fallback
++        # below would raise OSError(138) out of InitGui -- which aborts Initialize() and
++        # leaves the whole workbench unactivatable, not merely the binary unavailable.
++        # CSG import is pure Python and keeps working.
++        return None
+     FreeCAD.Console.PrintError(
+         "shutil.which('openscad') did not return a result. Using fallback.\n"
+     )
 diff --git a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
 index 1050760..9470f19 100644
 --- a/src/Mod/Part/App/AppPart.cpp
