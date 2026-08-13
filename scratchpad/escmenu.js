@@ -67,8 +67,9 @@ sys.__stderr__.flush()
   await sl(1800);
   const mm = /MENU (\d+) (\d+)/.exec(await last(p, /MENU [^\n]*/g));
   if (!mm) { console.log('menubar item not found'); await b.close(); process.exit(0); }
+  await sl(4000);          // let the menubar finish laying out (slower over the network)
   await p.mouse.click(+mm[1], +mm[2]);
-  await sl(2500);
+  await sl(3500);
 
   const popupState = async (tag) => {
     await run(p, `
@@ -81,7 +82,17 @@ sys.__stderr__.flush()
     await sl(1500);
     return (await last(p, new RegExp('POP ' + tag + ' [^\\n]*', 'g'))).replace('POP ' + tag + ' ', '');
   };
-  console.log('after clicking View: popup ' + await popupState('A'));
+  let opened = await popupState('A');
+  if (opened === 'none') {           // retry once before drawing any conclusion
+    await p.mouse.click(+mm[1], +mm[2]);
+    await sl(3500);
+    opened = await popupState('A2');
+  }
+  console.log('after clicking View: popup ' + opened);
+  if (opened === 'none') {
+    console.log('INCONCLUSIVE: the menu never opened, so this run says nothing about Escape');
+    await b.close().catch(() => {}); process.exit(0);
+  }
   const focus1 = await p.evaluate(() => {
     const d = (r) => r && r.activeElement
       ? (r.activeElement.tagName + (r.activeElement.id ? '#' + r.activeElement.id : '')
