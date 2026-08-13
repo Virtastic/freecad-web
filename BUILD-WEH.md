@@ -184,6 +184,28 @@ which is harmless for a no-op worker but means worker updates are not instant.
 `/play-gui/*` is gitignored with an allowlist -- a new front-end file needs an explicit
 `!` exception or the image builds without it and the deploy fails.
 
+## The engine triple must be content-addressed together
+
+`FreeCAD.js`, `FreeCAD.wasm` and `FreeCAD.data` are ONE artifact split across three
+files: the JS carries the byte offsets of everything packed inside the data. They are
+served `Cache-Control: immutable` for a year, so if any of them changes at a fixed URL a
+returning browser mixes an old one with a new one. That is not hypothetical -- it shipped:
+a cached `FreeCAD.js` plus new data meant CPython could not import its own `encodings`
+module, and the app died on the splash with a Qt error dialog. First-time visitors were
+completely fine, which is why every check missed it.
+
+`infra/Dockerfile` now stamps all three URLs from their own md5 and fails the build if any
+stamp is missing. The entry HTML is `no-cache` so those stamps are actually seen.
+
+**Always run one gate with a REUSED browser profile.** `scratchpad/reg-prod.js` keeps a
+fixed `userDataDir` deliberately -- it is the only harness that behaves like a returning
+user, and it is the one that caught this. Fresh-profile testing cannot see a stale-cache
+bug, an accumulating-state bug, or anything else that only exists on the second visit.
+
+**When a harness says "0 page errors" but nothing works, take a screenshot.** The failure
+here was a Qt modal sitting in the middle of the canvas the whole time; the console showed
+only repeated `readobject called with exception set`.
+
 ## Releasing: the checklist, and the ways it bites
 
 1. **Release first, push second.** CI pulls assets by tag, so the release must exist
