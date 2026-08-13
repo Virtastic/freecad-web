@@ -131,6 +131,27 @@ unzip the wheel) -- without it `importCSG` raises `No module named 'ply'` and Op
 import is dead. PySide6 ships Core/Gui/Widgets only; nothing in FreeCAD's own Python
 imports the rest.
 
+## Escape and the popup keyboard grab
+
+Escape now dismisses an open menu, and the route there is worth keeping because the
+obvious fixes do not work. Measured on this Qt-wasm build:
+
+- Typing reaches Qt normally: a focused `QLineEdit` receives real key events verbatim,
+  even though `document.activeElement` is `BODY` and the Qt canvas has no `tabindex`.
+- With **no** popup open, an event filter sees `Key_Escape` (16777216) arrive.
+- With a popup open, the key never enters Qt's event system at all -- an application-wide
+  filter installed on `QApplication` does **not** see it. The popup never gets the
+  keyboard grab it has on desktop.
+
+So this cannot be fixed from inside Qt, and a Python-level event filter (tried, verified
+ineffective) is the wrong layer. `freecad-gui.html` watches for Escape in the DOM and
+calls `closeActivePopup()`, which asks Qt to close `activePopupWidget()`. It is a no-op
+unless a popup is actually open, so Escape keeps its normal meaning everywhere else, and
+it respects `__fcPyBusy` so it can never re-enter a running interpreter.
+
+Front-end only: no relink, and the release assets are unchanged -- push the branch and CI
+rebuilds the image around the same release.
+
 ## Known: the one upstream test that hangs, and why it does not reach users
 
 `Document.testApplyFiles` does not finish in 400 s (the other 107 tests in that suite

@@ -1945,7 +1945,29 @@ window.fcRunPy = fcRunPy;
     var k=(e.key||'').toLowerCase();
     if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); download(); }
     else if((e.metaKey||e.ctrlKey)&&k==='o'){ e.preventDefault(); e.stopImmediatePropagation(); openFile(); }
+    else if(k==='escape'){ closeActivePopup(); }
   },true);
+
+  // Escape closes an open menu. Measured on this Qt-wasm build: with a popup open the
+  // key never enters Qt's event system at all -- an application-wide Qt event filter
+  // installed on QApplication does NOT see it, though the same filter sees Escape fine
+  // when no popup is open, and typing works normally. So Qt cannot fix this from inside;
+  // the shell has to notice the key and ask Qt to close the popup.
+  // Deliberately narrow: does nothing unless a popup is actually open, so Escape keeps
+  // its normal meaning everywhere else (task dialogs, Sketcher tools). Nested submenus
+  // close one level per press, as on desktop.
+  function closeActivePopup(){
+    try{
+      var m=window.fcInstance; if(!m||!m._malloc) return;
+      if(window.__fcPyBusy) return;           // never re-enter a running interpreter
+      var code="from PySide6 import QtWidgets as _W\n"
+             + "_w=_W.QApplication.activePopupWidget()\n"
+             + "\nif _w is not None:\n    _w.close()\n";
+      var n=new TextEncoder().encode(code).length+1;
+      var q=m._malloc(n); m.stringToUTF8(code,q,n);
+      (window.fcRunPy||function(mm,pp){mm._fcweb_run_python(pp);mm._free(pp);})(m,q);
+    }catch(err){}
+  }
 })();
 </script>
 </body></html>
