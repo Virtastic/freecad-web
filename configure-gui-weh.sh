@@ -51,6 +51,10 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DFCWEB_DW="$DW" \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_GUI=ON \
+  `# ON installs the freecad namespace package into the HOST python's site-packages,`\
+  `# which a cross build cannot write and which never reaches the wasm FS. OFF puts it`\
+  `# in <prefix>/Ext/freecad, the tree that is preloaded as /freecad/Ext.` \
+  -DINSTALL_TO_SITEPACKAGES=OFF \
   -DFREECAD_USE_PYSIDE=OFF -DFREECAD_USE_SHIBOKEN=OFF \
   -DCMAKE_DISABLE_FIND_PACKAGE_Shiboken6=ON -DCMAKE_DISABLE_FIND_PACKAGE_PySide6=ON \
   -DBUILD_FEM=ON -DBUILD_ADDONMGR=OFF -DBUILD_BIM=ON -DBUILD_DRAFT=ON \
@@ -60,9 +64,9 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DBUILD_OPENSCAD=ON -DBUILD_SMESH=ON -DBUILD_PART_DESIGN=ON -DBUILD_CAM=ON -DBUILD_ASSEMBLY=ON \
   -DFREECAD_USE_PYBIND11=ON -Dpybind11_DIR="$ROOT/.qtvenv/lib/python3.14/site-packages/pybind11/share/cmake/pybind11" \
   -DVTK_DIR="$DW/lib/cmake/vtk-9.3" \
-  -DBUILD_PLOT=OFF -DBUILD_POINTS=ON -DBUILD_REVERSEENGINEERING=ON -DBUILD_ROBOT=ON \
+  -DBUILD_PLOT=ON -DBUILD_POINTS=ON -DBUILD_REVERSEENGINEERING=ON -DBUILD_ROBOT=ON \
   -DBUILD_SHOW=ON -DBUILD_SKETCHER=ON -DBUILD_SPREADSHEET=ON -DBUILD_START=ON \
-  -DBUILD_TEST=OFF -DBUILD_MEASURE=ON -DBUILD_TECHDRAW=ON -DBUILD_TUX=ON \
+  -DBUILD_TEST=ON -DBUILD_MEASURE=ON -DBUILD_TECHDRAW=ON -DBUILD_TUX=ON \
   -DBUILD_WEB=ON -DBUILD_SURFACE=ON -DBUILD_PART=ON \
   -DBUILD_DYNAMIC_LINK_PYTHON=OFF \
   -DFREECAD_USE_EXTERNAL_PIVY=OFF -DFREECAD_USE_PCH=OFF \

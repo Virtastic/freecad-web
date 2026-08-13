@@ -110,6 +110,43 @@ Gotchas that cost real time:
 - Set `-DCMAKE_STRIP=/usr/bin/true`. Apple `strip` corrupts the archives and
   `emstrip` drops the symbol table.
 
+## Module coverage vs upstream FreeCAD 1.0
+
+Every `BUILD_*` module is ON except **AddonManager**, which wants a `git` binary and
+real sockets; the `.zip`/GitHub workbench installer covers that use case instead.
+`BUILD_PLOT` and `BUILD_TEST` are ON -- Test's C++ half is the `QtUnitGui` module, which
+needs both a `PyImport_AppendInittab` entry in `MainGui.cpp` and `QtUnitGui.a` on the
+link line, since nothing is dynamically loaded. Plot ships no workbench class upstream,
+so it is importable but correctly absent from the workbench list.
+
+`INSTALL_TO_SITEPACKAGES` must be **OFF**. ON installs the `freecad` namespace package
+into the *host* interpreter's site-packages -- a path a cross build usually cannot write
+(the install then fails part-way, silently skipping the Gui/Doc install steps) and which
+never reaches the wasm FS regardless. OFF puts it in `<prefix>/Ext/freecad`, the tree
+preloaded as `/freecad/Ext`, so `import freecad` and `freecad.<addon>` layouts work.
+
+Two Python packages are vendored into `deps/src/cpython/Lib` (preloaded as `/pylib`)
+because FreeCAD needs them and they are pure Python: **ply** (`pip download ply`,
+unzip the wheel) -- without it `importCSG` raises `No module named 'ply'` and OpenSCAD
+import is dead. PySide6 ships Core/Gui/Widgets only; nothing in FreeCAD's own Python
+imports the rest.
+
+## FEM in the browser: never run its tasks on a thread
+
+The solver framework (`femsolver/task.py`) and the mesh task panel
+(`femtaskpanels/base_femmeshtaskpanel.py`) each ran their work on a worker thread --
+`threading.Thread` and `QThread` respectively. Both reach the solvers through JS imports
+owned by the **main** thread (`window.fcwebCcxRun`, `window.fcwebGmshRun`), and JSPI can
+only suspend the main stack, so on a worker `_fcwebccx.available()` / `_fcwebgmsh
+.available()` return False. The result was not an error but a wrong branch: Solve
+reported *"The Calculix binary has not been found"* and meshing fell through to
+`which gmsh`. **The Solve button and the mesh panel's Apply had therefore never worked**,
+while every scripted CalculiX/gmsh test passed, because scripts call the tools directly
+on the main thread. Both sites now run inline under `sys.platform == "emscripten"`.
+The GUI entry point already did `machine.start(); machine.join()` synchronously, so
+nothing became more blocking than it was. These were the only two Python threading
+sites in the shipped tree -- check any new one against this.
+
 ## Editing FreeCAD's Python (a trap)
 
 The link preloads `freecad-gui-install/Mod@/freecad/Mod`, **not** the source tree. So
@@ -267,7 +304,15 @@ The recorded link line had gone stale (it predated CalculiX and was missing
 `weh-objs/fcweb_ccx_module.o`, so it failed with `undefined symbol: PyInit__fcwebccx`);
 that object is now in it.
 
-## Relinking FreeCAD: two things the link does NOT do for you
+## Relinking FreeCAD: three things the link does NOT do for you
+
+0. **Rebuild `play-gui/FreeCAD.data.gz`.** The page loads the **gz**, never the raw
+   `.data` (`freecad-gui.html`'s `locateFile`). A `.gz` left over from the previous link
+   pairs the new JS with the old data, and CPython dies with *"Failed to import
+   encodings module"* behind a Qt error dialog -- which reads as a broken build, not a
+   stale file. `tools/sync-play-artifacts.sh` copies the triple, runs the JS patcher and
+   regenerates the gz; use it instead of `cp`.
+
 
 1. **Re-apply the GL patches.** Two fixes live only in the linked `FreeCAD.js`, because
    they patch emscripten's generated GL-emulation code -- `pre-gui.js` is inlined
