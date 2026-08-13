@@ -252,6 +252,17 @@ The fix is one export and one JS class:
 If the export is missing (older binary), the shim leaves Qt's own listener alone: dialogs
 and drag stay broken, but input keeps working.
 
+## Serving the app locally: python -m http.server cannot do it
+
+`scratchpad/testserver.js` is the local server (port 8792 by convention). Python's
+`http.server` is **single-threaded**, and the app fetches `FreeCAD.wasm`, `FreeCAD.data.gz`
+and the pthread workers in parallel -- so the requests queue behind each other and boot
+sits at "loading…" forever, with **no page error and no failed request** to explain it.
+That looks exactly like a broken build. It cost three "failures" of `datasafety.js`, which
+defaults to port 8791, before I checked which process was actually listening
+(`lsof -nP -iTCP:8791 -sTCP:LISTEN`). Byte-for-byte the two servers were serving identical
+files.
+
 ## Driving the GUI with real input, and how the harness lies to you
 
 The keyboard defect was invisible to every scripted-API test, so each ordinary

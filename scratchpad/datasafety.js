@@ -16,7 +16,11 @@ const tail = async (p, re) => { const t = await p.evaluate(() => document.getEle
   const m = t.match(re) || []; return m[m.length - 1] || '(none)'; };
 
 async function boot(p) {
-  await p.goto('http://localhost:8791/index.html', { waitUntil: 'domcontentloaded', timeout: 300000 });
+  // argv[2] is the scenario name, so the URL is taken from any argument that looks like
+  // one. Without this the harness hardcoded 8791 and, handed a production URL, connected
+  // to nothing and printed nothing at all -- which reads exactly like a silent pass.
+  const URL = process.argv.slice(2).find((a) => /^https?:\/\//.test(a)) || 'http://localhost:8791/index.html';
+  await p.goto(URL, { waitUntil: 'domcontentloaded', timeout: 300000 });
   const t0 = Date.now();
   while (Date.now() - t0 < 300000) { if (await p.evaluate(() => !!(window.fcInstance && window.fcInstance._malloc))) break; await sl(1000); }
   await sl(16000);   // boot settles; the restore pass runs at ~13s
@@ -41,7 +45,7 @@ const CHECK = ['import FreeCAD as App, sys',
     args: ['--no-sandbox', '--use-gl=angle', '--use-angle=metal', '--window-size=1300,850'],
     protocolTimeout: 2400000, userDataDir: PROFILE });
   const p = (await b.pages())[0];
-  const scenario = process.argv[2] || 'all';
+  const scenario = process.argv.slice(2).find((a) => !/^https?:\/\//.test(a)) || 'all';
   const results = [];
 
   if (scenario === 'all' || scenario === 'autosave') {
