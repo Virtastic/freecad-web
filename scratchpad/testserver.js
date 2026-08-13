@@ -5,7 +5,9 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const ROOT = path.join(__dirname, '..', 'play-gui');
+// serve an alternate root when testing a candidate build before promoting it
+const ROOT = process.argv[2] || path.join(__dirname, '..', 'play-gui');
+const PORT = +(process.argv[3] || 8792);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
                 '.css': 'text/css', '.json': 'application/json', '.png': 'image/png',
                 '.webmanifest': 'application/manifest+json' };
@@ -25,4 +27,4 @@ http.createServer((req, res) => {
     res.writeHead(200, h);
     res.end(buf);
   });
-}).listen(8792, () => console.log('test server on 8792'));
+}).listen(PORT, () => console.log('test server on ' + PORT + ' root=' + ROOT));
