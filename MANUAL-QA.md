@@ -48,6 +48,13 @@ wrong rather than anything that errors.
 - [ ] Open a task panel (e.g. Pad), type a length, press OK — the model updates
 - [ ] Escape closes menus; clicking away also closes them
 - [ ] Right-click the tree and the 3D view: menus appear near the cursor and are readable
+- [ ] **Help > About opens a dialog**, and its OK button closes it (this was dead until
+      2026-08-13: a dialog opened by mouse could not suspend, so nothing appeared at all)
+- [ ] **Drag a tree item onto a Group** and drop it — it should reparent. This is the one
+      interaction no script can drive: Chrome refuses to begin a native HTML5 drag from
+      synthesised input, and Qt's wasm drag is built on native drag events. The pipeline
+      is verified (`scratchpad/dragsim.js` dispatches the drag events itself and the drop
+      reparents), but only a human hand proves Chrome starts the gesture.
 
 **Files and persistence (4 min)**
 - [ ] Save the document, reload the browser tab, reopen it — geometry intact
