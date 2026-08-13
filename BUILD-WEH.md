@@ -165,6 +165,25 @@ git push origin dev:ovhcloud     # triggers .github/workflows/deploy-ovh.yml
 Verify live: `curl -sI https://freecad.virtastic.app/FreeCAD.wasm` — the
 `content-length` must equal the local `play-gui/FreeCAD.wasm`.
 
+## Installability, and why it is a data-safety feature
+
+Chrome refuses `navigator.storage.persist()` on engagement alone -- measured, three
+visits on one profile with real interaction each time, denied every time
+(`scratchpad/persistgrant.js`). It grants it automatically to an **installed** app.
+Without it the browser may evict a user's saved documents to reclaim disk space, so the
+manifest, icons and service worker exist for that reason before any convenience one.
+
+The service worker is a **pass-through and must stay one**. Chrome requires a fetch
+handler for installability; ours never calls `respondWith`. The engine is 139 MB served
+with exact `Content-Encoding` and cross-origin-isolation headers, and a caching worker is
+an excellent way to corrupt that. It carries an `unregister` message handler as an escape
+hatch. nginx serves it `no-cache` (the `.js` artifact rule would otherwise pin it
+immutable for a year); Cloudflare's zone Browser Cache TTL still stamps 4 hours on it,
+which is harmless for a no-op worker but means worker updates are not instant.
+
+`/play-gui/*` is gitignored with an allowlist -- a new front-end file needs an explicit
+`!` exception or the image builds without it and the deploy fails.
+
 ## Releasing: the checklist, and the ways it bites
 
 1. **Release first, push second.** CI pulls assets by tag, so the release must exist
