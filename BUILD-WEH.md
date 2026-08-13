@@ -131,26 +131,36 @@ unzip the wheel) -- without it `importCSG` raises `No module named 'ply'` and Op
 import is dead. PySide6 ships Core/Gui/Widgets only; nothing in FreeCAD's own Python
 imports the rest.
 
-## The 2 GB heap: still an unmeasured hard limit, and why
+## The 2 GB heap: measured, and now warned about before it bites
 
-`ALLOW_MEMORY_GROWTH=0` with `INITIAL_MEMORY=2GB`, so the wasm heap is PRE-ALLOCATED. Two
-consequences that cost time here:
+`ALLOW_MEMORY_GROWTH=0` with `INITIAL_MEMORY=2GB`, so the heap is PRE-ALLOCATED and
+`HEAPU8.buffer.byteLength` reads 2048 MB from boot -- it is the ceiling, not the usage, and
+any "heap used" probe built on it is meaningless. The used portion is the sbrk break, so
+`_emscripten_get_sbrk_ptr` is now in `EXPORTED_FUNCTIONS`. Reading it from JS is a plain
+memory read: no Python, no round trip, and it works **while the interpreter is busy** --
+which is exactly when memory is being consumed, and exactly what defeated two earlier
+attempts to measure this (one wedged behind a 3D view rebuild, the other pegged a renderer
+thread for 20+ minutes with no answer).
 
-- `Module.HEAPU8.buffer.byteLength` reads **2048 MB from the first instant** -- it is the
-  ceiling, not the usage. Any "heap used" probe built on it is meaningless. `_sbrk` and
-  `_emscripten_get_sbrk_ptr` are not exported, so there is currently no in-page way to read
-  the used portion.
-- Attempts to find the wall empirically both failed, and the reason is the same one that
-  bites every harness here: **the work blocks the main thread, so no in-page probe can
-  report while it runs.** Adding 250 solids per batch wedged behind the 3D view rebuild;
-  allocating 32 MB Python blocks until failure left one renderer thread pegged at 100% CPU
-  with no answer after 20+ minutes and had to be killed.
+Measured on this build:
 
-So the honest position for release notes is unchanged and deliberately conservative:
-**treat 2 GB as a hard limit**, do not claim graceful degradation at it, and do not quote a
-model-size number -- none has been measured. Measuring it properly needs either an exported
-`sbrk` (a link-flag change) or an out-of-process observer (CDP `Memory.getBrowserSamplingProfile`
-or `performance.measureUserAgentSpecificMemory()` from a worker), not another in-page poll.
+| state | heap used |
+|---|---|
+| after boot | **288 MB** |
+| empty document | 288 MB |
+| 800 simple solids | 322.8 MB |
+| 1600 simple solids | 402.7 MB |
+
+So roughly **72 KB per solid**, and the ~1.76 GB of headroom is on the order of **20,000
+such solids**. Quote that rather than "there is a hard wall".
+
+`freecad-gui.html` polls it every 5 s and, at 80% and again at 92%, FORCE-SAVES the user's
+documents and says so in plain words. The point is the save, not the message: the abort
+that follows is unavoidable, but the work no longer goes with it. Thresholds are
+overridable via `window.__fcwebMemWarn` / `__fcwebMemCrit` so the behaviour can be tested
+without building a 1.6 GB model -- **do not** test it by faking `HEAPU8.buffer`, which the
+emscripten glue uses everywhere and which produces a cascade of aborts that looks exactly
+like the feature failing.
 
 ## Escape and the popup keyboard grab
 

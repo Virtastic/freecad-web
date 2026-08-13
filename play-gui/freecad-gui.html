@@ -1318,6 +1318,61 @@ window.fcRunPy = fcRunPy;
       "if _n: _s.__stderr__.write('[fcweb] restored %d document(s) from your last session\\n' % _n); _s.__stderr__.flush()",
       ""
     ].join("\n");
+    // ---- memory pressure ------------------------------------------------------
+    // The heap is a FIXED 2 GB, so a big enough model aborts the instance. Until now the
+    // only signal was the abort itself -- the user got a message after losing the session.
+    // _emscripten_get_sbrk_ptr is exported (see the link command), so the used portion is
+    // a plain memory read: no Python, no round trip, and it still works while the
+    // interpreter is busy -- which is exactly when memory is being consumed.
+    //
+    // Measured on this build: 288 MB after boot, ~72 KB per simple solid (1600 boxes take
+    // it to 403 MB), so the ~1.76 GB of headroom is roughly 20k such solids. The point of
+    // warning at 80% is that the user's work is FORCE-SAVED while saving still works.
+    // Thresholds are overridable so the behaviour can be exercised without building a
+    // 1.6 GB model. (Faking it by swapping HEAPU8.buffer breaks the runtime -- the buffer
+    // is used all over emscripten's glue -- and produces a cascade of aborts that looks
+    // like the feature failing.)
+    var __memState = 0;
+    function memWarnAt(){ return +window.__fcwebMemWarn || 0.80; }
+    function memCritAt(){ return +window.__fcwebMemCrit || 0.92; }
+    function heapUsedFraction(){
+      try {
+        var m = window.fcInstance;
+        if (!m || typeof m._emscripten_get_sbrk_ptr !== 'function') return -1;
+        var used = m.HEAPU32[m._emscripten_get_sbrk_ptr() >> 2];
+        var cap = m.HEAPU8.buffer.byteLength;
+        return cap > 0 ? used / cap : -1;
+      } catch (e) { return -1; }
+    }
+    function checkMemoryPressure(){
+      var f = heapUsedFraction();
+      if (f < 0) return;
+      var mb = Math.round(f * 2048);
+      if (f >= memCritAt() && __memState < 2) {
+        __memState = 2;
+        try { py(AUTOSAVE_FORCE); } catch (e) {}
+        if (typeof window.fcwebNotify === 'function') {
+          window.fcwebNotify('Memory is nearly full (' + mb + ' MB of 2048 MB). Your work has '
+            + 'been saved. Save a copy with File \u2192 Save and close documents you are not '
+            + 'using -- the browser build cannot grow past 2 GB.', 'warn');
+        }
+      } else if (f >= memWarnAt() && __memState < 1) {
+        __memState = 1;
+        try { py(AUTOSAVE_FORCE); } catch (e) {}
+        if (typeof window.fcwebNotify === 'function') {
+          window.fcwebNotify('This model is using ' + mb + ' MB of the 2 GB the browser build '
+            + 'has. Your work has been saved. Consider simplifying it or closing documents you '
+            + 'are not using.', 'warn');
+        }
+      } else if (f < memWarnAt() - 0.05) {
+        __memState = 0;              // recovered (documents closed); allow warning again
+      }
+    }
+    setInterval(checkMemoryPressure, 5000);
+    window.fcwebHeapUsedMB = function(){
+      var f = heapUsedFraction(); return f < 0 ? -1 : Math.round(f * 2048);
+    };
+
     var AUTOSAVE_PY = "import FreeCAD as _App\n" +
       "try: _App._fcweb_saver.save()\n" +
       "except Exception: pass\n";
