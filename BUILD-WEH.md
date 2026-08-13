@@ -185,6 +185,34 @@ never against a number measured hours earlier under different load.
 mid-way leaves the un-optimized 234 MB intermediate in `bin/` looking finished, and
 shipping that IS a real, large regression.
 
+## Keyboard: Qt only hears keys while a TEXT widget has focus
+
+The single most user-visible defect found in this port, and it hid behind the fact that
+typing always worked. Measured with an application-wide Qt event filter:
+
+| focus | what Qt receives |
+|---|---|
+| `QLineEdit` (any text widget) | everything -- Delete, Meta, Z |
+| model tree (or any non-text widget) | **nothing at all** |
+
+So **Delete did not delete** (`Std_Delete` is enabled and works when invoked via
+`Gui.runCommand`), **Ctrl/Cmd+Z did not undo**, and no single-key shortcut fired. Qt-wasm
+focuses a hidden DOM input only for text widgets; otherwise `document.activeElement` is
+BODY and the keydown never enters Qt. The Escape-with-a-popup case above is the same bug.
+
+Re-dispatching the identical `KeyboardEvent` onto **Qt's own canvas** (inside its shadow
+root) does drive Qt, so `freecad-gui.html` forwards there rather than hard-coding a
+shortcut table -- every key keeps whatever meaning FreeCAD gives it. Two properties matter
+and are tested (`scratchpad/keyfix.js`):
+
+- `isTrusted` is the loop guard. The forwarded copy is synthetic, so it is ignored by the
+  same listener and cannot bounce.
+- Forwarding is skipped when a text field has focus, or every character would arrive
+  **twice**. Verified: typing `abc123` yields exactly `abc123`.
+
+Verified end to end: Delete deletes, Cmd+Z restores, typing is not doubled, Escape still
+closes menus, regression 8/8 + 6/6 with 0 page errors.
+
 ## Escape and the popup keyboard grab
 
 Escape now dismisses an open menu, and the route there is worth keeping because the

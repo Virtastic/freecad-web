@@ -2003,6 +2003,54 @@ window.fcRunPy = fcRunPy;
     else if(k==='escape'){ closeActivePopup(); }
   },true);
 
+  // ---- keyboard outside text fields -----------------------------------------
+  // Measured on this build: Qt receives keys ONLY while a text widget has focus. With the
+  // model tree focused an application-wide Qt event filter sees NOTHING -- so Delete does
+  // not delete (the Std_Delete action is enabled and the command works when invoked
+  // directly), Ctrl+Z does not undo, and no single-key shortcut fires. Qt-wasm focuses a
+  // hidden DOM input only for text widgets; otherwise document.activeElement is BODY and
+  // the keydown never enters Qt.
+  //
+  // Re-dispatching the same event onto Qt's own canvas DOES drive it (verified: the object
+  // was deleted), so forward there instead of hard-coding a shortcut table -- every key
+  // keeps whatever meaning FreeCAD gives it.
+  function qtCanvas(){
+    try{
+      var hosts=[].slice.call(document.querySelectorAll('*')).filter(function(e){return e.shadowRoot;});
+      for(var i=0;i<hosts.length;i++){
+        var c=hosts[i].shadowRoot.querySelector('canvas');
+        if(c) return c;
+      }
+    }catch(e){}
+    return null;
+  }
+  function textHasFocus(){
+    var d=document.activeElement;
+    while(d && d.shadowRoot && d.shadowRoot.activeElement) d=d.shadowRoot.activeElement;
+    if(!d) return false;
+    var t=d.tagName;
+    return t==='INPUT' || t==='TEXTAREA' || d.isContentEditable === true;
+  }
+  function forwardKeyToQt(e){
+    // isTrusted is the loop guard: our re-dispatched copy is synthetic, so it is ignored
+    // here and cannot bounce. Skip when a text field has focus -- Qt already gets those,
+    // and forwarding would type every character twice.
+    if(!e.isTrusted) return;
+    if(e.metaKey || e.ctrlKey){
+      var k=(e.key||'').toLowerCase();
+      if(k==='s'||k==='o') return;          // handled by the shell above
+    }
+    if(textHasFocus()) return;
+    var c=qtCanvas(); if(!c) return;
+    c.dispatchEvent(new KeyboardEvent(e.type, {
+      key:e.key, code:e.code, keyCode:e.keyCode, which:e.which, location:e.location,
+      ctrlKey:e.ctrlKey, shiftKey:e.shiftKey, altKey:e.altKey, metaKey:e.metaKey,
+      repeat:e.repeat, isComposing:e.isComposing, bubbles:true, cancelable:true, composed:true
+    }));
+  }
+  window.addEventListener('keydown', forwardKeyToQt, true);
+  window.addEventListener('keyup', forwardKeyToQt, true);
+
   // Escape closes an open menu. Measured on this Qt-wasm build: with a popup open the
   // key never enters Qt's event system at all -- an application-wide Qt event filter
   // installed on QApplication does NOT see it, though the same filter sees Escape fine
