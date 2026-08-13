@@ -29,11 +29,23 @@ RUN gzip -6 -k /usr/share/nginx/html/FreeCAD.data \
 # ship new data under the old ?v= and every returning visitor keeps the stale copy until
 # 2027. Stamping the checksum makes a changed file a different URL automatically, and an
 # unchanged one keep its cache. Fails the build rather than shipping an unstamped page.
-RUN V=$(md5sum /usr/share/nginx/html/FreeCAD.data | cut -c1-12) \
- && sed -i "s|FreeCAD\.data\.gz?v=[A-Za-z0-9]*|FreeCAD.data.gz?v=$V|g" \
+# Content-address the ENGINE TRIPLE together. These three are one unit: FreeCAD.js
+# carries the byte offsets of every file inside FreeCAD.data, and the wasm is built
+# against both. They are served Cache-Control: immutable for a year, so a returning
+# browser kept its cached FreeCAD.js while fetching new data and CPython's own stdlib
+# failed to load -- "Failed to import encodings module". Stamping each URL with its
+# content makes a changed file a new URL and keeps an unchanged one cached.
+RUN JS=$(md5sum /usr/share/nginx/html/FreeCAD.js   | cut -c1-12) \
+ && WA=$(md5sum /usr/share/nginx/html/FreeCAD.wasm | cut -c1-12) \
+ && DA=$(md5sum /usr/share/nginx/html/FreeCAD.data | cut -c1-12) \
+ && sed -i "s|FreeCAD\.data\.gz?v=[A-Za-z0-9]*|FreeCAD.data.gz?v=$DA|g; \
+            s|'FreeCAD\.js'|'FreeCAD.js?v=$JS'|g; \
+            s|'FreeCAD\.wasm'|'FreeCAD.wasm?v=$WA'|g" \
         /usr/share/nginx/html/freecad-gui.html \
- && grep -q "FreeCAD.data.gz?v=$V" /usr/share/nginx/html/freecad-gui.html \
- && echo "data URL stamped with $V"
+ && grep -q "FreeCAD.data.gz?v=$DA" /usr/share/nginx/html/freecad-gui.html \
+ && grep -q "FreeCAD.js?v=$JS"      /usr/share/nginx/html/freecad-gui.html \
+ && grep -q "FreeCAD.wasm?v=$WA"    /usr/share/nginx/html/freecad-gui.html \
+ && echo "stamped js=$JS wasm=$WA data=$DA"
 # The mesher, fetched by the page on first use (FEM meshing 404s without it).
 COPY play-gui/gmsh.js play-gui/gmsh.wasm /usr/share/nginx/html/
 # CalculiX solver module, fetched on first solve.
