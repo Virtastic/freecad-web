@@ -59,6 +59,9 @@ wrong rather than anything that errors.
 **Files and persistence (4 min)**
 - [ ] Save the document, reload the browser tab, reopen it — geometry intact
 - [ ] Export a STEP and an STL; open the STEP back
+- [ ] **Save via the OS file dialog** — Chromium's `showSaveFilePicker` path cannot be
+      scripted, so only a person can confirm the picker appears and the file lands where
+      they chose. (The download fallback other browsers use is verified automatically.)
 - [ ] Open one of the bundled examples (BIM is the heaviest — watch for slowness)
 
 **Feel (3 min)**

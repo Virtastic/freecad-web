@@ -252,6 +252,23 @@ The fix is one export and one JS class:
 If the export is missing (older binary), the shim leaves Qt's own listener alone: dialogs
 and drag stay broken, but input keeps working.
 
+## Getting work out: two save paths, and only one is scriptable
+
+`File > Save` and `File > Export` clicked for real both deliver a file
+(`scratchpad/filemenu.js`): `SaveMe.FCStd` 4203 B and `SaveMe-Brick.3mf` 1283 B landed on
+disk, 0 page errors. The patched save dialog hands FreeCAD a staging path under
+`/home/web_user/_dl`, and the watcher in the shell delivers it once written.
+
+There are two delivery paths, and the difference matters when testing:
+
+- **`showSaveFilePicker` (Chromium)** — the preferred one. It opens a **native OS dialog**
+  that no script can answer, so an automated save just waits on a picker that never
+  resolves: no download, no error, and `Document.FileName` still shows the `_dl` staging
+  path. That is not a defect, it is a human-only path. A first run read exactly like a
+  broken save.
+- **anchor download (Firefox/Safari, or Chromium with the picker removed)** — scriptable,
+  and what the harness exercises: `delete window.showSaveFilePicker` before clicking.
+
 ## Serving the app locally: python -m http.server cannot do it
 
 `scratchpad/testserver.js` is the local server (port 8792 by convention). Python's
