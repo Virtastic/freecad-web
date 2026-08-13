@@ -131,6 +131,25 @@ unzip the wheel) -- without it `importCSG` raises `No module named 'ply'` and Op
 import is dead. PySide6 ships Core/Gui/Widgets only; nothing in FreeCAD's own Python
 imports the rest.
 
+## Known: the one upstream test that hangs, and why it does not reach users
+
+`Document.testApplyFiles` does not finish in 400 s (the other 107 tests in that suite
+pass). Localised by driving one test per call (`scratchpad/onetest.js`) and then timing
+the test's own steps: every step is 0.00 s up to and including the second `undo()`, and
+it wedges on the first **`redo()`** of an `App::DocumentObjectFileIncluded` File
+assignment, with the test's nested `openTransaction`s left uncommitted.
+
+`PropertyFileIncluded` is not exotic -- TechDraw's SVG templates, hatches and images use
+it, as do ArchSite/ArchBuildingPart -- so this was worth bounding rather than waving off.
+The realistic path is clean: assigning an A4 template, switching it to A3, then undo x2
+and redo x2 runs in <= 0.03 s per step. The hang needs the test's exact shape, so no
+shipped workbench reaches it. Left unfixed and documented rather than guessed at.
+
+(Two things ruled out along the way: `Base::Uuid` really does generate a fresh value per
+construction, so `getUniqueFileName`'s `while (fi.exists())` -- which builds its uuid
+once, outside the loop -- cannot spin; and `FileInfo::getTempFileName` uses `mkstemp`,
+not a retry loop.)
+
 ## Workbenches that fail their FIRST activation
 
 `Gui.activateWorkbench()` returns **False** when a workbench's `Initialize()` throws --
