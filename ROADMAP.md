@@ -6,11 +6,24 @@
 > local build against the multi-gigabyte `deps/` tree on the build machine. CI only downloads
 > release assets; it never compiles. Those two need someone at that machine.
 >
-> A note that changes items 4 and 5: the shipped `FreeCAD.js` comes from the GitHub Release
-> already patched, and the deploy does **not** re-run `tools/patch-freecad-js.py`. So a change
-> to the patch table currently has no way to reach production without a relink. Adding one
-> idempotent patcher step to the deploy fixes that and makes both rendering items shippable
-> without touching the binary — it is the first task of item 4, not a side quest.
+> **Correction, made by trying it.** I claimed items 4 and 5 were relink-free because the GL
+> fixes are JS patches. That is only half true, and the half that is wrong matters.
+>
+> The deploy now runs `tools/patch-freecad-js.py` over the release asset, so **new** patches
+> at untouched sites are deployable without a relink — that part holds and is shipped.
+>
+> But the release's `FreeCAD.js` is *already patched*: the nine `throw"glMaterialfv: TODO"`
+> sites were rewritten to `0` before the asset was ever published. Changing what they are
+> rewritten *to* therefore has nothing to match, and the deploy correctly refused with
+> `9 patch site(s) not found` — before building the image, with production untouched. `0` is
+> far too generic to re-match safely; the tool's own comments say several replacements are
+> the literal `"0"`, which occurs everywhere in minified JS.
+>
+> So **item 4's instrumentation needs a fresh unpatched `FreeCAD.js`, i.e. a relink** — the
+> same constraint as items 6 and 7 — unless someone re-derives each site from its surrounding
+> context, which is fiddly and risks a mismatch in the GL hot path for a diagnostic.
+> Item 5 (display lists) is likely still relink-free, since `glGenLists` and friends are
+> *untouched* sites, but that should be confirmed rather than assumed twice.
 
 Seven known gaps, planned. Written after a production verification pass on
 `build-20260813-eventstack+c41d84b`, so the starting facts are measured rather than assumed.
