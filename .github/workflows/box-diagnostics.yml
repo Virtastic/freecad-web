@@ -22,6 +22,11 @@ jobs:
     if: github.repository == 'Virtastic/freecad-web' && github.event_name != 'pull_request'
     runs-on: [self-hosted, ovh, virtastic]
     steps:
+      # Needed so the sudoers candidate can be syntax-checked from the repo. Without it the
+      # workspace holds whatever the last job left behind, and the validation step reported
+      # "file not present" while looking straight at a stale directory.
+      - uses: actions/checkout@v4
+
       - name: Runner identity and registration scope
         run: |
           echo "--- who this job runs as ---"
