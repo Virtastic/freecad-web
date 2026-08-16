@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd /Users/mstavridis/Downloads/FreeCAD-Web
+cd "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 bash scratchpad/linkcmds/fc-post-weh.sh 2>&1 | grep -E "minified GL patches" || true
 python3 - <<'PY'
 import re

@@ -1,5 +1,7 @@
 # === Vendored toolchains (multi-GB, not source) ===
-/emsdk/
+# emsdk* covers both pinned toolchains: emsdk (3.1.70, compiles/links) and
+# emsdk2 (4.0.23, supplies wasm-opt only). See BUILD-WEH.md.
+/emsdk*/
 /qt/
 /deps/
 /.qtvenv/
@@ -7,16 +9,12 @@
 !/toolchain/env.sh
 
 # === Build directories ===
-/build-coin/
-/build-freecad/
-/build-freecad-gui/
-/build-occt/
-/build-xercesc/
-/build-yamlcpp/
-/build-pivy-wasm/
-/build-pyside-wasm/
-/build-shiboken-gen/
-/build-shiboken-wasm/
+# One glob rather than a hand-kept list: the enumerated form silently missed every
+# -weh directory (build-freecad-gui-weh/ above all), so CMakeCache.txt and build.ninja
+# — which embed absolute paths — were never ignored. Trailing slash matches directories
+# only, so the build-*.sh scripts at the repo root stay tracked.
+/build-*/
+/weh-objs/
 
 # === Install trees / web output ===
 /freecad-install/
@@ -32,6 +30,8 @@
 !/play-gui/sw.js
 !/play-gui/icon-192.png
 !/play-gui/icon-512.png
+# source of truth for the non-JSPI dialog-shim payload embedded in freecad-gui.html
+!/play-gui/wasm_dialog_shim.py
 
 # === Compiled artifacts ===
 *.o
@@ -54,12 +54,13 @@ aqtinstall.log
 # === OS / editor cruft ===
 .DS_Store
 
-# === Additional wasm dep build dirs (Wave 5+ / numpy) ===
-/build-hdf5/
-/build-vtk/
-/build-ifcopenshell/
-/build-numpy/
+# === Node / test scratch ===
 /node_modules/
+
+# Meson cross-files are GENERATED from the .meson.in templates by
+# tools/gen-crossfiles.sh (they need absolute paths, which differ per machine).
+/*.meson
+!/*.meson.in
 scratchpad/vtktest/*.wasm
 scratchpad/vtktest/*.js
 scratchpad/vtktest/*.vtu
@@ -68,10 +69,18 @@ scratchpad/fttest/*.wasm
 scratchpad/fttest/*.js
 scratchpad/fttest/*.ttf
 scratchpad/fttest/*.err
-build-matplotlib/
+
+# === Python bytecode (stray .pyc files have been committed here before) ===
+__pycache__/
+*.pyc
+
+# === OS / editor cruft ===
+Thumbs.db
+desktop.ini
+*.swp
+*~
 
 # terraform local state
 *.tfstate
 *.tfstate.*
 .terraform/
-tools/__pycache__/

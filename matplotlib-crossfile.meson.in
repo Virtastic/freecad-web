@@ -1,0 +1,35 @@
+# Meson cross-file TEMPLATE for matplotlib's C extensions (wasm-EH lane).
+#
+# @ROOT@ is substituted with the repo root by tools/gen-crossfiles.sh, which
+# configure-matplotlib-weh.sh and configure-matplotlib.sh run before `meson setup`.
+# Do not edit the generated matplotlib-crossfile.meson -- it is gitignored and
+# overwritten.
+#
+# Note this lane uses -fwasm-exceptions, unlike emscripten-crossfile.meson.in:
+# mixing one JS-EH object into the link silently reintroduces invoke_* trampolines
+# that JSPI cannot suspend across. See BUILD-WEH.md.
+[binaries]
+c = '@ROOT@/emsdk/upstream/emscripten/emcc'
+cpp = '@ROOT@/emsdk/upstream/emscripten/em++'
+ar = '@ROOT@/emsdk/upstream/emscripten/emar'
+ranlib = '@ROOT@/emsdk/upstream/emscripten/emranlib'
+strip = '@ROOT@/emsdk/upstream/bin/llvm-strip'
+python = '@ROOT@/deps/src/cpython/builddir/build/python3-native'
+
+[host_machine]
+system = 'emscripten'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'
+
+[built-in options]
+c_args = ['-fwasm-exceptions', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
+cpp_args = ['-fwasm-exceptions', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
+c_link_args = ['-fwasm-exceptions', '-pthread']
+cpp_link_args = ['-fwasm-exceptions', '-pthread']
+
+[properties]
+needs_exe_wrapper = true
+longdouble_format = 'IEEE_DOUBLE_LE'
+numpy-include-dir = '@ROOT@/deps/src/numpy/numpy/_core/include'
+devnull = '/dev/null'

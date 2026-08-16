@@ -1,0 +1,32 @@
+# Meson cross-file TEMPLATE for building Python C-extensions (numpy) to wasm32-emscripten.
+#
+# @ROOT@ is substituted with the repo root by tools/gen-crossfiles.sh, which every
+# consumer runs before `meson setup`. Do not edit the generated
+# emscripten-crossfile.meson -- it is gitignored and overwritten.
+#
+# Paths are absolute in the generated file so meson can be run from any build dir.
+[binaries]
+c = '@ROOT@/emsdk/upstream/emscripten/emcc'
+cpp = '@ROOT@/emsdk/upstream/emscripten/em++'
+ar = '@ROOT@/emsdk/upstream/emscripten/emar'
+ranlib = '@ROOT@/emsdk/upstream/emscripten/emranlib'
+strip = '@ROOT@/emsdk/upstream/bin/llvm-strip'
+# host build python (runs numpy's code generators). Use the non-.exe symlink so
+# meson doesn't mono-wrap it (it's a native binary despite CPython's naming).
+python = '@ROOT@/deps/src/cpython/builddir/build/python3-native'
+
+[host_machine]
+system = 'emscripten'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'
+
+[built-in options]
+c_args = ['-fexceptions', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
+cpp_args = ['-fexceptions', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
+c_link_args = ['-fexceptions', '-pthread']
+cpp_link_args = ['-fexceptions', '-pthread']
+
+[properties]
+needs_exe_wrapper = true
+longdouble_format = 'IEEE_DOUBLE_LE'

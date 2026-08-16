@@ -1,3 +1,4 @@
+const __RT = require('path').resolve(__dirname, '../..');  // repo root (was a hardcoded home dir)
 // Run a CalculiX deck through the wasm module under node and print result extremes.
 //
 // The browser bridge (freecad-gui.html) does the same three things -- write the .inp
@@ -10,7 +11,7 @@ const inp = process.argv[2];
 const job = path.basename(inp).replace(/\.inp$/i, '');
 
 (async () => {
-  const CcxModule = require('/Users/mstavridis/Downloads/FreeCAD-Web/play-gui/ccx.js');
+  const CcxModule = require(__RT+'/play-gui/ccx.js');
   const M = await CcxModule();
   try { M.FS.mkdir('/work'); } catch (e) {}
   M.FS.chdir('/work');

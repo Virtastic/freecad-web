@@ -61,6 +61,7 @@ for h in _numpyconfig.h __multiarray_api.h __ufunc_api.h; do
 done
 
 # 2. configure (crossfile provides numpy-include-dir + devnull)
+bash tools/gen-crossfiles.sh
 rm -rf build-matplotlib
 meson setup build-matplotlib deps/src/matplotlib --cross-file matplotlib-crossfile.meson \
   -Dbuildtype=release -Db_lto=false

@@ -1,3 +1,4 @@
+const __RT = require('path').resolve(__dirname, '..');  // repo root (was a hardcoded home dir)
 // Resilient single-probe runner: boots the 291MB build and runs a Python file
 // (arg1 = path). Retries the whole boot up to 3x on renderer crashes
 // (TargetCloseError) which are common at this wasm size in headless Chrome.
@@ -16,7 +17,7 @@ const PY = fs.readFileSync(process.argv[2], 'utf8');
 // SAME build reuse the warm compile cache.
 let PROFILE = '/tmp/fc-chrome-profile';
 try {
-  const mt = Math.floor(fs.statSync('/Users/mstavridis/Downloads/FreeCAD-Web/play-gui/FreeCAD.wasm').mtimeMs);
+  const mt = Math.floor(fs.statSync(__RT+'/play-gui/FreeCAD.wasm').mtimeMs);
   PROFILE = '/tmp/fc-chrome-profile-' + mt;
 } catch (e) {}
 

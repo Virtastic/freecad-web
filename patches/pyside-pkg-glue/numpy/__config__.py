@@ -34,8 +34,8 @@ CONFIG = _cleanup(
                 "name": "emscripten",
                 "linker": r"ld.wasm",
                 "version": "3.1.70",
-                "commands": r"/Users/mstavridis/Downloads/FreeCAD-Web/emsdk/upstream/emscripten/emcc",
-                "args": r"-fexceptions, -pthread, -O2, -I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/Include, -I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/builddir/emscripten-mt",
+                "commands": r"<freecad-web-root>/emsdk/upstream/emscripten/emcc",
+                "args": r"-fexceptions, -pthread, -O2, -I<freecad-web-root>/deps/src/cpython/Include, -I<freecad-web-root>/deps/src/cpython/builddir/emscripten-mt",
                 "linker args": r"-fexceptions, -pthread",
             },
             "cython": {
@@ -50,8 +50,8 @@ CONFIG = _cleanup(
                 "name": "emscripten",
                 "linker": r"ld.wasm",
                 "version": "3.1.70",
-                "commands": r"/Users/mstavridis/Downloads/FreeCAD-Web/emsdk/upstream/emscripten/em++",
-                "args": r"-fexceptions, -pthread, -O2, -I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/Include, -I/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/builddir/emscripten-mt",
+                "commands": r"<freecad-web-root>/emsdk/upstream/emscripten/em++",
+                "args": r"-fexceptions, -pthread, -O2, -I<freecad-web-root>/deps/src/cpython/Include, -I<freecad-web-root>/deps/src/cpython/builddir/emscripten-mt",
                 "linker args": r"-fexceptions, -pthread",
             },
         },
@@ -93,7 +93,7 @@ CONFIG = _cleanup(
             },
         },
         "Python Information": {
-            "path": r"/Users/mstavridis/Downloads/FreeCAD-Web/deps/src/cpython/builddir/build/python3-native",
+            "path": r"<freecad-web-root>/deps/src/cpython/builddir/build/python3-native",
             "version": "3.13",
         },
         "SIMD Extensions": {

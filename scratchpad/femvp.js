@@ -1,3 +1,4 @@
+const __RT = require('path').resolve(__dirname, '..');  // repo root (was a hardcoded home dir)
 // Open FEMExample and dump the [FCWEB-VP] attach markers to find the last VP
 // before the unreachable trap. Cache-safe profile. Port 8799.
 const fs = require('fs');
@@ -7,7 +8,7 @@ const ARGS = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu-sandbox',
   '--js-flags=--max-old-space-size=8192','--use-gl=angle','--use-angle=swiftshader',
   '--enable-features=SharedArrayBuffer','--ignore-gpu-blocklist'];
 let PROFILE = '/tmp/fc-chrome-profile';
-try { PROFILE = '/tmp/fc-chrome-profile-' + Math.floor(fs.statSync('/Users/mstavridis/Downloads/FreeCAD-Web/play-gui/FreeCAD.wasm').mtimeMs); } catch(e){}
+try { PROFILE = '/tmp/fc-chrome-profile-' + Math.floor(fs.statSync(__RT+'/play-gui/FreeCAD.wasm').mtimeMs); } catch(e){}
 const PY = `
 import sys
 import FreeCAD as App

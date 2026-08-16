@@ -1,3 +1,4 @@
+const __RT = require('path').resolve(__dirname, '..');  // repo root (was a hardcoded home dir)
 // Boot + fire FEMExample open. Markers persist server-side via sync-XHR (/mark),
 // so the tab need not survive — just boot and start the open. Retries boot.
 const fs = require('fs');
@@ -8,7 +9,7 @@ const ARGS = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu-sandbox',
   '--js-flags=--max-old-space-size=8192','--use-gl=angle','--use-angle=swiftshader',
   '--enable-features=SharedArrayBuffer','--ignore-gpu-blocklist'];
 let PROFILE = '/tmp/fc-chrome-profile';
-try { PROFILE = '/tmp/fc-chrome-profile-' + Math.floor(fs.statSync('/Users/mstavridis/Downloads/FreeCAD-Web/play-gui/FreeCAD.wasm').mtimeMs); } catch(e){}
+try { PROFILE = '/tmp/fc-chrome-profile-' + Math.floor(fs.statSync(__RT+'/play-gui/FreeCAD.wasm').mtimeMs); } catch(e){}
 const PY = `
 import sys
 import FreeCAD as App
