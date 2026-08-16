@@ -8,7 +8,7 @@
 > | 2 | Error reporting | **shipped** — four anonymous counters, live and recording |
 > | 3 | Storage evictable | **shipped** — user-nominated backup folder, live |
 > | 4 | GL no-op inventory | **done** — instrumented and measured; see BUILD-WEH.md |
-> | 5 | Display lists / 11 fps | **blocked on visual verification** — see below |
+> | 5 | Display lists / 11 fps | **scoped** — C change + relink + pixel gate, not a JS patch |
 > | 6 | 2 GB heap | **implemented, opt-in** — `FCWEB_HEAP_BYTES`; needs a link + `heapprobe.js` |
 > | 7 | CalculiX threading | **implemented, opt-in** — `FCWEB_CCX_PTHREADS=1`; needs a link + the decks |
 > | 8 | Chrome/Edge only | **decided** — track, don't build |
@@ -28,14 +28,33 @@
 > wrong number rather than a crash, and the CalculiX decks must **match** today's results
 > rather than merely converge. Do the heap one alone, in its own link.
 >
-> **Item 5 is blocked differently, and the distinction matters.** Implementing display lists is
-> plausibly a new patch at *untouched* sites, so it may well be deployable without a relink.
-> But re-enabling render caching is the change that once made *nothing draw at all*, and
-> verifying it means looking at pixels. Canvas capture was tried here and is unusable — with
-> the browser pane hidden the page stops compositing, and `toDataURL` returned a byte-identical
-> frame across an empty scene, a solid, and a camera change. Do this one at a machine with a
-> visible browser, behind a query flag, with `scratchpad/shot.js`'s pixel gate, before trusting
-> any fps number.
+> **Item 5, scoped properly — and my earlier guess about it was wrong.** I said display lists
+> were "plausibly a new patch at untouched sites", i.e. shippable without a relink. Checked,
+> and they are not. The display-list entry points are **entirely absent from the JS glue** —
+> not stubbed, absent — because they are stubbed in C, in `gl_legacy_stubs.c`, which is linked
+> into the binary:
+>
+> ```c
+> GLuint glGenLists(GLsizei range) { return 0; }  /* 0 => no display lists => immediate mode */
+> void glNewList(GLuint, GLenum) {}   void glEndList(void) {}
+> void glCallList(GLuint) {}          void glDeleteLists(GLuint, GLsizei) {}
+> ```
+>
+> So this is lane C: a C change, a relink, and real work — a display list means recording and
+> replaying a GL command stream, not filling in a function. The stub is also deliberate, and
+> its comment explains the trade: returning 0 makes Coin fall back to immediate mode, which
+> the emulation *does* support.
+>
+> It also needs pixel verification, which is not optional here: re-enabling render caching is
+> the change that once made **nothing draw at all**. Canvas capture was tried and is unusable
+> with a hidden browser pane — the page stops compositing and `toDataURL` returned a
+> byte-identical frame across an empty scene, a solid, and a camera change. Use
+> `scratchpad/shot.js` on a machine with a visible browser, behind a query flag.
+>
+> **Worth pricing the alternative first.** Coin can draw through VBOs instead of display
+> lists, which is also lane C but avoids implementing a command recorder at all. Given the
+> batching work already took the heavy scene from 10 to 21–34 fps, compare both before
+> committing a day to either.
 >
 > **Two corrections worth keeping, both found by trying.** First, the deploy now runs
 > `tools/patch-freecad-js.py` over the release asset, so patch-table changes are deployable at
