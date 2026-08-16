@@ -21,6 +21,22 @@ CCX="$ROOT/deps/src/ccx/ccx_2.22/src"
 OUT="$ROOT/play-gui"
 OBJ="$ROOT/build-ccx-weh/module"
 
+# Threading, matched to how libccx.a was built (see build-ccx-weh.sh).
+#
+# Serial (default): bridge/ccx_threads.c supplies __wrap_pthread_create/__wrap_pthread_join,
+# so the link must ask for those wraps or ccx's real pthread_create is used -- and on a
+# non-pthread build that is a stub which silently fails, leaving an all-zero matrix.
+#
+# Threaded: ccx_threads.c is NOT compiled, so there is no __wrap_* to bind. Leaving the
+# --wrap flags in place then makes wasm-ld SEGFAULT inside ImportSection::addImport rather
+# than report a missing symbol -- measured, and the reason this is a variable now.
+if [ "${FCWEB_CCX_PTHREADS:-0}" = "1" ]; then
+  CCX_THREAD_LINK="-pthread -sPTHREAD_POOL_SIZE=4"
+  echo "[ccx-module] linking WITH pthreads (no --wrap)" >&2
+else
+  CCX_THREAD_LINK="-Wl,--wrap=pthread_create -Wl,--wrap=pthread_join"
+fi
+
 for l in libccx libarpack libspooles libf2c; do
   test -f "$PREFIX/lib/$l.a" || { echo "missing $PREFIX/lib/$l.a" >&2; exit 1; }
 done
@@ -37,7 +53,7 @@ emcc $CFLAGS -c "$ROOT/ccx_wasm_main.c" -o "$OBJ/wrapper.o"
 emcc -fwasm-exceptions -O2 "$OBJ/ccx_main.o" "$OBJ/wrapper.o" \
   -Wl,--start-group "$PREFIX/lib/libccx.a" "$PREFIX/lib/libarpack.a" \
                     "$PREFIX/lib/libspooles.a" "$PREFIX/lib/libf2c.a" -Wl,--end-group \
-  -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join \
+  $CCX_THREAD_LINK \
   -o "$OUT/ccx.js" \
   -sMODULARIZE=1 \
   -sEXPORT_NAME=CcxModule \
