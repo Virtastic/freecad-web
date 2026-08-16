@@ -65,9 +65,10 @@ jobs:
           echo "--- CalculiX 2.22 ---"
           # The tarball unpacks as ./CalculiX/ccx_2.22/src/ -- one level deeper than the
           # build scripts expect, which hardcode deps/src/ccx/ccx_2.22/src. Strip the
-          # leading CalculiX/ component rather than moving directories afterwards.
+          # leading ./CalculiX components rather than moving directories afterwards. It is 2, not 1:
+          # the archive entries begin "./", so that dot is itself a component.
           curl -fsSL -o /tmp/ccx.tar.bz2 http://www.dhondt.de/ccx_2.22.src.tar.bz2
-          tar xjf /tmp/ccx.tar.bz2 -C deps/src/ccx --strip-components=1
+          tar xjf /tmp/ccx.tar.bz2 -C deps/src/ccx --strip-components=2
           # 977 .f files; f77ify.py globs src/*.f and fails with FileNotFoundError on the
           # unexpanded pattern if this layout is wrong, which is how the second run failed.
           echo "  .f files: $(ls deps/src/ccx/ccx_2.22/src/*.f 2>/dev/null | wc -l)"
