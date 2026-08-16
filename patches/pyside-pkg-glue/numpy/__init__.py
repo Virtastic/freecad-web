@@ -1,3 +1,10 @@
+# Vendored from the NumPy project (packaging glue for the wasm build).
+#   Upstream: https://github.com/numpy/numpy
+#   License:  BSD 3-Clause (see LICENSES/BSD-3-Clause-NumPy.txt)
+#
+# Copyright (c) 2005-present, NumPy Developers. All rights reserved.
+# Upstream ships the license in a separate LICENSE.txt rather than per-file, so this
+# provenance note stands in its place.
 """
 NumPy
 =====

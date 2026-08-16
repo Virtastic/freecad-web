@@ -1,22 +1,28 @@
 {
   "name": "freecad-web",
   "version": "1.0.0",
-  "description": "",
-  "main": "post-fix.js",
+  "description": "FreeCAD 1.0 compiled to WebAssembly and served in the browser",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"No automated suite is wired up yet -- the verification harnesses live in scratchpad/ and are run by hand. See MANUAL-QA.md.\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Virtastic/freecad-wasm.git"
+    "url": "git+https://github.com/Virtastic/freecad-web.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "freecad",
+    "cad",
+    "webassembly",
+    "wasm",
+    "emscripten"
+  ],
+  "author": "Virtastic",
+  "license": "LGPL-2.1-or-later",
   "bugs": {
-    "url": "https://github.com/Virtastic/freecad-wasm/issues"
+    "url": "https://github.com/Virtastic/freecad-web/issues"
   },
-  "homepage": "https://github.com/Virtastic/freecad-wasm#readme",
+  "homepage": "https://github.com/Virtastic/freecad-web#readme",
   "dependencies": {
     "puppeteer-core": "^23.11.1"
   }

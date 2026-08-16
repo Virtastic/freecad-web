@@ -1,14 +1,15 @@
 {
   "name": "00-occt-node",
   "version": "1.0.0",
-  "description": "",
+  "description": "Spike: drive OCCT from node to validate the wasm build lane",
+  "private": true,
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Virtastic",
+  "license": "LGPL-2.1-or-later",
   "dependencies": {
     "opencascade.js": "^1.1.1"
   }

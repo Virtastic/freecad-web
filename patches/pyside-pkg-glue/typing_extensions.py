@@ -1,3 +1,11 @@
+# Vendored verbatim from the 'typing_extensions' project.
+#   Upstream: https://github.com/python/typing_extensions
+#   License:  Python Software Foundation License 2.0 (see LICENSES/PSF-2.0.txt)
+#
+# Copyright (c) the typing_extensions authors and the Python Software Foundation.
+# Bundled unmodified into deps/src/cpython/Lib because FreeCAD's Python needs it and it
+# is pure Python; upstream ships the license in a separate LICENSE file, not per-file,
+# so this provenance note stands in its place. Do not edit -- replace from upstream.
 import abc
 import builtins
 import collections
