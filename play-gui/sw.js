@@ -4,7 +4,7 @@
 // pressure. Engagement alone does not earn it (measured: three engaged visits, still
 // denied), so installation is the lever.
 //
-// It must not cache or rewrite anything. The engine is 139 MB served with precise
+// It must not cache or rewrite anything. The engine is ~115 MB over the wire, served with precise
 // Content-Encoding and cross-origin-isolation headers; a caching service worker is an
 // excellent way to corrupt that. No respondWith call anywhere: every request goes to the
 // network exactly as it would without a worker.

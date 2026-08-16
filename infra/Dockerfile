@@ -51,4 +51,24 @@ COPY play-gui/gmsh.js play-gui/gmsh.wasm /usr/share/nginx/html/
 # CalculiX solver module, fetched on first solve.
 COPY play-gui/ccx.js play-gui/ccx.wasm /usr/share/nginx/html/
 
+# Stamp the mesher and solver too. They were served Cache-Control: immutable for a YEAR
+# while their URLs were bare, so a rebuilt gmsh or ccx would have stayed stale in a
+# returning browser for up to twelve months -- a correctness bug wearing a caching costume.
+# A Cloudflare purge cannot fix that; only a different URL can.
+RUN GM=$(md5sum /usr/share/nginx/html/gmsh.wasm | cut -c1-12) \
+ && CX=$(md5sum /usr/share/nginx/html/ccx.wasm  | cut -c1-12) \
+ && sed -i "s|'gmsh\.js'|'gmsh.js?v=$GM'|g; \
+            s|'ccx\.js'|'ccx.js?v=$CX'|g" \
+        /usr/share/nginx/html/freecad-gui.html \
+ && grep -q "gmsh.js?v=$GM" /usr/share/nginx/html/freecad-gui.html \
+ && grep -q "ccx.js?v=$CX"  /usr/share/nginx/html/freecad-gui.html \
+ && echo "stamped gmsh=$GM ccx=$CX"
+
+# Build identity, so a bug report can name the build it came from. Supplied by CI as the
+# release tag + short SHA; defaults to "unknown" for a local image build.
+ARG FCWEB_BUILD=unknown
+RUN sed -i "s|__FCWEB_BUILD__|${FCWEB_BUILD}|g" /usr/share/nginx/html/freecad-gui.html \
+ && ! grep -q "__FCWEB_BUILD__" /usr/share/nginx/html/freecad-gui.html \
+ && echo "stamped build=${FCWEB_BUILD}"
+
 EXPOSE 80

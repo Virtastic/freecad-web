@@ -1,4 +1,13 @@
-<!doctype html><html><head><meta charset="utf-8"><title>FreeCAD — WebAssembly (GUI)</title><link rel="icon" href="/icon-192.png">
+<!doctype html><html><head><meta charset="utf-8"><title>FreeCAD-Web</title><link rel="icon" href="/icon-192.png">
+<!-- Build identity. infra/Dockerfile rewrites the placeholder at image build time with the
+     release tag + short SHA. Without this a bug report cannot be tied to a build, which is
+     why it is set here, before anything else, rather than somewhere convenient later. The
+     literal below is what you see when running the page straight from a checkout. -->
+<script>window.FCWEB_BUILD = "__FCWEB_BUILD__".indexOf("FCWEB_BUILD") >= 0 ? "dev" : "__FCWEB_BUILD__";
+document.addEventListener('DOMContentLoaded', function(){
+  var el = document.getElementById('buildstamp');
+  if (el) el.textContent = ' · build ' + window.FCWEB_BUILD;
+});</script>
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#2b2f36">
 <!-- Without this a tablet renders the canvas at a fake 980px width and then scales it,
@@ -71,11 +80,12 @@
       </svg>
     </div>
     <div class="bt">Free<span class="accent">CAD</span></div>
-    <div class="bs" id="bootstatus">starting… (first load downloads ~150 MB, then it is cached)</div>
+    <div class="bs" id="bootstatus">starting… (the first load downloads about 115 MB)</div>
     <div class="ld-bar"><div class="ld-fill" id="bootfill"></div></div>
     <div class="ld-detail" id="bootdetail"></div>
     <div class="ld-credit">FreeCAD-Web by <a href="https://virtastic.app" target="_blank" rel="noopener">Virtastic</a>
-      &middot; LGPL &middot; <a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">Source</a></div>
+      &middot; LGPL &middot; <a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">Source</a>
+      <span id="buildstamp"></span></div>
   </div>
 </div>
 <div id="log" class="hidden"><span id="status">loading…</span></div>
@@ -99,7 +109,13 @@
       s.src = 'gmsh.js';
       s.onload = function () {
         if (typeof GmshModule !== 'function') { reject(new Error('gmsh.js did not define GmshModule')); return; }
-        GmshModule().then(resolve, reject);
+        // Carry the ?v= stamp from this script's URL over to gmsh.wasm. infra/Dockerfile
+        // keys that stamp on the WASM's md5, so propagating it content-addresses the wasm
+        // too. Without this the .js gets a fresh URL while the .wasm -- served immutable
+        // for a year -- stays stale in a returning browser, i.e. new loader, old engine.
+        var q = (s.src.split('?')[1] || '');
+        GmshModule(q ? { locateFile: function (f) { return /\.wasm$/.test(f) ? f + '?' + q : f; } } : {})
+          .then(resolve, reject);
       };
       s.onerror = function () { reject(new Error('failed to fetch gmsh.js')); };
       document.head.appendChild(s);
@@ -182,6 +198,7 @@
 // small next to the solve itself.
 (function () {
   var scriptP = null;
+  var ccxOpts = {};                      // locateFile for ccx.wasm, set once the script URL is known
 
   function loadScript() {
     if (scriptP) { return scriptP; }
@@ -191,6 +208,11 @@
       s.src = 'ccx.js';
       s.onload = function () {
         if (typeof CcxModule !== 'function') { reject(new Error('ccx.js did not define CcxModule')); return; }
+        // Propagate this script's ?v= stamp to ccx.wasm -- see the same note in the gmsh
+        // loader above. The stamp is keyed on the wasm's md5, so without forwarding it a
+        // rebuilt solver stays stale behind a year-long immutable cache.
+        var q = (s.src.split('?')[1] || '');
+        if (q) { ccxOpts = { locateFile: function (f) { return /\.wasm$/.test(f) ? f + '?' + q : f; } }; }
         resolve();
       };
       s.onerror = function () { reject(new Error('failed to fetch ccx.js')); };
@@ -225,7 +247,7 @@
     var job = base(inpPath).replace(/\.inp$/i, '');
     var outDir = dirOf(inpPath);
     try {
-      var M = await CcxModule();
+      var M = await CcxModule(ccxOpts);
       var wd = '/work';
       try { M.FS.mkdir(wd); } catch (e) {}
       try { M.FS.chdir(wd); } catch (e) {}
@@ -259,7 +281,7 @@
   window.fcwebCcxVersion = async function () {
     try {
       await loadScript();
-      var M = await CcxModule();
+      var M = await CcxModule(ccxOpts);
       return M.ccall('fcweb_ccx_version', 'string', [], []);
     } catch (e) { return null; }
   };
@@ -725,7 +747,7 @@ window.fcwebNotify = function (text, kind, actions) {
      if(__bootEl) __bootEl.classList.remove('indet');
      if(__bootFill) __bootFill.style.width=Math.max(2,Math.min(100,+m[2]))+'%';
      __bootStatus.textContent=(m[1]||'Downloading').replace(/[…\.\s]+$/,'')||'Downloading';
-     if(__bootDetail) __bootDetail.textContent=m[2]+'% of ~150 MB';
+     if(__bootDetail) __bootDetail.textContent=m[2]+'% of ~115 MB';
    } else {
      if(__bootEl) __bootEl.classList.add('indet');
      // strip trailing "(…)" into the detail line so the label stays short + uppercase-clean
@@ -760,11 +782,24 @@ window.fcwebNotify = function (text, kind, actions) {
  // reads (it is hidden by default). Promote the ones that mean "the thing you just
  // asked for did not happen" into a visible toast. Matched once each so a retry loop
  // cannot spam.
+ // NOTE on the first two rules: Gmsh and CalculiX ARE in this build, as separate wasm
+ // modules (gmsh.wasm / ccx.wasm) reached through window.fcwebGmshRun / fcwebCcxRun.
+ // These messages used to say the tools "are not part of the browser build", which was
+ // false -- and worse, misleading in the exact case that produces them. The known cause
+ // is the bridge being unreachable, not absent: it lives on the MAIN thread and JSPI can
+ // only suspend the main stack, so anything running the solver from a worker gets
+ // available()==False and falls through to a "binary not found" path. That shipped once
+ // (BUILD-WEH.md, "FEM in the browser: never run its tasks on a thread") and the Solve
+ // button had never worked. So describe the failure, and say which build it happened on.
  const __NOTIFY_RULES = [
    [/Gmsh binary .* not found|Gmsh executable not found|No standard location implemented/i,
-    'Mesh generation is unavailable: the Gmsh mesher is not part of the browser build.'],
+    'Meshing could not start: the browser could not reach the Gmsh module. ' +
+    'Reload the page and try again — if it keeps happening, please report it' +
+    (window.FCWEB_BUILD ? ' quoting build ' + window.FCWEB_BUILD + '.' : '.')],
    [/CalculiX binary .* not found|No or wrong CalculiX binary|CalculiX binary has not been found/i,
-    'Solving is unavailable: the CalculiX solver is not part of the browser build.'],
+    'The solve could not start: the browser could not reach the CalculiX module. ' +
+    'Reload the page and try again — if it keeps happening, please report it' +
+    (window.FCWEB_BUILD ? ' quoting build ' + window.FCWEB_BUILD + '.' : '.')],
    [/doesn't contain expected phrase/i,
     'The configured solver binary did not respond as expected, so the solve was skipped.'],
    // Out of wasm memory. The heap is a FIXED 2 GB (growth is deliberately off -- see
@@ -926,7 +961,7 @@ window.fcRunPy = fcRunPy;
        setStatus:(t)=>{ if(!t) return; append('[status] '+t);
          // Friendly loading-overlay text (no raw byte counts / spam).
          const m=/\((\d+)\/(\d+)\)/.exec(t);
-         if(/Downloading/.test(t)){ __setBoot(m?('Downloading… '+Math.floor(100*(+m[1])/(+m[2]))+'%'):'Downloading… (first load ~150 MB)'); }
+         if(/Downloading/.test(t)){ __setBoot(m?('Downloading… '+Math.floor(100*(+m[1])/(+m[2]))+'%'):'Downloading… (first load ~115 MB)'); }
          else if(/Running/.test(t)){ __setBoot('Starting FreeCAD…'); } },
        monitorRunDependencies:(n)=>{ append('[deps] remaining='+n);
          if(n>0) __setBoot('Unpacking application data… ('+n+' left)'); },
@@ -1028,7 +1063,21 @@ window.fcRunPy = fcRunPy;
 </script>
 <script>
 // FCWEB GL tracer: wrap WebGL2 draw calls to see what actually reaches the GPU.
+//
+// OPT-IN (?gltrace=1). It used to run for every user, and it is not free: it wraps every
+// drawArrays/drawElements and, for the first 400, issues synchronous getParameter /
+// isEnabled reads. Those flush the GL pipeline, on a renderer that is already draw-call
+// bound at ~11 fps on a heavy scene -- so the diagnostic was taxing the exact thing it
+// exists to diagnose, and retaining 400 records with shader and uniform dumps besides.
+//
+// The render-debug switches below (?nodepth, ?nocull, ?darkbg) live in the same block and
+// are gated on ?dev=1. They are support surface, not security: a user who lands on a
+// shared link carrying ?skipCoin or ?nodepth files a bug nobody can reproduce.
 (function(){
+  var __qs = location.search;
+  var __trace = /[?&]gltrace=1/.test(__qs);
+  var __dev   = /[?&]dev=1/.test(__qs);
+  if (!__trace && !__dev) { return; }
   window.__gllog = [];
   function wrap(proto, name){
     var orig = proto[name];
@@ -1073,9 +1122,11 @@ window.fcRunPy = fcRunPy;
     };
   }
   try {
-    wrap(WebGL2RenderingContext.prototype, 'drawElements');
-    wrap(WebGL2RenderingContext.prototype, 'drawArrays');
-    var qp = new URLSearchParams(location.search);
+    if (__trace) {
+      wrap(WebGL2RenderingContext.prototype, 'drawElements');
+      wrap(WebGL2RenderingContext.prototype, 'drawArrays');
+    }
+    var qp = __dev ? new URLSearchParams(location.search) : new URLSearchParams('');
     if (qp.has('nodepth') || qp.has('nocull')) {
       var _en = WebGL2RenderingContext.prototype.enable;
       WebGL2RenderingContext.prototype.enable = function(cap){
@@ -1650,7 +1701,7 @@ window.fcRunPy = fcRunPy;
 </script>
 <script>
 /* Browser support gate. This runs BEFORE FreeCAD.js, because loading that script starts
-   the ~150 MB download immediately -- and on a browser that cannot run this build the
+   the ~115 MB download immediately -- and on a browser that cannot run this build the
    user previously watched all of it arrive, saw "DOWNLOADING 100%", and then waited
    forever with nothing logged anywhere.
 
@@ -1762,9 +1813,29 @@ window.fcRunPy = fcRunPy;
       var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(function(){URL.revokeObjectURL(a.href);},15000);
+      // The staged copy has been handed to the browser, so drop it. _dl sits UNDER the
+      // IDBFS mount, so anything left here is copied into IndexedDB and kept forever --
+      // the same storage autosave depends on. Left alone it grows without bound and the
+      // first symptom is the "your work is NOT being saved" quota toast, i.e. data loss.
+      try{ FS.unlink(dir+'/'+name); }catch(e){}
+      try{ FS.unlink(dir+'/name'); }catch(e){}
+      try{ FS.unlink(dir+'/done'); }catch(e){}
       return;
     }
     alert('Save timed out');
+  }
+
+  // Drop the staged upload once Python has consumed it. Appended to the SAME python
+  // snippet that does the import rather than unlinked from JS, because py() only queues
+  // the work -- deleting from JS would race the read.
+  //
+  // Deliberately NOT used for .FCStd: an opened document's FileName IS this path, and
+  // FreeCAD needs it to save. Those are left in place; they are files the user explicitly
+  // opened, not invisible litter. Everything else (STEP/STL/SVG/DXF/macros/zips) is copied
+  // into the document or the Mod dir on import, so the staged file is pure waste -- and
+  // _up lives under the IDBFS mount, so waste here is permanent IndexedDB growth.
+  function DROP_UPLOAD(p){
+    return "\ntry:\n import os; os.remove("+JSON.stringify(p)+")\nexcept Exception: pass";
   }
 
   function openFile(filter){
@@ -1797,16 +1868,22 @@ window.fcRunPy = fcRunPy;
           "try:",
           "  Gui.doCommandGui('exec(open(%r, encoding=\"utf-8\").read())' % dst)",
           "except Exception as e:",
-          "  import sys; sys.__stderr__.write('macro error: %s\\n'%e)"
+          "  import sys; sys.__stderr__.write('macro error: %s\\n'%e)",
+          // Only if the copy into the macro dir actually landed somewhere else -- the
+          // except branch above falls back to dst=src, and removing it then would delete
+          // the macro we are about to run.
+          "if dst != src:",
+          "  try: os.remove(src)",
+          "  except Exception: pass"
         ].join('\n'));
       } else if(ext==='zip'){
         // Custom workbench / addon package: extract into the user Mod dir and load it, so an
         // engineer can install a plugin they already have as a .zip (no network needed).
         installWorkbenchZip(path);
       } else if(ext==='svg'||ext==='dxf'){
-        py("import FreeCAD, FreeCADGui as Gui, importSVG, importDXF\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\n(importSVG if "+JSON.stringify(ext)+"=='svg' else importDXF).insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
+        py("import FreeCAD, FreeCADGui as Gui, importSVG, importDXF\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\n(importSVG if "+JSON.stringify(ext)+"=='svg' else importDXF).insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass"+DROP_UPLOAD(path));
       } else {
-        py("import FreeCAD, Part, FreeCADGui as Gui\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\nPart.insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
+        py("import FreeCAD, Part, FreeCADGui as Gui\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\nPart.insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass"+DROP_UPLOAD(path));
       }
       } finally { inp.remove(); }
     };
