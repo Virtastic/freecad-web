@@ -69,6 +69,40 @@ wrong rather than anything that errors.
 - [ ] No moment where the UI is frozen with no indication of progress
 - [ ] Text is crisp, not blurry, at your display's scaling
 
+## Recorded result — 2026-08-16, build `build-20260813-eventstack+c41d84b`
+
+Driven against **production**, in a real browser, with the results below measured rather
+than asserted. This covers the automatable half; the two human-only checks (starting a
+native drag, and the `showSaveFilePicker` dialog) are **still outstanding** and are the
+reason this file exists.
+
+| check | result |
+|---|---|
+| cold boot to Ready | 23 s |
+| return visit to Ready | 8–10 s, **0 bytes fetched** for wasm/data |
+| workbench first-click activation | **19/19**, 0 failures (incl. CAM and OpenSCAD) |
+| PartDesign sketch → pad | 1400.000 mm³ vs analytic 1400.000 — **0.0000%** |
+| boolean cut (box − cylinder) | 717.257 mm³ vs analytic 717.257 — **0.0000%** |
+| STEP export | 8291 bytes written |
+| File → Save (anchor path) | file delivered, `_dl` staging left **empty** |
+| autosave observer installed | marker present |
+| **work survives a reload** | `SurviveReload/Brick vol=4199.0` restored (13×17×19) |
+| memory monitor | live, heap 285 MB at idle |
+| GL tracer off by default | `window.__gllog` undefined |
+| console errors | none |
+
+Two things this pass caught that no scripted API test would have:
+
+1. **Autosave was never installing.** `FreeCAD._fcweb_saver` did not exist, the autosave
+   directory was empty, and every failure path was a swallowed exception, so it looked
+   healthy. A user could have modelled for an hour and lost everything.
+2. **A GL-tracer gate had disabled three unrelated subsystems** — autosave, the
+   out-of-memory warning, and the draw-call batching — because an early return skipped the
+   rest of the enclosing IIFE. The app looked completely normal.
+
+Both are fixed and re-verified above. The lesson for future passes: check that a subsystem
+is *alive*, not merely that nothing threw.
+
 ## What to write down
 
 For anything that looks or feels wrong, note **what you did, what you expected, what you
