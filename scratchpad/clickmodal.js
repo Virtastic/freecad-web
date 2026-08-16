@@ -3,7 +3,7 @@
 // A menu click is a plain DOM callback -- if a nested loop cannot suspend there, then the
 // drag failure is one instance of a much larger class.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (p, c) => p.evaluate((code) => {
   const m = window.fcInstance;

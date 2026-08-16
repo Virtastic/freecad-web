@@ -2,7 +2,7 @@
 // click the edge in the viewport, place the dimension, then deal with the value dialog.
 // Aimed with view.getPointOnScreen (bottom-left origin -> flip Y against the subwindow).
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
 const run = (p, c) => p.evaluate((code) => {

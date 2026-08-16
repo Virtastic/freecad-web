@@ -1,7 +1,7 @@
 // Generic post-boot Python probe with auto-retry on renderer crash.
 // Usage: node probe.js '<python>' [waitMs]
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const PY = process.argv[2];
 const ARGS = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu-sandbox',
   '--js-flags=--max-old-space-size=8192','--use-gl=angle','--use-angle=swiftshader',

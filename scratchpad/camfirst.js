@@ -1,7 +1,7 @@
 // Capture everything FreeCAD logs during the FIRST activation of a workbench.
 // Usage: node scratchpad/camfirst.js [WorkbenchName] [url]
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const WB = process.argv[2] || 'CAMWorkbench';
 const URL = process.argv[3] || 'http://localhost:8792/index.html';

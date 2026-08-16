@@ -3,7 +3,7 @@
 // typed into it must reach the geometry. Before the promising fix this dialog could not
 // open from real input at all.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
 const run = (p, c) => p.evaluate((code) => {

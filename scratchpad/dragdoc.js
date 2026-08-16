@@ -3,7 +3,7 @@
 //   2. switch between two open documents via the Windows menu, and confirm the
 //      3D view and the tree both follow
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (p, c) => p.evaluate((code) => {
   const m = window.fcInstance;

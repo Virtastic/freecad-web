@@ -3,7 +3,7 @@
 // the page log + console and screenshots. Reusable smoke/regression harness.
 //   node scratchpad/drive.js "render3d=1&autotest=1" /tmp/fc-smoke.png 45
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 
 (async () => {
   const query = process.argv[2] || 'render3d=1&autotest=1';

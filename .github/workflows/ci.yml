@@ -114,6 +114,21 @@ jobs:
           fi
           echo "OK"
 
+      # The harnesses are the only real verification this project has, so they must be
+      # runnable by whoever needs them -- not just on one laptop. 142 of them hardcoded a
+      # macOS Chrome path, which meant nobody on Windows or Linux could check anything.
+      - name: Harnesses are runnable off macOS
+        run: |
+          set -e
+          bad=$(grep -rl "Applications/Google Chrome.app" scratchpad/ 2>/dev/null \
+                | xargs -r grep -L "process.env.CHROME_PATH" || true)
+          if [ -n "$bad" ]; then
+            echo "::error::these harnesses hardcode a macOS Chrome path with no CHROME_PATH fallback:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "OK — $(grep -rl 'process.env.CHROME_PATH' scratchpad/ | wc -l) harnesses honour CHROME_PATH"
+
       # infra/Dockerfile greps for each of these after its sed; if a refactor renames one the
       # image build fails on the box. Catch it here instead, on a free runner.
       - name: Dockerfile stamp targets still present in the page

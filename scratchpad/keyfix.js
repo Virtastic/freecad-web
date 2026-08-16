@@ -2,7 +2,7 @@
 // a text field must still produce each character exactly ONCE (double-entry is the obvious
 // way a forwarder like this goes wrong).
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
 const run = (p, c) => p.evaluate((code) => {

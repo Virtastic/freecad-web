@@ -2,7 +2,7 @@
 // Qt-wasm registers its own DOM listeners; re-dispatching the real KeyboardEvent onto the
 // element Qt listens to should give GENERAL keyboard support, not a hardcoded shortcut map.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (p, c) => p.evaluate((code) => {
   const m = window.fcInstance;

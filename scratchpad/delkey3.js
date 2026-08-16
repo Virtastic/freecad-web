@@ -4,7 +4,7 @@
 //   - WAIT from the harness before reading action enablement: FreeCAD refreshes it on a
 //     150 ms timer, so reading it in the same Python call that set the selection is stale.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (p, c) => p.evaluate((code) => {
   const m = window.fcInstance;

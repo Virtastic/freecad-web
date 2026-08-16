@@ -1,5 +1,5 @@
 const fs=require('fs');const puppeteer=require('puppeteer-core');
-const CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const PY=fs.readFileSync(process.argv[2],'utf8');
 const PROFILE='/tmp/fc-warm';   // fixed, reused, never wiped (wasm is stable)
 (async()=>{

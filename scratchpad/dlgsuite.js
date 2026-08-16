@@ -5,7 +5,7 @@
 // The Python bridge still answers while a C++ modal is up (the dialog's nested loop is
 // suspended, CPython is idle), which is how the buttons get located.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (p, c) => p.evaluate((code) => {
   const m = window.fcInstance;

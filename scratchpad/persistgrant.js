@@ -3,7 +3,7 @@
 // installation. A fresh scripted profile has none of that, which is why it reads false.
 // Same profile, several visits, real interaction each time, checking after each.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const PROFILE = '/tmp/fc-persist-' + (process.argv[3] || 'a');
 const URL = process.argv[2] || 'https://freecad.virtastic.app/';

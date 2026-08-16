@@ -7,7 +7,7 @@
 //
 // Usage: node scratchpad/onetest.js <SuiteName> [url] [per-test-timeout-ms]
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const SUITE = process.argv[2] || 'Document';
 const URL = process.argv[3] || 'http://localhost:8792/index.html';

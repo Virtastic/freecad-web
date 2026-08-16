@@ -2,7 +2,7 @@
 // to a single step instead of a 60-line script. Each step prints its own marker.
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const STEPS = [

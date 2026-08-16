@@ -3,7 +3,7 @@
 // opened). The distinction that matters: writing a file into the emscripten FS is not
 // the same as it reaching IndexedDB.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const PROFILE = '/tmp/fc-datasafety-' + (process.argv[3] || 'a');
 const run = (p, c) => p.evaluate((c) => { const m = window.fcInstance;

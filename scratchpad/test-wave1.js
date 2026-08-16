@@ -1,7 +1,7 @@
 // Boot the build, then run a Python probe via the JS bridge to confirm the new
 // C++ workbenches import, register workbenches, and do real geometry.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 
 const PY = `
 import FreeCAD as App

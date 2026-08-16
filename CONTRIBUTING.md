@@ -53,10 +53,33 @@ relink silently drops 30 hand-applied GL patches; without them the 3D view never
 ## Testing
 
 The verification harnesses live in `scratchpad/` and are Puppeteer scripts run by hand. They
-currently hardcode a macOS Chrome path — making them portable is open work and a genuinely
-useful contribution.
+default to the macOS Chrome path but honour **`CHROME_PATH`**, so they run anywhere:
 
-There is no CI test suite yet. `npm test` deliberately fails and says so.
+```bash
+CHROME_PATH="/c/Program Files/Google/Chrome/Application/chrome.exe" node scratchpad/reg-prod.js
+```
+
+They need a real Chrome, not headless-shell: Qt-wasm wants a compositor, and most of these
+launch with `headless: false` for exactly that reason.
+
+The ones worth knowing:
+
+| harness | what it proves |
+|---|---|
+| `reg-prod.js` | the returning-user gate — the **only** one with a fixed `userDataDir`, and the one that caught a stale-cache boot failure that killed returning users while first-time visitors were fine |
+| `workflows.js` | eight CAD workflows, each ending in a number that can be wrong |
+| `guidrive.js` | menus and toolbars through **real Qt input**, not the Python bridge |
+| `datasafety.js` | work survives a genuine reload, asserting geometry |
+| `inputdialog.js` | a macro prompt returns what the user typed |
+| `ccxe2e/run-prod.js` | FEM end to end, gmsh + CalculiX |
+
+**Drive anything user-facing with real input.** Every scripted `Gui.runCommand` test passed
+while real mouse clicks could not open a single dialog, and every scripted CalculiX run passed
+while the Solve button had never worked. Events built with `dispatchEvent()` are *untrusted*
+and Qt ignores them — that is why these are Puppeteer scripts and not page scripts.
+
+CI runs the patch-tool selftest and a set of repo-hygiene checks; the harnesses above are
+still run by hand.
 
 ## Commits
 

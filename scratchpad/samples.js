@@ -1,5 +1,5 @@
 const puppeteer=require('puppeteer-core');
-const CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const run=async(p,c)=>{await p.evaluate((c)=>{const m=window.fcInstance;const n=new TextEncoder().encode(c).length+1;const q=m._malloc(n);m.stringToUTF8(c,q,n);m._fcweb_run_python(q);m._free(q);},c);};
 const wait=async(p,mk,ms)=>{try{await p.waitForFunction((k)=>document.getElementById('log').textContent.includes(k),{timeout:ms,polling:500},mk);return true;}catch(e){return false;}};
 const FILES=[

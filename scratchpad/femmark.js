@@ -4,7 +4,7 @@ const __RT = require('path').resolve(__dirname, '..');  // repo root (was a hard
 const fs = require('fs');
 const { execSync } = require('child_process');
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const ARGS = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu-sandbox',
   '--js-flags=--max-old-space-size=8192','--use-gl=angle','--use-angle=swiftshader',
   '--enable-features=SharedArrayBuffer','--ignore-gpu-blocklist'];

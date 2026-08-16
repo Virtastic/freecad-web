@@ -1,7 +1,7 @@
 // Production smoke test: boots, storage is persistent, crash reporter present, FEM path
 // alive. Run after every deploy that touches the loader or the data URL.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
   const errs = [];

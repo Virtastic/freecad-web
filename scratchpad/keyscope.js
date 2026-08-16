@@ -2,7 +2,7 @@
 // widget has focus but not when the tree does. If true, Delete/undo/most shortcuts are dead
 // for users. Test the same keys against both focus states in one run.
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
 const run = (p, c) => p.evaluate((code) => {

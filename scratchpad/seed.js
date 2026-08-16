@@ -1,7 +1,7 @@
 // Recreate the failing condition on purpose: a profile carrying many autosaved documents.
 const puppeteer = require('puppeteer-core');
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 (async () => {
   const b = await puppeteer.launch({ executablePath: CHROME, headless: false, defaultViewport: null,
     args: ['--no-sandbox', '--use-gl=angle', '--use-angle=metal', '--window-size=1200,800'],

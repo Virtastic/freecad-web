@@ -5,7 +5,7 @@
 // because a silent failure is the thing most worth seeing.
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const CODE = fs.readFileSync('/tmp/ccxe2e.py', 'utf8');
 

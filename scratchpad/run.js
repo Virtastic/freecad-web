@@ -5,7 +5,7 @@ const __RT = require('path').resolve(__dirname, '..');  // repo root (was a hard
 // Prints the filtered on-page log. Port 8799.
 const fs = require('fs');
 const puppeteer = require('puppeteer-core');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const ARGS = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu-sandbox',
   '--js-flags=--max-old-space-size=8192','--use-gl=angle','--use-angle=swiftshader',
   '--enable-features=SharedArrayBuffer','--ignore-gpu-blocklist','--window-size=1400,900',
