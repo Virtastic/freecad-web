@@ -68,12 +68,18 @@ jobs:
       - name: Build image
         run: |
           set -e
+          # Two forms on purpose. The page stamp is a display string and may contain '+';
+          # a docker tag may NOT ([a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}), and using '+' failed
+          # the build with "invalid reference format". Sanitise anything else out too, so a
+          # release tag with an odd character can never break the deploy again.
           BUILD_ID="${REL_TAG}+${GITHUB_SHA::7}"
-          echo "building $BUILD_ID"
+          IMAGE_TAG=$(printf '%s' "${REL_TAG}-${GITHUB_SHA::7}" | tr -c 'a-zA-Z0-9._-' '-')
+          echo "building $BUILD_ID  (image tag: $IMAGE_TAG)"
           DOCKER_BUILDKIT=1 docker build \
             --build-arg "FCWEB_BUILD=$BUILD_ID" \
-            -t "freecad:$BUILD_ID" -t freecad:ovh -f infra/Dockerfile .
-          echo "BUILD_ID=$BUILD_ID" >> "$GITHUB_ENV"
+            -t "freecad:$IMAGE_TAG" -t freecad:ovh -f infra/Dockerfile .
+          echo "BUILD_ID=$BUILD_ID"   >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
 
       - name: Sync compose to /opt/freecad
         run: |
