@@ -198,8 +198,15 @@ jobs:
           chk "wasm content-type"              'grep -qi "^content-type: *application/wasm" /tmp/cw'
           chk "wasm immutable"                 'grep -qi "^cache-control:.*immutable" /tmp/cw'
 
-          curl -sS -D /tmp/cd -o /dev/null "https://freecad.virtastic.app/$(grep -oE 'FreeCAD\.data\.gz\?v=[a-z0-9]+' /tmp/cb | head -1)"
+          # MUST send Accept-Encoding: gzip. curl does not by default, and a CDN correctly
+          # decompresses for a client that does not advertise it -- so without this header
+          # the response has no Content-Encoding and the check fails on a perfectly healthy
+          # origin. That false positive failed a deploy once; a gate that red-lights every
+          # run is worse than no gate, because it teaches you to ignore red.
+          curl -sS -H 'Accept-Encoding: gzip' -D /tmp/cd -o /dev/null \
+            "https://freecad.virtastic.app/$(grep -oE 'FreeCAD\.data\.gz\?v=[a-z0-9]+' /tmp/cb | head -1)"
           chk "data.gz Content-Encoding gzip"  'grep -qi "^content-encoding: *gzip" /tmp/cd'
+          chk "data.gz has a body"             '[ "$(grep -i "^content-length:" /tmp/cd | tr -dc 0-9)" -gt 1000000 ]'
 
           [ "$fail" = 0 ] || { echo "::error::what Cloudflare serves does not match what the edge serves"; exit 1; }
           echo "through-CDN health OK"
