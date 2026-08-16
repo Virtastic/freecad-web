@@ -481,6 +481,50 @@ bug, an accumulating-state bug, or anything else that only exists on the second 
 here was a Qt modal sitting in the middle of the canvas the whole time; the console showed
 only repeated `readobject called with exception set`.
 
+## The engine was never actually cached, and the HTTP cache cannot fix it
+
+The boot screen promised "first load downloads ~150 MB, then it is cached". It was false on
+every visit. Measured against production, reloading in the **same** profile:
+
+| asset | size | delivery on reload |
+|---|---|---|
+| `FreeCAD.js` | 1 MB | `deliveryType: "cache"`, transferSize 0 |
+| `FreeCAD.wasm` | 152 MB (53 MB on the wire) | **`"network"`, 51 s** |
+| `FreeCAD.data.gz` | 262 MB (63 MB on the wire) | **`"network"`, 58 s** |
+
+The 1 MB file is the control: HTTP caching works fine in that profile. Chrome's disk cache
+simply will not retain entries this large, and `Cache-Control: immutable` does not change
+that. So every visit cost ~113 MB and 2–3 minutes — cold boot 171 s to READY, warm reload
+115 s.
+
+**Cache Storage has no such per-entry ceiling.** Measured before writing any of it: a single
+152,506,718-byte entry stores in 409 ms and reads back in **111 ms**, byte-identical (wasm
+magic `00 61 73 6d` intact), against a ~5 GB origin quota. Verified again through the real
+implementation against the live asset: cold 2237 ms with 1366 progress callbacks, warm
+**105 ms**, bytes identical, and a planted `?v=STALEBUILD` key correctly swept.
+
+Three things that are easy to get wrong here:
+
+- **Store a synthetic `Response`, never the network one.** `FreeCAD.data.gz` is served with a
+  hand-set `Content-Encoding: gzip` over a body the browser has *already* decoded. Caching
+  the network `Response` risks carrying that header onto non-gzip bytes — a double-decode on
+  read, which is exactly the corruption this file warns about elsewhere.
+- **Do not put it in the service worker.** `sw.js` is a pass-through on purpose; a
+  fetch-intercepting worker sits in front of the precise `Content-Encoding` and
+  cross-origin-isolation headers the whole boot depends on.
+- **`content-length` is the wrong progress denominator.** Both assets are gzip-encoded in
+  transit, so it reports the *compressed* size while the stream yields decoded bytes — the
+  bar runs to ~300%. `freecad-gui.html` uses nominal decoded sizes instead.
+
+The data package is handed to emscripten through `Module.getPreloadedPackage(name, size)`, a
+documented hook already present in the shipped `FreeCAD.js` — so this needs no relink and no
+addition to `tools/patch-freecad-js.py`. Returning `null` falls back to emscripten fetching
+the URL itself, so a prefetch failure degrades to the old behaviour rather than breaking boot.
+
+Cache keys are the stamped `?v=` URLs, so a new build is automatically a new key and anything
+else is swept on boot. A damaged entry would otherwise be sticky forever, so a non-OOM abort
+offers "clear cached engine and reload" (`window.fcwebClearEngineCache()`).
+
 ## Releasing: the checklist, and the ways it bites
 
 1. **Release first, push second.** CI pulls assets by tag, so the release must exist

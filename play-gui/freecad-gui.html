@@ -939,23 +939,136 @@ window.fcRunPy = fcRunPy;
  // Both causes are gone. If a dialog ever regresses, the bridge is in git history at
  // the commit that removed it.
 
+ // ---- Engine cache -------------------------------------------------------------
+ // The engine was NOT actually cached, on any visit. Measured against production: on a
+ // reload in the SAME profile, the 1 MB FreeCAD.js came back deliveryType:"cache" while
+ // FreeCAD.wasm (152 MB) and FreeCAD.data.gz came back deliveryType:"network" -- 113 MB
+ // and ~110 s of it, every single time. Chrome's HTTP disk cache will not retain entries
+ // that large, so "then it is cached" was simply false however long you kept the tab.
+ //
+ // Cache Storage has no such per-entry ceiling. Measured before writing this: one
+ // 152,506,718-byte entry stores in 409 ms and reads back in 111 ms, byte-identical
+ // (magic 00 61 73 6d intact), against a ~5 GB origin quota.
+ //
+ // Three deliberate choices:
+ //  - Keys are the stamped ?v= URLs, which infra/Dockerfile already content-addresses by
+ //    md5. A new build is automatically a new key, so no new versioning machinery -- and
+ //    anything not in the current set is swept on boot.
+ //  - We store SYNTHETIC Responses, never the network Response. FreeCAD.data.gz is served
+ //    with a hand-set Content-Encoding: gzip; storing the network Response risks carrying
+ //    that header onto a body the browser has ALREADY decoded, i.e. a double-decode on
+ //    read. Building our own Response sidesteps the question entirely.
+ //  - This is NOT a fetch-intercepting service worker. sw.js is a pass-through on purpose
+ //    (BUILD-WEH.md): the load it would sit in front of depends on exact Content-Encoding
+ //    and cross-origin-isolation headers, and a caching worker is an excellent way to
+ //    corrupt both.
+ const ENGINE_CACHE = 'fcweb-engine';
+ // Progress denominators. Both assets are gzip-encoded in transit, so content-length is
+ // the COMPRESSED size while the stream yields decoded bytes -- using it would run the bar
+ // to ~300%. These are nominal decoded sizes; they only scale a progress bar, and being
+ // approximately right beats a bar pinned at 100% while 113 MB is still arriving.
+ const NOMINAL = { wasm: 152 * 1048576, data: 262 * 1048576 };
+ async function __engineCache(){ try { return await caches.open(ENGINE_CACHE); } catch(e){ return null; } }
+ // Returns an ArrayBuffer, from Cache Storage when the exact stamped URL is present.
+ // Any failure falls back to a plain network fetch: a broken cache must never be fatal.
+ async function __engineFetch(url, label, onBytes){
+   const c = await __engineCache();
+   if (c) {
+     try {
+       const hit = await c.match(url);
+       if (hit) { const b = await hit.arrayBuffer(); onBytes(b.byteLength, b.byteLength, true); return b; }
+     } catch(e){ append('engine cache read failed ('+label+'): '+e); }
+   }
+   const res = await fetch(url);
+   if (!res.ok) throw new Error(label+': HTTP '+res.status);
+   let buf;
+   if (res.body && res.body.getReader) {
+     const reader = res.body.getReader(); const chunks = []; let got = 0;
+     for(;;){ const r = await reader.read(); if (r.done) break;
+       chunks.push(r.value); got += r.value.length; onBytes(got, 0, false); }
+     const out = new Uint8Array(got); let o = 0;
+     for (const ch of chunks) { out.set(ch, o); o += ch.length; }
+     buf = out.buffer;
+   } else { buf = await res.arrayBuffer(); onBytes(buf.byteLength, 0, false); }
+   if (c) { try { await c.put(url, new Response(buf, {headers:{'content-type':'application/octet-stream'}})); }
+            catch(e){ append('engine cache put failed ('+label+'): '+e); } }
+   return buf;
+ }
+ // One corrupt entry would otherwise be an unrecoverable app for that user, forever.
+ window.fcwebClearEngineCache = async function(){
+   try { await caches.delete(ENGINE_CACHE); } catch(e){}
+   try { location.reload(); } catch(e){}
+ };
+ // Shown only after a real abort. Plain DOM rather than fcwebNotify, because the abort
+ // may well have taken the toast machinery down with it.
+ let __cacheResetShown = false;
+ function __offerCacheReset(){
+   if (__cacheResetShown) { return; } __cacheResetShown = true;
+   try {
+     const d = document.createElement('div');
+     d.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;'
+       + 'background:#2b2f36;color:#e6e6e6;border:1px solid #555;border-radius:6px;padding:12px 16px;'
+       + 'font:13px system-ui,sans-serif;max-width:min(560px,92vw);box-shadow:0 4px 16px rgba(0,0,0,.5)';
+     const p = document.createElement('div');
+     p.textContent = 'FreeCAD stopped unexpectedly. If this repeats on every reload, the '
+       + 'downloaded engine may be damaged — clearing it re-downloads about 115 MB.';
+     const b = document.createElement('button');
+     b.textContent = 'Clear cached engine and reload';
+     b.style.cssText = 'margin-top:10px;padding:6px 12px;cursor:pointer;border-radius:4px;'
+       + 'border:1px solid #777;background:#3a3f48;color:#fff;font:inherit';
+     b.onclick = function(){ window.fcwebClearEngineCache(); };
+     d.appendChild(p); d.appendChild(b); document.body.appendChild(d);
+   } catch(e){}
+ }
+
  async function init(){
    try { globalThis.__FCWEB_SEARCH = location.search || ''; } catch(e){}
    const screen=document.getElementById('screen');
    try {
+     // These two literals are rewritten by infra/Dockerfile's md5 stamping (it greps to
+     // confirm the rewrite landed, so a refactor that breaks the match fails the build).
+     const WASM_URL = 'FreeCAD.wasm';
+     const DATA_URL = 'FreeCAD.data.gz?v=1';
+     let __wasmGot = 0, __dataGot = 0, __fromCache = true;
+     const __report = () => {
+       const done = __wasmGot + __dataGot, tot = NOMINAL.wasm + NOMINAL.data;
+       const pct = Math.max(1, Math.min(99, Math.floor(100 * done / tot)));
+       if (__fromCache) { __setBoot('Loading from local cache…'); }
+       else { __setBoot('Downloading… ' + pct + '%'); }
+     };
      // Fetch the wasm bytes up front so the PyEM_CountArgs parser (pre-gui.js)
      // can read Module.wasmBinary and force CPython's direct-call trampoline
      // (no JS frame) — required for JSPI to suspend across CPython frames.
-     let __fcWasmBytes;
-     try { __fcWasmBytes = await (await fetch('FreeCAD.wasm')).arrayBuffer(); } catch(e){ append('wasm prefetch failed: '+e,'err'); }
+     let __fcWasmBytes, __fcDataBytes;
+     try {
+       __fcWasmBytes = await __engineFetch(WASM_URL, 'wasm', (n,_t,cached) => {
+         __wasmGot = n; if (!cached) __fromCache = false; __report(); });
+       // Prefetch the package too, and hand it to emscripten via getPreloadedPackage
+       // below. Doing it here rather than letting the Module fetch it is what makes it
+       // cacheable at all -- and it is a documented emscripten hook, so no relink and no
+       // patching of the generated FreeCAD.js.
+       __fcDataBytes = await __engineFetch(DATA_URL, 'data', (n,_t,cached) => {
+         __dataGot = n; if (!cached) __fromCache = false; __report(); });
+     } catch(e){ append('engine prefetch failed: '+e,'err'); }
+     // Drop any build's entries but this one's, so the cache does not accumulate a
+     // 400 MB engine per release.
+     try {
+       const c = await __engineCache();
+       if (c) { const keep = [WASM_URL, DATA_URL].map(u => new URL(u, location.href).href);
+         for (const req of await c.keys()) { if (keep.indexOf(req.url) < 0) { await c.delete(req); } } }
+     } catch(e){}
      const instance = window.fcInstance = await qtLoad({
        wasmBinary: __fcWasmBytes,
+       // Hand emscripten the package we already fetched (and cached). Returning null
+       // makes it fall back to fetching the URL itself, so a prefetch failure degrades
+       // to the old behaviour instead of breaking boot.
+       getPreloadedPackage: (name, size) => __fcDataBytes || null,
        // ?v= is not cosmetic: Cloudflare had already cached /FreeCAD.data.gz from a
        // probe made BEFORE nginx served it with Content-Encoding, and that entry would
        // hand the browser raw gzip bytes. A new query string is a new cache object, so
        // this cannot collide with anything cached earlier. Bump it if the file changes
        // in a way the immutable Cache-Control would otherwise hide.
-       locateFile: (f) => (f === 'FreeCAD.data' ? 'FreeCAD.data.gz?v=1' : f),
+       locateFile: (f) => (f === 'FreeCAD.data' ? DATA_URL : f),
        // emscripten Module config merged by qtLoad:
        print:(t)=>append(t), printErr:(t)=>append(t,'err'),
        setStatus:(t)=>{ if(!t) return; append('[status] '+t);
@@ -974,6 +1087,11 @@ window.fcRunPy = fcRunPy;
                'Out of memory: this model is larger than the browser build can hold ' +
                '(2 GB limit). Your work has been autosaved — reload to get it back.', 'error');
            } else if (window.fcwebCrash) { window.fcwebCrash('wasm abort', w); }
+           // A non-OOM abort can mean a bad cached engine, and a bad cached entry is
+           // sticky: it would be served again on every reload, so the app would be
+           // permanently broken for that user with no way out from inside the page.
+           // Offer the way out. Only on real aborts, so it is never ordinary UI.
+           if (!/memory|OOM/i.test(String(w))) { __offerCacheReset(); }
          } catch(e){} },
        qt: {
          onLoaded: () => { const st=document.getElementById('status'); if(st) st.textContent='FreeCAD loaded';
