@@ -10,10 +10,29 @@
 > | 4 | GL no-op inventory | **done** — instrumented and measured; see BUILD-WEH.md |
 > | 5 | Display lists / 11 fps | **scoped** — C change + relink + pixel gate, not a JS patch |
 > | 6 | 2 GB heap | **implemented, opt-in** — `FCWEB_HEAP_BYTES`; needs a link + `heapprobe.js` |
-> | 7 | CalculiX threading | **implemented, opt-in** — `FCWEB_CCX_PTHREADS=1`; needs a link + the decks |
+> | 7 | CalculiX threading | **BUILT in CI** — threaded ccx.wasm exists; needs deck validation before release |
 > | 8 | Chrome/Edge only | **decided** — track, don't build |
 >
-> **Items 6 and 7 are now one command each, not a project.** Both are implemented and
+> **Item 7 no longer needs the build machine at all.** `.github/workflows/build-ccx.yml`
+> builds CalculiX on a hosted runner: it installs emsdk 3.1.70, fetches CalculiX 2.22,
+> SPOOLES 2.2, f2c and arpack-ng + LAPACK, builds the f2c translator natively, then the four
+> static libs, then links the module. Both configurations build clean — 977 Fortran files,
+> 976 compiled, 0 failed:
+>
+> | build | ccx.wasm |
+> |---|---|
+> | serial (today's config) | 3,797,838 bytes |
+> | **threaded** (`FCWEB_CCX_PTHREADS=1`) | **3,885,816 bytes** |
+> | currently live | 4,784,783 bytes |
+>
+> **Do not ship either yet.** Both CI builds are ~1 MB smaller than the deployed module, and
+> that is unexplained — different flags, a different source revision, or something extra in
+> the live one. Resolve that first, then run `scratchpad/ccxval/run.js` (elas, freq, plast,
+> therm) and `ccxe2e/run-prod.js`: results must **match** today's numbers, not merely
+> converge, because a race in the assembly is a slightly different answer rather than a crash.
+> The threaded artifact is attached to the run as `ccx-wasm-pthreads`.
+>
+> **Item 6 is still one command, and still needs the build machine.** Both are implemented and
 > parameterised, and both default to exactly today's behaviour so nothing changes until
 > someone opts in:
 >
