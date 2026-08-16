@@ -72,14 +72,20 @@ jobs:
           curl -fsSL -o /tmp/spooles.tgz https://netlib.org/linalg/spooles/spooles.2.2.tgz
           tar xzf /tmp/spooles.tgz -C deps/src/spooles/SPOOLES.2.2
 
-          echo "--- f2c ---"
-          curl -fsSL -o /tmp/f2c.zip https://www.netlib.org/f2c/mksrc.zip || true
-          # f2c is distributed as separate src/ and libf2c/ trees.
+          echo "--- f2c (two separate trees: the runtime library, and the translator) ---"
+          # libf2c is the runtime linked INTO the wasm build.
           curl -fsSL -o /tmp/libf2c.zip https://www.netlib.org/f2c/libf2c.zip
-          mkdir -p deps/src/f2c/libf2c deps/src/f2c/src
+          mkdir -p deps/src/f2c/libf2c
           unzip -q -o /tmp/libf2c.zip -d deps/src/f2c/libf2c
-          curl -fsSL -o /tmp/f2csrc.tar.gz https://www.netlib.org/f2c/src.tar.gz || true
-          [ -s /tmp/f2csrc.tar.gz ] && tar xzf /tmp/f2csrc.tar.gz -C deps/src/f2c/src || true
+
+          # The translator is a NATIVE host tool that turns CalculiX's Fortran into C.
+          # build-ccx-weh.sh expects the built binary at deps/src/f2c/src/f2c and stops with
+          # "missing f2c translator" without it -- which is exactly how the first run failed.
+          # Note the URL: netlib serves src.tgz; the .tar.gz and mksrc.zip spellings both 404.
+          curl -fsSL -o /tmp/f2csrc.tgz https://netlib.org/f2c/src.tgz
+          mkdir -p deps/src/f2c
+          tar xzf /tmp/f2csrc.tgz -C deps/src/f2c        # unpacks as src/
+          ls deps/src/f2c/src/main.c >/dev/null
 
           echo "--- arpack-ng 3.9.1 (netlib arpack96 404s; see build-arpack-weh.sh) ---"
           curl -fsSL -o /tmp/arpack.tar.gz \
@@ -97,6 +103,18 @@ jobs:
                    deps/src/arpack/arpack-ng-3.9.1 deps/src/lapack/lapack-3.12.0; do
             [ -e "$p" ] && echo "  OK      $p" || echo "  MISSING $p"
           done
+
+      # Native, not wasm: this runs ON the runner to translate Fortran to C. f2c is 1990s C
+      # and trips several modern-clang/gcc defaults, hence the demotions -- the same reason
+      # build-spooles-weh.sh carries a -Wno- list for SPOOLES.
+      - name: Build the f2c translator (host tool)
+        run: |
+          set -e
+          cd deps/src/f2c/src
+          cp makefile.u makefile
+          make CC=gcc CFLAGS="-O2 -std=gnu89 -w -Wno-implicit-function-declaration -Wno-return-type" f2c
+          ls -la f2c
+          ./f2c -h 2>&1 | head -3 || true
 
       - name: Build the dependency libs
         run: |
