@@ -1,0 +1,97 @@
+name: box diagnostics (read-only)
+
+# Answers the questions that otherwise need a shell on the VPS, WITHOUT anyone holding an
+# SSH key: the self-hosted runner already executes on that box, so this is the same channel
+# the deploy uses -- audited, logged, repeatable, and revocable by disabling the runner.
+#
+# STRICTLY READ-ONLY. It inspects and reports; it never writes, restarts, pulls or prunes.
+# Keep it that way -- the value here is that it is safe to run at any time, including while
+# something is on fire.
+#
+# It deliberately never prints .credentials, tokens, or key material: the runner's
+# .credentials file holds a live registration token, so only the SCOPE fields of .runner
+# are read.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.repository == 'Virtastic/freecad-web' && github.event_name != 'pull_request'
+    runs-on: [self-hosted, ovh, virtastic]
+    steps:
+      - name: Runner identity and registration scope
+        run: |
+          echo "--- who this job runs as ---"
+          echo "user: $(whoami)   uid: $(id -u)   groups: $(id -Gn)"
+          echo "host: $(hostname)"
+          echo "workdir: $(pwd)"
+          echo
+          echo "--- runner registration scope (the public-repo risk question) ---"
+          # .runner records what the runner is registered against. .credentials sits next to
+          # it and holds a live token -- never read that one.
+          cfg=""
+          for d in "$HOME/actions-runner" "$RUNNER_WORKSPACE/../../.." /opt/actions-runner /srv/actions-runner; do
+            [ -f "$d/.runner" ] && { cfg="$d/.runner"; break; }
+          done
+          if [ -n "$cfg" ]; then
+            echo "config: $cfg"
+            # gitHubUrl tells you org-level vs repo-level; agentName/poolId identify the group.
+            grep -oE '"(gitHubUrl|agentName|poolId|workFolder|ephemeral)"[^,}]*' "$cfg" | sed 's/^/  /'
+          else
+            echo "  (.runner not found in the usual places — reporting env instead)"
+          fi
+          echo "  RUNNER_NAME=${RUNNER_NAME:-?}  RUNNER_ENVIRONMENT=${RUNNER_ENVIRONMENT:-?}"
+
+      - name: Privilege the runner actually holds
+        run: |
+          echo "--- passwordless sudo? (this is what makes the runner root-equivalent) ---"
+          if sudo -n true 2>/dev/null; then
+            echo "  YES — this job can become root without a password"
+            sudo -n -l 2>/dev/null | sed 's/^/    /' | head -15
+          else
+            echo "  no — sudo requires a password"
+          fi
+          echo
+          echo "--- docker socket access? ---"
+          if docker info >/dev/null 2>&1; then
+            echo "  YES — full control of every container on this box"
+          else
+            echo "  no"
+          fi
+
+      - name: Disk (image pruning was added recently — did it hold?)
+        run: |
+          echo "--- filesystem ---"
+          df -h / /var/lib/docker 2>/dev/null | sed 's/^/  /'
+          echo
+          echo "--- docker space ---"
+          docker system df 2>/dev/null | sed 's/^/  /'
+          echo
+          echo "--- freecad images (rollback targets; deploy keeps the newest 5 build-*) ---"
+          docker images 'freecad' --format '  {{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' | sort -r
+          echo
+          echo "--- dangling images (waste) ---"
+          echo "  count: $(docker images -f dangling=true -q | wc -l)"
+
+      - name: Containers and health
+        run: |
+          echo "--- all containers on the shared box ---"
+          docker ps -a --format '  {{.Names}}\t{{.Status}}\t{{.Image}}' | sed 's/^/ /'
+          echo
+          echo "--- freecad container health (HEALTHCHECK was added recently) ---"
+          docker inspect --format '  state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}<none configured>{{end}} restarts={{.RestartCount}}' freecad 2>/dev/null \
+            || echo "  (no container named freecad)"
+          echo
+          echo "--- last 20 log lines from freecad ---"
+          docker logs --tail 20 freecad 2>&1 | sed 's/^/    /' || true
+
+      - name: What the box serves to the world
+        run: |
+          echo "--- listening sockets (is anything exposed beyond the edge?) ---"
+          (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | sed 's/^/  /' | head -20
+          echo
+          echo "--- firewall ---"
+          (sudo -n ufw status 2>/dev/null || sudo -n iptables -S 2>/dev/null | head -20 || echo "  (not readable)") | sed 's/^/  /'
