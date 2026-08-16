@@ -157,10 +157,33 @@ done
 compile "$ROOT/bridge/ccx_stubs.c" "c_ccx_stubs" && nc=$((nc+1)) || failed=$((failed+1))
 # real implementations of things f2c does not provide (dnrm2, xerbla, F90 intrinsics)
 compile "$ROOT/bridge/ccx_fortran_rt.c" "c_ccx_fortran_rt" && nc=$((nc+1)) || failed=$((failed+1))
-# ccx runs assembly and stress recovery on pthreads; link with
-#   -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join
-# or the workers never run and every matrix comes out zero. See bridge/ccx_threads.c.
-compile "$ROOT/bridge/ccx_threads.c" "c_ccx_threads" && nc=$((nc+1)) || failed=$((failed+1))
+# Threading. Two modes, and the default is the SAFE one.
+#
+# ccx parallelises assembly and stress recovery by handing each thread a disjoint range of
+# elements, then joining immediately. This module is not built with -pthread, so emscripten's
+# pthread_create is a stub that FAILS -- and ccx never checks the return value. The workers
+# simply never ran: the matrix came out identically zero, SPOOLES reported it singular, and
+# nothing anywhere said why. bridge/ccx_threads.c wraps pthread_create to run each worker
+# inline, which is why the solver produces numbers at all. It serialises what would have been
+# parallel -- that is the "single-threaded CalculiX" limit users feel on large FEM jobs.
+#
+# FCWEB_CCX_PTHREADS=1 builds it for real instead: -pthread, no wrap, ccx's own
+# pthread_create. The ingredients are present -- the main app already runs -pthread with
+# PTHREAD_POOL_SIZE=16 and the site is cross-origin isolated, so SharedArrayBuffer exists.
+#
+# UNVERIFIED, deliberately opt-in. Before believing a threaded build, run the four decks:
+#   node scratchpad/ccxval/run.js        # elas, freq, plast, therm
+#   node scratchpad/ccxe2e/run-prod.js   # end to end through the browser bridge
+# Results must MATCH the current numbers, not merely converge -- a race in the assembly would
+# show up as a slightly different answer, not as a crash. And measure before celebrating: if
+# SPOOLES factorisation dominates the runtime, parallel assembly may buy very little, which
+# is worth knowing before spending a day on it.
+if [ "${FCWEB_CCX_PTHREADS:-0}" = "1" ]; then
+  echo "[ccx] building WITH pthreads -- ccx_threads.c wrap omitted (UNVERIFIED path)" >&2
+  CFLAGS="$CFLAGS -pthread"
+else
+  compile "$ROOT/bridge/ccx_threads.c" "c_ccx_threads" && nc=$((nc+1)) || failed=$((failed+1))
+fi
 
 for f in "$CCX"/*.c; do
   b="$(basename "$f" .c)"

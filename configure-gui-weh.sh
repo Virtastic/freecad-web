@@ -10,6 +10,43 @@ HOSTPY="$CPY/builddir/build/python.exe"
 SYSROOT="$(em-config CACHE)/sysroot"
 : "${FC_LINK_MODE_FLAGS:=-sNODERAWFS=1}"
 
+# ---- Heap size -------------------------------------------------------------------------
+# Default stays 2 GB. Raising it is a real option now, but it is NOT free, and the failure
+# mode is nasty enough to be worth stating before anyone changes the number.
+#
+# Measured: ~72 KB per simple solid, so 2 GB is roughly 20,000 of them -- fine for parts,
+# tight for a large assembly.
+#
+# Why raising INITIAL_MEMORY is the cheap lever, and ALLOW_MEMORY_GROWTH is not: with growth
+# OFF, emscripten keeps direct HEAPU8[...] access. Turning growth ON rewrites 841 heap
+# accesses into accessor form (GROWABLE_HEAP_F32()[x>>>2>>>0]), which invalidates the entire
+# hand-derived patch table in tools/patch-freecad-js.py -- and the hot path here IS the JS GL
+# emulation. See BUILD-WEH.md. So: ask for more, do not ask for growth.
+#
+# THE HAZARD, and it is why the default has not simply been raised. Above 2 GB a pointer
+# exceeds INT32_MAX. Any C++ in OCCT, Coin, Qt or CPython that stores a pointer in a signed
+# int, or compares one, breaks -- and plausibly as CORRUPT GEOMETRY rather than a clean
+# crash, which is the hardest kind of bug to attribute. Nothing here can prove that absent;
+# only a build and the full workflow suite can.
+#
+#   FCWEB_HEAP_BYTES=3221225472 bash configure-gui-weh.sh    # 3 GB
+#
+# After linking such a build, before trusting it:
+#   1. node scratchpad/heapprobe.js       -- pointers past 2 GB behave
+#   2. node scratchpad/workflows.js       -- all eight geometry results still exact
+#   3. node scratchpad/ccxe2e/run-prod.js -- FEM still matches closed form
+#   4. node scratchpad/shot.js            -- render still pixel-identical
+# A wrong answer in (2) or (4) with no crash is exactly what the signed-pointer hazard looks
+# like. Keep 2 GB shipped until all four pass.
+FCWEB_HEAP_BYTES="${FCWEB_HEAP_BYTES:-2147483648}"
+FCWEB_HEAP_FLAGS="-sINITIAL_MEMORY=$FCWEB_HEAP_BYTES"
+if [ "$FCWEB_HEAP_BYTES" -gt 2147483648 ]; then
+  # wasm32 tops out at 4 GB, and emscripten wants MAXIMUM_MEMORY stated once past 2 GB.
+  FCWEB_HEAP_FLAGS="$FCWEB_HEAP_FLAGS -sMAXIMUM_MEMORY=$FCWEB_HEAP_BYTES"
+  echo "[heap] $FCWEB_HEAP_BYTES bytes -- ABOVE 2 GB: pointers now exceed INT32_MAX." >&2
+  echo "[heap] Run heapprobe/workflows/ccxe2e/shot before trusting this build." >&2
+fi
+
 # numpy C-extension static libs (built by configure-numpy.sh into deps/wasm/lib/numpy-mod).
 # Module libs first (provide PyInit_*), then support libs (npymath/mtargets/dispatch/highway).
 NPYLIBS=""
@@ -102,4 +139,4 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DZLIB_LIBRARY="$SYSROOT/lib/wasm32-emscripten/libz.a" \
   -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O2 -DBOOST_ALL_NO_LIB --use-port=zlib -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
   -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread -O2 --use-port=zlib -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
-  -DCMAKE_EXE_LINKER_FLAGS="$FC_LINK_MODE_FLAGS -O2 -lembind -lidbfs.js -pthread -sJSPI -sASYNCIFY_EXPORTS=fcweb_run_python -fwasm-exceptions -sALLOW_TABLE_GROWTH -sPTHREAD_POOL_SIZE=16 -sASSERTIONS=0 -sFORCE_FILESYSTEM=1 -sMODULARIZE=1 -sEXPORT_NAME=FreeCAD_entry -sWASM_BIGINT=1 -sSTACK_SIZE=32MB -sDEFAULT_PTHREAD_STACK_SIZE=16MB -sINITIAL_MEMORY=2147483648 -sMAX_WEBGL_VERSION=2 -sLEGACY_GL_EMULATION=1 -sGL_UNSAFE_OPTS=0 -sERROR_ON_UNDEFINED_SYMBOLS=0 -sFETCH -sEXPORTED_RUNTIME_METHODS=UTF16ToString,stringToUTF16,UTF8ToString,stringToUTF8,JSEvents,specialHTMLTargets,FS,ENV,callMain,ccall -sEXPORTED_FUNCTIONS=_main,__embind_initialize_bindings,_fcweb_run_python,_malloc,_free -Wl,--allow-multiple-definition -Wl,--wrap=_ZN16QCoreApplication9postEventEP7QObjectP6QEventi -Wl,--wrap=_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData -Wl,--wrap=_ZN23QCoreApplicationPrivate13notify_helperEP7QObjectP6QEvent $ROOT/weh-objs/postevent_wrap.o $ROOT/weh-objs/fcweb_export_stub.o $ROOT/weh-objs/spe_sanitize.o $ROOT/weh-objs/gl_legacy_stubs.o $ROOT/weh-objs/fcweb_dlg_module.o $ROOT/weh-objs/fcweb_gmsh_module.o $ROOT/weh-objs/fcweb_ccx_module.o  --pre-js=$ROOT/pre-gui.js --use-port=zlib --use-port=bzip2 --use-port=sqlite3 $PYMT/Modules/_decimal/libmpdec/libmpdec.a $PYMT/Modules/_hacl/libHacl_Hash_SHA2.a $PYMT/Modules/expat/libexpat.a -Wl,--start-group ${FCWEB_PYSIDE_LIBS:-$DW/shiboken6/lib/libshiboken6.abi3.a $ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a $ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a $ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a $ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a $ROOT/build-shiboken-wasm/shibokenmodule/CMakeFiles/shibokenmodule.dir/Shiboken/shiboken_module_wrapper.cpp.o $ROOT/build-freecad-gui-weh/src/Mod/Draft/App/DraftUtils.a $ROOT/build-pivy-wasm/interfaces/_coin.a $ROOT/build-ifcopenshell/ifcwrap/lib_ifcopenshell_wrapper.a $ROOT/build-ifcopenshell/ifcgeom/libIfcGeom.a $ROOT/build-ifcopenshell/ifcgeom/kernels/libgeometry_kernel_opencascade.a $ROOT/build-ifcopenshell/ifcgeom/Serialization/libgeometry_serializer.a $ROOT/build-ifcopenshell/serializers/libSerializers.a $ROOT/build-ifcopenshell/ifcparse/libIfcParse.a} $NPYLIBS $MPLLIBS -Wl,--end-group"
+  -DCMAKE_EXE_LINKER_FLAGS="$FC_LINK_MODE_FLAGS -O2 -lembind -lidbfs.js -pthread -sJSPI -sASYNCIFY_EXPORTS=fcweb_run_python -fwasm-exceptions -sALLOW_TABLE_GROWTH -sPTHREAD_POOL_SIZE=16 -sASSERTIONS=0 -sFORCE_FILESYSTEM=1 -sMODULARIZE=1 -sEXPORT_NAME=FreeCAD_entry -sWASM_BIGINT=1 -sSTACK_SIZE=32MB -sDEFAULT_PTHREAD_STACK_SIZE=16MB $FCWEB_HEAP_FLAGS -sMAX_WEBGL_VERSION=2 -sLEGACY_GL_EMULATION=1 -sGL_UNSAFE_OPTS=0 -sERROR_ON_UNDEFINED_SYMBOLS=0 -sFETCH -sEXPORTED_RUNTIME_METHODS=UTF16ToString,stringToUTF16,UTF8ToString,stringToUTF8,JSEvents,specialHTMLTargets,FS,ENV,callMain,ccall -sEXPORTED_FUNCTIONS=_main,__embind_initialize_bindings,_fcweb_run_python,_malloc,_free -Wl,--allow-multiple-definition -Wl,--wrap=_ZN16QCoreApplication9postEventEP7QObjectP6QEventi -Wl,--wrap=_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData -Wl,--wrap=_ZN23QCoreApplicationPrivate13notify_helperEP7QObjectP6QEvent $ROOT/weh-objs/postevent_wrap.o $ROOT/weh-objs/fcweb_export_stub.o $ROOT/weh-objs/spe_sanitize.o $ROOT/weh-objs/gl_legacy_stubs.o $ROOT/weh-objs/fcweb_dlg_module.o $ROOT/weh-objs/fcweb_gmsh_module.o $ROOT/weh-objs/fcweb_ccx_module.o  --pre-js=$ROOT/pre-gui.js --use-port=zlib --use-port=bzip2 --use-port=sqlite3 $PYMT/Modules/_decimal/libmpdec/libmpdec.a $PYMT/Modules/_hacl/libHacl_Hash_SHA2.a $PYMT/Modules/expat/libexpat.a -Wl,--start-group ${FCWEB_PYSIDE_LIBS:-$DW/shiboken6/lib/libshiboken6.abi3.a $ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a $ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a $ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a $ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a $ROOT/build-shiboken-wasm/shibokenmodule/CMakeFiles/shibokenmodule.dir/Shiboken/shiboken_module_wrapper.cpp.o $ROOT/build-freecad-gui-weh/src/Mod/Draft/App/DraftUtils.a $ROOT/build-pivy-wasm/interfaces/_coin.a $ROOT/build-ifcopenshell/ifcwrap/lib_ifcopenshell_wrapper.a $ROOT/build-ifcopenshell/ifcgeom/libIfcGeom.a $ROOT/build-ifcopenshell/ifcgeom/kernels/libgeometry_kernel_opencascade.a $ROOT/build-ifcopenshell/ifcgeom/Serialization/libgeometry_serializer.a $ROOT/build-ifcopenshell/serializers/libSerializers.a $ROOT/build-ifcopenshell/ifcparse/libIfcParse.a} $NPYLIBS $MPLLIBS -Wl,--end-group"

@@ -9,14 +9,24 @@
 > | 3 | Storage evictable | **shipped** — user-nominated backup folder, live |
 > | 4 | GL no-op inventory | **done** — instrumented and measured; see BUILD-WEH.md |
 > | 5 | Display lists / 11 fps | **blocked on visual verification** — see below |
-> | 6 | 2 GB heap | **blocked: needs a relink** |
-> | 7 | CalculiX threading | **blocked: needs a relink** |
+> | 6 | 2 GB heap | **implemented, opt-in** — `FCWEB_HEAP_BYTES`; needs a link + `heapprobe.js` |
+> | 7 | CalculiX threading | **implemented, opt-in** — `FCWEB_CCX_PTHREADS=1`; needs a link + the decks |
 > | 8 | Chrome/Edge only | **decided** — track, don't build |
 >
-> **What "needs a relink" means, and why CI cannot do it.** A relink is a local build against
-> the multi-gigabyte `deps/` tree on the build machine: ~1 h compile plus 45–60 min link. CI
-> only ever *downloads* release assets — it never compiles — so items 6 and 7 need someone at
-> that machine. Nothing in this repo can route around that.
+> **Items 6 and 7 are now one command each, not a project.** Both are implemented and
+> parameterised, and both default to exactly today's behaviour so nothing changes until
+> someone opts in:
+>
+> ```bash
+> FCWEB_HEAP_BYTES=3221225472 bash configure-gui-weh.sh   # 3 GB heap
+> FCWEB_CCX_PTHREADS=1        bash build-ccx-weh.sh       # threaded CalculiX
+> ```
+>
+> What still needs the build machine is the *link and the verification*, which CI genuinely
+> cannot do — it only downloads release assets, it never compiles. Neither should be believed
+> because it built: `scratchpad/heapprobe.js` exists because the heap hazard shows up as a
+> wrong number rather than a crash, and the CalculiX decks must **match** today's results
+> rather than merely converge. Do the heap one alone, in its own link.
 >
 > **Item 5 is blocked differently, and the distinction matters.** Implementing display lists is
 > plausibly a new patch at *untouched* sites, so it may well be deployable without a relink.
