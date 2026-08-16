@@ -203,8 +203,62 @@ _TODO_THROWS = [
 ]
 PATCHES += [(t.split('"')[1].split(':')[0] + ' must not throw', t, '0') for t in _TODO_THROWS]
 
+# ---------------------------------------------------------------------------------------
+# Make the nine no-ops COUNTABLE.
+#
+# The patches above turn each `throw"gl*: TODO"` into a bare `0`, which was the right call
+# (a throw unwinds through Coin's render traversal and takes the viewport with it) -- but a
+# bare 0 is unmeasurable, and these have been silently doing nothing for the whole life of
+# the build. glMaterialfv and glLightfv are how Coin sets material colour and lighting, so
+# "no-op" plausibly means "shading differs from desktop": an unmeasured parity claim in a
+# project whose target is 1:1 with desktop FreeCAD.
+#
+# These entries match the ALREADY-SUBSTITUTED form, in context. That matters: the shipped
+# FreeCAD.js in the GitHub Release was patched before publication, so the throw text is long
+# gone and there is nothing for the table above to match. Anchoring on the surrounding code
+# instead makes the instrumentation deployable without a ~2 h relink. Each anchor was
+# verified UNIQUE against the deployed FreeCAD.js before being written down -- a bare `0`
+# would be hopeless, since it occurs everywhere in minified JS.
+#
+# Applied leniently (see apply()): on a FRESH link the throws still exist, the table above
+# handles them, and these will not match. Absence is expected there, not an error.
+_COUNT = ('(globalThis.__fcglNoop=globalThis.__fcglNoop||{},'
+          'globalThis.__fcglNoop.%s=(globalThis.__fcglNoop.%s||0)+1,0)')
 
-def apply(text, _passes=3):
+
+def _count(name):
+    return _COUNT % (name, name)
+
+
+COUNTING_PATCHES = [
+    ('count glLightModelf',
+     'ghtModelTwoSide=param!=0?true:false}else{0}}',
+     'ghtModelTwoSide=param!=0?true:false}else{%s}}' % _count('glLightModelf')),
+    ('count glLightModelfv',
+     'odelAmbient[3]=HEAPF32[param+12>>2]}else{0}}',
+     'odelAmbient[3]=HEAPF32[param+12>>2]}else{%s}}' % _count('glLightModelfv')),
+    ('count glLightfv',
+     'GLEmulation.lightPosition[lightId])}else{0}}',
+     'GLEmulation.lightPosition[lightId])}else{%s}}' % _count('glLightfv')),
+    ('count glMaterialfv (face)',
+     'if(face!=1028&&face!=1032){0}',
+     'if(face!=1028&&face!=1032){%s}' % _count('glMaterialfv_face')),
+    ('count glMaterialfv (pname)',
+     'GLEmulation.materialDiffuse[3]=_a}else{0}}',
+     'GLEmulation.materialDiffuse[3]=_a}else{%s}}' % _count('glMaterialfv')),
+    ('count glTexCoord4f',
+     'var _glTexCoord4f=()=>{0}',
+     'var _glTexCoord4f=()=>{%s}' % _count('glTexCoord4f')),
+    ('count glTexGenfv',
+     'var _glTexGenfv=(coord,pname,param)=>{0}',
+     'var _glTexGenfv=(coord,pname,param)=>{%s}' % _count('glTexGenfv')),
+    ('count glTexGeni',
+     'var _glTexGeni=(coord,pname,param)=>{0}',
+     'var _glTexGeni=(coord,pname,param)=>{%s}' % _count('glTexGeni')),
+]
+
+
+def apply(text, _passes=3, counting=True):
     """Return (patched_text, [status per patch]). Idempotent.
 
     Applied repeatedly to a fixpoint: some sites only appear once an earlier patch has
@@ -215,7 +269,32 @@ def apply(text, _passes=3):
         text, st = _apply_once(text)
         if all(s != 'applied' for _, s in st):
             break
-    return _apply_once(text)
+    text, st = _apply_once(text)
+
+    # The counting instrumentation is applied LENIENTLY and reported separately.
+    #
+    # It anchors on the already-substituted `0` form, which exists only in an asset that has
+    # been patched before (i.e. the shipped release). On a FRESH link the original throws are
+    # still present, the main table converts them, and none of these will match -- absence
+    # there is correct, not a failure, so it must not be able to fail a build.
+    #
+    # Still strict about ambiguity: a replacement is skipped unless its anchor occurs
+    # EXACTLY ONCE. Every anchor was verified unique against the deployed FreeCAD.js, and a
+    # second occurrence would mean the emscripten output moved and the anchor is no longer
+    # the thing it was derived from.
+    if not counting:
+        return text, st
+    for name, old, new in COUNTING_PATCHES:
+        if new in text:
+            st.append((name, 'already applied'))
+        elif text.count(old) == 1:
+            text = text.replace(old, new, 1)
+            st.append((name, 'applied'))
+        elif text.count(old) == 0:
+            st.append((name, 'n/a (unpatched source)'))
+        else:
+            st.append((name, 'SKIPPED - anchor not unique (%d)' % text.count(old)))
+    return text, st
 
 
 # ---- immediate-mode line batching -------------------------------------------------
@@ -334,7 +413,12 @@ def selftest():
     # Fixture is built from the patch table itself, so it cannot go stale as patches
     # are added. Each OLD string must be found and replaced exactly once.
     src = ''.join(e[1] for e in PATCHES)
-    out, status = apply(src)
+    # counting=False here on purpose. A counting patch legitimately rewrites part of an
+    # EARLIER patch's output -- the glMaterialfv EMISSION replacement ends in the same
+    # `...materialDiffuse[3]=_a}else{0}}` that the counter anchors on -- so the exact-match
+    # assertion below would fail on a change that is entirely correct. The counters get
+    # their own checks after.
+    out, status = apply(src, counting=False)
     # after the fixpoint loop the final pass reports 'already applied'; what matters
     # is that no site was missed
     bad = [(n, st) for n, st in status if st == 'NOT FOUND']
@@ -344,19 +428,34 @@ def selftest():
         assert new in out, name
 
     # idempotent: a second pass must change nothing
-    out2, status2 = apply(out)
+    out2, status2 = apply(out, counting=False)
     assert out2 == out, 'not idempotent'
 
     # a file missing every site must be reported, not silently "fixed"
-    _, s3 = apply('function unrelated(){}')
+    _, s3 = apply('function unrelated(){}', counting=False)
     assert all(st == 'NOT FOUND' for _, st in s3), s3
+
+    # The counters must be inert where their anchors do not exist -- which is every fresh
+    # link, since those still carry the original throws. Absence there is correct, and must
+    # never be able to fail a build.
+    _, s4 = apply('function unrelated(){}')
+    cnt = [(n, st) for n, st in s4 if n.startswith('count ')]
+    assert cnt and all(st == 'n/a (unpatched source)' for _, st in cnt), cnt
+
+    # And where an anchor DOES exist they must apply exactly once, then be idempotent.
+    fixture = ''.join(old for _, old, _ in COUNTING_PATCHES)
+    c1, sc1 = apply(fixture)
+    assert all(st == 'applied' for n, st in sc1 if n.startswith('count ')), sc1
+    c2, _ = apply(c1)
+    assert c2 == c1, 'counting patches not idempotent'
 
     # NOTE: patches whose replacement is just "0" cannot be distinguished as
     # "already applied" vs "site absent" by content alone -- "0" is everywhere in
     # minified JS. That is why apply() tests for the UNPATCHED site first; the
     # worst case is a cosmetic status, never a missed or double substitution.
 
-    print('patch-freecad-js selftest OK (%d patches)' % len(PATCHES))
+    print('patch-freecad-js selftest OK (%d patches + %d counters)'
+          % (len(PATCHES), len(COUNTING_PATCHES)))
 
 
 if __name__ == '__main__':
