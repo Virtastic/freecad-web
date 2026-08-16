@@ -30,8 +30,10 @@
 !/play-gui/sw.js
 !/play-gui/icon-192.png
 !/play-gui/icon-512.png
-# source of truth for the non-JSPI dialog-shim payload embedded in freecad-gui.html
+# sources of truth for the dialog-shim payloads embedded in freecad-gui.html.
+# Both are regenerated into the page by tools/gen-dialog-shims.py; CI fails if they drift.
 !/play-gui/wasm_dialog_shim.py
+!/play-gui/wasm_dialog_shim_jspi.py
 
 # === Compiled artifacts ===
 *.o

@@ -87,6 +87,33 @@ jobs:
           ! grep -q '"ISC"' package.json
           echo "OK"
 
+      # The dialog shims run inside wasm CPython, so they ship as base64 inside the page.
+      # They were previously maintained AS base64 -- which is how a stub that made every
+      # macro prompt return "cancelled" sat there unnoticed. Regenerating must be a no-op:
+      # if it is not, the .py and the embedded copy have drifted and the .py is a lie.
+      - name: Embedded dialog shims match their sources
+        run: |
+          set -e
+          python3 tools/gen-dialog-shims.py
+          if ! git diff --quiet -- play-gui/freecad-gui.html; then
+            echo "::error::freecad-gui.html is out of date with the shim sources — run: python3 tools/gen-dialog-shims.py"
+            git diff --stat -- play-gui/freecad-gui.html
+            exit 1
+          fi
+          echo "OK — embedded payloads match play-gui/wasm_dialog_shim*.py"
+
+      # The shipped shim must not reinstate the QInputDialog stubs: they return
+      # (value, False) i.e. "cancelled" for every prompt, silently breaking macros and
+      # Python workbench commands that ask for a name, count or length.
+      - name: JSPI shim does not stub QInputDialog
+        run: |
+          set -e
+          if grep -qE "QInputDialog\.(getText|getInt|getDouble|getItem)\s*=" play-gui/wasm_dialog_shim_jspi.py; then
+            echo "::error::the JSPI shim stubs QInputDialog again — every macro prompt will silently cancel"
+            exit 1
+          fi
+          echo "OK"
+
       # infra/Dockerfile greps for each of these after its sed; if a refactor renames one the
       # image build fails on the box. Catch it here instead, on a free runner.
       - name: Dockerfile stamp targets still present in the page
