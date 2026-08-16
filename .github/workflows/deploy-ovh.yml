@@ -120,9 +120,16 @@ jobs:
           done
           [ "$ok" = 1 ] || { docker logs freecad-canary 2>&1 | tail -30; echo "::error::canary never answered"; exit 1; }
 
+          # Each `docker run --rm curl` is its own container with its own filesystem, so
+          # curl's -D/-o write INSIDE it and vanish. Everything must come back over stdout
+          # and be redirected here, on the runner. Writing to /tmp/... instead produced an
+          # empty file, and `cat` of it under `set -e` killed the step -- a gate that failed
+          # a perfectly good image.
           C() { docker run --rm --network nostalgia curlimages/curl:latest "$@"; }
-          C -fsS -D /tmp/can -o /tmp/canbody http://freecad-canary:80/
+          C -fsS -D - -o /dev/null http://freecad-canary:80/ > /tmp/can
+          C -fsS http://freecad-canary:80/ > /tmp/canbody
           echo "--- canary / headers ---"; cat /tmp/can
+          echo "--- canary page size: $(wc -c < /tmp/canbody) bytes ---"
 
           fail=0
           chk() { if eval "$2"; then echo "  PASS  $1"; else echo "  FAIL  $1"; fail=1; fi; }
