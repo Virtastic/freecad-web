@@ -15,38 +15,26 @@
 >
 > **What "needs a relink" means, and why CI cannot do it.** A relink is a local build against
 > the multi-gigabyte `deps/` tree on the build machine: ~1 h compile plus 45–60 min link. CI
-> only ever *downloads* release assets — it never compiles — so items 4, 6 and 7 need someone
-> at that machine. Nothing in this repo can route around that.
+> only ever *downloads* release assets — it never compiles — so items 6 and 7 need someone at
+> that machine. Nothing in this repo can route around that.
 >
-> **Item 5 is blocked differently and the distinction matters.** Implementing display lists is
-> plausibly a new patch at untouched sites, so it may well be deployable without a relink. But
-> re-enabling render caching is the change that once made *nothing draw at all*, and verifying
-> it requires looking at pixels — `scratchpad/shot.js` exists precisely for that. It should not
-> be shipped by anyone who cannot see the viewport. Do this one at a machine with a visible
-> browser, behind a query flag, with the pixel gate, before trusting any fps number.
+> **Item 5 is blocked differently, and the distinction matters.** Implementing display lists is
+> plausibly a new patch at *untouched* sites, so it may well be deployable without a relink.
+> But re-enabling render caching is the change that once made *nothing draw at all*, and
+> verifying it means looking at pixels. Canvas capture was tried here and is unusable — with
+> the browser pane hidden the page stops compositing, and `toDataURL` returned a byte-identical
+> frame across an empty scene, a solid, and a camera change. Do this one at a machine with a
+> visible browser, behind a query flag, with `scratchpad/shot.js`'s pixel gate, before trusting
+> any fps number.
 >
-> **Correction, made by trying it.** I claimed items 4 and 5 were relink-free because the GL
-> fixes are JS patches. That is only half true, and the half that is wrong matters.
->
-> The deploy now runs `tools/patch-freecad-js.py` over the release asset, so **new** patches
-> at untouched sites are deployable without a relink — that part holds and is shipped.
->
-> But the release's `FreeCAD.js` is *already patched*: the nine `throw"glMaterialfv: TODO"`
-> sites were rewritten to `0` before the asset was ever published. Changing what they are
-> rewritten *to* therefore has nothing to match, and the deploy correctly refused with
-> `9 patch site(s) not found` — before building the image, with production untouched. `0` is
-> far too generic to re-match safely; the tool's own comments say several replacements are
-> the literal `"0"`, which occurs everywhere in minified JS.
->
-> **Resolved by doing exactly that.** Each site was re-derived from its surrounding context
-> (`if(face!=1028&&face!=1032){0}`, `var _glTexGeni=(coord,pname,param)=>{0}`, …), every anchor
-> verified unique against the deployed `FreeCAD.js` first. So item 4 needed no relink after
-> all. The measurement is in BUILD-WEH.md: across boot, solid modelling with booleans, five
-> camera changes and BIMExample's 361 objects, **not one of the instrumented sites fired** —
-> and reading the code shows most of them are unhandled-argument fallbacks rather than dead
-> functions.
-> Item 5 (display lists) is likely still relink-free, since `glGenLists` and friends are
-> *untouched* sites, but that should be confirmed rather than assumed twice.
+> **Two corrections worth keeping, both found by trying.** First, the deploy now runs
+> `tools/patch-freecad-js.py` over the release asset, so patch-table changes are deployable at
+> all — they previously had no route to production except a relink. Second, I claimed item 4
+> then needed a relink anyway, because the release's `FreeCAD.js` is already patched and the
+> `throw` sites are long gone. That was wrong: re-deriving each site from its surrounding
+> context (`if(face!=1028&&face!=1032){0}`, `var _glTexGeni=(coord,pname,param)=>{0}`, …), with
+> every anchor verified unique against the deployed file first, worked. Item 4 is done and the
+> measurement is in BUILD-WEH.md.
 
 Seven known gaps, planned. Written after a production verification pass on
 `build-20260813-eventstack+c41d84b`, so the starting facts are measured rather than assumed.
