@@ -1,0 +1,154 @@
+name: build ccx.wasm
+
+# Build the CalculiX solver module in CI, on a hosted runner.
+#
+# This exists because "needs a relink" was being used to mean "needs the build machine", and
+# for CalculiX that is simply not true. Relinking FreeCAD consumes 168 prebuilt .a/.o inputs
+# -- the whole of OCCT, Coin, VTK, Qt, CPython -- and genuinely cannot happen here. ccx.wasm
+# consumes FOUR small numerical libraries, none of which touch that stack:
+#
+#     libccx.a  libarpack.a  libspooles.a  libf2c.a
+#
+# All four are public tarballs. So the only thing standing between CI and a CalculiX build
+# was that the build scripts expect sources at deps/src/* and nothing fetches them. This
+# fetches them.
+#
+# The payoff is item 7 of ROADMAP.md: FCWEB_CCX_PTHREADS=1 builds ccx with real threads
+# instead of bridge/ccx_threads.c's inline wrap, which is the "single-threaded CalculiX"
+# limit users feel on large FEM jobs. That option is implemented but UNVERIFIED, and it
+# cannot be verified without a build -- which is what this provides.
+#
+# Runs on ubuntu-latest, never the production self-hosted runner: this is a compile, and the
+# box it would otherwise land on is serving another product's database.
+on:
+  workflow_dispatch:
+    inputs:
+      pthreads:
+        description: "Build CalculiX WITH pthreads (the unverified fast path)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Disk before
+        run: df -h / | sed 's/^/  /'
+
+      # Pinned to match BUILD-WEH.md. 3.1.70 is the toolchain everything else here is built
+      # with; a different emscripten would produce a module that may not agree with the
+      # engine it has to interoperate with.
+      - name: Install emsdk 3.1.70
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install 3.1.70
+          ./emsdk activate 3.1.70
+          . ./emsdk_env.sh
+          emcc --version | head -1
+
+      # The build scripts read from deps/src/<name>/<versioned-dir>; those exact paths are
+      # what they hardcode, so the layout here is not arbitrary.
+      - name: Fetch sources
+        run: |
+          set -e
+          mkdir -p deps/src/{ccx,spooles,f2c,arpack,lapack}
+
+          echo "--- CalculiX 2.22 ---"
+          curl -fsSL -o /tmp/ccx.tar.bz2 http://www.dhondt.de/ccx_2.22.src.tar.bz2
+          tar xjf /tmp/ccx.tar.bz2 -C deps/src/ccx
+          ls deps/src/ccx
+
+          echo "--- SPOOLES 2.2 ---"
+          mkdir -p deps/src/spooles/SPOOLES.2.2
+          curl -fsSL -o /tmp/spooles.tgz https://netlib.org/linalg/spooles/spooles.2.2.tgz
+          tar xzf /tmp/spooles.tgz -C deps/src/spooles/SPOOLES.2.2
+
+          echo "--- f2c ---"
+          curl -fsSL -o /tmp/f2c.zip https://www.netlib.org/f2c/mksrc.zip || true
+          # f2c is distributed as separate src/ and libf2c/ trees.
+          curl -fsSL -o /tmp/libf2c.zip https://www.netlib.org/f2c/libf2c.zip
+          mkdir -p deps/src/f2c/libf2c deps/src/f2c/src
+          unzip -q -o /tmp/libf2c.zip -d deps/src/f2c/libf2c
+          curl -fsSL -o /tmp/f2csrc.tar.gz https://www.netlib.org/f2c/src.tar.gz || true
+          [ -s /tmp/f2csrc.tar.gz ] && tar xzf /tmp/f2csrc.tar.gz -C deps/src/f2c/src || true
+
+          echo "--- arpack-ng 3.9.1 (netlib arpack96 404s; see build-arpack-weh.sh) ---"
+          curl -fsSL -o /tmp/arpack.tar.gz \
+            https://github.com/opencollab/arpack-ng/archive/refs/tags/3.9.1.tar.gz
+          tar xzf /tmp/arpack.tar.gz -C deps/src/arpack
+
+          echo "--- reference LAPACK 3.12.0 (arpack-ng does not bundle BLAS/LAPACK) ---"
+          curl -fsSL -o /tmp/lapack.tar.gz \
+            https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v3.12.0.tar.gz
+          tar xzf /tmp/lapack.tar.gz -C deps/src/lapack
+
+          echo "--- resulting layout (must match what the build scripts hardcode) ---"
+          for p in deps/src/ccx/ccx_2.22/src deps/src/spooles/SPOOLES.2.2 \
+                   deps/src/f2c/libf2c deps/src/f2c/src/f2c \
+                   deps/src/arpack/arpack-ng-3.9.1 deps/src/lapack/lapack-3.12.0; do
+            [ -e "$p" ] && echo "  OK      $p" || echo "  MISSING $p"
+          done
+
+      - name: Build the dependency libs
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          bash build-libf2c-weh.sh
+          bash build-spooles-weh.sh
+          bash build-arpack-weh.sh
+          ls -la deps/wasm/lib/ | sed 's/^/  /'
+
+      - name: Build libccx.a
+        env:
+          FCWEB_CCX_PTHREADS: ${{ inputs.pthreads && '1' || '0' }}
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          echo "FCWEB_CCX_PTHREADS=$FCWEB_CCX_PTHREADS"
+          bash build-ccx-weh.sh
+
+      - name: Link ccx.wasm
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          bash build-ccx-module-weh.sh
+          ls -la play-gui/ccx.js play-gui/ccx.wasm | sed 's/^/  /'
+
+      # Compare against what is live. A module that differs wildly in size, or not at all,
+      # is worth noticing before anyone releases it.
+      - name: Compare with the deployed module
+        run: |
+          set -e
+          url=$(curl -sS https://freecad.virtastic.app/ | grep -oE 'ccx\.js\?v=[a-z0-9]+' | head -1)
+          curl -fsS "https://freecad.virtastic.app/ccx.wasm" -o /tmp/live-ccx.wasm || true
+          echo "  built : $(stat -c%s play-gui/ccx.wasm) bytes"
+          [ -s /tmp/live-ccx.wasm ] && echo "  live  : $(stat -c%s /tmp/live-ccx.wasm) bytes"
+          echo "  built md5: $(md5sum play-gui/ccx.wasm | cut -d' ' -f1)"
+          [ -s /tmp/live-ccx.wasm ] && echo "  live  md5: $(md5sum /tmp/live-ccx.wasm | cut -d' ' -f1)"
+
+      - name: Disk after
+        if: always()
+        run: df -h / | sed 's/^/  /'
+
+      # The decks are the thing that decides whether a threaded build is trustworthy: results
+      # must MATCH, not merely converge, because a race in the assembly is a slightly
+      # different answer rather than a crash.
+      - name: Upload the module for deck validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccx-wasm-${{ inputs.pthreads && 'pthreads' || 'serial' }}
+          path: |
+            play-gui/ccx.js
+            play-gui/ccx.wasm
+          if-no-files-found: warn
+          retention-days: 14
