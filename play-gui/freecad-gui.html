@@ -1222,12 +1222,18 @@ window.fcRunPy = fcRunPy;
 // The render-debug switches below (?nodepth, ?nocull, ?darkbg) live in the same block and
 // are gated on ?dev=1. They are support surface, not security: a user who lands on a
 // shared link carrying ?skipCoin or ?nodepth files a bug nobody can reproduce.
+//
+// DO NOT early-return out of this IIFE to disable the tracer. It is not a tracer block --
+// it continues on to the 3D overlay compositor, the memory-pressure monitor and
+// fcwebHeapUsedMB, and the autosave install/restore poll. Returning here silently disabled
+// ALL of that: no memory warning, and no autosave, so a user's work was never written and
+// nothing said so. Gate the individual features (as the `if (__trace)` around the wrap()
+// calls below does) and leave the IIFE itself to run to the end.
 (function(){
   var __qs = location.search;
   var __trace = /[?&]gltrace=1/.test(__qs);
   var __dev   = /[?&]dev=1/.test(__qs);
-  if (!__trace && !__dev) { return; }
-  window.__gllog = [];
+  if (__trace) { window.__gllog = []; }
   function wrap(proto, name){
     var orig = proto[name];
     proto[name] = function(){
