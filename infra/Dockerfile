@@ -71,6 +71,15 @@ RUN sed -i "s|__FCWEB_BUILD__|${FCWEB_BUILD}|g" /usr/share/nginx/html/freecad-gu
  && ! grep -q "__FCWEB_BUILD__" /usr/share/nginx/html/freecad-gui.html \
  && echo "stamped build=${FCWEB_BUILD}"
 
+# The event-counter log directory (see the /t location in infra/nginx.conf). It must exist
+# in the IMAGE, not only as a compose volume mountpoint: nginx opens its log files at
+# startup and dies with
+#   [emerg] open() "/var/log/fcweb/events.log" failed (2: No such file or directory)
+# if the directory is absent. Creating it here keeps the image runnable on its own -- which
+# the pre-switch canary requires, since it starts the image with no volumes attached. In
+# production the named volume mounts over this and the logs persist across deploys.
+RUN mkdir -p /var/log/fcweb
+
 EXPOSE 80
 
 # `restart: unless-stopped` only restarts a container that EXITED. An nginx that is up but
