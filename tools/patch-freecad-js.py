@@ -243,9 +243,17 @@ COUNTING_PATCHES = [
     ('count glMaterialfv (face)',
      'if(face!=1028&&face!=1032){0}',
      'if(face!=1028&&face!=1032){%s}' % _count('glMaterialfv_face')),
-    ('count glMaterialfv (pname)',
-     'GLEmulation.materialDiffuse[3]=_a}else{0}}',
-     'GLEmulation.materialDiffuse[3]=_a}else{%s}}' % _count('glMaterialfv')),
+    # NOT counted: the glMaterialfv pname fallback, i.e.
+    #     'GLEmulation.materialDiffuse[3]=_a}else{0}}'
+    # That `{0}` sits INSIDE the replacement text of the 'glMaterialfv: EMISSION and
+    # AMBIENT_AND_DIFFUSE' patch above. Rewriting it makes that patch's own
+    # already-applied detection fail, because the tool looks for its replacement verbatim --
+    # so the next run reports "1 patch site(s) not found" and refuses, which is exactly what
+    # happened on the first deploy attempt.
+    #
+    # Dropped rather than worked around: glMaterialfv is still counted by the face check
+    # above, so nothing is lost from the inventory, and a counter is not worth weakening
+    # the detection that protects 33 patches the viewport depends on.
     ('count glTexCoord4f',
      'var _glTexCoord4f=()=>{0}',
      'var _glTexCoord4f=()=>{%s}' % _count('glTexCoord4f')),
@@ -441,6 +449,17 @@ def selftest():
     _, s4 = apply('function unrelated(){}')
     cnt = [(n, st) for n, st in s4 if n.startswith('count ')]
     assert cnt and all(st == 'n/a (unpatched source)' for _, st in cnt), cnt
+
+    # A counter must never anchor inside another patch's REPLACEMENT text. If it does, it
+    # rewrites that patch's output, the already-applied check stops matching, and the next
+    # run reports the patch as missing and refuses -- which is precisely how the first
+    # deploy of these counters failed. Catch it here instead of on the box.
+    for cname, cold, _cnew in COUNTING_PATCHES:
+        for entry in PATCHES:          # some entries carry a 4th 'marker' field
+            pname, pnew = entry[0], entry[2]
+            assert cold not in pnew, (
+                'counter %r anchors inside the replacement of %r -- it would break that '
+                "patch's already-applied detection" % (cname, pname))
 
     # And where an anchor DOES exist they must apply exactly once, then be idempotent.
     fixture = ''.join(old for _, old, _ in COUNTING_PATCHES)
