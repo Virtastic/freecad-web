@@ -135,6 +135,35 @@ jobs:
           sudo -n grep -rln "NOPASSWD: *ALL" /etc/sudoers /etc/sudoers.d/ 2>/dev/null | sed 's/^/  /' \
             || echo "  (not readable)"
 
+      - name: Event counters (what users are actually experiencing)
+        run: |
+          echo "--- boot/abort counters, last 7 days ---"
+          # Lives on a named volume, so read it through a throwaway container rather than
+          # from the host: the runner user has no business poking at other services' volumes.
+          if ! docker volume inspect freecad_fcweb-events >/dev/null 2>&1; then
+            echo "  (volume not created yet — deploy once with the telemetry change)"
+            exit 0
+          fi
+          docker run --rm -v freecad_fcweb-events:/log alpine:3 sh -c '
+            f=/log/events.log
+            [ -s "$f" ] || { echo "  (no events recorded yet)"; exit 0; }
+            echo "  lines: $(wc -l < $f)   since: $(head -1 $f | cut -d" " -f1)"
+            echo
+            echo "  by event:"
+            sed -n "s/.* e=\([a-z_]*\) .*/\1/p" "$f" | sort | uniq -c | sort -rn | sed "s/^/    /"
+            echo
+            echo "  by kind:"
+            sed -n "s/.* k=\([a-z0-9_]*\) .*/\1/p" "$f" | grep -v "^$" | sort | uniq -c | sort -rn | sed "s/^/    /"
+            echo
+            # The number this whole thing exists for.
+            s=$(grep -c " e=boot_start " "$f" || echo 0)
+            r=$(grep -c " e=boot_ready " "$f" || echo 0)
+            g=$(grep -c " e=boot_gate "  "$f" || echo 0)
+            a=$(grep -c " e=abort "      "$f" || echo 0)
+            echo "  arrivals=$s  reached-Ready=$r  turned-away=$g  aborted=$a"
+            [ "$s" -gt 0 ] && echo "  reached Ready: $(( r * 100 / s ))% of arrivals"
+          ' 2>&1 | sed 's/^/ /'
+
       - name: What the box serves to the world
         run: |
           echo "--- listening sockets (is anything exposed beyond the edge?) ---"
