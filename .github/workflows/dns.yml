@@ -5,10 +5,14 @@ name: dns (freecad.virtastic.app)
 # any number of times. Uses the org/repo secret CLOUDFLARE_API_TOKEN (zone-scoped: Zone:Read,
 # DNS:Edit). Set it once (the token never touches anyone's shell logs):
 #     gh secret set CLOUDFLARE_API_TOKEN --org Virtastic --repos freecad-web
+#
+# The origin IP is a repository VARIABLE, not a literal: Cloudflare proxies this hostname
+# precisely so the origin is not public, and this repo is public. Set it once with:
+#     gh variable set ORIGIN_IP --repo Virtastic/freecad-web --body "<vps-ipv4>"
 on:
   workflow_dispatch:
   push:
-    branches: [dev]
+    branches: [main]
     paths: ["infra/terraform/variables.tf", ".github/workflows/dns.yml"]
 
 permissions:
@@ -25,12 +29,13 @@ jobs:
       CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       ZONE: virtastic.app
       NAME: freecad.virtastic.app
-      IP: ORIGIN-IP-REDACTED
+      IP: ${{ vars.ORIGIN_IP }}
     steps:
       - name: Upsert A record (proxied) via Cloudflare API
         run: |
           set -euo pipefail
           [ -n "${CF_TOKEN:-}" ] || { echo "::error::CLOUDFLARE_API_TOKEN secret not set — gh secret set CLOUDFLARE_API_TOKEN --org Virtastic --repos freecad-web"; exit 1; }
+          [ -n "${IP:-}" ] || { echo "::error::ORIGIN_IP variable not set — gh variable set ORIGIN_IP --repo Virtastic/freecad-web --body '<vps-ipv4>'"; exit 1; }
           auth=(-H "Authorization: Bearer ${CF_TOKEN}" -H "Content-Type: application/json")
           api=https://api.cloudflare.com/client/v4
 
