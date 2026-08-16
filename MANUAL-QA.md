@@ -62,6 +62,12 @@ wrong rather than anything that errors.
 - [ ] **Save via the OS file dialog** — Chromium's `showSaveFilePicker` path cannot be
       scripted, so only a person can confirm the picker appears and the file lands where
       they chose. (The download fallback other browsers use is verified automatically.)
+- [ ] **Choose a backup folder, then confirm files appear in it.** Same limitation:
+      `showDirectoryPicker` needs a real user gesture and a real directory selection, so
+      no script can complete it. Model something, wait ~20 s, and look in the folder with
+      your file manager — a `.FCStd` should be there and should keep updating as you work.
+      Then reload and confirm it reconnects without asking again. This is the mechanism
+      that makes work survive the browser clearing its storage, so it is worth the minute.
 - [ ] Open one of the bundled examples (BIM is the heaviest — watch for slowness)
 
 **Feel (3 min)**

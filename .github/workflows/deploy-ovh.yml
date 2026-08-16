@@ -61,6 +61,30 @@ jobs:
           # Hand the release tag to the image build so the page can name its own build.
           echo "REL_TAG=$tag" >> "$GITHUB_ENV"
 
+      # Apply the GL patch table to the release's FreeCAD.js before it is baked in.
+      #
+      # ~33 hand-derived patches to emscripten's generated GL glue live in
+      # tools/patch-freecad-js.py: nine fixed-function calls converted from throw to no-op
+      # (a throw unwinds through Coin's render traversal and takes the viewport with it),
+      # and the immediate-mode line batching worth 10 -> 21-34 fps on a heavy scene.
+      #
+      # The release asset is already patched, so this is normally a no-op that reports
+      # "already applied" -- but it means a CHANGE to the patch table now reaches production
+      # without a relink. Rendering fixes were otherwise unshippable: the only path was a
+      # ~2 h local build against the multi-gigabyte deps/ tree, which CI cannot do.
+      #
+      # The tool is idempotent, tests for the UNPATCHED site first (several replacements are
+      # the literal "0", which occurs everywhere in minified JS), and verifies invariants
+      # rather than per-patch status -- a growth build once made nine patches report
+      # "already applied" while the file still threw from all nine. Non-zero exit fails the
+      # deploy here, before the image is built.
+      - name: Apply the GL patch table
+        run: |
+          set -e
+          python3 tools/patch-freecad-js.py play-gui/FreeCAD.js
+          echo "--- invariants ---"
+          python3 tools/patch-freecad-js.py play-gui/FreeCAD.js --check
+
       # Tagged by release + commit so a rollback is a retag, not a rebuild. `freecad:ovh`
       # used to be overwritten in place, leaving the previous image dangling and unnamed --
       # there was nothing to roll back TO. Keep that tag as the pointer the compose file
