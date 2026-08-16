@@ -1,5 +1,17 @@
 # Roadmap: from "works" to "someone can do their job in it"
 
+> **Status 2026-08-16.** Items 1 and 3 are **shipped and live**. Item 8 is a decision, taken.
+> Items 4 and 5 are unblocked but need the deploy to apply the patch table (see below).
+> **Items 6 and 7 cannot be done from CI at all** — they need a relink, and a relink is a
+> local build against the multi-gigabyte `deps/` tree on the build machine. CI only downloads
+> release assets; it never compiles. Those two need someone at that machine.
+>
+> A note that changes items 4 and 5: the shipped `FreeCAD.js` comes from the GitHub Release
+> already patched, and the deploy does **not** re-run `tools/patch-freecad-js.py`. So a change
+> to the patch table currently has no way to reach production without a relink. Adding one
+> idempotent patcher step to the deploy fixes that and makes both rendering items shippable
+> without touching the binary — it is the first task of item 4, not a side quest.
+
 Seven known gaps, planned. Written after a production verification pass on
 `build-20260813-eventstack+c41d84b`, so the starting facts are measured rather than assumed.
 

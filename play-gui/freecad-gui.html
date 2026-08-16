@@ -30,7 +30,15 @@ window.fcwebEvent = function (name, kind, ms) {
     else { fetch(q, { method: 'POST', keepalive: true }).catch(function () {}); }
   } catch (e) { /* never let a counter break the page */ }
 };
-window.fcwebEvent('boot_start');</script>
+window.fcwebEvent('boot_start');
+// Re-attach a previously chosen backup folder as early as possible, so the first autosave
+// mirror has somewhere to go. Never prompts -- a permission prompt the user did not ask for
+// on page load is hostile, and the status line offers a button instead.
+document.addEventListener('DOMContentLoaded', function () {
+  setTimeout(function () {
+    try { window.__fcRestoreBackupDir && window.__fcRestoreBackupDir(); } catch (e) {}
+  }, 3000);
+});</script>
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#2b2f36">
 <!-- Without this a tablet renders the canvas at a fake 980px width and then scales it,
@@ -641,23 +649,155 @@ window.fcwebNotify = function (text, kind, actions) {
         } }]);
   };
   // Fallback for the browsers/profiles where beforeinstallprompt never fires (already
-  // installed, or Chrome declining to offer): say the true thing once, without a button
-  // that cannot work. Only when they have work at risk, and only once.
+  // installed, or Chrome declining to offer): say the true thing once, and offer the fix
+  // that does not depend on the browser's goodwill at all.
   window.fcwebWarnEvictable = function () {
     if (installOffered || deferred) { return; }
     installOffered = true;
     if (!navigator.storage || !navigator.storage.persisted) { return; }
     navigator.storage.persisted().then(function (ok) {
       if (ok || typeof window.fcwebNotify !== 'function') { return; }
+      var actions = [];
+      if (window.showDirectoryPicker) {
+        actions.push({ label: 'Choose a backup folder', onClick: function (btn) {
+          btn.textContent = 'Choosing…';
+          window.fcwebChooseBackupFolder().then(function (okd) {
+            btn.textContent = okd ? 'Backups on' : 'Not now';
+          });
+        } });
+      }
       window.fcwebNotify(
-        'Your documents are stored in this browser and could be cleared by it to reclaim ' +
-        'disk space. Use File → Save to keep a copy on your machine.', 'info');
+        'Your documents are stored in this browser, which means it can clear them to ' +
+        'reclaim disk space. Pick a folder and they will be copied there as you work.',
+        'info', actions);
     });
   };
   // One entry point for "the user just saved real work", so the two paths above cannot
   // both fire and cannot fire before there is anything to protect.
   window.__fcWorkSaved = function () {
     try { window.fcwebOfferInstall(); window.fcwebWarnEvictable(); } catch (e) {}
+  };
+
+  // ---- Backup folder ------------------------------------------------------------------
+  // Everything above is damage limitation: the browser owns the storage and may clear it,
+  // and persist() is only granted to an installed app. This removes the dependency instead
+  // of mitigating it -- the user nominates a real directory, and autosave copies are
+  // mirrored there. That survives eviction, survives "clear site data", and is visible in
+  // their file manager, which is where a CAD user expects their work to be anyway.
+  //
+  // The handle is kept in IndexedDB because a FileSystemDirectoryHandle is structured-
+  // cloneable but not serialisable to a string; permission has to be re-granted on a later
+  // visit, which the browser makes a one-click prompt for a handle it already knows.
+  var FCDB = 'fcweb-handles', FCSTORE = 'handles';
+  function idb() {
+    return new Promise(function (res, rej) {
+      var r = indexedDB.open(FCDB, 1);
+      r.onupgradeneeded = function () { r.result.createObjectStore(FCSTORE); };
+      r.onsuccess = function () { res(r.result); };
+      r.onerror = function () { rej(r.error); };
+    });
+  }
+  function idbPut(k, v) {
+    return idb().then(function (db) {
+      return new Promise(function (res, rej) {
+        var t = db.transaction(FCSTORE, 'readwrite');
+        t.objectStore(FCSTORE).put(v, k);
+        t.oncomplete = res; t.onerror = function () { rej(t.error); };
+      });
+    });
+  }
+  function idbGet(k) {
+    return idb().then(function (db) {
+      return new Promise(function (res, rej) {
+        var t = db.transaction(FCSTORE, 'readonly');
+        var q = t.objectStore(FCSTORE).get(k);
+        q.onsuccess = function () { res(q.result || null); };
+        q.onerror = function () { rej(q.error); };
+      });
+    });
+  }
+
+  var backupDir = null;
+
+  window.fcwebChooseBackupFolder = async function () {
+    if (!window.showDirectoryPicker) {
+      window.fcwebNotify && window.fcwebNotify(
+        'This browser cannot open a folder picker, so backups stay inside the browser. ' +
+        'Use File → Save to keep copies on your machine.', 'warn');
+      return false;
+    }
+    try {
+      // Must be called from a user gesture, which is why this is a function the UI calls
+      // rather than something attempted automatically at boot.
+      var h = await window.showDirectoryPicker({ id: 'fcweb-backups', mode: 'readwrite' });
+      await idbPut('backupDir', h);
+      backupDir = h;
+      window.fcwebNotify && window.fcwebNotify(
+        'Backups on. Your documents will be copied to that folder as you work.', 'info');
+      window.fcwebEvent && window.fcwebEvent('backup_dir', 'chosen');
+      await window.__fcMirrorOut();
+      return true;
+    } catch (e) {
+      return false;                         // user dismissed the picker; not an error
+    }
+  };
+
+  // Re-attach a previously chosen folder. Never prompts: if the permission has lapsed the
+  // user is asked the next time they choose one, rather than being ambushed at boot.
+  window.__fcRestoreBackupDir = async function () {
+    try {
+      var h = await idbGet('backupDir');
+      if (!h || !h.queryPermission) { return false; }
+      var p = await h.queryPermission({ mode: 'readwrite' });
+      if (p === 'granted') { backupDir = h; return true; }
+      window.__fcBackupNeedsPermission = true;   // surfaced by the status line below
+      return false;
+    } catch (e) { return false; }
+  };
+
+  window.fcwebRegrantBackupFolder = async function () {
+    try {
+      var h = backupDir || await idbGet('backupDir');
+      if (!h || !h.requestPermission) { return false; }
+      var p = await h.requestPermission({ mode: 'readwrite' });   // needs a user gesture
+      if (p === 'granted') {
+        backupDir = h; window.__fcBackupNeedsPermission = false;
+        await window.__fcMirrorOut();
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+
+  // Copy the autosave directory out. Only writes files whose size or mtime changed, so a
+  // large model is not rewritten to disk every tick.
+  var mirrorState = {};
+  window.__fcMirrorOut = async function () {
+    if (!backupDir) { return 0; }
+    var m = window.fcInstance;
+    if (!m || !m.FS) { return 0; }
+    var dir = '/home/web_user/.fcweb-autosave', names;
+    try { names = m.FS.readdir(dir).filter(function (n) { return /\.FCStd$/i.test(n); }); }
+    catch (e) { return 0; }
+    var written = 0;
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i], path = dir + '/' + name;
+      try {
+        var st = m.FS.stat(path);
+        var sig = st.size + ':' + (st.mtime && st.mtime.getTime ? st.mtime.getTime() : 0);
+        if (mirrorState[name] === sig) { continue; }
+        var bytes = m.FS.readFile(path);
+        var fh = await backupDir.getFileHandle(name, { create: true });
+        var w = await fh.createWritable();
+        await w.write(bytes); await w.close();
+        mirrorState[name] = sig; written++;
+      } catch (e) {
+        // A revoked permission or a removed folder must not break autosave itself.
+        window.__fcBackupNeedsPermission = true; backupDir = null; break;
+      }
+    }
+    if (written) { window.fcwebEvent && window.fcwebEvent('backup_write'); }
+    return written;
   };
   window.addEventListener('appinstalled', function () {
     if (navigator.storage && navigator.storage.persist) {
@@ -1670,6 +1810,11 @@ window.fcRunPy = fcRunPy;
         if (!restored) { runPy(RESTORE_PY); restored = true; return; }
         clearInterval(poll);
         setInterval(function(){ runPy(AUTOSAVE_PY); }, 1500);
+        // Mirror the autosave copies out to a real folder on the user's disk, if they have
+        // nominated one. Slower cadence than the in-browser autosave on purpose: this
+        // writes through the File System Access API and is for durability, not for
+        // catching the last 1.5 s of edits.
+        setInterval(function(){ try { window.__fcMirrorOut && window.__fcMirrorOut(); } catch(e){} }, 20000);
         setInterval(function(){ runPy(AUTOSAVE_FORCE); }, 120000);  // backstop for a missed notify
       }, 1000);
     })();
