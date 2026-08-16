@@ -7,7 +7,30 @@
 document.addEventListener('DOMContentLoaded', function(){
   var el = document.getElementById('buildstamp');
   if (el) el.textContent = ' · build ' + window.FCWEB_BUILD;
-});</script>
+});
+
+// Anonymous event counters. Until now a failure died in this tab: nothing could answer
+// "what fraction of visitors never reach Ready?" or "how often does the 2 GB heap abort?",
+// and a user hitting a problem was invisible unless they filed an issue.
+//
+// This sends FOUR enumerated events and nothing else. No identifier, no cookie, no document
+// name, no free text, no session id -- there is deliberately nothing here that could
+// identify a person or their work, and the server does not log IPs either. It is a counter,
+// not analytics: it cannot tell you who, only how many.
+//
+// sendBeacon because it survives the page being closed, which is exactly when an abort
+// happens. Every call is wrapped: telemetry must never be able to break the app.
+window.fcwebEvent = function (name, kind, ms) {
+  try {
+    var q = '/t?e=' + encodeURIComponent(name) +
+            '&b=' + encodeURIComponent(window.FCWEB_BUILD || 'unknown');
+    if (kind) { q += '&k=' + encodeURIComponent(String(kind).slice(0, 32)); }
+    if (ms)   { q += '&ms=' + Math.round(ms); }
+    if (navigator.sendBeacon) { navigator.sendBeacon(q); }
+    else { fetch(q, { method: 'POST', keepalive: true }).catch(function () {}); }
+  } catch (e) { /* never let a counter break the page */ }
+};
+window.fcwebEvent('boot_start');</script>
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#2b2f36">
 <!-- Without this a tablet renders the canvas at a fake 980px width and then scales it,
@@ -1118,6 +1141,8 @@ window.fcRunPy = fcRunPy;
                'Out of memory: this model is larger than the browser build can hold ' +
                '(2 GB limit). Your work has been autosaved — reload to get it back.', 'error');
            } else if (window.fcwebCrash) { window.fcwebCrash('wasm abort', w); }
+           // Only the KIND, never the message -- an abort string can contain paths.
+           try { window.fcwebEvent('abort', /memory|OOM/i.test(String(w)) ? 'oom' : 'other'); } catch(e){}
            // A non-OOM abort can mean a bad cached engine, and a bad cached entry is
            // sticky: it would be served again on every reload, so the app would be
            // permanently broken for that user with no way out from inside the page.
@@ -1128,6 +1153,11 @@ window.fcRunPy = fcRunPy;
          onLoaded: () => { const st=document.getElementById('status'); if(st) st.textContent='FreeCAD loaded';
            // App is up: reveal the full-window FreeCAD UI and drop the loader.
            __setBoot('Ready'); __hideBoot();
+           // Time to Ready, and whether the engine came from cache. Together these
+           // say whether the caching work actually helps real visitors, which no
+           // amount of local measurement can.
+           try { window.fcwebEvent('boot_ready', __fromCache ? 'cache' : 'network',
+                                   performance.now()); } catch(e){}
            try { window.dispatchEvent(new Event('resize')); } catch(e){}
            // FCWEB: warm up the PySide/Shiboken wrapper machinery right after
            // boot. If the FIRST Qt-object wrap in a session happens lazily in
@@ -1938,6 +1968,15 @@ window.fcRunPy = fcRunPy;
   }
 
   window.__FC_UNSUPPORTED = true;
+  // Which capability turned them away, so "how many arrivals can't run this at all, and
+  // is it still JSPI?" is answerable -- that decides when Firefox becomes worth supporting.
+  // Records the check name only; `missing` holds fixed strings, never anything user-derived.
+  try {
+    var why = /JSPI/.test(missing[0][0]) ? 'jspi'
+            : /SharedArrayBuffer/.test(missing[0][0]) ? 'sab'
+            : /WebGL2/.test(missing[0][0]) ? 'webgl2' : 'other';
+    window.fcwebEvent('boot_gate', why);
+  } catch (e) {}
   var boot = document.getElementById('boot');
   if (boot) { boot.className = ''; }
   var st = document.getElementById('bootstatus');

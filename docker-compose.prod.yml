@@ -8,6 +8,14 @@ services:
     container_name: freecad
     restart: unless-stopped
     networks: [shared]
+    volumes:
+      # Event counters (see the /t location in infra/nginx.conf). On a named volume because
+      # the container is recreated on every deploy -- inside the image these would be lost
+      # each time, which would make the one thing they exist to measure unmeasurable.
+      - fcweb-events:/var/log/fcweb
+
+volumes:
+  fcweb-events:
 
 networks:
   shared:
