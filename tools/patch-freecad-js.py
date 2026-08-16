@@ -201,29 +201,7 @@ _TODO_THROWS = [
     'throw"glTexGenfv: TODO"',
     'throw"glTexGeni: TODO"',
 ]
-def _noop_counting(throw_text):
-    """Replacement for a fixed-function GL throw: still evaluates to 0, but counts.
-
-    These nine calls have been silently doing nothing for the whole life of this build, and
-    NOBODY KNOWS WHAT THAT COSTS VISUALLY. glMaterialfv and glLightfv in particular are how
-    Coin sets material colour and lighting, so "no-op" may well mean "shading differs from
-    desktop" -- an unmeasured parity claim.
-
-    A bare `0` is unmeasurable by construction. A comma expression has identical semantics
-    (evaluates to 0, no branch, no allocation) and turns the question into a number:
-
-        window.__fcglNoop  ->  { glMaterialfv: 12043, glLightfv: 88, ... }
-
-    Cheap enough to leave on permanently: one property increment against an integer, versus
-    the string concatenation the original throw performed on the same path.
-    """
-    name = throw_text.split('"')[1].split(':')[0]
-    return ('(globalThis.__fcglNoop=globalThis.__fcglNoop||{},'
-            'globalThis.__fcglNoop.%s=(globalThis.__fcglNoop.%s||0)+1,0)' % (name, name))
-
-
-PATCHES += [(t.split('"')[1].split(':')[0] + ' must not throw', t, _noop_counting(t))
-            for t in _TODO_THROWS]
+PATCHES += [(t.split('"')[1].split(':')[0] + ' must not throw', t, '0') for t in _TODO_THROWS]
 
 
 def apply(text, _passes=3):
