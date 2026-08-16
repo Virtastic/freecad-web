@@ -1,10 +1,29 @@
 # Roadmap: from "works" to "someone can do their job in it"
 
-> **Status 2026-08-16.** Items 1 and 3 are **shipped and live**. Item 8 is a decision, taken.
-> Items 4 and 5 are unblocked but need the deploy to apply the patch table (see below).
-> **Items 6 and 7 cannot be done from CI at all** — they need a relink, and a relink is a
-> local build against the multi-gigabyte `deps/` tree on the build machine. CI only downloads
-> release assets; it never compiles. Those two need someone at that machine.
+> **Status 2026-08-16.**
+>
+> | # | item | state |
+> |---|---|---|
+> | 1 | QInputDialog | **shipped** — natives restored, live, harness written |
+> | 2 | Error reporting | **shipped** — four anonymous counters, live and recording |
+> | 3 | Storage evictable | **shipped** — user-nominated backup folder, live |
+> | 4 | GL no-op inventory | **blocked: needs a relink** (tried, reverted — see below) |
+> | 5 | Display lists / 11 fps | **blocked on visual verification** — see below |
+> | 6 | 2 GB heap | **blocked: needs a relink** |
+> | 7 | CalculiX threading | **blocked: needs a relink** |
+> | 8 | Chrome/Edge only | **decided** — track, don't build |
+>
+> **What "needs a relink" means, and why CI cannot do it.** A relink is a local build against
+> the multi-gigabyte `deps/` tree on the build machine: ~1 h compile plus 45–60 min link. CI
+> only ever *downloads* release assets — it never compiles — so items 4, 6 and 7 need someone
+> at that machine. Nothing in this repo can route around that.
+>
+> **Item 5 is blocked differently and the distinction matters.** Implementing display lists is
+> plausibly a new patch at untouched sites, so it may well be deployable without a relink. But
+> re-enabling render caching is the change that once made *nothing draw at all*, and verifying
+> it requires looking at pixels — `scratchpad/shot.js` exists precisely for that. It should not
+> be shipped by anyone who cannot see the viewport. Do this one at a machine with a visible
+> browser, behind a query flag, with the pixel gate, before trusting any fps number.
 >
 > **Correction, made by trying it.** I claimed items 4 and 5 were relink-free because the GL
 > fixes are JS patches. That is only half true, and the half that is wrong matters.
