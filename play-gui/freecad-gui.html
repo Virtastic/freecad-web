@@ -1445,6 +1445,9 @@ window.fcRunPy = fcRunPy;
     //      the restore having completed. (With the original 30 s tick the prune happened
     //      to land after the 13 s restore, which is the only reason this ever worked.)
     var AUTOSAVE_DIR = "/home/web_user/.fcweb-autosave";
+    // Deliberately in /tmp, not under the IDBFS mount: it must be absent on every fresh
+    // boot so a stale marker can never convince us autosave is running when it is not.
+    var AUTOSAVE_MARKER = "/tmp/.fcweb_saver_installed";
     var AUTOSAVE_INSTALL = [
       "import FreeCAD as _App, os as _os",
       "if not getattr(_App, '_fcweb_saver', None):",
@@ -1486,6 +1489,13 @@ window.fcRunPy = fcRunPy;
       "            self.dirty = False",
       "    _App._fcweb_saver = _FcwebSaver()",
       "    _App.addDocumentObserver(_App._fcweb_saver)",
+      // Proof of life the JS side can actually see. runPy swallows every error, so without
+      // a marker "we called it" and "it worked" are indistinguishable -- which is exactly
+      // how this silently stopped autosaving anything.
+      "try:",
+      "    open('" + AUTOSAVE_MARKER + "','w').write('1' if getattr(_App,'_fcweb_saver',None) else '0')",
+      "except Exception:",
+      "    pass",
       ""
     ].join("\n");
     var RESTORE_PY = [
@@ -1589,9 +1599,38 @@ window.fcRunPy = fcRunPy;
         var m = window.fcInstance;
         return !!(m && m._fcweb_run_python && m.FS && !window.__fcPyBusy);
       }
+      // Did the install actually take? runPy reports nothing -- it swallows every error and
+      // is a silent no-op whenever the interpreter is not yet able to take the call. The
+      // old loop set installed=true right after calling it, cleared itself on the next
+      // tick, and left the session with NO observer, NO restore, and a 1.5 s tick poking a
+      // _fcweb_saver that did not exist. Every failure on that path is silent, so it
+      // presented as "autosave works" while nothing was ever written.
+      //
+      // Measured on production: saver=False, restored=None, autosave dir empty after a
+      // clean boot. It surfaced only once the engine cache cut boot from ~170 s to ~20 s --
+      // the race was always there, the speedup just started winning it.
+      function installed_ok(){
+        try { var m = window.fcInstance;
+              return !!(m && m.FS && m.FS.analyzePath(AUTOSAVE_MARKER).exists); }
+        catch(e){ return false; }
+      }
+      var tries = 0;
       var poll = setInterval(function(){
         if (!ready()) return;
-        if (!installed) { runPy(AUTOSAVE_INSTALL); installed = true; return; }   // next tick: restore
+        if (!installed) {
+          runPy(AUTOSAVE_INSTALL);
+          if (!installed_ok()) {                 // retry rather than assume
+            if (++tries % 10 === 0) { append('[autosave] install has not taken after ' + tries + ' attempts', 'err'); }
+            if (tries > 60) {                    // ~1 min: stop trying, but SAY so
+              clearInterval(poll);
+              try { window.fcwebNotify && window.fcwebNotify(
+                'Autosave could not start, so your work is NOT being saved automatically. ' +
+                'Use File → Save to keep a copy.', 'error'); } catch(e){}
+            }
+            return;
+          }
+          installed = true; append('[autosave] observer installed'); return;
+        }
         if (!restored) { runPy(RESTORE_PY); restored = true; return; }
         clearInterval(poll);
         setInterval(function(){ runPy(AUTOSAVE_PY); }, 1500);
