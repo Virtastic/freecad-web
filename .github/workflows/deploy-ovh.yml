@@ -81,6 +81,18 @@ jobs:
           echo "BUILD_ID=$BUILD_ID"   >> "$GITHUB_ENV"
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
 
+          # Keep the last few build tags as rollback targets and drop the rest. Each image is
+          # ~785 MB (the engine is baked in), so retaining every deploy fills the disk of a box
+          # that also hosts other sites -- and a full disk there is an outage for all of them.
+          # Only ever removes freecad:build-* tags: never freecad:ovh (the live pointer), and
+          # never an image the running container still needs.
+          docker images 'freecad' --format '{{.Tag}}\t{{.CreatedAt}}' \
+            | grep -E '^build-' | sort -k2 -r | tail -n +6 | cut -f1 \
+            | while read -r old; do
+                echo "pruning freecad:$old"
+                docker rmi "freecad:$old" || true
+              done
+
       - name: Sync compose to /opt/freecad
         run: |
           sudo mkdir -p /opt/freecad

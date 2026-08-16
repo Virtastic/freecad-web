@@ -37,8 +37,20 @@ jobs:
           echo "--- freecad images on this box (newest first) ---"
           docker images 'freecad' --format '{{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' | sort -r
           echo
-          echo "currently serving:"
-          docker inspect --format '{{.Config.Image}}' freecad 2>/dev/null || echo "  (no running container named 'freecad')"
+          echo "--- currently serving ---"
+          # .Config.Image resolves to an image ID once compose recreates the container, which
+          # answers nothing on its own -- map it back to the tags pointing at that ID.
+          id=$(docker inspect --format '{{.Image}}' freecad 2>/dev/null || true)
+          if [ -n "$id" ]; then
+            echo "  image id: $id"
+            docker images --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}' \
+              | awk -v id="$id" '$2==id {print "  tag: " $1}'
+          else
+            echo "  (no running container named 'freecad')"
+          fi
+          echo
+          echo "--- build the live page reports ---"
+          curl -sS https://freecad.virtastic.app/ | grep -o 'FCWEB_BUILD = "[^"]*"' || echo "  (unstamped)"
 
       - name: Activate the requested image
         if: inputs.image_tag != ''
