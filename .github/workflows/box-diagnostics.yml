@@ -32,17 +32,33 @@ jobs:
           echo "--- runner registration scope (the public-repo risk question) ---"
           # .runner records what the runner is registered against. .credentials sits next to
           # it and holds a live token -- never read that one.
-          cfg=""
-          for d in "$HOME/actions-runner" "$RUNNER_WORKSPACE/../../.." /opt/actions-runner /srv/actions-runner; do
-            [ -f "$d/.runner" ] && { cfg="$d/.runner"; break; }
-          done
-          if [ -n "$cfg" ]; then
-            echo "config: $cfg"
-            # gitHubUrl tells you org-level vs repo-level; agentName/poolId identify the group.
-            grep -oE '"(gitHubUrl|agentName|poolId|workFolder|ephemeral)"[^,}]*' "$cfg" | sed 's/^/  /'
-          else
-            echo "  (.runner not found in the usual places — reporting env instead)"
+          # There is MORE THAN ONE runner installed on this box. Guessing $HOME/actions-runner
+          # read the wrong one (a different org's). Derive the install dir from the workspace
+          # this job is actually executing in, so the scope reported is THIS runner's.
+          mine=""
+          if [ -n "${GITHUB_WORKSPACE:-}" ]; then
+            d="$GITHUB_WORKSPACE"
+            for _ in 1 2 3 4 5 6; do
+              d="$(dirname "$d")"
+              [ -f "$d/.runner" ] && { mine="$d/.runner"; break; }
+            done
           fi
+          echo "runner executing this job:"
+          if [ -n "$mine" ]; then
+            echo "  config: $mine"
+            grep -oE '"(gitHubUrl|agentName|poolId|workFolder|ephemeral)"[^,}]*' "$mine" | sed 's/^/    /'
+          else
+            echo "  (could not locate this runner's .runner from $GITHUB_WORKSPACE)"
+          fi
+          echo
+          echo "EVERY runner installed on this box (blast radius: who else can run here):"
+          for c in /home/*/actions-runner*/.runner /opt/actions-runner*/.runner /srv/actions-runner*/.runner; do
+            [ -f "$c" ] || continue
+            url=$(grep -oE '"gitHubUrl"[^,}]*' "$c" | cut -d'"' -f4)
+            name=$(grep -oE '"agentName"[^,}]*' "$c" | cut -d'"' -f4)
+            echo "  $c"
+            echo "    scope=$url  agent=$name"
+          done
           echo "  RUNNER_NAME=${RUNNER_NAME:-?}  RUNNER_ENVIRONMENT=${RUNNER_ENVIRONMENT:-?}"
 
       - name: Privilege the runner actually holds
