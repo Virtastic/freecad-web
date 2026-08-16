@@ -102,6 +102,51 @@ jobs:
       - name: Install edge vhost
         run: sudo cp deploy/freecad.caddy /opt/edge/sites/freecad.caddy
 
+      # Gate the NEW image before it serves anyone. Every check used to run after
+      # `docker compose up -d`, so a failed gate turned the run red and left the broken
+      # version serving -- the checks could report a problem but never prevent one.
+      # A throwaway container on the same network gets the same nginx, the same stamped
+      # page and the same headers, without touching the live one.
+      - name: Gate the new image (canary, before any traffic moves)
+        run: |
+          set -e
+          docker rm -f freecad-canary >/dev/null 2>&1 || true
+          docker run -d --name freecad-canary --network nostalgia "freecad:$IMAGE_TAG" >/dev/null
+          ok=0
+          for i in $(seq 1 15); do
+            docker run --rm --network nostalgia curlimages/curl:latest \
+              -fsS -o /dev/null http://freecad-canary:80/ >/dev/null 2>&1 && { ok=1; break; }
+            sleep 2
+          done
+          [ "$ok" = 1 ] || { docker logs freecad-canary 2>&1 | tail -30; echo "::error::canary never answered"; exit 1; }
+
+          C() { docker run --rm --network nostalgia curlimages/curl:latest "$@"; }
+          C -fsS -D /tmp/can -o /tmp/canbody http://freecad-canary:80/
+          echo "--- canary / headers ---"; cat /tmp/can
+
+          fail=0
+          chk() { if eval "$2"; then echo "  PASS  $1"; else echo "  FAIL  $1"; fail=1; fi; }
+          chk "COOP same-origin"        'grep -qi "^cross-origin-opener-policy: same-origin" /tmp/can'
+          chk "COEP require-corp"       'grep -qi "^cross-origin-embedder-policy: require-corp" /tmp/can'
+          # The page must be stamped: an unstamped build means the md5/build sed silently
+          # did not apply, which is precisely the class of failure that killed returning
+          # users once before.
+          chk "engine URLs stamped"     'grep -qE "FreeCAD\.wasm\?v=[a-z0-9]{12}" /tmp/canbody'
+          chk "data URL stamped"        'grep -qE "FreeCAD\.data\.gz\?v=[a-z0-9]{12}" /tmp/canbody'
+          chk "build stamp applied"     '! grep -q "__FCWEB_BUILD__" /tmp/canbody'
+          chk "engine assets present"   'C -fsS -o /dev/null -I http://freecad-canary:80/FreeCAD.wasm'
+
+          if [ "$fail" != 0 ]; then
+            echo "::error::the new image failed its gate -- NOT switching traffic to it"
+            exit 1
+          fi
+          echo "canary OK -- safe to switch"
+
+      # Always remove the canary, including when the gate above failed.
+      - name: Remove canary
+        if: always()
+        run: docker rm -f freecad-canary >/dev/null 2>&1 || true
+
       - name: Start / update container
         run: docker compose -f /opt/freecad/docker-compose.prod.yml up -d
 

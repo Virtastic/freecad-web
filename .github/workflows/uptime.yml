@@ -1,0 +1,64 @@
+name: uptime (freecad.virtastic.app)
+
+# Nothing watched this site. The deploy's health checks run once, at deploy time, and the
+# two most useful ones deliberately bypass Cloudflare -- so after a run went green, a
+# container that wedged, a cert that expired, or an edge object that went stale was noticed
+# by a user or not at all.
+#
+# This probes what a real visitor gets, through the CDN, on a schedule, and fails the run
+# (which mails whoever watches Actions) when the app would be broken. Deliberately cheap:
+# headers and a HEAD on the stamped engine URL, never the 115 MB body.
+#
+# Runs on a hosted runner, NOT the production self-hosted one.
+on:
+  schedule:
+    - cron: "17 */2 * * *"   # every two hours, off the hour so it misses the herd
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe through Cloudflare
+        run: |
+          set -uo pipefail
+          fail=0
+          chk() { if eval "$2"; then echo "  PASS  $1"; else echo "  FAIL  $1"; fail=1; fi; }
+
+          code=$(curl -sS -m 30 -o /tmp/body -D /tmp/head -w '%{http_code}' https://freecad.virtastic.app/ || echo 000)
+          echo "--- / (HTTP $code) ---"; cat /tmp/head || true
+
+          chk "entry page 200"        '[ "$code" = 200 ]'
+          # Without BOTH of these the browser has no SharedArrayBuffer and the app boots to
+          # a blank page. They are the single highest-value thing to watch.
+          chk "COOP same-origin"      'grep -qi "^cross-origin-opener-policy: same-origin" /tmp/head'
+          chk "COEP require-corp"     'grep -qi "^cross-origin-embedder-policy: require-corp" /tmp/head'
+          chk "entry page no-cache"   'grep -qi "^cache-control:.*no-cache" /tmp/head'
+          chk "page looks like the app" 'grep -q "FCWEB_BUILD" /tmp/body'
+
+          # The stamped URLs the page will actually ask for must resolve through the CDN.
+          # A stale or 404 edge object here is invisible to a first-time visitor and fatal
+          # to a returning one -- exactly the failure this repo shipped once before.
+          for u in $(grep -oE '(FreeCAD\.wasm|FreeCAD\.data\.gz|gmsh\.js|ccx\.js)\?v=[a-z0-9]+' /tmp/body | sort -u); do
+            c=$(curl -sS -m 30 -o /dev/null -I -w '%{http_code}' "https://freecad.virtastic.app/$u" || echo 000)
+            chk "asset $u -> $c" "[ \"$c\" = 200 ]"
+          done
+
+          # TLS expiry, which nothing else here would ever notice until it broke.
+          days=$(echo | openssl s_client -servername freecad.virtastic.app \
+                   -connect freecad.virtastic.app:443 2>/dev/null \
+                 | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+          if [ -n "$days" ]; then
+            left=$(( ( $(date -d "$days" +%s) - $(date +%s) ) / 86400 ))
+            echo "  cert expires in $left days ($days)"
+            chk "cert >14 days from expiry" '[ "$left" -gt 14 ]'
+          else
+            echo "  (could not read cert expiry)"
+          fi
+
+          echo "build now serving: $(grep -o 'FCWEB_BUILD = \"[^\"]*\"' /tmp/body || echo unknown)"
+          [ "$fail" = 0 ] || { echo "::error::freecad.virtastic.app is not healthy for real users"; exit 1; }
+          echo "uptime OK"

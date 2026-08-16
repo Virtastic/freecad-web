@@ -583,14 +583,26 @@ window.fcwebNotify = function (text, kind, actions) {
     });
   }
   var deferred = null;
+  var installOffered = false;
+  // Capture the prompt but DO NOT use it yet. Chrome fires this on arrival, when the user
+  // has done nothing, has nothing to lose, and has no reason to say yes -- and the offer is
+  // one-shot, so spending it there wastes the only lever we have. Installation is the ONLY
+  // way to get navigator.storage.persist() granted (measured: denied on three separate
+  // engaged visits to a normal profile, see BUILD-WEH.md), and until it is granted the
+  // browser may evict a user's saved documents to reclaim disk. So the ask is deferred to
+  // the moment it is concretely true: right after they first save real work.
   window.addEventListener('beforeinstallprompt', function (e) {
     e.preventDefault();
     deferred = e;
     window.__fcInstallable = true;
-    if (typeof window.fcwebNotify !== 'function') return;
+  });
+  // Called once the user has actually saved something worth keeping.
+  window.fcwebOfferInstall = function () {
+    if (installOffered || !deferred || typeof window.fcwebNotify !== 'function') { return; }
+    installOffered = true;
     window.fcwebNotify(
-      'Install FreeCAD as an app? Installed, the browser guarantees your saved documents ' +
-      'are never evicted to reclaim disk space, and it opens in its own window.',
+      'Your work is saved in this browser — which means it can be cleared to reclaim disk ' +
+      'space. Installing FreeCAD as an app stops that, and opens it in its own window.',
       'info',
       [{ label: 'Install', onClick: function (btn) {
           btn.textContent = 'Installing…';
@@ -604,7 +616,26 @@ window.fcwebNotify = function (text, kind, actions) {
             }
           });
         } }]);
-  });
+  };
+  // Fallback for the browsers/profiles where beforeinstallprompt never fires (already
+  // installed, or Chrome declining to offer): say the true thing once, without a button
+  // that cannot work. Only when they have work at risk, and only once.
+  window.fcwebWarnEvictable = function () {
+    if (installOffered || deferred) { return; }
+    installOffered = true;
+    if (!navigator.storage || !navigator.storage.persisted) { return; }
+    navigator.storage.persisted().then(function (ok) {
+      if (ok || typeof window.fcwebNotify !== 'function') { return; }
+      window.fcwebNotify(
+        'Your documents are stored in this browser and could be cleared by it to reclaim ' +
+        'disk space. Use File → Save to keep a copy on your machine.', 'info');
+    });
+  };
+  // One entry point for "the user just saved real work", so the two paths above cannot
+  // both fire and cannot fire before there is anything to protect.
+  window.__fcWorkSaved = function () {
+    try { window.fcwebOfferInstall(); window.fcwebWarnEvictable(); } catch (e) {}
+  };
   window.addEventListener('appinstalled', function () {
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().then(function (ok) {
@@ -1938,6 +1969,9 @@ window.fcRunPy = fcRunPy;
       try{ FS.unlink(dir+'/'+name); }catch(e){}
       try{ FS.unlink(dir+'/name'); }catch(e){}
       try{ FS.unlink(dir+'/done'); }catch(e){}
+      // They have just saved real work: the one moment the install offer is concretely
+      // about something they would mind losing.
+      try{ window.__fcWorkSaved && window.__fcWorkSaved(); }catch(e){}
       return;
     }
     alert('Save timed out');
@@ -2073,6 +2107,8 @@ window.fcRunPy = fcRunPy;
         (function(p,size){
           var bytes; try{ bytes=FS.readFile(p); }catch(e){ return; }
           if(bytes.length!==size) { pendingSaves[p]=null; return; } // mid-write; retry next tick
+          // The user has saved real work through File > Save / Save As / Export.
+          try{ window.__fcWorkSaved && window.__fcWorkSaved(); }catch(e){}
           // Preferred: write straight into the file the user picked in the OS save dialog.
           if(writeToTarget(p, bytes)) return;
           // Fallback (no File System Access API): download it.
