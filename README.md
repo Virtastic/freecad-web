@@ -40,7 +40,7 @@ These are real constraints, stated up front rather than discovered:
 | | |
 |---|---|
 | **Browser** | Chrome or Edge 137+. Firefox and Safari lack JSPI; they are refused up front having downloaded nothing. |
-| **First load** | ~139 MB. |
+| **First load** | ~115 MB. Return visits fetch nothing — the engine is held in Cache Storage and reaches Ready in seconds. |
 | **Memory** | A fixed 2 GB heap — roughly 20,000 simple solids. The app force-saves your documents and warns before it runs out. |
 | **AddonManager** | Absent (it needs `git` and real sockets). A `.zip` / GitHub workbench installer covers the same use case. |
 | **CalculiX** | Single-threaded, so large FEM jobs are slower than desktop. |

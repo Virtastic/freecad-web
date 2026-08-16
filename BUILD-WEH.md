@@ -525,6 +525,18 @@ Cache keys are the stamped `?v=` URLs, so a new build is automatically a new key
 else is swept on boot. A damaged entry would otherwise be sticky forever, so a non-OOM abort
 offers "clear cached engine and reload" (`window.fcwebClearEngineCache()`).
 
+**Measured live on production after deploying it**, from a cleared cache:
+
+| | before | after |
+|---|---|---|
+| first visit to Ready | 171 s | 23 s |
+| return visit to Ready | 115 s | **8 s** |
+| bytes fetched on a return visit | 113 MB | **0** |
+
+`performance.getEntriesByType('resource')` shows **no entry at all** for `FreeCAD.wasm` or
+`FreeCAD.data.gz` on the second load — they never reach the network. That is the check worth
+re-running: it is the exact measurement that exposed the original defect.
+
 ## Releasing: the checklist, and the ways it bites
 
 1. **Release first, push second.** CI pulls assets by tag, so the release must exist

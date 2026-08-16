@@ -78,7 +78,11 @@ actionable; "3D view is janky" is not.
 ## Known and accepted — not worth reporting
 
 - Chrome/Edge 137+ only (other browsers are refused up front, having downloaded nothing)
-- First load is ~139 MB; later loads are cached
+- First load downloads ~115 MB. Later loads really are cached now — the engine is held in
+  Cache Storage, so a return visit fetches **nothing** and reaches Ready in seconds.
+  (It genuinely was not cached before 2026-08-16: Chrome's HTTP cache will not retain a
+  152 MB entry, so every visit re-downloaded the lot. If you see a return visit downloading
+  again, that is a regression worth reporting.)
 - AddonManager is absent (use the `.zip` / GitHub workbench installer)
 - Memory is a fixed 2 GB, with a civil message if a model exhausts it
 - CalculiX solves are single-threaded, so large FEM jobs are slower than desktop
