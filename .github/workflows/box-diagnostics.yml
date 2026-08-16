@@ -104,6 +104,32 @@ jobs:
           echo "--- last 20 log lines from freecad ---"
           docker logs --tail 20 freecad 2>&1 | sed 's/^/    /' || true
 
+      - name: Validate the scoped sudoers candidate (does NOT install it)
+        run: |
+          echo "--- absolute paths the sudoers rule must match ---"
+          # A sudoers Cmnd must be the fully-qualified path. If these differ from what
+          # infra/sudoers-runner-scoped says, the rule silently will not match and the
+          # deploy breaks the moment the blanket rule is removed.
+          for c in mkdir cp ufw iptables; do
+            printf '  %-9s %s\n' "$c" "$(command -v "$c" 2>/dev/null || echo '(not found)')"
+          done
+          echo
+          echo "--- syntax check on infra/sudoers-runner-scoped ---"
+          if [ -f infra/sudoers-runner-scoped ]; then
+            if visudo -c -f infra/sudoers-runner-scoped 2>&1 | sed 's/^/  /'; then
+              echo "  syntax OK"
+            else
+              echo "::error::infra/sudoers-runner-scoped is NOT valid — do not install it"
+              exit 1
+            fi
+          else
+            echo "  (file not present in this checkout)"
+          fi
+          echo
+          echo "--- where the blanket NOPASSWD: ALL is defined (so it can be removed later) ---"
+          sudo -n grep -rln "NOPASSWD: *ALL" /etc/sudoers /etc/sudoers.d/ 2>/dev/null | sed 's/^/  /' \
+            || echo "  (not readable)"
+
       - name: What the box serves to the world
         run: |
           echo "--- listening sockets (is anything exposed beyond the edge?) ---"

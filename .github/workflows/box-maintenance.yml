@@ -1,0 +1,112 @@
+name: box maintenance (docker reclaim)
+
+# Reclaim docker disk on the shared VPS.
+#
+# Why this exists: box-diagnostics reported the root filesystem at 68% (131G of 193G) with
+# the docker BUILD CACHE at 104.3 GB, 78.98 GB of it reclaimable. The deploy's image
+# pruning (keep the newest 5 build-* tags) saves ~785 MB a time -- roughly a hundredth of
+# the actual problem. A full disk on this box is an outage for all 22 containers, including
+# another product's Postgres and login service, so this is the bigger lever by far.
+#
+# THIS BOX IS SHARED. The build cache belongs to every project that builds here, not just
+# FreeCAD, which is why:
+#   - it is manual dispatch only, never scheduled -- nobody should discover their cache
+#     evaporated because someone else's repo ran a cron;
+#   - dry run is the DEFAULT, so the first thing you get is a report, not a deletion;
+#   - it keeps recent cache (default 7 days) instead of emptying it, so active projects
+#     stay warm and only genuinely stale layers go;
+#   - it never touches volumes (nl-postgres lives in one), never stops or restarts a
+#     container, and never removes a tagged image.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only, delete nothing"
+        type: boolean
+        required: false
+        default: true
+      keep_hours:
+        description: "Keep build cache newer than this many hours (default 168 = 7 days)"
+        required: false
+        default: "168"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never reclaim while a deploy is building -- it would pull the cache out from under it.
+  group: deploy-ovh-freecad
+  cancel-in-progress: false
+
+jobs:
+  reclaim:
+    if: github.repository == 'Virtastic/freecad-web' && github.event_name != 'pull_request'
+    runs-on: [self-hosted, ovh, virtastic]
+    steps:
+      - name: Before
+        run: |
+          echo "--- disk ---"
+          df -h / | sed 's/^/  /'
+          echo
+          echo "--- docker ---"
+          docker system df | sed 's/^/  /'
+          echo
+          echo "--- containers running (must be unchanged afterwards) ---"
+          echo "  count: $(docker ps -q | wc -l)"
+          docker ps -q | wc -l > /tmp/fcweb_container_count_before
+
+      - name: Reclaim
+        env:
+          DRY: ${{ inputs.dry_run }}
+          KEEP: ${{ inputs.keep_hours }}
+        run: |
+          set -e
+          KEEP="${KEEP:-168}"
+          if [ "$DRY" = "true" ]; then
+            echo "DRY RUN — nothing will be deleted."
+            echo "Would run:"
+            echo "  docker builder prune -f --filter until=${KEEP}h    (stale build cache)"
+            echo "  docker image prune -f                             (dangling/untagged images only)"
+            echo
+            echo "Reclaimable right now, per docker:"
+            docker system df | sed 's/^/  /'
+            echo
+            echo "Dangling images: $(docker images -f dangling=true -q | wc -l)"
+            echo
+            echo "Re-run with dry_run=false to actually reclaim."
+            exit 0
+          fi
+
+          echo "=== pruning build cache older than ${KEEP}h ==="
+          docker builder prune -f --filter "until=${KEEP}h" | tail -5 | sed 's/^/  /'
+          echo
+          echo "=== pruning dangling images (untagged, unused by any container) ==="
+          docker image prune -f | tail -3 | sed 's/^/  /'
+          # Deliberately NOT: `docker system prune`, `-a`, or any volume prune. -a would
+          # delete every image not currently running -- including every rollback target --
+          # and a volume prune would take a database with it.
+
+      - name: After, and prove nothing was collaterally killed
+        run: |
+          echo "--- disk ---"
+          df -h / | sed 's/^/  /'
+          echo
+          echo "--- docker ---"
+          docker system df | sed 's/^/  /'
+          echo
+          before=$(cat /tmp/fcweb_container_count_before 2>/dev/null || echo "?")
+          after=$(docker ps -q | wc -l)
+          echo "--- containers: before=$before after=$after ---"
+          if [ "$before" != "?" ] && [ "$before" != "$after" ]; then
+            echo "::error::container count changed ($before -> $after) — something was stopped, investigate"
+            docker ps -a --format '  {{.Names}}\t{{.Status}}' | sed 's/^/ /'
+            exit 1
+          fi
+          echo
+          echo "--- freecad rollback targets must still exist ---"
+          docker images 'freecad' --format '  {{.Tag}}\t{{.Size}}' | sort -r
+          echo
+          echo "--- site still healthy through the CDN ---"
+          code=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' https://freecad.virtastic.app/ || echo 000)
+          echo "  https://freecad.virtastic.app/ -> $code"
+          [ "$code" = 200 ] || { echo "::error::site not healthy after reclaim"; exit 1; }

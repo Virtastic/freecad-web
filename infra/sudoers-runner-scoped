@@ -1,0 +1,66 @@
+# Scoped sudo for the self-hosted Actions runner.
+#
+# Install as /etc/sudoers.d/60-actions-runner-freecad  (mode 0440, root:root).
+#
+# WHY
+# ---
+# box-diagnostics reported the runner's privilege as:
+#
+#     User ubuntu may run the following commands on vps-7e7250d5:
+#         (ALL) NOPASSWD: ALL
+#
+# i.e. unrestricted passwordless root, on a box running 22 containers including another
+# product's Postgres and login service. The freecad-web deploy needs exactly three
+# commands. Everything else that blanket rule grants is standing blast radius for no
+# benefit.
+#
+# READ THIS BEFORE INSTALLING
+# ---------------------------
+# The `ubuntu` account is SHARED by three runners registered to three different scopes:
+#
+#     /home/ubuntu/actions-runner-virtastic  -> github.com/Virtastic
+#     /home/ubuntu/actions-runner            -> github.com/Nostalgia-Lab
+#     /home/ubuntu/actions-runner-stavridis  -> github.com/dumpster-TechOps/Stavridis-Resume
+#
+# So narrowing `ubuntu`'s sudo narrows it for ALL THREE. This file covers what freecad-web
+# needs and nothing else; the other two repos' deploys must be audited the same way before
+# the blanket `(ALL) NOPASSWD: ALL` is removed, or their deploys will start failing on a
+# sudo they no longer have.
+#
+# Adding this file alone is SAFE and changes nothing: while the blanket rule is still
+# present it simply grants a subset that was already granted. It only takes effect once
+# the blanket rule is removed, which is the deliberate second step.
+#
+# HOW TO ROLL IT OUT
+# ------------------
+#   1. Copy this file to the box and validate BEFORE installing -- a malformed sudoers
+#      file can lock everyone out of sudo:
+#          sudo visudo -c -f sudoers-runner-scoped
+#   2. Install it:
+#          sudo install -m 0440 -o root -g root sudoers-runner-scoped \
+#               /etc/sudoers.d/60-actions-runner-freecad
+#   3. Audit the other two runners' workflows for their sudo usage and add equivalents.
+#   4. Only then remove the blanket rule (find it first: `sudo grep -rn "NOPASSWD: ALL"
+#      /etc/sudoers /etc/sudoers.d/`), and keep a root shell open on another terminal
+#      until you have confirmed a deploy still succeeds.
+#
+# HOW TO REVERT
+# -------------
+#   sudo rm /etc/sudoers.d/60-actions-runner-freecad
+#
+# Command paths are absolute on purpose: a bare `cp` would let anything named cp earlier in
+# PATH run as root, which defeats the point of scoping at all.
+
+Cmnd_Alias FCWEB_DEPLOY = \
+    /usr/bin/mkdir -p /opt/freecad, \
+    /usr/bin/cp docker-compose.prod.yml /opt/freecad/docker-compose.prod.yml, \
+    /usr/bin/cp deploy/freecad.caddy /opt/edge/sites/freecad.caddy
+
+# Read-only, used by box-diagnostics to report the firewall. Drop these two if you would
+# rather the runner could not enumerate the firewall at all -- diagnostics degrades to
+# "(not readable)" and nothing else changes.
+Cmnd_Alias FCWEB_DIAG = \
+    /usr/sbin/ufw status, \
+    /usr/sbin/iptables -S
+
+ubuntu ALL=(root) NOPASSWD: FCWEB_DEPLOY, FCWEB_DIAG
