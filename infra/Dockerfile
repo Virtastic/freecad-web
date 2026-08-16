@@ -72,3 +72,9 @@ RUN sed -i "s|__FCWEB_BUILD__|${FCWEB_BUILD}|g" /usr/share/nginx/html/freecad-gu
  && echo "stamped build=${FCWEB_BUILD}"
 
 EXPOSE 80
+
+# `restart: unless-stopped` only restarts a container that EXITED. An nginx that is up but
+# wedged is never noticed, and nothing outside watches this box. Checking the entry page
+# (not just the port) also catches the case where the html failed to stamp or copy.
+HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1/freecad-gui.html || exit 1

@@ -1,0 +1,98 @@
+name: ci
+
+# The first automated verification this repo has ever had.
+#
+# tools/patch-freecad-js.py is the highest-integrity component in the tree: ~30 hand-derived
+# patches to emscripten's generated GL glue, which EVERY relink silently drops, and without
+# which the 3D view never comes up and newDocument() never returns. It ships with a selftest
+# whose fixture is built from the patch table itself (so it cannot go stale) and a --check
+# mode that verifies invariants rather than per-patch status -- because a memory-growth build
+# once made nine patches report "already applied" while the file still threw from all nine.
+#
+# None of it ran automatically. This is an hour of work for the best correctness-per-effort
+# ratio available here. Runs on a hosted runner, NOT the production self-hosted one.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: patch-freecad-js selftest
+        run: python3 tools/patch-freecad-js.py --selftest
+
+      # Proves the patches are present in what production is actually serving. This is the
+      # exact regression a relink causes, and it is invisible until the 3D view fails to come up.
+      - name: Verify the deployed FreeCAD.js still carries the GL patches
+        run: |
+          set -e
+          url=$(curl -sS https://freecad.virtastic.app/ | grep -oE 'FreeCAD\.js\?v=[a-z0-9]+' | head -1)
+          echo "deployed loader: $url"
+          curl -fsS "https://freecad.virtastic.app/$url" -o /tmp/FreeCAD.js
+          ls -la /tmp/FreeCAD.js
+          # The path is argv[1]; --check must follow it (and stops the tool writing back).
+          # Verified against the live loader: every patch reports "already applied", exit 0.
+          python3 tools/patch-freecad-js.py /tmp/FreeCAD.js --check
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The publication gate, as a test. Each of these was a real finding, and each would
+      # silently come back the next time someone regenerates a build file.
+      - name: No absolute home directories in tracked files
+        run: |
+          if git grep -nE '/Users/[a-z]+/|C:\\\\Users\\\\' -- $(git ls-files) ; then
+            echo "::error::a tracked file hardcodes someone's home directory -- see tools/gen-crossfiles.sh"
+            exit 1
+          fi
+          echo "OK"
+
+      - name: No origin IP in tracked files
+        run: |
+          if git grep -nE '\b135\.148\.33\.60\b' -- $(git ls-files) ; then
+            echo "::error::the origin address belongs in the ORIGIN_IP variable, not the tree"
+            exit 1
+          fi
+          echo "OK"
+
+      - name: No tracked-but-ignored files
+        run: |
+          out=$(git ls-files --cached | git check-ignore --stdin --no-index || true)
+          if [ -n "$out" ]; then
+            echo "::error::tracked files match .gitignore: $out"
+            exit 1
+          fi
+          echo "OK"
+
+      - name: Licensing is declared and consistent
+        run: |
+          set -e
+          test -s LICENSE
+          test -s NOTICE
+          grep -q "GNU LESSER GENERAL PUBLIC LICENSE" LICENSE
+          grep -q '"license": "LGPL-2.1-or-later"' package.json
+          ! grep -q '"ISC"' package.json
+          echo "OK"
+
+      # infra/Dockerfile greps for each of these after its sed; if a refactor renames one the
+      # image build fails on the box. Catch it here instead, on a free runner.
+      - name: Dockerfile stamp targets still present in the page
+        run: |
+          set -e
+          for pat in "'FreeCAD.wasm'" "FreeCAD.data.gz?v=1" "'FreeCAD.js'" "'gmsh.js'" "'ccx.js'" "__FCWEB_BUILD__"; do
+            grep -qF "$pat" play-gui/freecad-gui.html || { echo "::error::infra/Dockerfile stamps \"$pat\" but it is gone from freecad-gui.html"; exit 1; }
+          done
+          echo "OK"

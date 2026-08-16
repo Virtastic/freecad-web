@@ -58,9 +58,22 @@ jobs:
           test -s play-gui/FreeCAD.wasm && test -s play-gui/FreeCAD.data \
             && test -s play-gui/gmsh.wasm && test -s play-gui/ccx.wasm \
             || { echo "FATAL: artifacts missing/empty after download" >&2; exit 1; }
+          # Hand the release tag to the image build so the page can name its own build.
+          echo "REL_TAG=$tag" >> "$GITHUB_ENV"
 
+      # Tagged by release + commit so a rollback is a retag, not a rebuild. `freecad:ovh`
+      # used to be overwritten in place, leaving the previous image dangling and unnamed --
+      # there was nothing to roll back TO. Keep that tag as the pointer the compose file
+      # uses, and stamp the page with the build it came from.
       - name: Build image
-        run: DOCKER_BUILDKIT=1 docker build -t freecad:ovh -f infra/Dockerfile .
+        run: |
+          set -e
+          BUILD_ID="${REL_TAG}+${GITHUB_SHA::7}"
+          echo "building $BUILD_ID"
+          DOCKER_BUILDKIT=1 docker build \
+            --build-arg "FCWEB_BUILD=$BUILD_ID" \
+            -t "freecad:$BUILD_ID" -t freecad:ovh -f infra/Dockerfile .
+          echo "BUILD_ID=$BUILD_ID" >> "$GITHUB_ENV"
 
       - name: Sync compose to /opt/freecad
         run: |
@@ -146,3 +159,41 @@ jobs:
               "https://freecad.virtastic.app/ccx.js",
               "https://freecad.virtastic.app/ccx.wasm"
             ]}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print("purge success:",d.get("success"))'
+
+      # The gate that has never existed: verify what a REAL USER receives, through Cloudflare.
+      # Every check above deliberately bypasses the CDN (--resolve to 127.0.0.1), so nothing in
+      # this pipeline has ever looked at the layer most likely to break it. This repo's own
+      # history has Cloudflare caching a 404 for a year, and caching FreeCAD.data.gz from a probe
+      # made before nginx served it with Content-Encoding -- which would have broken every boot.
+      # Runs after the purge, so it also proves the purge worked.
+      - name: Health check (through Cloudflare, what users actually get)
+        run: |
+          set -e
+          sleep 5
+          fail=0
+          chk() { if eval "$2"; then echo "  PASS  $1"; else echo "  FAIL  $1"; fail=1; fi; }
+
+          curl -sS -D /tmp/ch -o /tmp/cb https://freecad.virtastic.app/
+          echo "--- / headers (through Cloudflare) ---"; cat /tmp/ch
+
+          chk "200 on /"                       'grep -qE "^HTTP/[0-9.]+ 200" /tmp/ch'
+          chk "COOP same-origin"               'grep -qi "^cross-origin-opener-policy: same-origin" /tmp/ch'
+          chk "COEP require-corp"              'grep -qi "^cross-origin-embedder-policy: require-corp" /tmp/ch'
+          chk "entry HTML is no-cache"         'grep -qi "^cache-control:.*no-cache" /tmp/ch'
+
+          # The stamps the browser will actually request must resolve THROUGH the CDN. A stale
+          # edge object here is exactly the failure that killed returning users once before.
+          for u in $(grep -oE "(FreeCAD\.wasm|FreeCAD\.data\.gz|gmsh\.js|ccx\.js)\?v=[a-z0-9]+" /tmp/cb | sort -u); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' "https://freecad.virtastic.app/$u")
+            chk "stamped asset $u -> $code" "[ \"$code\" = 200 ]"
+          done
+
+          curl -sS -D /tmp/cw -o /dev/null "https://freecad.virtastic.app/$(grep -oE 'FreeCAD\.wasm\?v=[a-z0-9]+' /tmp/cb | head -1)"
+          chk "wasm content-type"              'grep -qi "^content-type: *application/wasm" /tmp/cw'
+          chk "wasm immutable"                 'grep -qi "^cache-control:.*immutable" /tmp/cw'
+
+          curl -sS -D /tmp/cd -o /dev/null "https://freecad.virtastic.app/$(grep -oE 'FreeCAD\.data\.gz\?v=[a-z0-9]+' /tmp/cb | head -1)"
+          chk "data.gz Content-Encoding gzip"  'grep -qi "^content-encoding: *gzip" /tmp/cd'
+
+          [ "$fail" = 0 ] || { echo "::error::what Cloudflare serves does not match what the edge serves"; exit 1; }
+          echo "through-CDN health OK"

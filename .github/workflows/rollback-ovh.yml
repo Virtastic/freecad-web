@@ -1,0 +1,68 @@
+name: rollback (freecad.virtastic.app)
+
+# Put a previously built image back in front of traffic, WITHOUT rebuilding.
+#
+# Before this existed, rollback meant re-running the deploy against an older release tag:
+# a full rebuild that re-downloads ~450 MB of artifacts and re-gzips 262 MB, several minutes
+# during which the broken version is still serving. And it only worked if that old release
+# still had all seven assets. Meanwhile `freecad:ovh` was overwritten in place every deploy,
+# so the previous image was left dangling and unnamed -- there was nothing to roll back TO.
+#
+# deploy-ovh.yml now also tags each build `freecad:<release-tag>+<sha>`. This workflow just
+# re-points `freecad:ovh` at one of those and restarts: seconds, not minutes.
+#
+#   gh workflow run rollback-ovh.yml -f image_tag=build-20260813-eventstack+9d59467
+#
+# Run with no input to list what is available on the box and stop.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to activate (blank = just list what's on the box)"
+        required: false
+        default: ""
+
+concurrency:
+  # Shares the deploy group on purpose: a rollback must never race a deploy.
+  group: deploy-ovh-freecad
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    if: github.repository == 'Virtastic/freecad-web' && github.event_name != 'pull_request'
+    runs-on: [self-hosted, ovh, virtastic]
+    steps:
+      - name: List available images
+        run: |
+          echo "--- freecad images on this box (newest first) ---"
+          docker images 'freecad' --format '{{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' | sort -r
+          echo
+          echo "currently serving:"
+          docker inspect --format '{{.Config.Image}}' freecad 2>/dev/null || echo "  (no running container named 'freecad')"
+
+      - name: Activate the requested image
+        if: inputs.image_tag != ''
+        env:
+          TAG: ${{ inputs.image_tag }}
+        run: |
+          set -e
+          # Refuse rather than restart into a tag that does not exist -- the container would
+          # come up on whatever `freecad:ovh` still pointed at and the rollback would silently
+          # not have happened.
+          docker image inspect "freecad:$TAG" >/dev/null 2>&1 \
+            || { echo "::error::no such image: freecad:$TAG (see the list above)"; exit 1; }
+          docker tag "freecad:$TAG" freecad:ovh
+          docker compose -f /opt/freecad/docker-compose.prod.yml up -d --force-recreate
+          echo "activated freecad:$TAG"
+
+      - name: Verify through Cloudflare
+        if: inputs.image_tag != ''
+        run: |
+          set -e
+          sleep 6
+          curl -sS -D /tmp/h -o /tmp/b https://freecad.virtastic.app/
+          grep -qE '^HTTP/[0-9.]+ 200' /tmp/h
+          grep -qi '^cross-origin-opener-policy: same-origin'    /tmp/h
+          grep -qi '^cross-origin-embedder-policy: require-corp' /tmp/h
+          echo "now serving build: $(grep -o 'FCWEB_BUILD = \"[^\"]*\"' /tmp/b || echo '(unstamped)')"
+          echo "rollback verified"
