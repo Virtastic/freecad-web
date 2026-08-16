@@ -7,7 +7,7 @@
 > | 1 | QInputDialog | **shipped** — natives restored, live, harness written |
 > | 2 | Error reporting | **shipped** — four anonymous counters, live and recording |
 > | 3 | Storage evictable | **shipped** — user-nominated backup folder, live |
-> | 4 | GL no-op inventory | **blocked: needs a relink** (tried, reverted — see below) |
+> | 4 | GL no-op inventory | **done** — instrumented and measured; see BUILD-WEH.md |
 > | 5 | Display lists / 11 fps | **blocked on visual verification** — see below |
 > | 6 | 2 GB heap | **blocked: needs a relink** |
 > | 7 | CalculiX threading | **blocked: needs a relink** |
@@ -38,9 +38,13 @@
 > far too generic to re-match safely; the tool's own comments say several replacements are
 > the literal `"0"`, which occurs everywhere in minified JS.
 >
-> So **item 4's instrumentation needs a fresh unpatched `FreeCAD.js`, i.e. a relink** — the
-> same constraint as items 6 and 7 — unless someone re-derives each site from its surrounding
-> context, which is fiddly and risks a mismatch in the GL hot path for a diagnostic.
+> **Resolved by doing exactly that.** Each site was re-derived from its surrounding context
+> (`if(face!=1028&&face!=1032){0}`, `var _glTexGeni=(coord,pname,param)=>{0}`, …), every anchor
+> verified unique against the deployed `FreeCAD.js` first. So item 4 needed no relink after
+> all. The measurement is in BUILD-WEH.md: across boot, solid modelling with booleans, five
+> camera changes and BIMExample's 361 objects, **not one of the instrumented sites fired** —
+> and reading the code shows most of them are unhandled-argument fallbacks rather than dead
+> functions.
 > Item 5 (display lists) is likely still relink-free, since `glGenLists` and friends are
 > *untouched* sites, but that should be confirmed rather than assumed twice.
 

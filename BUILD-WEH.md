@@ -537,6 +537,48 @@ offers "clear cached engine and reload" (`window.fcwebClearEngineCache()`).
 `FreeCAD.data.gz` on the second load — they never reach the network. That is the check worth
 re-running: it is the exact measurement that exposed the original defect.
 
+## The nine "silently dead" GL calls: measured, and smaller than it looked
+
+`tools/patch-freecad-js.py` rewrites nine fixed-function `throw"gl*: TODO"` sites to `0`.
+That was correct — a throw unwinds through Coin's render traversal and takes the viewport
+with it — but it left an unmeasured parity claim, because `glMaterialfv` and `glLightfv` are
+how Coin sets material colour and lighting. "Silently does nothing" could have meant
+"shading differs from desktop".
+
+Instrumented (each `0` became a counter that still evaluates to `0`) and measured on
+production:
+
+| exercised | result |
+|---|---|
+| boot | no counter fired |
+| box + cylinder + boolean fuse, shaded, isometric, fitAll | no counter fired |
+| five camera changes (front/top/right/iso, fitAll) | no counter fired |
+| **BIMExample — 361 objects**, heap 285 → 425 MB | **no counter fired** |
+
+`window.__fcglNoop` stayed `undefined` throughout.
+
+**Reading the code explains why, and it reframes the whole concern.** These `{0}`s are not
+"the function does nothing". They are of two kinds:
+
+- **Fallback branches for unhandled arguments** — `glLightModelf`, `glLightModelfv`,
+  `glLightfv`, and `glMaterialfv`'s face check. The functions *are* implemented for the
+  cases Coin actually uses, and the `glMaterialfv: EMISSION and AMBIENT_AND_DIFFUSE` patch
+  extended them further. The `0` runs only for arguments emscripten never implemented, and
+  nothing above reached one.
+- **Genuinely empty functions** — `glTexCoord4f`, `glTexGenfv`, `glTexGeni`. The entire body
+  is `{0}`. These are texture-coordinate generation, which only matters for texture-mapped
+  materials; none of the above uses them.
+
+So the honest status: for ordinary solid modelling and the heaviest bundled scene, the
+no-ops cost nothing observable. What remains untested is texture-mapped materials, which is
+where `glTexGen*` would finally be called — worth a targeted check before claiming full
+parity, but it is a narrow gap rather than a broad one.
+
+One counter is deliberately absent. `glMaterialfv`'s *pname* fallback anchors inside the
+EMISSION patch's replacement text, and instrumenting it breaks that patch's already-applied
+detection — the deploy caught this and refused. The selftest now asserts no counter anchors
+inside any patch's replacement, so the class cannot come back.
+
 ## Releasing: the checklist, and the ways it bites
 
 1. **Release first, push second.** CI pulls assets by tag, so the release must exist
