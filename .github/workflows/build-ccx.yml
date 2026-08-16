@@ -63,9 +63,15 @@ jobs:
           mkdir -p deps/src/{ccx,spooles,f2c,arpack,lapack}
 
           echo "--- CalculiX 2.22 ---"
+          # The tarball unpacks as ./CalculiX/ccx_2.22/src/ -- one level deeper than the
+          # build scripts expect, which hardcode deps/src/ccx/ccx_2.22/src. Strip the
+          # leading CalculiX/ component rather than moving directories afterwards.
           curl -fsSL -o /tmp/ccx.tar.bz2 http://www.dhondt.de/ccx_2.22.src.tar.bz2
-          tar xjf /tmp/ccx.tar.bz2 -C deps/src/ccx
-          ls deps/src/ccx
+          tar xjf /tmp/ccx.tar.bz2 -C deps/src/ccx --strip-components=1
+          # 977 .f files; f77ify.py globs src/*.f and fails with FileNotFoundError on the
+          # unexpanded pattern if this layout is wrong, which is how the second run failed.
+          echo "  .f files: $(ls deps/src/ccx/ccx_2.22/src/*.f 2>/dev/null | wc -l)"
+          ls deps/src/ccx/ccx_2.22/src/ccx_2.22.c >/dev/null
 
           echo "--- SPOOLES 2.2 ---"
           mkdir -p deps/src/spooles/SPOOLES.2.2
