@@ -162,6 +162,27 @@ jobs:
           echo "FCWEB_CCX_PTHREADS=$FCWEB_CCX_PTHREADS"
           bash build-ccx-weh.sh
 
+      # The actionable half of the size gap. Routines f2c cannot translate are STUBBED --
+      # they compile and link, and then do nothing at run time. That is why a build can
+      # report "failed: 0" and still be missing functionality, and it is what makes the CI
+      # module smaller than production's. This prints exactly which ones, so the gap is a
+      # work list rather than a mystery.
+      - name: Which routines got stubbed
+        run: |
+          set -e
+          f=build-ccx-weh/UNCONVERTED.txt
+          if [ ! -s "$f" ]; then echo "  (none — every routine translated)"; exit 0; fi
+          echo "  total entries: $(wc -l < $f)"
+          echo
+          echo "  --- untranslated (stubbed, i.e. silently do nothing) ---"
+          grep -vE '^(STUB-FAIL|CC-FAIL)' "$f" | sed 's|.*/||' | sort | sed 's/^/    /'
+          echo
+          echo "  --- f2c could not even stub these ---"
+          grep -E '^STUB-FAIL' "$f" | sed 's/^/    /' || echo "    (none)"
+          echo
+          echo "  --- failed to compile ---"
+          grep -E '^CC-FAIL' "$f" | sed 's/^/    /' || echo "    (none)"
+
       - name: Link ccx.wasm
         env:
           FCWEB_CCX_PTHREADS: ${{ inputs.pthreads && '1' || '0' }}
@@ -200,5 +221,6 @@ jobs:
           path: |
             play-gui/ccx.js
             play-gui/ccx.wasm
+            build-ccx-weh/UNCONVERTED.txt
           if-no-files-found: warn
           retention-days: 14
