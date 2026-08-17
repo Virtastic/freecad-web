@@ -63,6 +63,15 @@ Sslave, Smaster
 *BOUNDARY
 Nfix, 1, 3
 **
+**  The upper block is held ONLY by the contact interface, which transmits no tangential
+**  force here, so without this it is free to slide in x and y -- a rigid body mode, and a
+**  singular system. The first version of this deck omitted it: production answered rc=0 with
+**  displacements of 29,600 mm on a 10 mm cube (and an error estimate of 132), while the CI
+**  build refused to converge. The CI build was right. Constrain the mode instead of asking
+**  either solver to invent an answer.
+*BOUNDARY
+Ntop, 1, 2
+**
 *STEP, INC=100
 *STATIC
 0.2, 1.0
