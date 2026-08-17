@@ -111,6 +111,27 @@ jobs:
             [ -e "$p" ] && echo "  OK      $p" || echo "  MISSING $p"
           done
 
+      # The repo carries source deltas that are NOT in the upstream tarballs. Skipping them
+      # silently produces a SMALLER, less capable module: the first CI build came out 844 KB
+      # short of production's compiled code, which is missing functionality, not a smaller
+      # binary to be pleased about.
+      #
+      # ccx is deliberately not in patches/regen.sh's MAP (like VTK), so this one is applied
+      # by hand rather than through patches/apply.sh.
+      - name: Apply the CalculiX source patch
+        run: |
+          set -e
+          cd deps/src/ccx/ccx_2.22
+          if patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/ccx-wasm-automatic-array.patch" >/dev/null 2>&1; then
+            patch -p1 < "$GITHUB_WORKSPACE/patches/ccx-wasm-automatic-array.patch"
+            echo "  applied ccx-wasm-automatic-array.patch"
+          elif patch -p1 -R --dry-run < "$GITHUB_WORKSPACE/patches/ccx-wasm-automatic-array.patch" >/dev/null 2>&1; then
+            echo "  already applied"
+          else
+            echo "::error::ccx-wasm-automatic-array.patch does not apply to this source"
+            exit 1
+          fi
+
       # Native, not wasm: this runs ON the runner to translate Fortran to C. f2c is 1990s C
       # and trips several modern-clang/gcc defaults, hence the demotions -- the same reason
       # build-spooles-weh.sh carries a -Wno- list for SPOOLES.
