@@ -6,6 +6,42 @@ It is a **full-world rebuild**: everything must be compiled with wasm exceptions
 reintroduces `invoke_*` JS trampolines, and JSPI cannot suspend across a JS
 frame — dialogs stop returning the user's real choice.
 
+## The dependency versions are not recorded — and that is the top reproducibility defect
+
+Twenty-three dependencies are referenced by an **unversioned** path: `deps/src/occt`,
+`deps/src/coin3d`, `deps/src/cpython`, `deps/src/freecad`, `deps/src/pyside-setup`, and so on.
+Only two carry a version anywhere in the tree: `VTK-9.3.1` and `hdf5-1.14.3`.
+
+So for twenty-one of them **the version is whatever happens to be on the build machine's
+disk**. `deps/` is gitignored, so nothing else records it. That means:
+
+- production cannot be reproduced by anyone else, or by this machine once those directories
+  move on;
+- "rebuild the dependencies in CI" is not merely slow, it is *undefined* — you would be
+  building some OCCT, not the OCCT production was built from.
+
+This is not hypothetical. It is exactly how CalculiX ended up with 69 routines silently
+stubbed in a clean build while production's solver worked correctly: the build machine held
+f2c workarounds nobody had captured, and nobody noticed until someone built from clean on
+2026-08-16 (see `docs-ccx-stubbed-routines.md`). CalculiX was one instance of this defect.
+The dependency stack is the general case, and it is still open.
+
+**Fix, and it takes about a minute.** On the build machine, with `deps/` populated as it was
+for the release:
+
+```bash
+bash tools/capture-dep-versions.sh > deps-versions.txt
+git add deps-versions.txt && git commit -m "chore: pin the dependency manifest"
+```
+
+The script only reads — it clones nothing and changes nothing. It records a git commit where
+a dependency is a checkout, a stated version where the tree declares one, and a content
+checksum where it declares nothing, so even the `unknown` entries become comparable. After
+that a clean rebuild has a target to hit and any drift is a diff rather than a mystery.
+
+Until that file exists, treat every "reproduce the build" instruction below as
+best-effort rather than exact.
+
 ## Toolchains
 
 | Path | Version | Used for |
