@@ -1078,7 +1078,6 @@ STATIC_DIM_BOUNDS = {
     'nktet': 200000,       # nodes in the tet mesh
     'ncont': 100000,       # contact elements; declared as 3*ncont
     'ntie': 10000,         # tie/contact pairs
-    'maxmid': 200000,      # midside nodes
     'nfield': 20,          # number of result fields, not a mesh dimension
     'nselect': 10000,
     'nobject': 1000,
@@ -1180,9 +1179,33 @@ def _decl_elem_bytes(ln):
     return ELEM_BYTES.get(head.group(1).lower().replace(' ', ''), 8)
 
 
+# Statement keywords that are followed by a parenthesis and would otherwise read as an array
+# name. `parameter(maxmid=400)` scanned as an array called `parameter` whose dimension
+# contains letters, which reverted zienzhu.f -- a routine that was translating fine.
+_DECL_KEYWORDS = frozenset((
+    'parameter', 'dimension', 'common', 'data', 'save', 'equivalence', 'implicit',
+    'external', 'intrinsic', 'precision', 'character', 'integer', 'real', 'logical'))
+
+
+def _parameter_names(text):
+    """Names given a value by PARAMETER: compile-time constants, legal as F77 dimensions."""
+    names = set()
+    for m in re.finditer(r'^\s{6,}parameter\s*\((.*)\)\s*$', text, re.I | re.M):
+        for part in _split_dims(m.group(1)):
+            if '=' in part:
+                names.add(part.split('=')[0].strip().lower())
+    return names
+
+
 def _automatic_arrays(text, args):
     """Local arrays still carrying a symbolic dimension -- i.e. what f2c will reject."""
     found, in_decl = set(), False
+    # TWO sets, and conflating them is a real bug. A dummy ARRAY may keep an adjustable
+    # dimension, so `args` excuses an array NAME. But a dummy SCALAR used as a dimension is
+    # exactly what makes an array automatic -- `incav(4,netet_)` with netet_ an argument is
+    # the whole construct this file exists to fix. Only PARAMETERs are constant dimensions.
+    const_names = args | _parameter_names(text) | _DECL_KEYWORDS
+    const_dims = _parameter_names(text) | _DECL_KEYWORDS
     for ln in text.split('\n'):
         if len(ln) < 7 or (ln and ln[0] in 'CcDd*!'):
             continue
@@ -1193,13 +1216,19 @@ def _automatic_arrays(text, args):
         for m in re.finditer(r'\b([a-z_][a-z0-9_]*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
                              ln, re.I):
             arr, dims = m.group(1), m.group(2)
-            if arr.lower() in args:
-                continue                               # dummy args may stay adjustable
+            if arr.lower() in const_names:
+                continue                # dummy arg, PARAMETER, or a statement keyword
             for part in _split_dims(dims):
                 part = part.strip()
                 # `*` is assumed-size, legal only on a dummy -- but a local declared with it
                 # is not something this rule created, so leave that judgement to f2c.
                 if part == '*' or not re.search(r'[a-z_]', part, re.I):
+                    continue
+                # A dimension built only from PARAMETERs is a compile-time constant and
+                # perfectly legal F77. nmids(maxmid) with parameter(maxmid=400) is not an
+                # automatic array, and treating it as one costs a working routine.
+                if all(t.lower() in const_dims
+                       for t in re.findall(r'[a-z_][a-z0-9_]*', part, re.I)):
                     continue
                 found.add(arr.lower())
     return found
@@ -1668,6 +1697,21 @@ def selftest():
         '      subroutine t(nevtot,mi)', '      integer nevtot,mi(3)',
         '      real*8 p(nevtot,6),g(0:mi(2),8)', '      p(1,1)=0.d0', '      end']))
     assert 'p(nevtot,6)' in tok, tok
+
+    # A PARAMETER dimension is a compile-time constant and legal F77 -- not an automatic
+    # array. Getting this wrong reverted zienzhu.f, which had been translating fine: the
+    # scanner read the statement `parameter(maxmid=400)` as an array named `parameter`.
+    par = fix_automatic_arrays(NL.join([
+        '      subroutine t(nk,co)', '      integer nk,maxmid', '      parameter(maxmid=400)',
+        '      real*8 co(3,*),scpav(6,nk),nmids(maxmid)', '      scpav(1,1)=0.d0', '      end']))
+    assert 'scpav(6,150000)' in par, par          # the real automatic array is bounded
+    assert 'nmids(maxmid)' in par, par            # the PARAMETER one is left alone
+    assert _parameter_names('      parameter(maxmid=400)') == {'maxmid'}
+    # ...but a dummy SCALAR used as a dimension is NOT constant -- that is the automatic
+    # array itself. Conflating the two let cavity_refine.f emit 1.5 MB and stay stubbed.
+    assert _automatic_arrays(NL.join([
+        '      subroutine t(netet_)', '      integer netet_',
+        '      integer incav(4,netet_)']), {'netet_'}) == {'incav'}
 
     # patch.f declares z(ipoints,ipoints) -- SQUARE in a problem-size dimension. Even a
     # modest bound is millions of elements, so the static ceiling must refuse it. This is the
