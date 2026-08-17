@@ -1053,10 +1053,43 @@ ARRAY_DIM_BOUNDS = {
 # Reached for only when a routine is otherwise unfixable. A bound here CAN be hit by a real
 # model -- 200000 equations is roughly a 66,000-node mesh -- and when it is, the run stops
 # with a message instead of quietly reading past the end of the array.
+#
+# The mesh-size entries below target the routines FreeCAD actually reaches: contact analysis
+# (slavintmortar, slavintpoints, extrapolatecontact) and the Zienkiewicz-Zhu error estimator
+# (zienzhu). Converting them cannot break anything that works today -- they are STUBBED right
+# now, so they already abort unconditionally. Bounding turns "always aborts" into "works, or
+# aborts when the bound is hit", which is strictly better and has the same failure mode.
+#
+# Deliberately NOT in this table, and each for a specific reason:
+#   k        near2d/near3d declare ir(k+4). One-letter, and far too common to token-match.
+#   x, y     calcview's `fform(x,y,idata,rdata)` is a FUNCTION declaration, not an array.
+#   ipoints  patch.f declares z(ipoints,ipoints) -- SQUARE, so any generous bound explodes.
+#            The per-array budget below refuses it anyway, but it should never be attempted.
 STATIC_DIM_BOUNDS = {
     'neq(2)': 200000,
     'nev': 10000,
+    # 150000 rather than 200000, and the reason is worth keeping: the widest arrays on this
+    # dimension are 6 columns of real*8 (zienzhu's scpav(6,nk), extrapolatecontact's
+    # stn(6,nk)). At 200000 those are 9.6 MB, over the static ceiling, so BOTH routines were
+    # refused and stayed stubbed. 150000 puts them at 7.2 MB and both convert. The ceiling is
+    # what picks this number; raising the bound past it buys nothing but a stub.
+    'nk': 150000,          # nodes
+    'ne': 200000,          # elements
+    'nktet': 200000,       # nodes in the tet mesh
+    'ncont': 100000,       # contact elements; declared as 3*ncont
+    'ntie': 10000,         # tie/contact pairs
+    'maxmid': 200000,      # midside nodes
+    'nfield': 20,          # number of result fields, not a mesh dimension
+    'nselect': 10000,
+    'nobject': 1000,
 }
+
+# A static array does not touch the stack, but it does consume linear memory for every user
+# of the module, forever. So static mode gets its own ceiling, well above the stack one and
+# still far below anything that would bloat the download. This is what stops
+# patch.f's z(ipoints,ipoints) -- square in a problem-size dimension -- from being emitted as
+# a multi-gigabyte declaration. Over the ceiling, the routine stays stubbed and says so.
+STATIC_ARRAY_MAX_BYTES = 8 << 20
 
 # f2c runs with -a, so these locals land on the STACK, and the link sets -sSTACK_SIZE=16MB.
 # A bound that is generous on paper can therefore overflow the stack at run time -- a failure
@@ -1211,10 +1244,12 @@ def fix_automatic_arrays(text):
                 if ext is None or ext <= 0:
                     return m.group(0)
                 total *= ext
-            # The budget guards the STACK, so it does not apply to an array being made
-            # static -- that is the entire reason the static table exists.
-            if not static and total > AUTO_ARRAY_MAX_BYTES:
-                refused.append('%s(%s) -> %d bytes of stack' % (arr, dims, total))
+            # Two ceilings, because the two storage classes cost different things: the stack
+            # one protects a 16 MB stack, the static one protects every user's linear memory.
+            cap = STATIC_ARRAY_MAX_BYTES if static else AUTO_ARRAY_MAX_BYTES
+            if total > cap:
+                refused.append('%s(%s) -> %d bytes of %s' % (
+                    arr, dims, total, 'static' if static else 'stack'))
                 return m.group(0)
             guards.extend(hit)
             if static:
@@ -1223,14 +1258,26 @@ def fix_automatic_arrays(text):
 
         new = re.sub(r'\b([a-z_][a-z0-9_]*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
                      rewrite, ln, flags=re.I)
-        if new != ln and len(new.rstrip()) <= 72:
+        # No column-72 check here: convert() ends with wrap_long_lines() over the whole file,
+        # which splits an over-long line onto a continuation. Refusing here instead cost
+        # zienzhu.f its whole rewrite over four characters. Verified afterwards -- the sweep
+        # asserts every emitted line is within column 72.
+        if new != ln:
             lines[i] = new
-        elif new != ln:
-            refused.append('%s: rewrite would pass column 72' % ln.strip()[:40])
 
     for r in refused:
         sys.stderr.write('f77ify: left automatic array unbounded -- %s\n' % r)
     if not guards:
+        return text
+
+    # ALL OR NOTHING per file. f2c rejects a file if ANY automatic array survives, so a
+    # partial rewrite leaves the routine stubbed exactly as before -- while still paying for
+    # every array that did get bounded. Measured: 6 MB of static arrays emitted into two
+    # routines that stayed stubbed anyway because one array each was over the ceiling. Give
+    # the whole file back instead.
+    if refused:
+        sys.stderr.write('f77ify: %d array(s) refused, reverting the whole file '
+                         '(a partial rewrite is stubbed anyway)\n' % len(refused))
         return text
 
     out, placed = [], False
@@ -1585,6 +1632,15 @@ def selftest():
         '      subroutine t(nevtot,mi)', '      integer nevtot,mi(3)',
         '      real*8 p(nevtot,6),g(0:mi(2),8)', '      p(1,1)=0.d0', '      end']))
     assert 'p(nevtot,6)' in tok, tok
+
+    # patch.f declares z(ipoints,ipoints) -- SQUARE in a problem-size dimension. Even a
+    # modest bound is millions of elements, so the static ceiling must refuse it. This is the
+    # case that makes a per-array budget mandatory rather than tidy.
+    sq = fix_automatic_arrays(NL.join([
+        '      subroutine t(nk)', '      integer nk',
+        '      real*8 z(nk,nk)', '      z(1,1)=0.d0', '      end']))
+    assert 'z(nk,nk)' in sq, sq
+    assert '200000' not in sq, sq
 
     # REGRESSION, from ARPACK dseupd.f: a subprogram whose SUBROUTINE line sits below a long
     # header comment. The argument list must still be found, or d(nev) and z(ldz,nev) -- both
