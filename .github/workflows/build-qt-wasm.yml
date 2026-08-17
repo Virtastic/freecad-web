@@ -59,6 +59,20 @@ jobs:
       # API has returned 404 for this repo for the whole session, so the normal way of finding
       # out why a step failed is unavailable -- but the artifacts API works. Routing the
       # diagnostics through it is the difference between a debuggable failure and a dead end.
+      # The host Qt's TOOLS are dynamically linked desktop binaries, so they need desktop
+      # runtime libraries even though nothing here draws anything. Diagnosed from run
+      # 32040905674, which configured fine and then died 731 targets into the build:
+      #   qsb: error while loading shared libraries: libEGL.so.1: cannot open shared object file
+      # A bare ubuntu-latest runner has no libEGL. qsb only compiles shaders offline, but it
+      # links against Qt Gui, so the .so has to be present regardless.
+      - name: Host Qt runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libegl1 libgl1 libglx0 libopengl0 libxkbcommon0 libfontconfig1 libdbus-1-3 \
+            libxcb-cursor0 libxcb-xinerama0 libxkbcommon-x11-0
+          echo "  libEGL: $(ldconfig -p | grep -c libEGL.so.1) match(es)"
+
       - name: Prepare log dir + environment fingerprint
         run: |
           mkdir -p /tmp/qtlogs
