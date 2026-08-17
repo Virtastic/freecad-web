@@ -86,8 +86,13 @@ jobs:
           # run ON THE HOST during the wasm build. The bare linux_gcc_64 package does not
           # include it. Mirror the target submodule list here.
           { python3 -m pip install --quiet aqtinstall &&
+            # ONLY qtshadertools. Run 32040636843 established that qtdeclarative, qtsvg and
+            # qttools are not separate aqtinstall modules for 6.9.0 -- they ship inside the
+            # base linux_gcc_64 package, and naming them makes aqt fail outright:
+            #   "The packages ['qtdeclarative', 'qtsvg', 'qttools'] were not found"
+            # qtshadertools IS separate, and is the one the cross-build actually needs.
             python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 \
-              -m qtshadertools qtsvg qtdeclarative qttools -O "$PWD/qt-host"
+              -m qtshadertools -O "$PWD/qt-host"
           } > /tmp/qtlogs/01-host-qt.txt 2>&1 || rc=$?
           echo "  aqt exit=$rc"
           find "$PWD/qt-host" -maxdepth 3 -name qmake >> /tmp/qtlogs/01-host-qt.txt 2>&1 || true
