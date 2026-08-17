@@ -23,6 +23,49 @@ workarounds for these that were never captured into `patches/`.
 That is the actual defect: `deps/` is gitignored, so those edits are invisible until
 someone builds from clean. Nobody had, until 2026-08-16.
 
+## Measured progress
+
+| | stubbed | translated | ccx.wasm |
+|---|---|---|---|
+| clean build, no patches | 69 | 908/977 | 3,797,838 |
+| + `ccx-wasm-automatic-array.patch` | 68 | 910/977 | 3,846,632 |
+| + `f77ify` automatic-array rule | **60** | **918/977** | 3,883,782 |
+| production (target) | ? | ? | 4,784,783 |
+
+The `f77ify` rule handles `elconloc(ncmat_)` — 26 routines declared it, and 8 of those had
+*no other* automatic array, so they now translate. The rest need the arrays below as well.
+
+## What still blocks the remaining 60
+
+`e_c3d.f`, the routine that matters most, is now down to exactly two:
+
+```
+Error on line 2176 of e_c3d.f: Declaration error for voldl:  adjustable dimension on non-argument
+Error on line 2176 of e_c3d.f: Declaration error for xlayer: adjustable dimension on non-argument
+```
+
+Across all 60, the blockers concentrate hard:
+
+| array | routines | declared as |
+|---|---|---|
+| `xlayer` | 15 | `xlayer(mi(3),...)` |
+| `vl` | 15 | `vl(0:mi(2),...)` |
+| `voldl` | 14 | `voldl(0:mi(2),...)` |
+| `q` | 7 | `q(0:mi(2),...)` |
+| `field`, `x`, `y`, `veoldl`, `vconl` | 2–4 each | mostly `0:mi(2)` |
+
+`mi` is CalculiX's limits array: `mi(1)` integration points, `mi(2)` DOF per node, `mi(3)`
+composite layers. All are small in practice, so generous bounds cost almost nothing.
+
+**Two things are needed to finish this**, and neither is guesswork about correctness:
+
+1. Bounds for `mi(2)` and `mi(3)` from CalculiX's own conventions. With the guard, a bound
+   that turns out too small **stops the run** rather than corrupting results — so the risk of
+   choosing generously is a refused analysis, never a wrong one.
+2. The `f77ify` rule currently rewrites single-dimension declarations (`name(dim)`). These
+   are multi-dimensional (`vl(0:mi(2),20)`), which needs the rule extended to rewrite one
+   dimension of several.
+
 ## Root cause: one construct explains 63 of the 68
 
 Every failing routine's f2c error is now preserved (the build used to delete them). Grouped:
