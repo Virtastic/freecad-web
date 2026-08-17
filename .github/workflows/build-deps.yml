@@ -98,6 +98,20 @@ jobs:
           } 2>&1 | tee /tmp/deplogs/00-fetch.txt
           tail -20 /tmp/deplogs/00-fetch.txt
 
+      # OCCT's script runs `embuilder build freetype >/dev/null 2>&1` and, under set -e, dies
+      # silently if that fails -- which is exactly what happened: occt.txt in run 32043014090
+      # contained the three env lines and nothing else. Building the port here first makes the
+      # failure visible instead of invisible, and warms it for the real step.
+      - name: Pre-build the emscripten freetype port (OCCT's only hard dep)
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/deplogs
+          . emsdk/emsdk_env.sh
+          rc=0
+          { embuilder build freetype && em-config CACHE; } > /tmp/deplogs/01-freetype.txt 2>&1 || rc=$?
+          echo "  freetype port exit=$rc"
+          tail -25 /tmp/deplogs/01-freetype.txt
+
       - name: boost
         id: boost
         continue-on-error: true
@@ -121,6 +135,20 @@ jobs:
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
           echo "  xerces exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/xerces.txt
           exit $rc
+
+      # Coin3D does find_package(Boost) for HEADERS, and build-boost-weh.sh stages them under
+      # deps/src/boost rather than installing to $DW/include -- b2 logs "headers: not
+      # building". So run 32043014090 died on "Could NOT find Boost (missing:
+      # Boost_INCLUDE_DIR)" even though the boost .a files had built fine. Expose the headers
+      # where a cross-build looks for them.
+      - name: Expose boost headers to dependent builds
+        continue-on-error: true
+        run: |
+          mkdir -p deps/wasm/include
+          if [ -d deps/src/boost/boost ] && [ ! -e deps/wasm/include/boost ]; then
+            cp -r deps/src/boost/boost deps/wasm/include/boost
+          fi
+          echo "  boost headers: $(find deps/wasm/include/boost -name '*.hpp' 2>/dev/null | wc -l) .hpp files"
 
       - name: OCCT
         id: occt
