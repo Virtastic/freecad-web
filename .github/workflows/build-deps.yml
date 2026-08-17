@@ -71,10 +71,11 @@ jobs:
         run: |
           set -e
           mkdir -p deps/src /tmp/deplogs
-          # An explicit if, not `[ -e A ] || [ -e B ] && { ...; return; }`. That form returns
-          # non-zero when BOTH tests fail -- the normal "not fetched yet" case -- and under
-          # `set -e` it killed the whole step before any dependency was built. Run 32042480090
-          # died in 2.3 minutes with no logs at all because of it.
+          # An explicit if, purely for clarity. I first blamed the previous
+          # `[ -e A ] || [ -e B ] && { ...; return; }` form for run 32042480090's 2.3-minute
+          # failure, then reproduced it and found it innocent: after the && short-circuits,
+          # execution falls through to the fetch lines, so the function exits with tar's
+          # status. Kept because it reads better; it fixed nothing.
           get() {  # get <dir> <url> <strip>
             if [ -e "deps/src/$1/CMakeLists.txt" ] || [ -e "deps/src/$1/bootstrap.sh" ]; then
               echo "  $1: present"
