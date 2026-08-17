@@ -294,12 +294,14 @@ jobs:
           # working state to regress from -- and a permanently red gate would destroy its
           # value for the decks that genuinely do guard against regression.
           #
-          #   contact  mortar (face-to-face) contact. Was 100% stubbed in a clean build; now
-          #            reaches the solver and fails to converge where production converges:
-          #            "maximum number of iterations for face-to-face contact reached",
-          #            residual 113284 at node 7 dof 3. No f77ify guard fires and no stub
-          #            aborts, so this is a numerical difference in a translated routine,
-          #            not a missing one. Unresolved. Remove from this list once it passes.
+          #   contact  mortar (face-to-face) contact. slavintmortar/slavintpoints CAN be
+          #            bounded, and when they are this deck converges to a PHYSICALLY INVALID
+          #            answer: contact pressure -93.2 (contact cannot pull), +4.07e-3 upward
+          #            displacement where production has exactly 0, asymmetric response on a
+          #            symmetric model, error estimate 68.5 vs 11.2. So they are deliberately
+          #            left stubbed in tools/f77ify.py (SKIP_FILES) and this deck aborts --
+          #            loudly and honestly -- instead of returning wrong stresses.
+          #            Remove from SKIP_FILES and from here together, once it matches.
           KNOWN_GAP=" contact "
 
           fail=0

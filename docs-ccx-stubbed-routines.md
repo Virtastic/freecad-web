@@ -165,7 +165,26 @@ it immediately earned its place:
    ```
 
    No `f77ify` guard fires and no stub aborts, so this is a **numerical difference in a
-   translated routine, not a missing one**. Unresolved.
+   translated routine, not a missing one**.
+
+4. Softening the deck (1.e4 instead of 1.e6, 0.02 mm instead of 0.05 mm) to separate "contact
+   is broken" from "these two disagree at the edge of convergence" gave the real answer, and
+   it is worse than non-convergence. It converges — to a **physically invalid** result:
+
+   | | production | this build |
+   |---|---|---|
+   | contact pressure | 0 .. **+107.1** | **−93.2** .. 3.06e-3 |
+   | z displacement | −2.0000e-2 .. **0.0** | −2.0001e-2 .. **+4.07e-3** |
+   | x/y | symmetric ±9.95e-4 | asymmetric |
+   | error estimate | 11.2 | **68.5** |
+
+   Negative contact pressure is impossible: contact pushes, it cannot pull. The model is
+   perfectly symmetric, so an asymmetric response is a second tell.
+
+**So `slavintmortar` and `slavintpoints` are now deliberately left stubbed** — see
+`SKIP_FILES` in `tools/f77ify.py`. A stub aborts with the routine's name; a bounded routine
+with wrong numerics returns an answer. For a solver the second is far worse, and the stiff
+version of the deck had been hiding it behind what looked like a tolerance problem.
 
 It is carried as a KNOWN GAP in the workflow rather than a failure: mortar contact was 100%
 stubbed in a clean build, so there is no working state to have regressed from, and a

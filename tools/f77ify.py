@@ -1084,6 +1084,29 @@ STATIC_DIM_BOUNDS = {
     'nobject': 1000,
 }
 
+# Files we deliberately leave STUBBED, even though the bounds machinery could convert them.
+#
+# A stub aborts with a message naming the routine. A bounded routine whose numerics are wrong
+# returns an answer. For a solver the second is far worse, and mortar contact is currently the
+# second: with slavintmortar and slavintpoints bounded, scratchpad/ccxval/contact.inp
+# CONVERGES and produces
+#
+#     contact pressure  -93.2      (negative: contact cannot pull, only push)
+#     z displacement    +4.07e-3   (production: exactly 0, nothing moves up)
+#     x/y               asymmetric on a perfectly symmetric model
+#     error estimate    68.5       (production: 11.2)
+#
+# against production's physically sound result. So the bounds are not merely unvalidated here,
+# they are demonstrably wrong, and the honest state is the loud one. This was only visible
+# after softening the deck -- at full stiffness it failed to converge instead, which hid a
+# lying solver behind what looked like a tolerance problem.
+#
+# Remove an entry once contact.inp matches production. Do not remove one to make CI green.
+SKIP_FILES = frozenset((
+    'slavintmortar.f',
+    'slavintpoints.f',
+))
+
 # FILE-SCOPED bounds. Some dimension names are far too common to put in a global table but
 # are perfectly safe inside one known file. `k` is the case that forced this: near2d.f and
 # near3d.f declare ir(k+4) / r(k+6) where k is "the number of closest nodes to find" -- a
@@ -1262,6 +1285,11 @@ def fix_automatic_arrays(text):
     are touched (tracked across continuation lines), so an executable subscript that happens
     to mention mi(2) is never rewritten.
     """
+    if CURRENT_FILE in SKIP_FILES:
+        sys.stderr.write('f77ify: %s left stubbed on purpose -- its bounded numerics are '
+                         'wrong, and an abort beats a wrong answer\n' % CURRENT_FILE)
+        return text
+
     lines = text.split('\n')
     args = _dummy_args(lines)
     if args is None:
@@ -1781,6 +1809,15 @@ def selftest():
     other = fix_automatic_arrays(NL.join([
         '      subroutine t(n,k)', '      integer n,k,ir(k+6)', '      ir(1)=0', '      end']))
     assert 'ir(k+6)' in other, other          # the same shape elsewhere is untouched
+    CURRENT_FILE = ''
+
+    # A file on the skip list must come back untouched, however convertible it looks.
+    CURRENT_FILE = 'slavintmortar.f'
+    skipped = fix_automatic_arrays(NL.join([
+        '      subroutine slavintmortar(ncont,x)', '      integer ncont,ia(3,3*ncont)',
+        '      real*8 x(3)', '      ia(1,1)=0', '      end']))
+    assert 'ia(3,3*ncont)' in skipped, skipped
+    assert 'fcweb' not in skipped, skipped
     CURRENT_FILE = ''
 
     # patch.f declares z(ipoints,ipoints) -- SQUARE in a problem-size dimension. Even a
