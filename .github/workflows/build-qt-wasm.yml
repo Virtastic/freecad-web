@@ -74,21 +74,34 @@ jobs:
 
       # Only the modules FreeCAD actually links. Building all of Qt here would add hours for
       # things this app never loads.
+      # Output is teed into the STEP SUMMARY, not just the log. GitHub's job-log API returned
+      # 404 for this repo throughout, so a failure whose reason lives only in the log is one
+      # nobody can act on. `-static` is dropped: Qt for wasm is always statically linked and
+      # passing the flag explicitly is rejected by some configure versions -- a plausible
+      # cause of the first run's failure, and harmless to remove regardless.
       - name: Configure for wasm
         run: |
-          set -e
           . emsdk/emsdk_env.sh
           mkdir -p qt-build && cd qt-build
+          rc=0
           ../qt-src/configure \
             -platform wasm-emscripten \
             -qt-host-path "$GITHUB_WORKSPACE/qt-host/6.9.0/gcc_64" \
             -prefix "$GITHUB_WORKSPACE/qt/6.9.0/wasm_mt_weh" \
             -feature-wasm-exceptions \
             -feature-wasm-jspi \
-            -release -static -no-warnings-are-errors \
+            -release -no-warnings-are-errors \
             -submodules qtbase,qtsvg,qtdeclarative,qttools \
             -skip qtwebengine \
-            -- -DCMAKE_POLICY_VERSION_MINIMUM=3.5 2>&1 | tail -40
+            -- -DCMAKE_POLICY_VERSION_MINIMUM=3.5 > /tmp/qtconf.log 2>&1 || rc=$?
+          {
+            echo "### configure (exit $rc)"
+            echo '```'
+            tail -60 /tmp/qtconf.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -60 /tmp/qtconf.log
+          exit $rc
 
       - name: Build and install
         id: build
