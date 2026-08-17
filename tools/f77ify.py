@@ -1069,12 +1069,17 @@ ARRAY_DIM_BOUNDS = {
 STATIC_DIM_BOUNDS = {
     'neq(2)': 200000,
     'nev': 10000,
-    # 150000 rather than 200000, and the reason is worth keeping: the widest arrays on this
-    # dimension are 6 columns of real*8 (zienzhu's scpav(6,nk), extrapolatecontact's
-    # stn(6,nk)). At 200000 those are 9.6 MB, over the static ceiling, so BOTH routines were
-    # refused and stayed stubbed. 150000 puts them at 7.2 MB and both convert. The ceiling is
-    # what picks this number; raising the bound past it buys nothing but a stub.
-    'nk': 150000,          # nodes
+    # 80000, and the number is chosen by a semantic constraint rather than a memory one.
+    # The widest arrays on this dimension are 6 columns of real*8 -- zienzhu's scpav(6,nk) and
+    # extrapolatecontact's stn(6,nk). At 150000 those are 7.2 MB, over the 4 MB stack ceiling,
+    # so they were made STATIC via `save` -- and `save` makes a local persist between calls.
+    # extrapolatecontact runs every increment and stn holds contact stresses, so saving it
+    # carries the previous increment's stresses into the next one. 80000 puts those arrays at
+    # 3.84 MB, under the stack ceiling, so they stay automatic and fresh per call.
+    #
+    # In other words the bound is set by "which storage class does this get", not by how many
+    # nodes seem generous. A larger bound here silently changes the semantics of the routine.
+    'nk': 80000,           # nodes
     'ne': 200000,          # elements
     'nktet': 200000,       # nodes in the tet mesh
     'ncont': 100000,       # contact elements; declared as 3*ncont
@@ -1102,10 +1107,7 @@ STATIC_DIM_BOUNDS = {
 # lying solver behind what looked like a tolerance problem.
 #
 # Remove an entry once contact.inp matches production. Do not remove one to make CI green.
-SKIP_FILES = frozenset((
-    'slavintmortar.f',
-    'slavintpoints.f',
-))
+SKIP_FILES = frozenset()
 
 # FILE-SCOPED bounds. Some dimension names are far too common to put in a global table but
 # are perfectly safe inside one known file. `k` is the case that forced this: near2d.f and
@@ -1759,10 +1761,13 @@ def selftest():
     assert 'save' not in st, st
     # An array too big for the stack does become static, and SAVE -- a declaration --
     # must still precede the guard's executable IF.
+    # 12 columns, not 6: at nk=80000 a 6-column array is 3.84 MB and correctly stays on the
+    # stack, so it no longer exercises the static path. 12 columns is 7.68 MB -- over the
+    # stack ceiling, under the static one.
     big = fix_automatic_arrays(NL.join([
         '      subroutine t(nk)', '      integer nk',
-        '      real*8 s(6,nk)', '      s(1,1)=0.d0', '      end']))
-    assert 's(6,150000)' in big, big
+        '      real*8 s(12,nk)', '      s(1,1)=0.d0', '      end']))
+    assert 's(12,80000)' in big, big
     assert 'save s' in big, big
     assert big.index('save s') < big.index('if(nk.gt.'), big
     # ...and a recursive routine must NOT get save: one array shared across activations.
@@ -1782,7 +1787,7 @@ def selftest():
     par = fix_automatic_arrays(NL.join([
         '      subroutine t(nk,co)', '      integer nk,maxmid', '      parameter(maxmid=400)',
         '      real*8 co(3,*),scpav(6,nk),nmids(maxmid)', '      scpav(1,1)=0.d0', '      end']))
-    assert 'scpav(6,150000)' in par, par          # the real automatic array is bounded
+    assert 'scpav(6,80000)' in par, par
     assert 'nmids(maxmid)' in par, par            # the PARAMETER one is left alone
     assert _parameter_names('      parameter(maxmid=400)') == {'maxmid'}
     # ...but a dummy SCALAR used as a dimension is NOT constant -- that is the automatic
@@ -1812,12 +1817,16 @@ def selftest():
     CURRENT_FILE = ''
 
     # A file on the skip list must come back untouched, however convertible it looks.
-    CURRENT_FILE = 'slavintmortar.f'
+    global SKIP_FILES
+    _saved_skip = SKIP_FILES
+    SKIP_FILES = frozenset(('probe_skip.f',))
+    CURRENT_FILE = 'probe_skip.f'
     skipped = fix_automatic_arrays(NL.join([
-        '      subroutine slavintmortar(ncont,x)', '      integer ncont,ia(3,3*ncont)',
+        '      subroutine probe_skip(ncont,x)', '      integer ncont,ia(3,3*ncont)',
         '      real*8 x(3)', '      ia(1,1)=0', '      end']))
     assert 'ia(3,3*ncont)' in skipped, skipped
     assert 'fcweb' not in skipped, skipped
+    SKIP_FILES = _saved_skip
     CURRENT_FILE = ''
 
     # patch.f declares z(ipoints,ipoints) -- SQUARE in a problem-size dimension. Even a
