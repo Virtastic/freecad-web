@@ -308,7 +308,13 @@ jobs:
               echo "    $j: IMPROVEMENT — this build runs a deck production cannot"
             elif [ "$bok" = 0 ] && [ "$lok" = 1 ]; then
               echo "::error::$j regressed — production runs it, this build does not"
-              tail -8 "$b" | sed 's/^/      | /'
+              # Wide, because the interesting line is rarely the last one. A guard from
+              # tools/f77ify.py firing ('*ERROR: <dim> above the wasm build bound') appears
+              # near the TOP of the run, and tail -8 hid it.
+              echo "      --- built (first 30) ---"; head -30 "$b" | sed 's/^/      | /'
+              echo "      --- built (last 30) ---";  tail -30 "$b" | sed 's/^/      | /'
+              echo "      --- guards that fired ---"
+              grep -n 'above the wasm build bound' "$b" | sed 's/^/      | /' || echo "      | (none)"
               fail=1
             else
               echo "    $j: neither build runs it (both stubbed) — not a regression"
