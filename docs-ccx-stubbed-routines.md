@@ -15,10 +15,14 @@ functionality, and it is the whole of the size gap against production:
 
 ## Why this matters more than a size number
 
-`e_c3d.f` is the 3D element stiffness routine and `gauss.f` supplies the integration
-points. Stub those and solid FEM does not work at all. Production's solver demonstrably
-DOES work -- validated to under 1% against beam theory -- so the build machine has f2c
-workarounds for these that were never captured into `patches/`.
+`e_c3d.f` is the 3D element stiffness routine. Stub it and solid FEM does not work at all.
+Production's solver demonstrably DOES work -- validated to under 1% against beam theory --
+so the build machine has f2c workarounds that were never captured into `patches/`.
+
+(An earlier version of this file also called `gauss.f` a stubbed routine. It is not a
+routine at all: it is an INCLUDE file of Gauss-point data, pulled into 60 others. Its
+appearing in `UNCONVERTED.txt` is meaningless -- f2c cannot translate a bare data include on
+its own, and `e_c3d.f` translating proves the include resolves fine.)
 
 That is the actual defect: `deps/` is gitignored, so those edits are invisible until
 someone builds from clean. Nobody had, until 2026-08-16.

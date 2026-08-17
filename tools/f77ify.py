@@ -1022,8 +1022,18 @@ def truncate_sequence_field(text):
 # extrapolate routines costs 160 KB per layer, so mi(3)=255 would ask for 40 MB of stack.
 # 16 layers keeps it at 2.6 MB and still covers any laminate FreeCAD can produce (FreeCAD
 # emits no composite sections at all, so mi(3) is 1 or 2 in practice).
+#   mi(1)    255  max integration points per element. Every standard element type sets it to
+#                 a small constant in allocation.f (1, 2, 4, 8, 9, 15, 27, 50 -- 50 is the
+#                 largest), and the only unbounded-looking sites are the same two as mi(2):
+#                   userelements.f:67  *USER ELEMENT -> '*ERROR ... exceeds 255'
+#                   allocation.f:2091  mi(1)=max(mi(1),8*nlayer)  for composites
+#                 So 255 again comes from CalculiX, and only a composite above 31 layers can
+#                 reach past it -- which the guard stops. Found because extrapolate.f
+#                 declares coords(3,mi(1)) and yiloc(6,mi(1)), and it was the single routine
+#                 keeping the elastic and plastic decks from running at all.
 DIM_BOUNDS = {
     'ncmat_': 1000,
+    'mi(1)': 255,
     'mi(2)': 255,
     'mi(3)': 255,
 }
@@ -1499,7 +1509,7 @@ def selftest():
     assert '20*16' in ovr, ovr
     # Every bound in the table must carry a guard -- the whole basis for using fixed bounds.
     for _dim in DIM_BOUNDS:
-        assert _dim in ('ncmat_', 'mi(2)', 'mi(3)'), _dim
+        assert _dim in ('ncmat_', 'mi(1)', 'mi(2)', 'mi(3)'), _dim
     long_l = ' ' * 39 + 'if(ikactmech(idm).eq.jdof-1) goto 8012'
     w = wrap_long_lines([long_l])
     assert all(len(x) <= 72 for x in w), [len(x) for x in w]
