@@ -1281,6 +1281,11 @@ def fix_automatic_arrays(text):
         is_cont = ln[5] not in ' 0'
         if not is_cont:
             in_decl = bool(RE_DECL_LINE.match(ln))
+            # The type keyword is on the statement's FIRST line only. Reading it per-line
+            # made every array declared on a continuation default to real*8 -- which sized
+            # `integer iactiveline(3,3*ncont)` at 7.2 MB instead of 3.6 MB and pushed it into
+            # static storage it did not need.
+            elem_bytes = _decl_elem_bytes(ln) if in_decl else 8
         if not in_decl:
             continue
 
@@ -1320,12 +1325,20 @@ def fix_automatic_arrays(text):
                 return m.group(0)
             # Stack budget. An unknown extent (an assumed-size `*`, or a bound still
             # symbolic) means this is not a plain local array; leave it alone.
-            total = _decl_elem_bytes(ln)
+            total = elem_bytes
             for part in parts:
                 ext = _extent(part)
                 if ext is None or ext <= 0:
                     return m.group(0)
                 total *= ext
+            # PREFER THE STACK. `save` is not a free substitute for automatic storage: it
+            # makes the array persist between calls instead of being fresh each time, and a
+            # routine called repeatedly inside an iteration can depend on that. Suspected
+            # cause of the contact deck failing to converge ("too many cutbacks") where
+            # production solves it, so a problem-size array that FITS on the stack keeps the
+            # original semantics and only an oversized one is made static.
+            if static and total <= AUTO_ARRAY_MAX_BYTES:
+                static = False
             # Two ceilings, because the two storage classes cost different things: the stack
             # one protects a 16 MB stack, the static one protects every user's linear memory.
             cap = STATIC_ARRAY_MAX_BYTES if static else AUTO_ARRAY_MAX_BYTES
@@ -1712,9 +1725,18 @@ def selftest():
     st = fix_automatic_arrays(NL.join([
         '      subroutine t(neq)', '      integer neq(2)',
         '      real*8 x(neq(2))', '      x(1)=0.d0', '      end']))
+    # It fits the stack (1.6 MB), so it must NOT be made static: `save` changes semantics
+    # and is only worth it when the array cannot live on the stack at all.
     assert 'x(200000)' in st, st
-    assert 'save x' in st, st
-    assert st.index('save x') < st.index('if(neq(2)'), st
+    assert 'save' not in st, st
+    # An array too big for the stack does become static, and SAVE -- a declaration --
+    # must still precede the guard's executable IF.
+    big = fix_automatic_arrays(NL.join([
+        '      subroutine t(nk)', '      integer nk',
+        '      real*8 s(6,nk)', '      s(1,1)=0.d0', '      end']))
+    assert 's(6,150000)' in big, big
+    assert 'save s' in big, big
+    assert big.index('save s') < big.index('if(nk.gt.'), big
     # ...and a recursive routine must NOT get save: one array shared across activations.
     rec = fix_automatic_arrays(NL.join([
         '      recursive subroutine t(neq)', '      integer neq(2)',
