@@ -1121,6 +1121,22 @@ STATIC_DIM_BOUNDS = {
 # check was written, refused 12 files including e_c3d.f and resultsmech.f, and was reverted:
 # a rule that contradicts a measured byte-identical result is the wrong rule.
 #
+# LOCALISED, 2026-08-17. Diffing raw solver stdout against production puts the divergence at
+# ITERATION 1 OF INCREMENT 1 -- the first force evaluation there is:
+#
+#     live   average force= 10.714286   largest residual force=   0.000000  (node 6, dof 3)
+#     built  average force=  8.060516   largest residual force= 319.444444  (node 5, dof 3)
+#     both   largest increment of disp= 1.535714e-03      <-- IDENTICAL
+#
+# The displacement solve agrees exactly; the RESIDUAL FORCE does not. Production reaches exact
+# equilibrium on the first evaluation and this build is out by 319. Since no iteration history
+# exists yet, nothing stateful can explain it -- which independently confirms the `save`
+# hypothesis was wrong, and rules out convergence tuning, line search and increment size too.
+#
+# The defect is therefore in the CONTACT FORCE ASSEMBLY itself: the contact elements this
+# build generates carry different forces from the first moment they exist. That is where to
+# look next -- the slave integration point generation, not the solver loop around it.
+#
 # The caveat that DOES stand: a non-uniform bound -- ARRAY_DIM_BOUNDS or FILE_DIM_BOUNDS -- on
 # a non-last dimension of an array that gets passed onward is genuinely unsafe, because
 # nothing makes the callee agree. Today that is only field/mi(3), inside a routine already
@@ -1131,7 +1147,10 @@ STATIC_DIM_BOUNDS = {
 # and `save` is now absent from the entire tree) and the deck produced numbers BYTE-IDENTICAL
 # to the static build -- same -9.3215e+1 contact pressure, same 68.475 error estimate. So the
 # defect is deterministic and has nothing to do with storage class. Look elsewhere.
-SKIP_FILES = frozenset()   # TEMPORARILY EMPTY: diagnostic run, see the commit message
+SKIP_FILES = frozenset((
+    'slavintmortar.f',
+    'slavintpoints.f',
+))
 
 # FILE-SCOPED bounds. Some dimension names are far too common to put in a global table but
 # are perfectly safe inside one known file. `k` is the case that forced this: near2d.f and
