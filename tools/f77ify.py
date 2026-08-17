@@ -1041,6 +1041,23 @@ ARRAY_DIM_BOUNDS = {
     ('field', 'mi(3)'): 16,
 }
 
+# PROBLEM-SIZE dimensions, which are a different animal. Everything above is a per-element
+# constant, so a generous bound costs a few KB. These scale with the MODEL -- neq(2) is the
+# number of equations, nev the number of eigenvalues -- so they need bounds orders of
+# magnitude larger, and putting those on a 16 MB stack is not an option.
+#
+# So they get the convention this file already uses for F90 allocatables (ALLOC_BOUND, 200000,
+# with `save`): static storage rather than stack. Same guard, same fail-safe, no stack cost.
+# `save` is only sound because these routines are not recursive, which is asserted below.
+#
+# Reached for only when a routine is otherwise unfixable. A bound here CAN be hit by a real
+# model -- 200000 equations is roughly a 66,000-node mesh -- and when it is, the run stops
+# with a message instead of quietly reading past the end of the array.
+STATIC_DIM_BOUNDS = {
+    'neq(2)': 200000,
+    'nev': 10000,
+}
+
 # f2c runs with -a, so these locals land on the STACK, and the link sets -sSTACK_SIZE=16MB.
 # A bound that is generous on paper can therefore overflow the stack at run time -- a failure
 # that looks like memory corruption, not like a bound being wrong. So the rewrite is refused
@@ -1132,7 +1149,11 @@ def fix_automatic_arrays(text):
     lines = text.split('\n')
     args = _dummy_args(lines)
 
-    guards, refused, in_decl = [], [], False
+    # `save` would make a recursive routine share one array across activations. None of the
+    # affected routines are recursive, but assert it rather than assume it.
+    recursive = any(re.match(r'\s{6,}recursive\s', l, re.I) for l in lines[:80])
+
+    guards, refused, statics, in_decl = [], [], [], False
     for i, ln in enumerate(lines):
         if len(ln) < 7 or (ln and ln[0] in 'CcDd*!'):
             continue                                   # comment line
@@ -1146,7 +1167,7 @@ def fix_automatic_arrays(text):
             arr, dims = m.group(1), m.group(2)
             if arr.lower() in args:
                 return m.group(0)                      # a dummy argument is legal F77
-            parts, hit = _split_dims(dims), []
+            parts, hit, static = _split_dims(dims), [], False
             for k, part in enumerate(parts):
                 squashed = part.lower().replace(' ', '')
                 for dim, bound in DIM_BOUNDS.items():
@@ -1155,6 +1176,17 @@ def fix_automatic_arrays(text):
                     bound = ARRAY_DIM_BOUNDS.get((arr.lower(), dim), bound)
                     parts[k] = re.sub(re.escape(dim), str(bound), parts[k], flags=re.I)
                     hit.append((dim, bound))
+                if recursive:
+                    continue                           # `save` would be wrong; see above
+                for dim, bound in STATIC_DIM_BOUNDS.items():
+                    # A whole-token match only: `nev` must not fire inside `nevtot`.
+                    if not re.search(r'(?<![a-z0-9_])%s(?![a-z0-9_])' % re.escape(dim),
+                                     squashed, re.I):
+                        continue
+                    parts[k] = re.sub(r'(?<![a-z0-9_])%s(?![a-z0-9_])' % re.escape(dim),
+                                      str(bound), parts[k], flags=re.I)
+                    hit.append((dim, bound))
+                    static = True
             if not hit:
                 return m.group(0)
             # Stack budget. An unknown extent (an assumed-size `*`, or a bound still
@@ -1165,10 +1197,14 @@ def fix_automatic_arrays(text):
                 if ext is None or ext <= 0:
                     return m.group(0)
                 total *= ext
-            if total > AUTO_ARRAY_MAX_BYTES:
+            # The budget guards the STACK, so it does not apply to an array being made
+            # static -- that is the entire reason the static table exists.
+            if not static and total > AUTO_ARRAY_MAX_BYTES:
                 refused.append('%s(%s) -> %d bytes of stack' % (arr, dims, total))
                 return m.group(0)
             guards.extend(hit)
+            if static:
+                statics.append(arr)
             return '%s(%s)' % (arr, ','.join(parts))
 
         new = re.sub(r'\b([a-z_][a-z0-9_]*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
@@ -1194,6 +1230,11 @@ def fix_automatic_arrays(text):
         is_cont = len(ln) > 5 and ln[5] not in ' 0'
         if (not placed and out and stripped and not is_comment and not is_cont
                 and not RE_DECL_LINE.match(ln) and not RE_SUBPROG_HEAD.match(ln)):
+            # SAVE first: it is a declaration statement, so it must precede the guard's
+            # executable IF. Without it a 1.6 MB array would land on the stack anyway.
+            for nm in dict.fromkeys(statics):
+                out.append('C     fcweb: static so the bound costs no stack')
+                out.append('      save %s' % nm)
             seen = set()
             for dim, bound in guards:
                 if dim in seen:
@@ -1510,6 +1551,26 @@ def selftest():
     # Every bound in the table must carry a guard -- the whole basis for using fixed bounds.
     for _dim in DIM_BOUNDS:
         assert _dim in ('ncmat_', 'mi(1)', 'mi(2)', 'mi(3)'), _dim
+
+    NL = chr(10)
+    # A problem-size dimension gets a large bound AND static storage, so the bound does not
+    # land on the stack. SAVE must precede the guard, being a declaration statement.
+    st = fix_automatic_arrays(NL.join([
+        '      subroutine t(neq)', '      integer neq(2)',
+        '      real*8 x(neq(2))', '      x(1)=0.d0', '      end']))
+    assert 'x(200000)' in st, st
+    assert 'save x' in st, st
+    assert st.index('save x') < st.index('if(neq(2)'), st
+    # ...and a recursive routine must NOT get save: one array shared across activations.
+    rec = fix_automatic_arrays(NL.join([
+        '      recursive subroutine t(neq)', '      integer neq(2)',
+        '      real*8 x(neq(2))', '      x(1)=0.d0', '      end']))
+    assert 'save' not in rec and 'x(neq(2))' in rec, rec
+    # a whole-token match only: nev must not fire inside nevtot
+    tok = fix_automatic_arrays(NL.join([
+        '      subroutine t(nevtot,mi)', '      integer nevtot,mi(3)',
+        '      real*8 p(nevtot,6),g(0:mi(2),8)', '      p(1,1)=0.d0', '      end']))
+    assert 'p(nevtot,6)' in tok, tok
     long_l = ' ' * 39 + 'if(ikactmech(idm).eq.jdof-1) goto 8012'
     w = wrap_long_lines([long_l])
     assert all(len(x) <= 72 for x in w), [len(x) for x in w]
