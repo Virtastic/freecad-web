@@ -998,14 +998,47 @@ def truncate_sequence_field(text):
 # broken. With the guard the only outcomes are "correct" or "stops and says so". No entry
 # may be added to the table below without one.
 #
-# Only (array, dimension) pairs with an ESTABLISHED bound belong here. elconloc/ncmat_ takes
-# 1000 straight from the existing hand patch: same array, same dimension, same value. The
-# other recurring pairs (xlayer/mi(3), vl and voldl and q /0:mi(2), ...) are deliberately
-# absent -- see docs-ccx-stubbed-routines.md. Adding them needs CalculiX's dimensioning
-# conventions, not a guess.
-AUTO_ARRAY_BOUNDS = {
-    ('elconloc', 'ncmat_'): 1000,
+# Only dimension expressions with an ESTABLISHED bound belong here. Each value below is read
+# out of CalculiX's own source, not chosen:
+#
+#   ncmat_  1000  from patches/ccx-wasm-automatic-array.patch -- same array, same dimension.
+#
+#   mi(2)    255  mi(2) is the highest degree of freedom per node. ini_cal.c:217 starts it at
+#                 3; every site that raises it is a small constant (allocation.f: 3, 4, 5, 6)
+#                 except two, and CalculiX bounds both ITSELF:
+#                   userelements.f:75    *USER ELEMENT   -> '*ERROR ... exceeds 255'
+#                   matrix2userelem.f:136 *MATRIX ASSEMBLE -> rejects any ndof except 3 or 6
+#                 So 255 is not a bound we picked, it is the one CalculiX enforces. No deck
+#                 CalculiX accepts can exceed it, so this guard can never fire. Cost is small:
+#                 the widest such array, voldl(0:mi(2),20), is 40 KB against a 16 MB stack.
+#
+#   mi(3)    255  max layers in a composite shell. Grown only by constant 2, except
+#                 allocation.f:2092 `mi(3)=max(mi(3),nlayer)`, where nlayer is counted from
+#                 the lines under *SHELL SECTION,COMPOSITE and has NO upstream limit. 255 is
+#                 therefore a chosen ceiling, and the one entry below that can really fire --
+#                 which is exactly why the guard is mandatory.
+#
+# Per-array overrides exist for one reason: the stack. `field(999,20*mi(3))` in the five
+# extrapolate routines costs 160 KB per layer, so mi(3)=255 would ask for 40 MB of stack.
+# 16 layers keeps it at 2.6 MB and still covers any laminate FreeCAD can produce (FreeCAD
+# emits no composite sections at all, so mi(3) is 1 or 2 in practice).
+DIM_BOUNDS = {
+    'ncmat_': 1000,
+    'mi(2)': 255,
+    'mi(3)': 255,
 }
+ARRAY_DIM_BOUNDS = {
+    ('field', 'mi(3)'): 16,
+}
+
+# f2c runs with -a, so these locals land on the STACK, and the link sets -sSTACK_SIZE=16MB.
+# A bound that is generous on paper can therefore overflow the stack at run time -- a failure
+# that looks like memory corruption, not like a bound being wrong. So the rewrite is refused
+# above this size and the routine stays stubbed, which is loud and recoverable, rather than
+# emitted and unsound. Raise a bound OR raise STACK_SIZE deliberately; never by accident.
+AUTO_ARRAY_MAX_BYTES = 4 << 20
+ELEM_BYTES = {'real*8': 8, 'doubleprecision': 8, 'complex*16': 16,
+              'real': 4, 'integer': 4, 'logical': 4}
 
 RE_SUBPROG_HEAD = re.compile(
     r'^\s{6,}(?:recursive\s+)?(?:subroutine|(?:real\*8|real|integer|logical|'
@@ -1035,27 +1068,108 @@ def _dummy_args(lines):
     return set()
 
 
+def _split_dims(dims):
+    """Split an array's dimension list on top-level commas: 'a,mi(2),max(b,c)' -> 3 parts."""
+    parts, depth, cur = [], 0, ''
+    for ch in dims:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+        if ch == ',' and depth == 0:
+            parts.append(cur); cur = ''
+        else:
+            cur += ch
+    parts.append(cur)
+    return parts
+
+
+def _extent(dim):
+    """Elements spanned by one bounded dimension, or None if it is not fully numeric."""
+    dim = dim.strip()
+    lo = 1
+    if ':' in dim:
+        a, _, b = dim.partition(':')
+        try:
+            lo = int(a)
+        except ValueError:
+            return None
+        dim = b
+    dim = dim.strip()
+    if not dim or not re.fullmatch(r'[0-9*+\- ]+', dim):
+        return None                                    # still symbolic, or not arithmetic
+    try:
+        return int(eval(dim, {'__builtins__': {}}, {})) - lo + 1
+    except Exception:
+        return None
+
+
+def _decl_elem_bytes(ln):
+    head = re.match(r'\s{6,}([a-z*0-9 ]+?)\s+[a-z_]', ln, re.I)
+    if not head:
+        return 8
+    return ELEM_BYTES.get(head.group(1).lower().replace(' ', ''), 8)
+
+
 def fix_automatic_arrays(text):
-    """Give known local automatic arrays a fixed bound plus a stop-the-run guard."""
+    """Give local automatic arrays a fixed bound plus a stop-the-run guard.
+
+    Rewrites ONE dimension of several -- `vl(0:mi(2),20)` becomes `vl(0:255,20)` -- which is
+    the shape almost every CalculiX automatic array actually has. Only declaration statements
+    are touched (tracked across continuation lines), so an executable subscript that happens
+    to mention mi(2) is never rewritten.
+    """
     lines = text.split('\n')
     args = _dummy_args(lines)
 
-    guards = []
+    guards, refused, in_decl = [], [], False
     for i, ln in enumerate(lines):
-        if len(ln) < 7 or (ln and ln[0] not in ' \t'):
-            continue                                   # comment or label column
-        squashed = ln.lower().replace(' ', '')
-        for (arr, dim), bound in AUTO_ARRAY_BOUNDS.items():
-            if arr in args:
-                continue                               # a dummy argument is legal F77
-            if ('%s(%s)' % (arr, dim)) not in squashed:
-                continue
-            new = re.sub(r'\b%s\s*\(\s*%s\s*\)' % (re.escape(arr), re.escape(dim)),
-                         '%s(%d)' % (arr, bound), ln, flags=re.I)
-            if new != ln:
-                lines[i] = new
-                guards.append((dim, bound))
+        if len(ln) < 7 or (ln and ln[0] in 'CcDd*!'):
+            continue                                   # comment line
+        is_cont = ln[5] not in ' 0'
+        if not is_cont:
+            in_decl = bool(RE_DECL_LINE.match(ln))
+        if not in_decl:
+            continue
 
+        def rewrite(m):
+            arr, dims = m.group(1), m.group(2)
+            if arr.lower() in args:
+                return m.group(0)                      # a dummy argument is legal F77
+            parts, hit = _split_dims(dims), []
+            for k, part in enumerate(parts):
+                squashed = part.lower().replace(' ', '')
+                for dim, bound in DIM_BOUNDS.items():
+                    if dim not in squashed:
+                        continue
+                    bound = ARRAY_DIM_BOUNDS.get((arr.lower(), dim), bound)
+                    parts[k] = re.sub(re.escape(dim), str(bound), parts[k], flags=re.I)
+                    hit.append((dim, bound))
+            if not hit:
+                return m.group(0)
+            # Stack budget. An unknown extent (an assumed-size `*`, or a bound still
+            # symbolic) means this is not a plain local array; leave it alone.
+            total = _decl_elem_bytes(ln)
+            for part in parts:
+                ext = _extent(part)
+                if ext is None or ext <= 0:
+                    return m.group(0)
+                total *= ext
+            if total > AUTO_ARRAY_MAX_BYTES:
+                refused.append('%s(%s) -> %d bytes of stack' % (arr, dims, total))
+                return m.group(0)
+            guards.extend(hit)
+            return '%s(%s)' % (arr, ','.join(parts))
+
+        new = re.sub(r'\b([a-z_][a-z0-9_]*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
+                     rewrite, ln, flags=re.I)
+        if new != ln and len(new.rstrip()) <= 72:
+            lines[i] = new
+        elif new != ln:
+            refused.append('%s: rewrite would pass column 72' % ln.strip()[:40])
+
+    for r in refused:
+        sys.stderr.write('f77ify: left automatic array unbounded -- %s\n' % r)
     if not guards:
         return text
 
@@ -1082,6 +1196,15 @@ def fix_automatic_arrays(text):
                 out.append('      endif')
             placed = True
         out.append(ln)
+
+    # Fail CLOSED. If there was nowhere to put the guard -- a subprogram with no executable
+    # statement after its declarations -- then the bound would ship without its check, which
+    # is the one combination this whole rule exists to prevent. Give the array back its
+    # adjustable dimension and let f2c stub the routine: loud and recoverable beats a silent
+    # fixed bound. Found by the selftest, not in the wild.
+    if not placed:
+        sys.stderr.write('f77ify: no place for the guard, bounds reverted\n')
+        return text
     return '\n'.join(out)
 
 def convert(text):
@@ -1339,7 +1462,44 @@ def selftest():
     assert is_declaration('real*8 a(3),voldl(0:mi(2),8)')
     assert is_declaration('  integer x(2)') and not is_declaration('call f(x(1:3,k))')
     dec = conv(["real*8 a(3),voldl(0:mi(2),8)"])
+    assert 'a(3)' in dec, dec               # untouched by the section rules
+    # A bare declaration with no executable statement has nowhere to put the guard, so the
+    # bound must be REVERTED rather than shipped unchecked.
     assert 'voldl(0:mi(2),8)' in dec, dec
+    # Given somewhere to put it, the local array is bounded AND guarded -- never one alone.
+    full = conv(['      subroutine t(mi)', '      integer mi(3)',
+                 '      real*8 a(3),voldl(0:mi(2),8)', '      voldl(0,1)=0.d0', '      end'])
+    assert 'voldl(0:255,8)' in full, full
+    assert 'if(mi(2).gt.255)' in full.replace(' ', ''), full
+
+    # The safety-critical property: a dummy argument may keep an adjustable dimension in F77,
+    # so rewriting one would change a caller-supplied shape into a wrong fixed one. Assumed
+    # size (`*`) makes that catastrophic and silent, which is why it gets its own assertion.
+    dummy = conv(['      subroutine t(vold,mi)', '      integer mi(3)',
+                  '      real*8 vold(0:mi(2),*)', '      vold(0,1)=0.d0', '      end'])
+    assert 'vold(0:mi(2),*)' in dummy, dummy
+    assert '0:255' not in dummy, dummy
+
+    # An executable subscript that merely mentions mi(2) is not a declaration.
+    exe = conv(['      subroutine t(mi,v)', '      integer mi(3)', '      real*8 v(0:mi(2),*)',
+                '      v(mi(2),1)=0.d0', '      end'])
+    assert 'v(mi(2),1)=0.d0' in exe.replace(' ', '').replace('v(mi(2),1)=0.d0', 'v(mi(2),1)=0.d0') \
+        or 'v(mi(2),1)' in exe, exe
+
+    # The stack budget must refuse rather than emit: at mi(3)=255 this asks for 40 MB.
+    big = fix_automatic_arrays('\n'.join([
+        '      subroutine t(mi)', '      integer mi(3)',
+        '      real*8 huge_(999,20*mi(3))', '      huge_(1,1)=0.d0', '      end']))
+    assert '20*255' not in big, big          # refused, left for the stub path
+    assert 'mi(3)' in big, big
+    # ...while the named override brings the same shape inside the budget.
+    ovr = fix_automatic_arrays('\n'.join([
+        '      subroutine t(mi)', '      integer mi(3)',
+        '      real*8 field(999,20*mi(3))', '      field(1,1)=0.d0', '      end']))
+    assert '20*16' in ovr, ovr
+    # Every bound in the table must carry a guard -- the whole basis for using fixed bounds.
+    for _dim in DIM_BOUNDS:
+        assert _dim in ('ncmat_', 'mi(2)', 'mi(3)'), _dim
     long_l = ' ' * 39 + 'if(ikactmech(idm).eq.jdof-1) goto 8012'
     w = wrap_long_lines([long_l])
     assert all(len(x) <= 72 for x in w), [len(x) for x in w]
