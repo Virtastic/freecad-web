@@ -246,8 +246,17 @@ jobs:
             for d in scratchpad/ccxval/*.inp; do
               j=$(basename "$d" .inp)
               echo "### $j"
-              timeout 600 node scratchpad/ccxval/run.js "$d" 2>&1 \
-                | grep -E '^(rc=|[A-Z0-9]+: )' || echo "  (no result)"
+              timeout 600 node scratchpad/ccxval/run.js "$d" > "/tmp/raw-$1-$j.txt" 2>&1 || true
+              if grep -qE '^rc=' "/tmp/raw-$1-$j.txt"; then
+                grep -E '^(rc=|[A-Z0-9]+: )' "/tmp/raw-$1-$j.txt"
+              else
+                # A deck that produces nothing is the interesting case, and the previous
+                # version of this step filtered the reason out -- it kept only rc= and field
+                # lines, so a module that aborted looked identical to one that ran and said
+                # nothing. Keep the tail; it names the routine that died.
+                echo "  NO RESULT:"
+                tail -12 "/tmp/raw-$1-$j.txt" | sed 's/^/    | /'
+              fi
             done > "/tmp/val-$1.txt" 2>&1
             echo "  --- $1 ---"; sed 's/^/    /' "/tmp/val-$1.txt"
           }
