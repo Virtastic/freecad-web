@@ -1097,7 +1097,7 @@ STATIC_DIM_BOUNDS = {
     'nk': 80000,           # nodes
     'ne': 200000,          # elements
     'nktet': 200000,       # nodes in the tet mesh
-    'ncont': 100000,       # contact elements; declared as 3*ncont
+    'ncont': 50000,        # HALVED for the bound-sensitivity experiment
     'ntie': 10000,         # tie/contact pairs
     'nselect': 10000,
     # Safe despite bounding a FIRST dimension (extrapolatecontact's field(nfield,20*mi(3))):
@@ -1185,10 +1185,7 @@ STATIC_DIM_BOUNDS = {
 # and `save` is now absent from the entire tree) and the deck produced numbers BYTE-IDENTICAL
 # to the static build -- same -9.3215e+1 contact pressure, same 68.475 error estimate. So the
 # defect is deterministic and has nothing to do with storage class. Look elsewhere.
-SKIP_FILES = frozenset((
-    'slavintmortar.f',
-    'slavintpoints.f',
-))
+SKIP_FILES = frozenset()   # TEMPORARILY EMPTY: bound-sensitivity experiment
 
 # FILE-SCOPED bounds. Some dimension names are far too common to put in a global table but
 # are perfectly safe inside one known file. `k` is the case that forced this: near2d.f and
@@ -1202,8 +1199,8 @@ SKIP_FILES = frozenset((
 # 100000 is generous -- CalculiX clamps k to n (near3d.f:36 `if(k.gt.n) k=n`) and callers ask
 # for a handful of neighbours -- and costs 1.2 MB of stack against a 16 MB limit.
 FILE_DIM_BOUNDS = {
-    ('near2d.f', 'k'): 100000,
-    ('near3d.f', 'k'): 100000,
+    ('near2d.f', 'k'): 50000,
+    ('near3d.f', 'k'): 50000,
 }
 
 # Basename of the file being converted, for FILE_DIM_BOUNDS. Set by main().
@@ -1890,9 +1887,9 @@ def selftest():
         '      real*8 x(n),r(k+6)', '      ir(1)=0', '      end']))
     # `100000+6` rather than `100006`: a constant expression, which is valid F77 and
     # which f2c folds. Only the symbolic `k` had to go.
-    assert 'ir(100000+6)' in nr and 'r(100000+6)' in nr, nr
+    assert 'ir(50000+6)' in nr and 'r(50000+6)' in nr, nr
     assert 'neighbor(k)' in nr, nr           # a dummy array keeps its adjustable dimension
-    assert 'if(k.gt.100000)' in nr.replace(' ', ''), nr
+    assert 'if(k.gt.50000)' in nr.replace(' ', ''), nr
     CURRENT_FILE = 'somewhere_else.f'
     other = fix_automatic_arrays(NL.join([
         '      subroutine t(n,k)', '      integer n,k,ir(k+6)', '      ir(1)=0', '      end']))
