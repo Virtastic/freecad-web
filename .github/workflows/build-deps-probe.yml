@@ -81,9 +81,25 @@ jobs:
           echo "  === OCCT configure+build: $((SECONDS-t0))s ==="
           echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
 
+      # Written to the STEP SUMMARY, not just stdout. `gh run view --log` returned nothing
+      # for the first probe run, which left the timings unreadable after the fact -- the whole
+      # point of the exercise. The summary survives independently of log retention.
       - name: What got built
         if: always()
         run: |
+          {
+            echo "## FreeCAD dependency build probe"
+            echo
+            echo "| step | result |"
+            echo "|---|---|"
+            echo "| xerces-c | ${{ steps.xerces.outputs.secs && format('{0}s', steps.xerces.outputs.secs) || 'FAILED' }} |"
+            echo "| OCCT | ${{ steps.occt.outputs.secs && format('{0}s', steps.occt.outputs.secs) || 'FAILED' }} |"
+            echo
+            echo "### libraries in deps/wasm/lib"
+            echo '```'
+            ls -la deps/wasm/lib/ 2>/dev/null || echo "(nothing)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "  --- deps/wasm/lib ---"
           ls -la deps/wasm/lib/ 2>/dev/null | sed 's/^/    /' || echo "    (nothing)"
           echo "  --- timings ---"
