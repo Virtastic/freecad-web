@@ -22,6 +22,7 @@ Emitted labels start at 8000 and skip any label already present in the file.
 
 Usage: f77ify.py <in.f> <out.f>
 """
+import os
 import re
 import sys
 
@@ -1083,6 +1084,25 @@ STATIC_DIM_BOUNDS = {
     'nobject': 1000,
 }
 
+# FILE-SCOPED bounds. Some dimension names are far too common to put in a global table but
+# are perfectly safe inside one known file. `k` is the case that forced this: near2d.f and
+# near3d.f declare ir(k+4) / r(k+6) where k is "the number of closest nodes to find" -- a
+# dummy argument, so those locals are automatic arrays. A global `k` entry would match
+# thousands of unrelated declarations; scoped to two files it matches four.
+#
+# This is not optional polish. near3d is on the CONTACT path: with it stubbed, production
+# runs a contact analysis and a clean build aborts. The contact.inp deck caught exactly that.
+#
+# 100000 is generous -- CalculiX clamps k to n (near3d.f:36 `if(k.gt.n) k=n`) and callers ask
+# for a handful of neighbours -- and costs 1.2 MB of stack against a 16 MB limit.
+FILE_DIM_BOUNDS = {
+    ('near2d.f', 'k'): 100000,
+    ('near3d.f', 'k'): 100000,
+}
+
+# Basename of the file being converted, for FILE_DIM_BOUNDS. Set by main().
+CURRENT_FILE = ''
+
 # A static array does not touch the stack, but it does consume linear memory for every user
 # of the module, forever. So static mode gets its own ceiling, well above the stack one and
 # still far below anything that would bloat the download. This is what stops
@@ -1269,8 +1289,16 @@ def fix_automatic_arrays(text):
             if arr.lower() in args:
                 return m.group(0)                      # a dummy argument is legal F77
             parts, hit, static = _split_dims(dims), [], False
+            scoped = {d: b for (f, d), b in FILE_DIM_BOUNDS.items() if f == CURRENT_FILE}
             for k, part in enumerate(parts):
                 squashed = part.lower().replace(' ', '')
+                for dim, bound in scoped.items():
+                    if not re.search(r'(?<![a-z0-9_])%s(?![a-z0-9_])' % re.escape(dim),
+                                     squashed, re.I):
+                        continue
+                    parts[k] = re.sub(r'(?<![a-z0-9_])%s(?![a-z0-9_])' % re.escape(dim),
+                                      str(bound), parts[k], flags=re.I)
+                    hit.append((dim, bound))
                 for dim, bound in DIM_BOUNDS.items():
                     if dim not in squashed:
                         continue
@@ -1713,6 +1741,26 @@ def selftest():
         '      subroutine t(netet_)', '      integer netet_',
         '      integer incav(4,netet_)']), {'netet_'}) == {'incav'}
 
+    # File-scoped bounds: `k` is far too common for a global table, but inside near3d.f it
+    # is "the number of closest nodes" and ir(k+6) is a genuine automatic array. With this
+    # stubbed, production runs a contact analysis and a clean build aborts -- caught by
+    # contact.inp, not by anything static.
+    global CURRENT_FILE
+    CURRENT_FILE = 'near3d.f'
+    nr = fix_automatic_arrays(NL.join([
+        '      subroutine near3d(x,n,neighbor,k)', '      integer n,k,neighbor(k),ir(k+6)',
+        '      real*8 x(n),r(k+6)', '      ir(1)=0', '      end']))
+    # `100000+6` rather than `100006`: a constant expression, which is valid F77 and
+    # which f2c folds. Only the symbolic `k` had to go.
+    assert 'ir(100000+6)' in nr and 'r(100000+6)' in nr, nr
+    assert 'neighbor(k)' in nr, nr           # a dummy array keeps its adjustable dimension
+    assert 'if(k.gt.100000)' in nr.replace(' ', ''), nr
+    CURRENT_FILE = 'somewhere_else.f'
+    other = fix_automatic_arrays(NL.join([
+        '      subroutine t(n,k)', '      integer n,k,ir(k+6)', '      ir(1)=0', '      end']))
+    assert 'ir(k+6)' in other, other          # the same shape elsewhere is untouched
+    CURRENT_FILE = ''
+
     # patch.f declares z(ipoints,ipoints) -- SQUARE in a problem-size dimension. Even a
     # modest bound is millions of elements, so the static ceiling must refuse it. This is the
     # case that makes a per-array budget mandatory rather than tidy.
@@ -1816,6 +1864,8 @@ def main():
     if len(sys.argv) == 2 and sys.argv[1] == '--selftest':
         return selftest()
     src, dst = sys.argv[1], sys.argv[2]
+    global CURRENT_FILE
+    CURRENT_FILE = os.path.basename(src)          # selects FILE_DIM_BOUNDS entries
     with open(src, 'r', errors='replace') as f:
         text = f.read()
     with open(dst, 'w') as f:
