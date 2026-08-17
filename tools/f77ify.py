@@ -1107,7 +1107,16 @@ STATIC_DIM_BOUNDS = {
 # lying solver behind what looked like a tolerance problem.
 #
 # Remove an entry once contact.inp matches production. Do not remove one to make CI green.
-SKIP_FILES = frozenset()
+#
+# One hypothesis has been tested and DISPROVEN, recorded so nobody repeats it: `save`. Both
+# routines' arrays were made automatic (nk 150000 -> 80000 drops them under the stack ceiling,
+# and `save` is now absent from the entire tree) and the deck produced numbers BYTE-IDENTICAL
+# to the static build -- same -9.3215e+1 contact pressure, same 68.475 error estimate. So the
+# defect is deterministic and has nothing to do with storage class. Look elsewhere.
+SKIP_FILES = frozenset((
+    'slavintmortar.f',
+    'slavintpoints.f',
+))
 
 # FILE-SCOPED bounds. Some dimension names are far too common to put in a global table but
 # are perfectly safe inside one known file. `k` is the case that forced this: near2d.f and
