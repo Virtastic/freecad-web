@@ -1180,6 +1180,31 @@ def _decl_elem_bytes(ln):
     return ELEM_BYTES.get(head.group(1).lower().replace(' ', ''), 8)
 
 
+def _automatic_arrays(text, args):
+    """Local arrays still carrying a symbolic dimension -- i.e. what f2c will reject."""
+    found, in_decl = set(), False
+    for ln in text.split('\n'):
+        if len(ln) < 7 or (ln and ln[0] in 'CcDd*!'):
+            continue
+        if ln[5] in ' 0':
+            in_decl = bool(RE_DECL_LINE.match(ln))
+        if not in_decl:
+            continue
+        for m in re.finditer(r'\b([a-z_][a-z0-9_]*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)',
+                             ln, re.I):
+            arr, dims = m.group(1), m.group(2)
+            if arr.lower() in args:
+                continue                               # dummy args may stay adjustable
+            for part in _split_dims(dims):
+                part = part.strip()
+                # `*` is assumed-size, legal only on a dummy -- but a local declared with it
+                # is not something this rule created, so leave that judgement to f2c.
+                if part == '*' or not re.search(r'[a-z_]', part, re.I):
+                    continue
+                found.add(arr.lower())
+    return found
+
+
 def fix_automatic_arrays(text):
     """Give local automatic arrays a fixed bound plus a stop-the-run guard.
 
@@ -1278,6 +1303,17 @@ def fix_automatic_arrays(text):
     if refused:
         sys.stderr.write('f77ify: %d array(s) refused, reverting the whole file '
                          '(a partial rewrite is stubbed anyway)\n' % len(refused))
+        return text
+
+    # ...and the same applies to arrays that were never MATCHED, not just ones refused. A
+    # dimension absent from the tables produces no refusal, so the file could still sail
+    # through with some arrays bounded and others left adjustable -- which f2c rejects just
+    # the same. Measured: cavity_refine.f and cavityext_refine.f each emitted 1.5 MB of
+    # static arrays and stayed stubbed on a dimension not in the table. Re-scan and revert.
+    leftover = _automatic_arrays('\n'.join(lines), args)
+    if leftover:
+        sys.stderr.write('f77ify: %s still adjustable, reverting (file would be stubbed '
+                         'regardless)\n' % ', '.join(sorted(leftover)[:4]))
         return text
 
     out, placed = [], False
