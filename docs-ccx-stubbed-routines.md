@@ -181,6 +181,35 @@ it immediately earned its place:
    Negative contact pressure is impossible: contact pushes, it cannot pull. The model is
    perfectly symmetric, so an asymmetric response is a second tell.
 
+### What the investigation established
+
+Four hypotheses were tested and eliminated, and every transformation on the contact path was
+then read line by line and found **faithful**:
+
+| checked | verdict |
+|---|---|
+| `save` / storage class | not the cause — output byte-identical across static and automatic |
+| non-last-dimension stride | real hazard, but `mi()` bounds are applied uniformly so caller and callee agree; a static check written to enforce it refused `e_c3d.f` and was reverted |
+| `cycle`/`exit` → `goto` rewrite | correct in all four files: cycle targets sit immediately before their `enddo`, exit targets after |
+| `field` first-dimension bound | safe — `field` never leaves `extrapolatecontact` (0 call sites) |
+
+Divergence is at **iteration 1 of increment 1**: the displacement solve is identical
+(`1.535714e-03` in both) while the residual force is 0.000000 in production and 319.444444
+here. No iteration history exists at that point, which independently rules out anything
+stateful.
+
+Disassembling production's `ccx.wasm` closes the loop. It contains the stub format string
+`[ccx-wasm] %s is not available in this build.` — byte-identical to what
+`tools/ccx_make_stubs.py` emits — so **production was built with this repo's own tooling**.
+The name is a runtime `%s`, so the binary cannot be mined for a stub list; but since
+production solves the contact deck, it plainly does not stub these routines.
+
+**So production translated them and this build does not translate them the same way.** The
+build machine's uncaptured f2c workarounds (the original defect this whole document is about)
+handled these automatic arrays by some means other than a fixed bound, and that means
+difference is the remaining candidate — not a flaw in the rewrite, which is verified faithful
+against upstream.
+
 **So `slavintmortar` and `slavintpoints` are now deliberately left stubbed** — see
 `SKIP_FILES` in `tools/f77ify.py`. A stub aborts with the routine's name; a bounded routine
 with wrong numerics returns an answer. For a solver the second is far worse, and the stiff
