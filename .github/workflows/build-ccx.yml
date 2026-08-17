@@ -343,6 +343,23 @@ jobs:
               grep -m1 'is not available' "$b" | sed 's/^/      | /' || true
             fi
           done
+          # WHERE they first diverge, not just that they do. CalculiX prints per-increment and
+          # per-iteration residuals, so the first differing line of raw stdout localises the
+          # divergence to an increment -- which is the thing you need before you can reason
+          # about a contact defect at all. Result extremes alone cannot tell you that.
+          echo
+          echo "  === first divergence in raw solver output ==="
+          for d in scratchpad/ccxval/*.inp; do
+            j=$(basename "$d" .inp)
+            b="/tmp/raw-built-$j.txt"; l="/tmp/raw-live-$j.txt"
+            [ -s "$b" ] && [ -s "$l" ] || continue
+            if cmp -s "$b" "$l"; then echo "    $j: identical stdout"; continue; fi
+            n=$(diff --unchanged-line-format='' --old-line-format='' \
+                     --new-line-format='%dn\n' "$l" "$b" 2>/dev/null | head -1)
+            echo "    $j: first differing line ~$n"
+            diff -u "$l" "$b" 2>/dev/null | head -40 | sed 's/^/      /'
+          done
+
           [ "$fail" = 0 ] || exit 1
           echo "  no deck regressed against production"
 

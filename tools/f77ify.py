@@ -1131,10 +1131,7 @@ STATIC_DIM_BOUNDS = {
 # and `save` is now absent from the entire tree) and the deck produced numbers BYTE-IDENTICAL
 # to the static build -- same -9.3215e+1 contact pressure, same 68.475 error estimate. So the
 # defect is deterministic and has nothing to do with storage class. Look elsewhere.
-SKIP_FILES = frozenset((
-    'slavintmortar.f',
-    'slavintpoints.f',
-))
+SKIP_FILES = frozenset()   # TEMPORARILY EMPTY: diagnostic run, see the commit message
 
 # FILE-SCOPED bounds. Some dimension names are far too common to put in a global table but
 # are perfectly safe inside one known file. `k` is the case that forced this: near2d.f and
