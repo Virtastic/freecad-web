@@ -10,7 +10,7 @@
 > | 4 | GL no-op inventory | **done** — instrumented and measured; see BUILD-WEH.md |
 > | 5 | Display lists / 11 fps | **scoped** — C change + relink + pixel gate, not a JS patch |
 > | 6 | 2 GB heap | **implemented, opt-in** — `FCWEB_HEAP_BYTES`; needs a link + `heapprobe.js` |
-> | 7 | CalculiX threading | **BUILT in CI** — threaded ccx.wasm exists; needs deck validation before release |
+> | 7 | CalculiX threading | **built, NOT shippable** — production's ccx.wasm is not reproducible; see below |
 > | 8 | Chrome/Edge only | **decided** — track, don't build |
 >
 > **Item 7 no longer needs the build machine at all.** `.github/workflows/build-ccx.yml`
@@ -25,7 +25,36 @@
 > | **threaded** (`FCWEB_CCX_PTHREADS=1`) | **3,885,816 bytes** |
 > | currently live | 4,784,783 bytes |
 >
-> **Do not ship either yet.** Both CI builds are ~1 MB smaller than the deployed module, and
+> **Do not ship either — and the reason turned out to matter more than the schedule.**
+>
+> Chasing the size gap produced one very good result and one bad one.
+>
+> Good: my serial `ccx.js` is **byte-identical** to the one in production. The CI pipeline
+> reproduces the live build's exact configuration — same emscripten, same flags, same exports.
+>
+> Bad: the wasm is not close. Production carries **844 KB more compiled code** (code section
+> 4,188,444 vs 3,344,391). That is missing *functionality*, not a leaner binary. Applying
+> `patches/ccx-wasm-automatic-array.patch` — which the workflow had been skipping — moved
+> translation from 908/977 to 910/977 and the module to 3,846,632 bytes, and **still leaves
+> ~938 KB unaccounted for**.
+>
+> The conclusion is uncomfortable and worth stating plainly: **the ccx.wasm currently in
+> production cannot be reproduced from this repository plus upstream sources.** There are
+> changes in the build machine's `deps/src/ccx` that were never captured into `patches/` —
+> exactly the failure mode BUILD-WEH.md warns about, since `deps/` is gitignored and an
+> uncaptured edit is invisible until someone builds from clean.
+>
+> That makes this a reproducibility problem before it is a threading problem. Shipping the CI
+> module would silently drop working CalculiX routines. And if that Mac is lost, today's
+> solver cannot currently be rebuilt by anyone.
+>
+> **Next step is on the build machine, and it is not the threaded build:** diff its
+> `deps/src/ccx/ccx_2.22` against a clean 2.22 extract, capture the delta as a patch beside
+> `ccx-wasm-automatic-array.patch`, and re-run this workflow. When the code section matches,
+> the CI build is trustworthy — and threading becomes the one-flag change it was always
+> meant to be.
+>
+> Original note kept for the sequence once that holds: Both CI builds are ~1 MB smaller than the deployed module, and
 > that is unexplained — different flags, a different source revision, or something extra in
 > the live one. Resolve that first, then run `scratchpad/ccxval/run.js` (elas, freq, plast,
 > therm) and `ccxe2e/run-prod.js`: results must **match** today's numbers, not merely
