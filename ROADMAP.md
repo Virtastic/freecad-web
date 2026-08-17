@@ -241,6 +241,12 @@ known and bounded divergence.
 
 ### 5. ~11 fps on heavy scenes; render caching forced off *(lane A2 spike → C, 3–8 d)*
 
+> **Note on verifying this one.** Frame rate cannot be sampled from a hidden or headless-
+> without-compositor page: `requestAnimationFrame` does not fire, so a probe just hangs
+> rather than returning a low number. Confirmed 2026-08-17. Any measurement of this item
+> needs a *visible* viewport — which is what `scratchpad/shot.js` and the pixel gate provide.
+> Do not treat a timed-out probe as evidence of anything.
+
 The cause is one line, and it is upstream of the symptom:
 
 > `patches/freecad.patch:18060` — *"wasm: display lists are stubbed (glGenLists returns 0), so
@@ -271,6 +277,18 @@ numbers, and measure load average before believing any timing — this repo has 
 ## Tier 3 — real limits, real cost
 
 ### 6. The 2 GB heap *(lane C, 2–5 d, genuine risk)*
+
+**Measured on live production, 2026-08-17** (`build-20260813-eventstack+e835c2b`), via memory
+reflection in the browser rather than from the build flags:
+
+```
+currentHeapMB : 2048      growthAllowed : false
+```
+
+So the shipped heap is exactly 2 GB and fixed, which confirms the flags below and means
+`FCWEB_HEAP_BYTES`'s default (2147483648) is precisely what is already live. **There is
+nothing to do to "reach" 2 GB — this item is only ever about going past it**, and everything
+past it is the signed-pointer hazard, which needs the relink plus `scratchpad/heapprobe.js`.
 
 Current: `-sINITIAL_MEMORY=2147483648 -sALLOW_MEMORY_GROWTH=0`. Measured ~72 KB per simple
 solid → roughly 20,000 of them. Fine for parts; not for a large assembly.
