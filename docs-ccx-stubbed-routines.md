@@ -1,8 +1,8 @@
 # CalculiX: making a clean build reproduce production's solver
 
 Measured by `.github/workflows/build-ccx.yml` from CalculiX 2.22 upstream. Started at 69
-stubbed routines (run 31985042689); now **27**, and all four validation decks reproduce
-production exactly (run 31992713435).
+stubbed routines (run 31985042689); now **19**, and all four validation decks reproduce
+production exactly (run 31996275820).
 
 ## What this is
 
@@ -34,8 +34,11 @@ someone builds from clean. Nobody had, until 2026-08-16.
 | + `ccx-wasm-automatic-array.patch` | 68 | 910/977 | 3,846,632 | 938,151 |
 | + `f77ify` rule, `ncmat_` only | 60 | 918/977 | 3,883,782 | 901,001 |
 | + `mi(2)`/`mi(3)` bounds | 30 | 948/977 | 4,543,921 | 240,862 |
-| + `mi(1)` + static problem-size bounds | **27** | **951/977** | **4,599,882** | **184,901** |
+| + `mi(1)` + static problem-size bounds | 27 | 951/977 | 4,599,882 | 184,901 |
+| + mesh-size bounds (contact, ZZ estimator) | **19** | **959/977** | **4,687,709** | **97,074** |
 | production (target) | ? | ? | 4,784,783 | — |
+
+**69 stubs to 19; 90% of the size gap closed; all four decks identical throughout.**
 
 ## Reproduced
 
@@ -93,29 +96,47 @@ Two constraints shaped the implementation:
   for 40 MB — fine on paper, memory corruption at run time. The rule computes the size and
   refuses above 4 MB, leaving the routine stubbed; `field` takes a named override at 16.
 
-## What is still stubbed, and why it no longer blocks the decks
+## What is still stubbed
 
-| cause | routines | note |
-|---|---|---|
-| `wr_ardecls: nonconstant array size` | ~20 | the same construct on problem-size dimensions (`netet_`, `nk`, `nfront`, `ncont`, `numpts`, …). These scale with the MODEL, so a fixed bound is the wrong tool -- see below |
-| US3/US45 user shell elements | 6 | `e_c3d_us3/us45`, `resultsmech_us3/us45`, `us3_sub`, `us4_sub`. BUILD-WEH.md records FreeCAD never emits them; these can stay stubbed |
-| `xlocal.f` | 1 | `subscripts on scalar variable`, a separate root cause |
+    basis  calcview  cavity_refine  cavityext_refine  extendmesh  gauss  gen3dfrom2d
+    interpolateinface  near2d  near3d  patch  umat_ciarlet_el  xlocal
+    e_c3d_us3  e_c3d_us45  resultsmech_us3  resultsmech_us45  us3_sub  us4_sub
 
-None of them is reached by the four decks, which is why those now pass. That is a statement
-about coverage, not about correctness: an analysis that does reach one will stop with a
-message naming it.
+| group | note |
+|---|---|
+| US3/US45 user shells (6) | BUILD-WEH.md records FreeCAD never emits them — these can stay stubbed |
+| `gauss.f` | not a routine; an INCLUDE of Gauss-point data. Its presence here means nothing |
+| CalculiX's own remesher (`cavity_refine`, `cavityext_refine`, `extendmesh`, `basis`, `interpolateinface`) | FreeCAD meshes with gmsh, so this path is unused |
+| deliberately excluded dimensions (`near2d`, `near3d`, `calcview`, `patch`) | see the exclusion list in `tools/f77ify.py` — each would be unsafe to token-match |
+| `xlocal.f`, `umat_ciarlet_el`, `gen3dfrom2d` | separate root causes |
+
+None is reached by the four decks. That is a statement about coverage, not correctness: an
+analysis that does reach one stops with a message naming it, rather than returning a wrong
+answer.
 
 ### Two techniques, and knowing which applies
 
 - **Per-element constants** (`mi(1)`, `mi(2)`, `mi(3)`, `ncmat_`) take a fixed bound on the
   stack. A generous bound costs a few KB, and for `mi(1)`/`mi(2)` the bound is the one
   CalculiX enforces itself, so the guard can never fire.
-- **Problem-size dimensions** (`neq(2)`, `nev`, and the `wr_ardecls` group) take a large
+- **Problem-size dimensions** (`neq(2)`, `nev`, `nk`, `ne`, `nktet`, `ncont`, …) take a large
   bound plus `save`, i.e. static storage -- the convention this file already used for F90
-  allocatables. 1.6 MB arrays do not belong on a 16 MB stack.
+  allocatables. 1.6 MB arrays do not belong on a 16 MB stack. Cost: **35 MB static**, against
+  the module's 256 MB initial allocation.
 
 The distinction matters more than either bound: applying the first technique to a
 problem-size array either overflows the stack or refuses legitimate models.
+
+Three rules earn their keep, and all three were found by measuring rather than reasoning:
+
+1. **All or nothing per file.** f2c rejects a file if ANY automatic array survives, so a
+   partial rewrite is stubbed anyway *and* still costs memory. Two files were emitting 1.5 MB
+   each while staying stubbed.
+2. **The ceiling picks the bound.** `nk` is 150000 rather than 200000 because the widest
+   arrays on it are 6 columns of `real*8`; at 200000 those exceed the per-array static
+   ceiling and the routines are refused outright. A bigger bound bought nothing but a stub.
+3. **A PARAMETER dimension is not an automatic array.** `nmids(maxmid)` with
+   `parameter(maxmid=400)` is legal F77. Treating it as automatic cost a working routine.
 
 ## Validating any of this
 
