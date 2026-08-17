@@ -138,3 +138,17 @@ jobs:
             grep -qF "$pat" play-gui/freecad-gui.html || { echo "::error::infra/Dockerfile stamps \"$pat\" but it is gone from freecad-gui.html"; exit 1; }
           done
           echo "OK"
+
+      # The dependency manifest is the answer to "which OCCT was production built from?", and
+      # right now nothing in the repo answers it. This does not fail the build -- the file can
+      # only be produced on the build machine -- but an unanswered reproducibility question
+      # should be visible on every run rather than buried in BUILD-WEH.md.
+      - name: Dependency manifest present?
+        run: |
+          if [ -s deps-versions.txt ]; then
+            echo "OK — $(grep -cvE '^\s*(#|$)' deps-versions.txt) dependencies pinned"
+            unknown=$(grep -c 'unknown' deps-versions.txt || true)
+            [ "$unknown" = "0" ] || echo "::warning::$unknown dependencies still report 'unknown'"
+          else
+            echo "::warning::deps-versions.txt is missing — 21 of 23 dependencies have no recorded version, so this build is not reproducible. Run tools/capture-dep-versions.sh on the build machine (read-only, ~1 min) and commit the output. See BUILD-WEH.md."
+          fi
