@@ -283,14 +283,40 @@ jobs:
           fi
 
           echo
-          echo "  === built vs live ==="
-          if diff -u /tmp/val-live.txt /tmp/val-built.txt > /tmp/val.diff; then
-            echo "  IDENTICAL — every deck gives production's numbers"
-          else
-            echo "::error::a deck no longer agrees with production — see the diff below"
-            sed 's/^/    /' /tmp/val.diff
-            exit 1
-          fi
+          echo "  === built vs live, per deck ==="
+          # Per-deck rather than one diff of the whole file, because "different" is not one
+          # outcome. A deck production cannot run but this build CAN is an improvement, and
+          # failing the build for it would punish exactly the work this workflow exists to
+          # do. Only the reverse -- and a genuine numeric disagreement -- is a regression.
+          fail=0
+          for d in scratchpad/ccxval/*.inp; do
+            j=$(basename "$d" .inp)
+            b="/tmp/raw-built-$j.txt"; l="/tmp/raw-live-$j.txt"
+            bok=$(grep -qE '^rc=' "$b" && echo 1 || echo 0)
+            lok=$(grep -qE '^rc=' "$l" && echo 1 || echo 0)
+            bn=$(grep -E '^(rc=|[A-Z0-9]+: )' "$b" 2>/dev/null || true)
+            ln=$(grep -E '^(rc=|[A-Z0-9]+: )' "$l" 2>/dev/null || true)
+            if [ "$bok" = 1 ] && [ "$lok" = 1 ]; then
+              if [ "$bn" = "$ln" ]; then
+                echo "    $j: OK — identical to production"
+              else
+                echo "::error::$j disagrees with production numerically"
+                diff <(echo "$ln") <(echo "$bn") | sed 's/^/      /'
+                fail=1
+              fi
+            elif [ "$bok" = 1 ] && [ "$lok" = 0 ]; then
+              echo "    $j: IMPROVEMENT — this build runs a deck production cannot"
+            elif [ "$bok" = 0 ] && [ "$lok" = 1 ]; then
+              echo "::error::$j regressed — production runs it, this build does not"
+              tail -8 "$b" | sed 's/^/      | /'
+              fail=1
+            else
+              echo "    $j: neither build runs it (both stubbed) — not a regression"
+              grep -m1 'is not available' "$b" | sed 's/^/      | /' || true
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+          echo "  no deck regressed against production"
 
       - name: Disk after
         if: always()

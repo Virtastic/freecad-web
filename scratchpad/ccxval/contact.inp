@@ -1,0 +1,77 @@
+**
+**  Two stacked blocks pressed together through a SURFACE TO SURFACE (mortar) contact pair.
+**
+**  This deck exists to cover routines the other four never touch. slavintmortar,
+**  slavintpoints and extrapolatecontact were stubbed in every clean build until the
+**  mesh-size bounds landed, and "stubbed" here means the analysis aborts. Nothing in
+**  elas/freq/plast/therm reaches them, so without this deck the bounds chosen for nk,
+**  ncont and ntie were unverified against production.
+**
+**  TYPE=SURFACE TO SURFACE is deliberate: it selects the mortar path (slavintmortar,
+**  slavintpoints). NODE TO SURFACE would pass through different routines and prove nothing
+**  about these.
+**
+**  Lower block z=0..10 fixed at its base; upper block z=10..20 driven down 0.05 mm. The
+**  interface must transmit that as contact pressure rather than letting the blocks pass
+**  through each other, so CONTACT STRESS output is the part that matters.
+**
+*NODE, NSET=Nall
+1,   0.,  0.,  0.
+2,  10.,  0.,  0.
+3,  10., 10.,  0.
+4,   0., 10.,  0.
+5,   0.,  0., 10.
+6,  10.,  0., 10.
+7,  10., 10., 10.
+8,   0., 10., 10.
+9,   0.,  0., 10.
+10, 10.,  0., 10.
+11, 10., 10., 10.
+12,  0., 10., 10.
+13,  0.,  0., 20.
+14, 10.,  0., 20.
+15, 10., 10., 20.
+16,  0., 10., 20.
+*ELEMENT, TYPE=C3D8, ELSET=Elower
+1, 1, 2, 3, 4, 5, 6, 7, 8
+*ELEMENT, TYPE=C3D8, ELSET=Eupper
+2, 9, 10, 11, 12, 13, 14, 15, 16
+*ELSET, ELSET=Eall
+Elower, Eupper
+**
+**  C3D8 face numbering: S1 is nodes 1-2-3-4, S2 is 5-8-7-6. So the lower block's top face
+**  is S2 and the upper block's bottom face is S1 -- the two that meet at z=10.
+*SURFACE, NAME=Smaster, TYPE=ELEMENT
+1, S2
+*SURFACE, NAME=Sslave, TYPE=ELEMENT
+2, S1
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslave, Smaster
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+1.e6
+**
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3
+*SOLID SECTION, ELSET=Eall, MATERIAL=STEEL
+**
+*NSET, NSET=Nfix
+1, 2, 3, 4
+*NSET, NSET=Ntop
+13, 14, 15, 16
+*BOUNDARY
+Nfix, 1, 3
+**
+*STEP, INC=100
+*STATIC
+0.2, 1.0
+*BOUNDARY
+Ntop, 3, 3, -0.05
+*NODE FILE
+U
+*EL FILE
+S
+*CONTACT FILE
+CSTR
+*END STEP
