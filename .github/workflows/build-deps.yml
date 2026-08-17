@@ -98,6 +98,22 @@ jobs:
           } 2>&1 | tee /tmp/deplogs/00-fetch.txt
           tail -20 /tmp/deplogs/00-fetch.txt
 
+      # OCCT 7.8.1 does not compile against a current freetype: FT_Outline::tags became
+      # unsigned char*, and StdPrs_BRepFont.cxx assigns it to a const char*. Found at target
+      # 2716/5480 in run 32046710386. Cast only -- see the patch header.
+      - name: Patch OCCT for current freetype
+        run: |
+          set -e
+          cd deps/src/occt
+          if patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/occt-freetype-tags-const.patch" >/dev/null 2>&1; then
+            patch -p1 < "$GITHUB_WORKSPACE/patches/occt-freetype-tags-const.patch"
+            echo "  applied"
+          elif patch -p1 -R --dry-run < "$GITHUB_WORKSPACE/patches/occt-freetype-tags-const.patch" >/dev/null 2>&1; then
+            echo "  already applied"
+          else
+            echo "::warning::occt-freetype-tags-const.patch no longer applies -- OCCT may have fixed it upstream"
+          fi
+
       # OCCT's script runs `embuilder build freetype >/dev/null 2>&1` and, under set -e, dies
       # silently if that fails -- which is exactly what happened: occt.txt in run 32043014090
       # contained the three env lines and nothing else. Building the port here first makes the
@@ -149,6 +165,12 @@ jobs:
             cp -r deps/src/boost/boost deps/wasm/include/boost
           fi
           echo "  boost headers: $(find deps/wasm/include/boost -name '*.hpp' 2>/dev/null | wc -l) .hpp files"
+          # Copying headers is not enough: Coin's find_package(Boost) resolves through
+          # FindBoost, which searches BOOST_ROOT / Boost_INCLUDE_DIR, not $DW/include. Run
+          # 32046710386 still failed with "missing: Boost_INCLUDE_DIR" after the copy.
+          echo "BOOST_ROOT=$PWD/deps/src/boost"           >> "$GITHUB_ENV"
+          echo "Boost_INCLUDE_DIR=$PWD/deps/src/boost"    >> "$GITHUB_ENV"
+          echo "BOOST_INCLUDEDIR=$PWD/deps/src/boost"     >> "$GITHUB_ENV"
 
       - name: OCCT
         id: occt
