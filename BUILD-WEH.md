@@ -76,6 +76,27 @@ bash lane4-weh.sh; bash lane4b-weh.sh; bash lane5-weh.sh
 Qt 6.9.0 is built from source into `qt/6.9.0/wasm_mt_weh` with
 `-feature-wasm-exceptions -feature-wasm-jspi`.
 
+**This now builds in CI** — `.github/workflows/build-qt-wasm.yml`, **56 minutes** on a hosted
+ubuntu-latest runner (run 32041786072), installing to that exact prefix. Not 2–3 hours, which
+was my estimate before measuring.
+
+The trick is that cross-compiling Qt needs a *host* Qt to run `moc`/`rcc`/`uic`/`qsb`, but
+only the **target** needs the two features above. The host never touches wasm, so it can be an
+ordinary `aqtinstall` prebuilt, which removes an entire Qt build from the critical path.
+
+Three things had to be right, each found from a build log rather than guessed:
+
+1. **The host needs `qtshadertools`.** `qtdeclarative` depends on it and its `qsb` shader
+   compiler runs on the host. Without it configure dies with *"Qt6ShaderToolsTools package
+   could not be found"*. The rule: a host Qt needs every module whose **tools** the build
+   runs — not the target's module list.
+2. **Only `qtshadertools` is a separate `aqtinstall` module** for 6.9.0. `qtdeclarative`,
+   `qtsvg` and `qttools` live in the base `linux_gcc_64` package, and naming them makes `aqt`
+   fail outright so no host Qt is installed at all.
+3. **The runner needs desktop runtime libraries.** `qsb` is a dynamically-linked Qt Gui binary
+   even though it only compiles shaders offline, so a bare runner fails at
+   *"libEGL.so.1: cannot open shared object file"* — 731 targets into the build.
+
 Then FreeCAD itself:
 
 ```bash
