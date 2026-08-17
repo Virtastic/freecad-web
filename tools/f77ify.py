@@ -1078,8 +1078,17 @@ RE_DECL_LINE = re.compile(
 
 
 def _dummy_args(lines):
-    """Names in the SUBROUTINE/FUNCTION argument list (they may keep adjustable dims)."""
-    for i, ln in enumerate(lines[:80]):
+    """Names in the SUBROUTINE/FUNCTION argument list (they may keep adjustable dims).
+
+    Returns None if no subprogram header was found at all -- which is NOT the same as "no
+    arguments", and the caller must refuse to rewrite anything in that case. This scans the
+    whole file rather than a fixed prefix: ARPACK's dseupd.f carries ~200 lines of header
+    comment before its SUBROUTINE line, so an 80-line window found nothing, concluded the
+    routine had no arguments, and rewrote d(nev) and z(ldz,nev) -- which are arguments. That
+    silently changed a caller-supplied shape into a fixed one and broke every frequency
+    analysis. Caught by the deck gate; it is invisible to compilation.
+    """
+    for i, ln in enumerate(lines):
         if not RE_SUBPROG_HEAD.match(ln):
             continue
         decl = ''
@@ -1092,7 +1101,7 @@ def _dummy_args(lines):
             inner = decl[decl.find('(') + 1:decl.rfind(')')]
             return {a.strip().lower() for a in inner.split(',') if a.strip()}
         return set()
-    return set()
+    return None                                        # no header: caller must not rewrite
 
 
 def _split_dims(dims):
@@ -1148,6 +1157,11 @@ def fix_automatic_arrays(text):
     """
     lines = text.split('\n')
     args = _dummy_args(lines)
+    if args is None:
+        # Without the argument list there is no way to tell a local from a dummy argument,
+        # and guessing wrong on a dummy argument corrupts the caller's array shape without
+        # any compile-time signal. Refuse.
+        return text
 
     # `save` would make a recursive routine share one array across activations. None of the
     # affected routines are recursive, but assert it rather than assume it.
@@ -1571,6 +1585,22 @@ def selftest():
         '      subroutine t(nevtot,mi)', '      integer nevtot,mi(3)',
         '      real*8 p(nevtot,6),g(0:mi(2),8)', '      p(1,1)=0.d0', '      end']))
     assert 'p(nevtot,6)' in tok, tok
+
+    # REGRESSION, from ARPACK dseupd.f: a subprogram whose SUBROUTINE line sits below a long
+    # header comment. The argument list must still be found, or d(nev) and z(ldz,nev) -- both
+    # arguments -- get rewritten into fixed shapes and every frequency analysis breaks with
+    # nothing failing to compile.
+    deep = ['C' + ' comment' * 3] * 200 + [
+        '      subroutine dseupd(rvec,d,z,ldz,nev,info)',
+        '      integer nev,ldz,info', '      logical rvec',
+        '      real*8 d(nev),z(ldz,nev)', '      d(1)=0.d0', '      end']
+    got = fix_automatic_arrays(NL.join(deep))
+    assert 'd(nev)' in got and 'z(ldz,nev)' in got, got[-400:]
+    assert '10000' not in got, got[-400:]
+    # ...and with NO header at all, nothing may be rewritten: local and dummy are
+    # indistinguishable, and guessing wrong on a dummy is silent corruption.
+    assert _dummy_args(['      real*8 x(nev)']) is None
+    assert 'x(nev)' in fix_automatic_arrays('      real*8 x(nev)')
     long_l = ' ' * 39 + 'if(ikactmech(idm).eq.jdof-1) goto 8012'
     w = wrap_long_lines([long_l])
     assert all(len(x) <= 72 for x in w), [len(x) for x in w]
