@@ -70,21 +70,32 @@ jobs:
       - name: Fetch sources
         run: |
           set -e
-          mkdir -p deps/src
+          mkdir -p deps/src /tmp/deplogs
+          # An explicit if, not `[ -e A ] || [ -e B ] && { ...; return; }`. That form returns
+          # non-zero when BOTH tests fail -- the normal "not fetched yet" case -- and under
+          # `set -e` it killed the whole step before any dependency was built. Run 32042480090
+          # died in 2.3 minutes with no logs at all because of it.
           get() {  # get <dir> <url> <strip>
-            [ -e "deps/src/$1/CMakeLists.txt" ] || [ -e "deps/src/$1/bootstrap.sh" ] && \
-              { echo "  $1: present"; return; }
+            if [ -e "deps/src/$1/CMakeLists.txt" ] || [ -e "deps/src/$1/bootstrap.sh" ]; then
+              echo "  $1: present"
+              return 0
+            fi
             echo "  $1: fetching"
             mkdir -p "deps/src/$1"
             curl -fsSL -o /tmp/s.tar.gz "$2"
             tar xzf /tmp/s.tar.gz -C "deps/src/$1" --strip-components="$3"
           }
-          get xercesc   https://archive.apache.org/dist/xerces/c/3/sources/xerces-c-3.2.5.tar.gz 1
-          get occt      https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/V7_8_1.tar.gz 1
-          get VTK-9.3.1 https://www.vtk.org/files/release/9.3/VTK-9.3.1.tar.gz                   1
-          get coin3d    https://github.com/coin3d/coin/archive/refs/tags/v4.0.3.tar.gz           1
-          get boost     https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.gz      1
-          echo "  --- fetched ---"; ls -1 deps/src | sed 's/^/    /'
+          {
+            get xercesc   https://archive.apache.org/dist/xerces/c/3/sources/xerces-c-3.2.5.tar.gz 1
+            get occt      https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/V7_8_1.tar.gz 1
+            get VTK-9.3.1 https://www.vtk.org/files/release/9.3/VTK-9.3.1.tar.gz                   1
+            get coin3d    https://github.com/coin3d/coin/archive/refs/tags/v4.0.3.tar.gz           1
+            get boost     https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.gz      1
+            echo "--- deps/src ---"; ls -1 deps/src
+            echo "--- deps/wasm/lib (from cache, if any) ---"; ls -1 deps/wasm/lib 2>/dev/null | head -50
+            echo "--- disk ---"; df -h /
+          } 2>&1 | tee /tmp/deplogs/00-fetch.txt
+          tail -20 /tmp/deplogs/00-fetch.txt
 
       - name: boost
         id: boost
