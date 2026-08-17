@@ -1,0 +1,154 @@
+name: build FreeCAD deps (wasm)
+
+# The C++ dependency stack, built for wasm on a hosted runner.
+#
+# This exists because "a FreeCAD relink needs the build machine" turned out to be wrong. The
+# probe (run 32030739112) installed emsdk 3.1.70 and built xerces-c and OCCT 7.8.1 for wasm in
+# 60.6 minutes on ubuntu-latest. OCCT is the largest C++ dependency FreeCAD has, so if it fits
+# in an hour the rest of this stack is a scheduling problem, not an impossibility.
+#
+# WHAT THIS DOES AND DOES NOT GIVE YOU
+#
+# It produces .a files in deps/wasm/lib, cached between runs and uploaded as an artifact. That
+# is the input a relink consumes.
+#
+# It does NOT reproduce production. 21 of 23 dependencies have no recorded version (see
+# BUILD-WEH.md), so the versions below are plausible upstream choices, not the ones production
+# was built from. Anything linked from these is a NEW build that happens to compile -- not the
+# binary being served. Run tools/capture-dep-versions.sh on the build machine and commit
+# deps-versions.txt, then pin the versions here to match it; only then is a comparison
+# meaningful.
+#
+# Qt is NOT here. It is 2-3 hours from source and cannot be replaced by an official prebuilt,
+# because production needs -feature-wasm-exceptions -feature-wasm-jspi and the shipped Qt wasm
+# binaries have neither. It needs its own job with its own cache; this covers everything else.
+#
+# Each dependency is continue-on-error deliberately: one failure should still leave every
+# earlier library cached and every later timing measured, because the point is the map.
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "Ignore the cache and rebuild from scratch"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Bump to invalidate the cache deliberately (a version change here should force a rebuild).
+  DEPS_KEY: v1-emsdk3.1.70-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
+
+jobs:
+  deps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk (this stack is large)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
+          df -h / | sed 's/^/  /'
+
+      - name: Cache built dependencies
+        if: ${{ !inputs.rebuild }}
+        uses: actions/cache@v4
+        with:
+          path: deps/wasm
+          key: fcweb-deps-${{ env.DEPS_KEY }}
+
+      - name: Install emsdk 3.1.70
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+          . ./emsdk_env.sh && emcc --version | head -1
+
+      # Fetch only what is missing, so a cache hit skips straight to the gaps.
+      - name: Fetch sources
+        run: |
+          set -e
+          mkdir -p deps/src
+          get() {  # get <dir> <url> <strip>
+            [ -e "deps/src/$1/CMakeLists.txt" ] || [ -e "deps/src/$1/bootstrap.sh" ] && \
+              { echo "  $1: present"; return; }
+            echo "  $1: fetching"
+            mkdir -p "deps/src/$1"
+            curl -fsSL -o /tmp/s.tar.gz "$2"
+            tar xzf /tmp/s.tar.gz -C "deps/src/$1" --strip-components="$3"
+          }
+          get xercesc   https://archive.apache.org/dist/xerces/c/3/sources/xerces-c-3.2.5.tar.gz 1
+          get occt      https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/V7_8_1.tar.gz 1
+          get VTK-9.3.1 https://www.vtk.org/files/release/9.3/VTK-9.3.1.tar.gz                   1
+          get coin3d    https://github.com/coin3d/coin/archive/refs/tags/v4.0.3.tar.gz           1
+          get boost     https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.gz      1
+          echo "  --- fetched ---"; ls -1 deps/src | sed 's/^/    /'
+
+      - name: boost
+        id: boost
+        continue-on-error: true
+        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash build-boost-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+
+      - name: xerces-c
+        id: xerces
+        continue-on-error: true
+        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash build-xercesc-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+
+      - name: OCCT
+        id: occt
+        continue-on-error: true
+        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash configure-occt-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+
+      - name: VTK
+        id: vtk
+        continue-on-error: true
+        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash configure-vtk-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+
+      - name: Coin3D
+        id: coin
+        continue-on-error: true
+        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash configure-coin-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+
+      # To the step summary, not just stdout: `gh run view --log` came back empty for the
+      # probe run and the timings -- the entire point -- were unreadable afterwards.
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## FreeCAD wasm dependency build"
+            echo
+            echo "| dependency | seconds |"
+            echo "|---|---|"
+            for p in "boost:${{ steps.boost.outputs.secs }}" "xerces-c:${{ steps.xerces.outputs.secs }}" \
+                     "OCCT:${{ steps.occt.outputs.secs }}" "VTK:${{ steps.vtk.outputs.secs }}" \
+                     "Coin3D:${{ steps.coin.outputs.secs }}"; do
+              n="${p%%:*}"; v="${p#*:}"
+              echo "| $n | ${v:-**FAILED**} |"
+            done
+            echo
+            echo "### deps/wasm/lib"
+            echo '```'
+            ls -la deps/wasm/lib/ 2>/dev/null || echo "(nothing)"
+            echo '```'
+            echo
+            echo "Not a reproduction of production: the versions here are upstream picks, not"
+            echo "the ones production was built from. See BUILD-WEH.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+          ls -la deps/wasm/lib/ 2>/dev/null | sed 's/^/  /' || echo "  (nothing built)"
+
+      - name: Upload the built libraries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcweb-wasm-deps
+          path: |
+            deps/wasm/lib/*.a
+            deps/wasm/include
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Disk after
+        if: always()
+        run: df -h / | sed 's/^/  /'
