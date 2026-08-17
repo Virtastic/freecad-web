@@ -1108,6 +1108,24 @@ STATIC_DIM_BOUNDS = {
 #
 # Remove an entry once contact.inp matches production. Do not remove one to make CI green.
 #
+# A SECOND hypothesis, also tested, also not the answer -- but it leaves a real caveat behind.
+# Fortran is column-major, so bounding a NON-LAST dimension changes the stride of everything
+# after it, and 66 declarations here do exactly that (vl(0:mi(2),20), field(nfield,...), ...).
+# Handing such an array to a routine that re-declares it with the RUNTIME dimension would make
+# the callee read the wrong elements, silently.
+#
+# It is nevertheless safe for the global table, and the reason is worth stating: mi(1..3),
+# ncmat_ and the rest are applied UNIFORMLY to every declaration in the tree, so caller and
+# callee agree on 255. That is not a theory -- elas, plast, freq and therm all bound mi(2) on
+# a first dimension and are byte-identical to production. A static "refuse non-last dims"
+# check was written, refused 12 files including e_c3d.f and resultsmech.f, and was reverted:
+# a rule that contradicts a measured byte-identical result is the wrong rule.
+#
+# The caveat that DOES stand: a non-uniform bound -- ARRAY_DIM_BOUNDS or FILE_DIM_BOUNDS -- on
+# a non-last dimension of an array that gets passed onward is genuinely unsafe, because
+# nothing makes the callee agree. Today that is only field/mi(3), inside a routine already
+# excluded. Check it before adding another.
+#
 # One hypothesis has been tested and DISPROVEN, recorded so nobody repeats it: `save`. Both
 # routines' arrays were made automatic (nk 150000 -> 80000 drops them under the stack ceiling,
 # and `save` is now absent from the entire tree) and the deck produced numbers BYTE-IDENTICAL
