@@ -977,6 +977,113 @@ def truncate_sequence_field(text):
     return '\n'.join(out) + '\n'
 
 
+
+# --- F90 automatic arrays ----------------------------------------------------
+# A LOCAL array sized by a variable -- `real*8 elconloc(ncmat_)` where elconloc is not a
+# dummy argument. F90 allows it; FORTRAN 77, which is all f2c implements, does not, and f2c
+# rejects the entire file with
+#
+#     Declaration error for elconloc: adjustable dimension on non-argument
+#
+# The routine is then STUBBED: it compiles, it links, and at run time it does nothing. 63 of
+# CalculiX's 977 routines failed exactly this way -- including e_c3d.f, the 3D element
+# stiffness routine, without which solid FEM does not work at all.
+#
+# patches/ccx-wasm-automatic-array.patch already fixes this by hand for one file. This
+# generalises its shape: give the array a fixed bound, and emit a guard that STOPS the run
+# if the real dimension ever exceeds it.
+#
+# THE GUARD IS THE POINT. A fixed bound that is too small would otherwise overrun silently
+# and produce wrong stresses -- the worst failure a solver can have, because nothing looks
+# broken. With the guard the only outcomes are "correct" or "stops and says so". No entry
+# may be added to the table below without one.
+#
+# Only (array, dimension) pairs with an ESTABLISHED bound belong here. elconloc/ncmat_ takes
+# 1000 straight from the existing hand patch: same array, same dimension, same value. The
+# other recurring pairs (xlayer/mi(3), vl and voldl and q /0:mi(2), ...) are deliberately
+# absent -- see docs-ccx-stubbed-routines.md. Adding them needs CalculiX's dimensioning
+# conventions, not a guess.
+AUTO_ARRAY_BOUNDS = {
+    ('elconloc', 'ncmat_'): 1000,
+}
+
+RE_SUBPROG_HEAD = re.compile(
+    r'^\s{6,}(?:recursive\s+)?(?:subroutine|(?:real\*8|real|integer|logical|'
+    r'double\s+precision)?\s*function)\s+([a-z0-9_]+)\s*\(', re.I)
+
+# Anything that is still part of the declaration section; the guard goes after the last one.
+RE_DECL_LINE = re.compile(
+    r'^\s{6,}(implicit|integer|real|double|logical|character|dimension|common|parameter|'
+    r'data|save|external|intrinsic|include|equivalence)\b', re.I)
+
+
+def _dummy_args(lines):
+    """Names in the SUBROUTINE/FUNCTION argument list (they may keep adjustable dims)."""
+    for i, ln in enumerate(lines[:80]):
+        if not RE_SUBPROG_HEAD.match(ln):
+            continue
+        decl = ''
+        for k in range(i, min(i + 60, len(lines))):
+            code = lines[k][:72]
+            decl += code[6:] if len(code) > 6 else ''
+            if decl.count('(') and decl.count('(') == decl.count(')'):
+                break
+        if '(' in decl and ')' in decl:
+            inner = decl[decl.find('(') + 1:decl.rfind(')')]
+            return {a.strip().lower() for a in inner.split(',') if a.strip()}
+        return set()
+    return set()
+
+
+def fix_automatic_arrays(text):
+    """Give known local automatic arrays a fixed bound plus a stop-the-run guard."""
+    lines = text.split('\n')
+    args = _dummy_args(lines)
+
+    guards = []
+    for i, ln in enumerate(lines):
+        if len(ln) < 7 or (ln and ln[0] not in ' \t'):
+            continue                                   # comment or label column
+        squashed = ln.lower().replace(' ', '')
+        for (arr, dim), bound in AUTO_ARRAY_BOUNDS.items():
+            if arr in args:
+                continue                               # a dummy argument is legal F77
+            if ('%s(%s)' % (arr, dim)) not in squashed:
+                continue
+            new = re.sub(r'\b%s\s*\(\s*%s\s*\)' % (re.escape(arr), re.escape(dim)),
+                         '%s(%d)' % (arr, bound), ln, flags=re.I)
+            if new != ln:
+                lines[i] = new
+                guards.append((dim, bound))
+
+    if not guards:
+        return text
+
+    out, placed = [], False
+    for ln in lines:
+        stripped = ln.strip()
+        is_comment = bool(ln) and ln[0] in 'CcDd*!'
+        # Fixed form: column 6 non-blank/non-zero is a CONTINUATION of the previous
+        # statement. Without this the first continuation of the SUBROUTINE argument list
+        # looks like an executable line, and the guard gets emitted before the
+        # declarations -- which is not valid Fortran. Measured on e_c3d.f.
+        is_cont = len(ln) > 5 and ln[5] not in ' 0'
+        if (not placed and out and stripped and not is_comment and not is_cont
+                and not RE_DECL_LINE.match(ln) and not RE_SUBPROG_HEAD.match(ln)):
+            seen = set()
+            for dim, bound in guards:
+                if dim in seen:
+                    continue
+                seen.add(dim)
+                out.append('C     fcweb: %s bounded a local automatic array' % dim)
+                out.append('      if(%s.gt.%d) then' % (dim, bound))
+                out.append("         write(*,*) '*ERROR: %s above the wasm build bound'" % dim)
+                out.append('         call exit(201)')
+                out.append('      endif')
+            placed = True
+        out.append(ln)
+    return '\n'.join(out)
+
 def convert(text):
     text = truncate_sequence_field(text)
     text = strip_inline_comments(text)
@@ -985,6 +1092,7 @@ def convert(text):
     text = split_decl_initialisers(text)
     text = expand_reductions(text, declared_dims(text.splitlines()))
     text = expand_allocatables(text)
+    text = fix_automatic_arrays(text)
     text = sink_data_statements(text)
     text = hoist_includes(text)
     text = RE_FLUSH.sub(r'\1continue', text)
