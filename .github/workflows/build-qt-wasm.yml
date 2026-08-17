@@ -55,22 +55,48 @@ jobs:
           cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
           . ./emsdk_env.sh && emcc --version | head -1
 
+      # Everything below logs to /tmp/qtlogs and is uploaded as an ARTIFACT. GitHub's job-log
+      # API has returned 404 for this repo for the whole session, so the normal way of finding
+      # out why a step failed is unavailable -- but the artifacts API works. Routing the
+      # diagnostics through it is the difference between a debuggable failure and a dead end.
+      - name: Prepare log dir + environment fingerprint
+        run: |
+          mkdir -p /tmp/qtlogs
+          {
+            echo "== tools =="
+            for t in cmake ninja python3 gcc g++ perl; do
+              printf '%-8s %s\n' "$t" "$(command -v $t || echo MISSING)"
+            done
+            cmake --version | head -1; ninja --version 2>/dev/null || echo "ninja: MISSING"
+            echo; echo "== disk =="; df -h /
+          } > /tmp/qtlogs/00-env.txt 2>&1
+          cat /tmp/qtlogs/00-env.txt
+
       # The host Qt: ordinary desktop build, no wasm involved, so a prebuilt is fine and saves
       # roughly an hour and a half. It only has to match the target VERSION.
       - name: Host Qt 6.9.0 (prebuilt — it never touches wasm)
         run: |
-          set -e
-          python3 -m pip install --quiet aqtinstall
-          python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 -O "$PWD/qt-host"
-          "$PWD/qt-host/6.9.0/gcc_64/bin/qmake" -query QT_VERSION | sed 's/^/  host Qt: /'
+          set -o pipefail
+          rc=0
+          { python3 -m pip install --quiet aqtinstall &&
+            python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 -O "$PWD/qt-host"
+          } > /tmp/qtlogs/01-host-qt.txt 2>&1 || rc=$?
+          echo "  aqt exit=$rc"
+          find "$PWD/qt-host" -maxdepth 3 -name qmake >> /tmp/qtlogs/01-host-qt.txt 2>&1 || true
+          tail -25 /tmp/qtlogs/01-host-qt.txt
+          exit $rc
 
       - name: Qt sources
         run: |
-          set -e
-          curl -fsSL -o /tmp/qt.tar.xz \
-            https://download.qt.io/archive/qt/6.9/6.9.0/single/qt-everywhere-src-6.9.0.tar.xz
-          mkdir -p qt-src && tar xJf /tmp/qt.tar.xz -C qt-src --strip-components=1
-          ls qt-src/configure >/dev/null && echo "  ok"
+          set -o pipefail
+          rc=0
+          { curl -fsSL -o /tmp/qt.tar.xz \
+              https://download.qt.io/archive/qt/6.9/6.9.0/single/qt-everywhere-src-6.9.0.tar.xz &&
+            mkdir -p qt-src && tar xJf /tmp/qt.tar.xz -C qt-src --strip-components=1
+          } > /tmp/qtlogs/02-src.txt 2>&1 || rc=$?
+          ls qt-src/configure >> /tmp/qtlogs/02-src.txt 2>&1 || true
+          echo "  src exit=$rc"; tail -10 /tmp/qtlogs/02-src.txt
+          exit $rc
 
       # Only the modules FreeCAD actually links. Building all of Qt here would add hours for
       # things this app never loads.
@@ -93,26 +119,46 @@ jobs:
             -release -no-warnings-are-errors \
             -submodules qtbase,qtsvg,qtdeclarative,qttools \
             -skip qtwebengine \
-            -- -DCMAKE_POLICY_VERSION_MINIMUM=3.5 > /tmp/qtconf.log 2>&1 || rc=$?
+            -- -DCMAKE_POLICY_VERSION_MINIMUM=3.5 > /tmp/qtlogs/03-configure.txt 2>&1 || rc=$?
+          # CMake's own error files say far more than configure's stdout when the failure is
+          # in a compile test, and they are the usual reason a wasm configure dies.
+          for f in qt-build/CMakeFiles/CMakeError.log qt-build/CMakeFiles/CMakeOutput.log \
+                   qt-build/config.summary; do
+            [ -s "$f" ] && cp "$f" "/tmp/qtlogs/04-$(basename "$f")" 2>/dev/null || true
+          done
           {
             echo "### configure (exit $rc)"
             echo '```'
-            tail -60 /tmp/qtconf.log
+            tail -60 /tmp/qtlogs/03-configure.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          tail -60 /tmp/qtconf.log
+          tail -60 /tmp/qtlogs/03-configure.txt
           exit $rc
 
       - name: Build and install
         id: build
         run: |
-          set -e
+          set -o pipefail
           . emsdk/emsdk_env.sh
           t0=$SECONDS
-          cmake --build qt-build --parallel
-          cmake --install qt-build
-          echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
-          echo "  === Qt build: $((SECONDS-t0))s ==="
+          rc=0
+          { cmake --build qt-build --parallel && cmake --install qt-build; } \
+            > /tmp/qtlogs/05-build.txt 2>&1 || rc=$?
+          [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  === Qt build exit=$rc in $((SECONDS-t0))s ==="
+          tail -40 /tmp/qtlogs/05-build.txt
+          exit $rc
+
+      # THE POINT OF ALL THE ABOVE. The jobs/logs API 404s for this repo; the artifacts API
+      # works. So the diagnostics leave by the door that is actually open.
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-wasm-logs
+          path: /tmp/qtlogs
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Report
         if: always()
