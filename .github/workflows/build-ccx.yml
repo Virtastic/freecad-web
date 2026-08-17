@@ -231,9 +231,14 @@ jobs:
       # Not "converge", not "look reasonable" -- match. A bounded array that is subtly wrong,
       # or a routine still stubbed, shows up here as a different number and nowhere else.
       #
-      # Advisory for now (|| true on the diff): production's own module still has ~60 stubbed
-      # routines, so some decks legitimately differ until the CI build is the better one.
-      # Read the output. Do not release a CalculiX module while any line is unexplained.
+      # BLOCKING, as of run 31992713435, where all four decks first agreed with production
+      # digit for digit -- including the 1e-13 and 1e-14 round-off noise, which is what makes
+      # this a reproduction rather than a resemblance. From that point on, any difference is
+      # a regression in the build and not a known gap, so it fails the run.
+      #
+      # It has already caught two defects that were invisible to compilation: a routine the
+      # stress path needs left stubbed, and an 80-line scan window that silently rewrote
+      # ARPACK's dummy-argument array shapes. Both builds were green on every other check.
       - name: Validate the decks against production's module
         if: always()
         run: |
@@ -282,8 +287,9 @@ jobs:
           if diff -u /tmp/val-live.txt /tmp/val-built.txt > /tmp/val.diff; then
             echo "  IDENTICAL — every deck gives production's numbers"
           else
-            echo "  DIFFERENCES (expected while production still carries stubs):"
+            echo "::error::a deck no longer agrees with production — see the diff below"
             sed 's/^/    /' /tmp/val.diff
+            exit 1
           fi
 
       - name: Disk after

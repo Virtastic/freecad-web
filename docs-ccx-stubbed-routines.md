@@ -34,8 +34,31 @@ someone builds from clean. Nobody had, until 2026-08-16.
 | clean build, no patches | 69 | 908/977 | 3,797,838 | 986,945 |
 | + `ccx-wasm-automatic-array.patch` | 68 | 910/977 | 3,846,632 | 938,151 |
 | + `f77ify` rule, `ncmat_` only | 60 | 918/977 | 3,883,782 | 901,001 |
-| + `mi(2)`/`mi(3)` bounds | **30** | **948/977** | **4,543,921** | **240,862** |
+| + `mi(2)`/`mi(3)` bounds | 30 | 948/977 | 4,543,921 | 240,862 |
+| + `mi(1)` + static problem-size bounds | **27** | **951/977** | **4,599,882** | **184,901** |
 | production (target) | ? | ? | 4,784,783 | — |
+
+## Reproduced
+
+**All four validation decks now give production's numbers exactly** (run 31992713435):
+
+```
+IDENTICAL — every deck gives production's numbers
+```
+
+elastic, frequency, plastic and thermal — matching digit for digit, including the 1e-13 and
+1e-14 round-off noise. That last part is what makes it a reproduction rather than a
+resemblance: round-off is where two differently-built solvers diverge first.
+
+So the original defect is closed. A clean build from this repo plus upstream sources now
+produces a CalculiX module that behaves like the one in production, with no undocumented
+edits on a build machine. The gate is blocking as of that run.
+
+A note on what the numbers do and do not say. 27 routines are still stubbed and the wasm is
+still 184,901 bytes smaller than production's, so the two modules are not byte-identical and
+this does not prove they agree on analyses the decks do not cover. What it does prove is that
+every path these four exercise is reproduced, and that a regression on them now fails the
+build.
 
 **`e_c3d.f` translates.** The 3D element stiffness routine — the one whose absence breaks
 solid FEM outright, and the reason any of this mattered — is no longer stubbed. So are
