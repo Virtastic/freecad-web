@@ -111,7 +111,8 @@ jobs:
           elif patch -p1 -R --dry-run < "$GITHUB_WORKSPACE/patches/occt-freetype-tags-const.patch" >/dev/null 2>&1; then
             echo "  already applied"
           else
-            echo "::warning::occt-freetype-tags-const.patch no longer applies -- OCCT may have fixed it upstream"
+            echo "::error::occt-freetype-tags-const.patch does not apply -- refusing to build OCCT that will fail 2716 targets in"
+            exit 1
           fi
 
       # OCCT's script runs `embuilder build freetype >/dev/null 2>&1` and, under set -e, dies
@@ -171,6 +172,8 @@ jobs:
           echo "BOOST_ROOT=$PWD/deps/src/boost"           >> "$GITHUB_ENV"
           echo "Boost_INCLUDE_DIR=$PWD/deps/src/boost"    >> "$GITHUB_ENV"
           echo "BOOST_INCLUDEDIR=$PWD/deps/src/boost"     >> "$GITHUB_ENV"
+          # Prove the header FindBoost actually probes for is where we are pointing it.
+          ls deps/src/boost/boost/version.hpp && echo "  boost/version.hpp present"             || echo "::warning::boost/version.hpp missing -- FindBoost will fail"
 
       - name: OCCT
         id: occt

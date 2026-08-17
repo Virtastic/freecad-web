@@ -4,26 +4,32 @@ OCCT assigns it straight to a `const char*`:
 
     src/StdPrs/StdPrs_BRepFont.cxx:460:17: error: cannot initialize a variable of type
     'const char *' with an rvalue of type 'unsigned char *'
-        const char* aTags = &anOutline->tags[aStartIndex];
+        const char* aTags      = &anOutline->tags[aStartIndex];
 
 Older freetype declared `tags` as `char*`, so this compiled; current freetype -- including the
 version emscripten's `--use-port=freetype` materialises -- declares it `unsigned char*`, and
-clang rejects the narrowing conversion outright rather than warning.
+clang rejects the conversion outright rather than warning.
 
 Only the pointer type is wrong. Every use below reads tag bits through FT_CURVE_TAG(), which
-masks the low bits and does not care about signedness, so an explicit cast is the whole fix
-and changes no behaviour.
+masks the low bits and is signedness-agnostic, so the cast is the whole fix and changes no
+behaviour.
 
 Found by building OCCT for wasm in CI (run 32046710386); it fails at target 2716 of 5480.
+
+NOTE: generated with `diff -u` against the real V7_8_1 file, not written by hand. The first
+version of this patch WAS hand-written from memory. It had the wrong indentation (4 spaces
+instead of 6) and the wrong neighbouring identifier (aEndIndex for anEndIndex), so it silently
+failed to apply -- and the build then failed in exactly the same place, which I nearly
+mistook for "the fix does not work" rather than "the fix never ran".
 
 --- a/src/StdPrs/StdPrs_BRepFont.cxx
 +++ b/src/StdPrs/StdPrs_BRepFont.cxx
 @@ -457,7 +457,7 @@
-     }
-
+   for (short aContour = 0, aStartIndex = 0; aContour < anOutline->n_contours; ++aContour)
+   {
      const FT_Vector* aPntList = &anOutline->points[aStartIndex];
 -    const char* aTags      = &anOutline->tags[aStartIndex];
 +    const char* aTags      = reinterpret_cast<const char*>(&anOutline->tags[aStartIndex]);
-     const short  aEndIndex = anOutline->contours[aContour];
-     const short  aPntsNb   = (aEndIndex - aStartIndex) + 1;
-     if (aPntsNb < 3 && !myIsSingleLine)
+     const short anEndIndex = anOutline->contours[aContour];
+     const short aPntsNb    = (anEndIndex - aStartIndex) + 1;
+     aStartIndex = anEndIndex + 1;
