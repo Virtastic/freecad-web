@@ -40,11 +40,15 @@ for f in *.f; do
   if "$F2C" -a -A -NC1000 -d"$BUILD/c" "$f" >/dev/null 2>"$BUILD/f2c-$f.log" \
      && ! grep -q '^Error' "$BUILD/f2c-$f.log"; then
     nf=$((nf+1))
+    rm -f "$BUILD/f2c-$f.log"        # succeeded: nothing to learn
+    # NOTE: the failure branch deliberately KEEPS its log. Deleting it
+    # unconditionally is why 68 routines were known to be stubbed but
+    # nobody could say WHY -- and a stubbed routine silently does nothing
+    # at run time. The reason is what makes tools/f77ify.py extendable.
   else
     echo "$f" >> "$BUILD/UNCONVERTED.txt"
     rm -f "$BUILD/c/${f%.f}.c"
   fi
-  rm -f "$BUILD/f2c-$f.log"
 done
 cd "$ROOT"
 

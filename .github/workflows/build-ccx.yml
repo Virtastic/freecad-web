@@ -183,6 +183,21 @@ jobs:
           echo "  --- failed to compile ---"
           grep -E '^CC-FAIL' "$f" | sed 's/^/    /' || echo "    (none)"
 
+      # WHY each routine fails, which is the thing that makes f77ify.py extendable. Without
+      # this the gap is a list of names; with it, it is a list of unsupported constructs.
+      - name: Why f2c rejected them
+        run: |
+          set -e
+          n=$(ls build-ccx-weh/f2c-*.log 2>/dev/null | wc -l)
+          echo "  logs kept: $n"
+          [ "$n" -gt 0 ] || exit 0
+          echo
+          echo "  --- error kinds, most common first ---"
+          cat build-ccx-weh/f2c-*.log 2>/dev/null             | grep -E '^(Error|Warning)'             | sed -E 's/line [0-9]+/line N/g; s/"[^"]*"/"X"/g; s/[0-9]+/N/g'             | sort | uniq -c | sort -rn | head -25 | sed 's/^/    /'
+          echo
+          echo "  --- a worked example: the 3D element stiffness routine ---"
+          cat build-ccx-weh/f2c-e_c3d.f.log 2>/dev/null | head -12 | sed 's/^/    /' || echo "    (no log)"
+
       - name: Link ccx.wasm
         env:
           FCWEB_CCX_PTHREADS: ${{ inputs.pthreads && '1' || '0' }}
@@ -222,5 +237,6 @@ jobs:
             play-gui/ccx.js
             play-gui/ccx.wasm
             build-ccx-weh/UNCONVERTED.txt
+            build-ccx-weh/f2c-*.log
           if-no-files-found: warn
           retention-days: 14
