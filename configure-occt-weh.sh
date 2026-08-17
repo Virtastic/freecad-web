@@ -11,6 +11,11 @@ CACHE=$(em-config CACHE)
 FT_INC="$CACHE/sysroot/include/freetype2"
 FT_LIBDIR="$CACHE/sysroot/lib/wasm32-emscripten"
 
+# BUILD_MODULE_DETools=OFF below: DETools builds ExpToCasExe, OCCT's EXPRESS-schema compiler.
+# It is a developer tool, not a library FreeCAD links -- verified, TKExpress appears in zero
+# link scripts in this repo. Cross-compiled it lands as .js+.wasm rather than a native binary,
+# so OCCT's install rule looks for build-occt/lin32/clang/bin/ExpToCasExe.wasm, does not find
+# it, and aborts the entire install AFTER all 5480 objects have compiled. CI run 32064568984.
 emcmake cmake -S deps/src/occt -B build-occt -G Ninja \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -D3RDPARTY_FREETYPE_INCLUDE_DIR_ft2build="$FT_INC" \
@@ -20,6 +25,7 @@ emcmake cmake -S deps/src/occt -B build-occt -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_LIBRARY_TYPE=Static \
   -DBUILD_MODULE_Draw=OFF \
+  -DBUILD_MODULE_DETools=OFF \
   -DBUILD_MODULE_Visualization=OFF \
   -DBUILD_MODULE_ApplicationFramework=ON \
   -DBUILD_MODULE_DataExchange=ON \

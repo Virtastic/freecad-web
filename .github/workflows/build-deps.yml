@@ -165,7 +165,11 @@ jobs:
           if [ -d deps/src/boost/boost ] && [ ! -e deps/wasm/include/boost ]; then
             cp -r deps/src/boost/boost deps/wasm/include/boost
           fi
-          echo "  boost headers: $(find deps/wasm/include/boost -name '*.hpp' 2>/dev/null | wc -l) .hpp files"
+          {
+            echo "boost headers: $(find deps/wasm/include/boost -name '*.hpp' 2>/dev/null | wc -l) .hpp files"
+            echo "BOOST_ROOT will be: $PWD/deps/src/boost"
+            ls -la deps/src/boost/boost/version.hpp 2>&1 || echo "version.hpp MISSING"
+          } | tee /tmp/deplogs/02-boost-headers.txt
           # Copying headers is not enough: Coin's find_package(Boost) resolves through
           # FindBoost, which searches BOOST_ROOT / Boost_INCLUDE_DIR, not $DW/include. Run
           # 32046710386 still failed with "missing: Boost_INCLUDE_DIR" after the copy.
