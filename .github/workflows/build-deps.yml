@@ -89,27 +89,62 @@ jobs:
       - name: boost
         id: boost
         continue-on-error: true
-        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash build-boost-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p /tmp/deplogs
+          . emsdk/emsdk_env.sh
+          t0=$SECONDS; rc=0
+          bash build-boost-weh.sh > /tmp/deplogs/boost.txt 2>&1 || rc=$?
+          [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  boost exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/boost.txt
+          exit $rc
 
       - name: xerces-c
         id: xerces
         continue-on-error: true
-        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash build-xercesc-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p /tmp/deplogs
+          . emsdk/emsdk_env.sh
+          t0=$SECONDS; rc=0
+          bash build-xercesc-weh.sh > /tmp/deplogs/xerces.txt 2>&1 || rc=$?
+          [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  xerces exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/xerces.txt
+          exit $rc
 
       - name: OCCT
         id: occt
         continue-on-error: true
-        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash configure-occt-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p /tmp/deplogs
+          . emsdk/emsdk_env.sh
+          t0=$SECONDS; rc=0
+          bash configure-occt-weh.sh > /tmp/deplogs/occt.txt 2>&1 || rc=$?
+          [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  occt exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/occt.txt
+          exit $rc
 
       - name: VTK
         id: vtk
         continue-on-error: true
-        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash configure-vtk-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p /tmp/deplogs
+          . emsdk/emsdk_env.sh
+          t0=$SECONDS; rc=0
+          bash configure-vtk-weh.sh > /tmp/deplogs/vtk.txt 2>&1 || rc=$?
+          [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  vtk exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/vtk.txt
+          exit $rc
 
       - name: Coin3D
         id: coin
         continue-on-error: true
-        run: . emsdk/emsdk_env.sh && t0=$SECONDS && bash configure-coin-weh.sh && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p /tmp/deplogs
+          . emsdk/emsdk_env.sh
+          t0=$SECONDS; rc=0
+          bash configure-coin-weh.sh > /tmp/deplogs/coin.txt 2>&1 || rc=$?
+          [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  coin exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/coin.txt
+          exit $rc
 
       # To the step summary, not just stdout: `gh run view --log` came back empty for the
       # probe run and the timings -- the entire point -- were unreadable afterwards.
@@ -137,6 +172,18 @@ jobs:
             echo "the ones production was built from. See BUILD-WEH.md."
           } >> "$GITHUB_STEP_SUMMARY"
           ls -la deps/wasm/lib/ 2>/dev/null | sed 's/^/  /' || echo "  (nothing built)"
+
+      # OCCT and Coin3D failed silently in run 32036398715 -- continue-on-error kept the run
+      # green and the reason went nowhere, because this workflow uploaded libraries but not
+      # logs. The jobs/logs API 404s for this repo, so the artifact is the only channel out.
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcweb-deps-logs
+          path: /tmp/deplogs
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload the built libraries
         if: always()
