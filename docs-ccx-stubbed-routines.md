@@ -1,7 +1,7 @@
-# CalculiX: the 68 routines a clean build cannot translate
+# CalculiX: the routines a clean build cannot translate
 
-Produced by `.github/workflows/build-ccx.yml` (run 31985042689), from CalculiX 2.22
-upstream + `patches/ccx-wasm-automatic-array.patch`.
+Measured by `.github/workflows/build-ccx.yml` from CalculiX 2.22 upstream. Started at 69
+stubbed routines (run 31985042689); **now 30** (run 31988178559).
 
 ## What this is
 
@@ -25,46 +25,70 @@ someone builds from clean. Nobody had, until 2026-08-16.
 
 ## Measured progress
 
-| | stubbed | translated | ccx.wasm |
-|---|---|---|---|
-| clean build, no patches | 69 | 908/977 | 3,797,838 |
-| + `ccx-wasm-automatic-array.patch` | 68 | 910/977 | 3,846,632 |
-| + `f77ify` automatic-array rule | **60** | **918/977** | 3,883,782 |
-| production (target) | ? | ? | 4,784,783 |
+| | stubbed | translated | ccx.wasm | gap to production |
+|---|---|---|---|---|
+| clean build, no patches | 69 | 908/977 | 3,797,838 | 986,945 |
+| + `ccx-wasm-automatic-array.patch` | 68 | 910/977 | 3,846,632 | 938,151 |
+| + `f77ify` rule, `ncmat_` only | 60 | 918/977 | 3,883,782 | 901,001 |
+| + `mi(2)`/`mi(3)` bounds | **30** | **948/977** | **4,543,921** | **240,862** |
+| production (target) | ? | ? | 4,784,783 | — |
 
-The `f77ify` rule handles `elconloc(ncmat_)` — 26 routines declared it, and 8 of those had
-*no other* automatic array, so they now translate. The rest need the arrays below as well.
+**`e_c3d.f` translates.** The 3D element stiffness routine — the one whose absence breaks
+solid FEM outright, and the reason any of this mattered — is no longer stubbed. So are
+`gauss.f`'s callers, `mafilldm.f`, `resultsmech.f`, `resultstherm.f`, `e_c3d_th.f` and the
+rest of the core solid/thermal set. The size gap is down by 73%.
 
-## What still blocks the remaining 60
+## Where the bounds came from
 
-`e_c3d.f`, the routine that matters most, is now down to exactly two:
+Not from judgement — from CalculiX's own source. `mi` is its limits array: `mi(1)`
+integration points, `mi(2)` DOF per node, `mi(3)` composite layers.
+
+`mi(2)` is initialised to 3 (`ini_cal.c:217`) and every site that raises it uses a small
+constant (`allocation.f`: 3, 4, 5, 6) except two — and CalculiX rejects both itself:
 
 ```
-Error on line 2176 of e_c3d.f: Declaration error for voldl:  adjustable dimension on non-argument
-Error on line 2176 of e_c3d.f: Declaration error for xlayer: adjustable dimension on non-argument
+userelements.f:75       *USER ELEMENT     -> '*ERROR ... exceeds 255'
+matrix2userelem.f:136   *MATRIX ASSEMBLE  -> refuses any ndof but 3 or 6
 ```
 
-Across all 60, the blockers concentrate hard:
+So **255 is the limit CalculiX enforces, not one we chose**; no deck it accepts can exceed
+it, and that guard can never fire. `mi(3)` is different: `allocation.f:2092` grows it from
+`nlayer`, counted from input lines with no upstream limit. 255 there *is* a chosen ceiling —
+the one entry that can really fire, which is exactly why the guard is mandatory.
 
-| array | routines | declared as |
+Two constraints shaped the implementation:
+
+- **One dimension of several.** These are `vl(0:mi(2),20)`, not `elconloc(ncmat_)`, so the
+  rule rewrites one dimension of a multi-dimensional declaration and tracks declaration
+  context across continuation lines — an executable subscript mentioning `mi(2)` must not be
+  touched, and neither must a dummy argument, whose adjustable dimension is legal F77.
+- **A stack budget.** f2c runs with `-a`, so these are stack arrays, and the link sets
+  `STACK_SIZE=16MB`. `field(999,20*mi(3))` costs 160 KB *per layer*, so `mi(3)=255` would ask
+  for 40 MB — fine on paper, memory corruption at run time. The rule computes the size and
+  refuses above 4 MB, leaving the routine stubbed; `field` takes a named override at 16.
+
+## What still blocks the remaining 30
+
+Three unrelated groups, none of them the original construct:
+
+| cause | routines | note |
 |---|---|---|
-| `xlayer` | 15 | `xlayer(mi(3),...)` |
-| `vl` | 15 | `vl(0:mi(2),...)` |
-| `voldl` | 14 | `voldl(0:mi(2),...)` |
-| `q` | 7 | `q(0:mi(2),...)` |
-| `field`, `x`, `y`, `veoldl`, `vconl` | 2–4 each | mostly `0:mi(2)` |
+| `wr_ardecls: nonconstant array size` | ~20 | automatic arrays again, but on dimension expressions not yet in the table (`basis.f`, `near2d/3d.f`, `patch.f`, `cavity_refine.f`, `extendmesh.f`, `interpolateinface.f`, `extrapolate*.f`, `slavint*.f`, …) |
+| US3/US45 user shell elements | 6 | `e_c3d_us3/us45`, `resultsmech_us3/us45`, `us3_sub`, `us4_sub`. BUILD-WEH.md records FreeCAD never emits them — these can stay stubbed |
+| `xlocal.f` | 1 | `subscripts on scalar variable`, a separate root cause |
 
-`mi` is CalculiX's limits array: `mi(1)` integration points, `mi(2)` DOF per node, `mi(3)`
-composite layers. All are small in practice, so generous bounds cost almost nothing.
+Note `wr_ardecls` is a *different* f2c message from `adjustable dimension on non-argument`:
+it fires later, when f2c writes the declaration out, so the same fix shape applies but the
+dimension expressions have to be identified first.
 
-**Two things are needed to finish this**, and neither is guesswork about correctness:
+## Validating any of this
 
-1. Bounds for `mi(2)` and `mi(3)` from CalculiX's own conventions. With the guard, a bound
-   that turns out too small **stops the run** rather than corrupting results — so the risk of
-   choosing generously is a refused analysis, never a wrong one.
-2. The `f77ify` rule currently rewrites single-dimension declarations (`name(dim)`). These
-   are multi-dimensional (`vl(0:mi(2),20)`), which needs the rule extended to rewrite one
-   dimension of several.
+`.github/workflows/build-ccx.yml` now runs the four decks in `scratchpad/ccxval` (elastic,
+modal, plastic, thermal) through both the module it just built and the one production is
+serving, and diffs the result extremes. **Results must match, not converge** — a bounded
+array that is subtly wrong is a slightly different number, not a crash, and there is nowhere
+else it shows up. The step is advisory while production itself still carries stubs; it
+becomes the release gate the moment the CI build is the one intended to ship.
 
 ## Root cause: one construct explains 63 of the 68
 
@@ -119,83 +143,11 @@ what makes the existing hand patch safe and what any generic version must preser
 Choosing those bounds needs CalculiX's dimensioning conventions, so it is written down here
 rather than guessed at.
 
-## The work list
+## The old work list is obsolete
 
-Fix these on the build machine and capture the delta as a patch beside
-`ccx-wasm-automatic-array.patch`. When the CI code section matches production's, the CI
-build is trustworthy and threaded CalculiX becomes the one-flag change it was meant to be.
-
-### Core solid/thermal FEM -- stubbing these breaks analyses
-    calcmass.f
-    calcstressheatfluxfem.f
-    e_c3d.f
-    e_c3d_cs_se.f
-    e_c3d_duds.f
-    e_c3d_em.f
-    e_c3d_prhs.f
-    e_c3d_se.f
-    e_c3d_th.f
-    e_c3d_u.f
-    e_c3d_u1.f
-    e_c3d_us3.f
-    e_c3d_us45.f
-    e_c3d_v1rhs.f
-    e_c3d_v2rhs.f
-    extrapolate.f
-    extrapolate_se.f
-    extrapolatecontact.f
-    extrapolatefem.f
-    gauss.f
-    mafilldm.f
-    mafilldmss.f
-    mafillv1rhs.f
-
-### Everything else
-    basis.f
-    beamextscheme.f
-    calcenergy.f
-    calcspringforc.f
-    calcview.f
-    cavity_refine.f
-    cavityext_refine.f
-    checkconstraint.f
-    e_corio.f
-    e_damp.f
-    effectivemodalmass.f
-    extendmesh.f
-    gen3dfrom2d.f
-    initialconditionss.f
-    interpolateinface.f
-    jouleheating.f
-    near2d.f
-    near3d.f
-    objective_mass_dx.f
-    objective_shapeener_dx.f
-    patch.f
-    printoutelem.f
-    printoutface.f
-    printoutfacefem.f
-    printoutint.f
-    printoutintfluidfem.f
-    regularization_gn_c.f
-    resultsem.f
-    resultsmech.f
-    resultsmech_matrix.f
-    resultsmech_se.f
-    resultsmech_u1.f
-    resultsmech_us3.f
-    resultsmech_us45.f
-    resultstherm.f
-    slavintmortar.f
-    slavintpoints.f
-    springstiff_n2f_th.f
-    umat_ciarlet_el.f
-    us3_sub.f
-    us4_sub.f
-    writemeshinp.f
-    writetrilinos.f
-    xlocal.f
-    zienzhu.f
+Every routine in the "core solid/thermal FEM" group that this document used to list as
+needing hand work now translates, including `e_c3d.f`. The current list is the 30 above,
+which the build prints on every run — read it there rather than from a copy that goes stale.
 
 ## Note on US3/US45
 
