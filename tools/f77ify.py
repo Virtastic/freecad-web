@@ -1038,14 +1038,24 @@ DIM_BOUNDS = {
     'mi(2)': 255,
     'mi(3)': 255,
 }
-# Empty, and it should stay that way unless the bound lands on an array's LAST dimension.
-# ('field','mi(3)') lived here and was wrong: combined with the global nfield entry it turned
+# An entry here MUST bound an array's LAST dimension. Fortran is column-major, so bounding any
+# earlier dimension changes the stride of everything after it -- and if the array is then
+# handed to a routine that re-declares it with the RUNTIME dimension, the callee reads the
+# wrong elements with nothing to warn you.
+#
+# ('field','mi(3)') satisfies that: in extrapolate.f's field(999,20*mi(3)) the bounded
+# dimension IS the last one, so the layout is unchanged and 999 stays 999. It is also load
+# bearing -- without it that array is 40 MB, over the stack ceiling, and extrapolate.f falls
+# back to a stub, which takes the elas and plast decks with it. Measured: removing it dropped
+# 959/977 to 954/977 and broke both.
+#
+# What was wrong was the separate GLOBAL `nfield` bound, now removed: together they turned
 #   field(nfield,20*mi(3))  ->  field(20,20*16)
-# which bounds the FIRST dimension. Fortran is column-major, so that changes the stride of
-# everything after it, while nfield is a dummy argument -- so any routine handed `field`
-# computes its strides from the RUNTIME nfield and reads the wrong elements. Silently.
-# This is precisely the hazard written up below, which I documented and then left switched on.
-ARRAY_DIM_BOUNDS = {}
+# in extrapolatecontact.f, bounding the FIRST dimension of an array whose stride a callee
+# computes from the runtime nfield.
+ARRAY_DIM_BOUNDS = {
+    ('field', 'mi(3)'): 16,
+}
 
 # PROBLEM-SIZE dimensions, which are a different animal. Everything above is a per-element
 # constant, so a generous bound costs a few KB. These scale with the MODEL -- neq(2) is the
@@ -1793,13 +1803,13 @@ def selftest():
         '      real*8 huge_(999,20*mi(3))', '      huge_(1,1)=0.d0', '      end']))
     assert '20*255' not in big, big          # refused, left for the stub path
     assert 'mi(3)' in big, big
-    # ...and there is no longer an override that would bound its FIRST dimension. See
-    # ARRAY_DIM_BOUNDS: bounding a non-last dimension of an array that gets passed on is
-    # unsafe, and field(nfield,...) is exactly that shape.
+    # ...while the named override brings the same shape inside the budget. Note the bounded
+    # dimension is the LAST one, which is what makes the override safe -- see
+    # ARRAY_DIM_BOUNDS.
     ovr = fix_automatic_arrays('\n'.join([
         '      subroutine t(mi)', '      integer mi(3)',
         '      real*8 field(999,20*mi(3))', '      field(1,1)=0.d0', '      end']))
-    assert '20*mi(3)' in ovr, ovr   # no override any more: must be left alone
+    assert '20*16' in ovr, ovr      # LAST dimension: safe to bound, and load bearing
     # Every bound in the table must carry a guard -- the whole basis for using fixed bounds.
     for _dim in DIM_BOUNDS:
         assert _dim in ('ncmat_', 'mi(1)', 'mi(2)', 'mi(3)'), _dim
