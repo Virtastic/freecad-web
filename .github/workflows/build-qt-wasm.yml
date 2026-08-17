@@ -1,0 +1,120 @@
+name: build Qt 6.9 for wasm (EH + JSPI)
+
+# The last expensive piece of a FreeCAD relink, and the one I kept citing as the reason the
+# whole thing was impossible here.
+#
+# THE THING THAT MAKES IT TRACTABLE
+#
+# Cross-building Qt for wasm needs a HOST Qt of the same version, to run moc/rcc/uic and the
+# build tooling. That sounds like two full Qt builds and it is why "Qt from source" reads as
+# 5+ hours. But only the TARGET needs production's special features:
+#
+#     -feature-wasm-exceptions -feature-wasm-jspi
+#
+# The host Qt runs on the runner's own CPU and never touches wasm, so it can be an ordinary
+# prebuilt from aqtinstall. That removes one entire Qt build from the critical path and leaves
+# a single cross-compile.
+#
+# This is exactly why an official Qt wasm binary cannot be used for the TARGET: the shipped
+# wasm builds have neither feature, and BUILD-WEH.md is explicit that mixing one JS-EH library
+# into this world silently reintroduces invoke_* trampolines, at which point JSPI cannot
+# suspend across the JS frame and dialogs stop returning the user's real choice.
+#
+# NOT A REPRODUCTION. Qt 6.9.0 is named in BUILD-WEH.md, so unlike the other 21 dependencies
+# this version is actually known -- but the configure flags here are reconstructed from that
+# document, not captured from the machine that built production. Treat the output as "a Qt
+# that should be compatible", and confirm against deps-versions.txt when it exists.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
+          df -h / | sed 's/^/  /'
+
+      - name: Cache the built Qt
+        uses: actions/cache@v4
+        with:
+          path: qt/6.9.0/wasm_mt_weh
+          key: fcweb-qt-6.9.0-wasm-eh-jspi-emsdk3.1.70-v1
+
+      - name: Install emsdk 3.1.70
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+          . ./emsdk_env.sh && emcc --version | head -1
+
+      # The host Qt: ordinary desktop build, no wasm involved, so a prebuilt is fine and saves
+      # roughly an hour and a half. It only has to match the target VERSION.
+      - name: Host Qt 6.9.0 (prebuilt — it never touches wasm)
+        run: |
+          set -e
+          python3 -m pip install --quiet aqtinstall
+          python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 -O "$PWD/qt-host"
+          "$PWD/qt-host/6.9.0/gcc_64/bin/qmake" -query QT_VERSION | sed 's/^/  host Qt: /'
+
+      - name: Qt sources
+        run: |
+          set -e
+          curl -fsSL -o /tmp/qt.tar.xz \
+            https://download.qt.io/archive/qt/6.9/6.9.0/single/qt-everywhere-src-6.9.0.tar.xz
+          mkdir -p qt-src && tar xJf /tmp/qt.tar.xz -C qt-src --strip-components=1
+          ls qt-src/configure >/dev/null && echo "  ok"
+
+      # Only the modules FreeCAD actually links. Building all of Qt here would add hours for
+      # things this app never loads.
+      - name: Configure for wasm
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          mkdir -p qt-build && cd qt-build
+          ../qt-src/configure \
+            -platform wasm-emscripten \
+            -qt-host-path "$GITHUB_WORKSPACE/qt-host/6.9.0/gcc_64" \
+            -prefix "$GITHUB_WORKSPACE/qt/6.9.0/wasm_mt_weh" \
+            -feature-wasm-exceptions \
+            -feature-wasm-jspi \
+            -release -static -no-warnings-are-errors \
+            -submodules qtbase,qtsvg,qtdeclarative,qttools \
+            -skip qtwebengine \
+            -- -DCMAKE_POLICY_VERSION_MINIMUM=3.5 2>&1 | tail -40
+
+      - name: Build and install
+        id: build
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          t0=$SECONDS
+          cmake --build qt-build --parallel
+          cmake --install qt-build
+          echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  === Qt build: $((SECONDS-t0))s ==="
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## Qt 6.9.0 for wasm (wasm-exceptions + JSPI)"
+            echo
+            echo "build: ${{ steps.build.outputs.secs && format('{0}s', steps.build.outputs.secs) || '**FAILED**' }}"
+            echo
+            echo '```'
+            ls qt/6.9.0/wasm_mt_weh/lib/*.a 2>/dev/null | head -30 || echo "(nothing installed)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ls -la qt/6.9.0/wasm_mt_weh/lib/ 2>/dev/null | head -20 | sed 's/^/  /' || echo "  (nothing)"
+
+      - name: Disk after
+        if: always()
+        run: df -h / | sed 's/^/  /'
