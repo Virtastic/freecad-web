@@ -138,6 +138,40 @@ Three rules earn their keep, and all three were found by measuring rather than r
 3. **A PARAMETER dimension is not an automatic array.** `nmids(maxmid)` with
    `parameter(maxmid=400)` is legal F77. Treating it as automatic cost a working routine.
 
+## Contact: a real gap, found by adding a deck for it
+
+The four original decks (elastic, modal, plastic, thermal) never touch contact, so when the
+mesh-size bounds turned `slavintmortar`, `slavintpoints` and `extrapolatecontact` from stubs
+into code, **nothing verified them**. `scratchpad/ccxval/contact.inp` was added for that, and
+it immediately earned its place:
+
+1. It failed on `near3d`, a routine I had documented as *deliberately* excluded because its
+   dimension `k` is one letter and unsafe to token-match globally. That exclusion read as
+   considered; it was in fact removing contact analysis entirely. Fixed with file-scoped
+   bounds — `k` now matches four declarations in two files instead of thousands everywhere.
+2. It then exposed a bug in the deck itself. The upper block had no lateral restraint, so it
+   was free to slide: a rigid-body mode. **Production answered `rc=0` with displacements of
+   29,600 mm on a 10 mm cube**, while the CI build refused to converge. The CI build was
+   right. Worth remembering that `rc=0` from CalculiX is not evidence of a usable answer —
+   which is exactly why this gate compares numbers rather than exit codes.
+3. With the deck corrected, production solves it (±5.3e-3 lateral, 569 MPa contact pressure)
+   and **this build still does not converge**:
+
+   ```
+   divergence allowed: number of contact elements stabilized
+   maximum number of iterations for face-to-face contact reached
+   largest residual force= 113284.597073 in node 7 and dof 3
+   *ERROR: too many cutbacks
+   ```
+
+   No `f77ify` guard fires and no stub aborts, so this is a **numerical difference in a
+   translated routine, not a missing one**. Unresolved.
+
+It is carried as a KNOWN GAP in the workflow rather than a failure: mortar contact was 100%
+stubbed in a clean build, so there is no working state to have regressed from, and a
+permanently red gate would destroy its value for the four decks that do guard real
+regressions. It reports in full on every run. Remove it from `KNOWN_GAP` once it passes.
+
 ## Validating any of this
 
 `.github/workflows/build-ccx.yml` now runs the four decks in `scratchpad/ccxval` (elastic,
