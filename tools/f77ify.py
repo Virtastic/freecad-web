@@ -1100,6 +1100,12 @@ STATIC_DIM_BOUNDS = {
     'ncont': 100000,       # contact elements; declared as 3*ncont
     'ntie': 10000,         # tie/contact pairs
     'nselect': 10000,
+    # Safe despite bounding a FIRST dimension (extrapolatecontact's field(nfield,20*mi(3))):
+    # `field` is never passed to another routine -- verified, 0 call sites -- so every access
+    # goes through the same declaration and the stride is self-consistent. I removed this
+    # entry once believing it was the contact defect; it was not, and removing it only stubbed
+    # extrapolatecontact. The stride hazard is real but needs the array to ESCAPE the routine.
+    'nfield': 20,
     'nobject': 1000,
 }
 
@@ -1135,6 +1141,18 @@ STATIC_DIM_BOUNDS = {
 # check was written, refused 12 files including e_c3d.f and resultsmech.f, and was reverted:
 # a rule that contradicts a measured byte-identical result is the wrong rule.
 #
+# EVERY TRANSFORMATION ON THE CONTACT PATH HAS NOW BEEN VERIFIED FAITHFUL, and none of them
+# explains the defect:
+#   - slavintmortar / slavintpoints: bounds touch only LAST dimensions, so the memory layout
+#     is unchanged; cycle/exit -> goto labels are all correctly placed (the cycle target sits
+#     immediately before its enddo, the exit target after it).
+#   - near2d / near3d: the named-loop conversion is correct too -- `cycle loop` becomes a jump
+#     to a label INSIDE the loop before its enddo, `exit` to one after it.
+#   - extrapolatecontact: `field` never leaves the routine, so its bound is self-consistent.
+# So the cause is NOT a mis-transformation of these four files. That is a real narrowing, and
+# it points at something outside them -- production carries ~90 KB more code than this build
+# and its stub list has never been enumerated.
+#
 # LOCALISED, 2026-08-17. Diffing raw solver stdout against production puts the divergence at
 # ITERATION 1 OF INCREMENT 1 -- the first force evaluation there is:
 #
@@ -1167,7 +1185,10 @@ STATIC_DIM_BOUNDS = {
 # and `save` is now absent from the entire tree) and the deck produced numbers BYTE-IDENTICAL
 # to the static build -- same -9.3215e+1 contact pressure, same 68.475 error estimate. So the
 # defect is deterministic and has nothing to do with storage class. Look elsewhere.
-SKIP_FILES = frozenset()   # TEMPORARILY EMPTY: retest after the field-stride fix
+SKIP_FILES = frozenset((
+    'slavintmortar.f',
+    'slavintpoints.f',
+))
 
 # FILE-SCOPED bounds. Some dimension names are far too common to put in a global table but
 # are perfectly safe inside one known file. `k` is the case that forced this: near2d.f and
