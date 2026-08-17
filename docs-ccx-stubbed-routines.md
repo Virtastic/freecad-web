@@ -204,6 +204,16 @@ Disassembling production's `ccx.wasm` closes the loop. It contains the stub form
 The name is a runtime `%s`, so the binary cannot be mined for a stub list; but since
 production solves the contact deck, it plainly does not stub these routines.
 
+**The decisive test.** Halving every bound on the contact path — `ncont` and `near2d`/
+`near3d`'s `k`, both 100000 → 50000 — produced **byte-identical wrong numbers**: the same
+`-9.3215e+1` contact pressure, the same `68.475` error estimate, the same displacements to
+every digit. The bound *value* does not reach the results at all, so these arrays are only
+ever accessed within their true runtime extent; nothing reads uninitialised tail memory and a
+fixed bound corrupts nothing.
+
+That, with the line-by-line verification above, **exonerates the transformation**. The
+remaining explanation is the only one left standing:
+
 **So production translated them and this build does not translate them the same way.** The
 build machine's uncaptured f2c workarounds (the original defect this whole document is about)
 handled these automatic arrays by some means other than a fixed bound, and that means
