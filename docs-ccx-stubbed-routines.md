@@ -1,17 +1,16 @@
-# CalculiX: the routines a clean build cannot translate
+# CalculiX: making a clean build reproduce production's solver
 
 Measured by `.github/workflows/build-ccx.yml` from CalculiX 2.22 upstream. Started at 69
-stubbed routines (run 31985042689); **now 30** (run 31988178559).
+stubbed routines (run 31985042689); now **27**, and all four validation decks reproduce
+production exactly (run 31992713435).
 
 ## What this is
 
-f2c implements FORTRAN 77. CalculiX uses some F90, so 68 of its 977 routines fail to
-translate and `build-ccx-weh.sh` **stubs** them: they compile, they link, and at run time
-they do nothing. That is why a build can print `failed: 0` and still be missing
-functionality, and it is the whole of the size gap against production:
-
-    production   code section = 4,188,444
-    clean CI     code section = 3,346,xxx     ~840 KB of stubs
+f2c implements FORTRAN 77. CalculiX uses some F90, so 69 of its 977 routines failed to
+translate and `build-ccx-weh.sh` **stubs** them. A stub compiles and links; at run time it
+prints which routine is missing and ABORTS, rather than returning undefined results. So the
+failure is loud -- but a build can still print `failed: 0` while the analysis a user actually
+wants cannot run.
 
 ## Why this matters more than a size number
 
@@ -94,19 +93,29 @@ Two constraints shaped the implementation:
   for 40 MB — fine on paper, memory corruption at run time. The rule computes the size and
   refuses above 4 MB, leaving the routine stubbed; `field` takes a named override at 16.
 
-## What still blocks the remaining 30
-
-Three unrelated groups, none of them the original construct:
+## What is still stubbed, and why it no longer blocks the decks
 
 | cause | routines | note |
 |---|---|---|
-| `wr_ardecls: nonconstant array size` | ~20 | automatic arrays again, but on dimension expressions not yet in the table (`basis.f`, `near2d/3d.f`, `patch.f`, `cavity_refine.f`, `extendmesh.f`, `interpolateinface.f`, `extrapolate*.f`, `slavint*.f`, …) |
-| US3/US45 user shell elements | 6 | `e_c3d_us3/us45`, `resultsmech_us3/us45`, `us3_sub`, `us4_sub`. BUILD-WEH.md records FreeCAD never emits them — these can stay stubbed |
+| `wr_ardecls: nonconstant array size` | ~20 | the same construct on problem-size dimensions (`netet_`, `nk`, `nfront`, `ncont`, `numpts`, …). These scale with the MODEL, so a fixed bound is the wrong tool -- see below |
+| US3/US45 user shell elements | 6 | `e_c3d_us3/us45`, `resultsmech_us3/us45`, `us3_sub`, `us4_sub`. BUILD-WEH.md records FreeCAD never emits them; these can stay stubbed |
 | `xlocal.f` | 1 | `subscripts on scalar variable`, a separate root cause |
 
-Note `wr_ardecls` is a *different* f2c message from `adjustable dimension on non-argument`:
-it fires later, when f2c writes the declaration out, so the same fix shape applies but the
-dimension expressions have to be identified first.
+None of them is reached by the four decks, which is why those now pass. That is a statement
+about coverage, not about correctness: an analysis that does reach one will stop with a
+message naming it.
+
+### Two techniques, and knowing which applies
+
+- **Per-element constants** (`mi(1)`, `mi(2)`, `mi(3)`, `ncmat_`) take a fixed bound on the
+  stack. A generous bound costs a few KB, and for `mi(1)`/`mi(2)` the bound is the one
+  CalculiX enforces itself, so the guard can never fire.
+- **Problem-size dimensions** (`neq(2)`, `nev`, and the `wr_ardecls` group) take a large
+  bound plus `save`, i.e. static storage -- the convention this file already used for F90
+  allocatables. 1.6 MB arrays do not belong on a 16 MB stack.
+
+The distinction matters more than either bound: applying the first technique to a
+problem-size array either overflows the stack or refuses legitimate models.
 
 ## Validating any of this
 
@@ -114,10 +123,14 @@ dimension expressions have to be identified first.
 modal, plastic, thermal) through both the module it just built and the one production is
 serving, and diffs the result extremes. **Results must match, not converge** — a bounded
 array that is subtly wrong is a slightly different number, not a crash, and there is nowhere
-else it shows up. The step is advisory while production itself still carries stubs; it
-becomes the release gate the moment the CI build is the one intended to ship.
+else it shows up.
 
-## Root cause: one construct explains 63 of the 68
+**Blocking as of run 31992713435**, where all four first agreed. Before that a difference
+could be a known gap; now it is a regression. It has already caught two defects that every
+other check called green -- a routine the stress path needs left stubbed, and an 80-line scan
+window silently rewriting ARPACK's dummy-argument array shapes.
+
+## Root cause: one construct explained 63 of the original 68
 
 Every failing routine's f2c error is now preserved (the build used to delete them). Grouped:
 
