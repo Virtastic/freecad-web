@@ -1038,9 +1038,14 @@ DIM_BOUNDS = {
     'mi(2)': 255,
     'mi(3)': 255,
 }
-ARRAY_DIM_BOUNDS = {
-    ('field', 'mi(3)'): 16,
-}
+# Empty, and it should stay that way unless the bound lands on an array's LAST dimension.
+# ('field','mi(3)') lived here and was wrong: combined with the global nfield entry it turned
+#   field(nfield,20*mi(3))  ->  field(20,20*16)
+# which bounds the FIRST dimension. Fortran is column-major, so that changes the stride of
+# everything after it, while nfield is a dummy argument -- so any routine handed `field`
+# computes its strides from the RUNTIME nfield and reads the wrong elements. Silently.
+# This is precisely the hazard written up below, which I documented and then left switched on.
+ARRAY_DIM_BOUNDS = {}
 
 # PROBLEM-SIZE dimensions, which are a different animal. Everything above is a per-element
 # constant, so a generous bound costs a few KB. These scale with the MODEL -- neq(2) is the
@@ -1084,7 +1089,6 @@ STATIC_DIM_BOUNDS = {
     'nktet': 200000,       # nodes in the tet mesh
     'ncont': 100000,       # contact elements; declared as 3*ncont
     'ntie': 10000,         # tie/contact pairs
-    'nfield': 20,          # number of result fields, not a mesh dimension
     'nselect': 10000,
     'nobject': 1000,
 }
@@ -1136,6 +1140,12 @@ STATIC_DIM_BOUNDS = {
 # The defect is therefore in the CONTACT FORCE ASSEMBLY itself: the contact elements this
 # build generates carry different forces from the first moment they exist. That is where to
 # look next -- the slave integration point generation, not the solver loop around it.
+#
+# STILL OUTSTANDING, flagged rather than changed: effectivemodalmass.f gets part(nev,6) and
+# effmodmass(nev,6) -- `nev` is a problem-size bound on a FIRST dimension, the same shape as
+# the field/nfield defect removed above. It is left alone because the freq deck exercises that
+# routine and is BYTE-IDENTICAL to production, and the lesson from the reverted stride check is
+# that measurement outranks the rule. Revisit if freq ever diverges; do not "fix" it blind.
 #
 # The caveat that DOES stand: a non-uniform bound -- ARRAY_DIM_BOUNDS or FILE_DIM_BOUNDS -- on
 # a non-last dimension of an array that gets passed onward is genuinely unsafe, because
@@ -1783,11 +1793,13 @@ def selftest():
         '      real*8 huge_(999,20*mi(3))', '      huge_(1,1)=0.d0', '      end']))
     assert '20*255' not in big, big          # refused, left for the stub path
     assert 'mi(3)' in big, big
-    # ...while the named override brings the same shape inside the budget.
+    # ...and there is no longer an override that would bound its FIRST dimension. See
+    # ARRAY_DIM_BOUNDS: bounding a non-last dimension of an array that gets passed on is
+    # unsafe, and field(nfield,...) is exactly that shape.
     ovr = fix_automatic_arrays('\n'.join([
         '      subroutine t(mi)', '      integer mi(3)',
         '      real*8 field(999,20*mi(3))', '      field(1,1)=0.d0', '      end']))
-    assert '20*16' in ovr, ovr
+    assert '20*mi(3)' in ovr, ovr   # no override any more: must be left alone
     # Every bound in the table must carry a guard -- the whole basis for using fixed bounds.
     for _dim in DIM_BOUNDS:
         assert _dim in ('ncmat_', 'mi(1)', 'mi(2)', 'mi(3)'), _dim
