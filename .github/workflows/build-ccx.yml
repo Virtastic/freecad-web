@@ -221,6 +221,62 @@ jobs:
           echo "  built md5: $(md5sum play-gui/ccx.wasm | cut -d' ' -f1)"
           [ -s /tmp/live-ccx.wasm ] && echo "  live  md5: $(md5sum /tmp/live-ccx.wasm | cut -d' ' -f1)"
 
+      # THE GATE. Everything above only proves the module compiles and links. A stubbed
+      # routine also compiles and links -- that is the entire defect this workflow exists to
+      # expose -- so size and md5 cannot tell a working solver from a hollow one.
+      #
+      # scratchpad/ccxval/ holds four decks (elastic, modal, plastic, thermal) chosen to
+      # exercise different solver paths. Each is run through the module just built AND
+      # through the one production is serving, and the printed result extremes must MATCH.
+      # Not "converge", not "look reasonable" -- match. A bounded array that is subtly wrong,
+      # or a routine still stubbed, shows up here as a different number and nowhere else.
+      #
+      # Advisory for now (|| true on the diff): production's own module still has ~60 stubbed
+      # routines, so some decks legitimately differ until the CI build is the better one.
+      # Read the output. Do not release a CalculiX module while any line is unexplained.
+      - name: Validate the decks against production's module
+        if: always()
+        run: |
+          set -e
+          command -v node >/dev/null || { echo "  no node on the runner — skipping"; exit 0; }
+          ls play-gui/ccx.js play-gui/ccx.wasm >/dev/null 2>&1 || { echo "  no module built"; exit 0; }
+          mkdir -p /tmp/ccxval && cp play-gui/ccx.js play-gui/ccx.wasm /tmp/ccxval/
+
+          run_decks() {                       # $1 = label
+            for d in scratchpad/ccxval/*.inp; do
+              j=$(basename "$d" .inp)
+              echo "### $j"
+              timeout 600 node scratchpad/ccxval/run.js "$d" 2>&1 \
+                | grep -E '^(rc=|[A-Z0-9]+: )' || echo "  (no result)"
+            done > "/tmp/val-$1.txt" 2>&1
+            echo "  --- $1 ---"; sed 's/^/    /' "/tmp/val-$1.txt"
+          }
+
+          run_decks built
+
+          echo
+          echo "  fetching production's module for comparison"
+          if curl -fsS https://freecad.virtastic.app/ccx.wasm -o /tmp/live-ccx.wasm \
+             && curl -fsS "https://freecad.virtastic.app/$(curl -sS https://freecad.virtastic.app/ \
+                  | grep -oE 'ccx\.js\?v=[a-z0-9]+' | head -1)" -o /tmp/live-ccx.js; then
+            cp /tmp/live-ccx.js play-gui/ccx.js
+            cp /tmp/live-ccx.wasm play-gui/ccx.wasm
+            run_decks live
+            cp /tmp/ccxval/ccx.js /tmp/ccxval/ccx.wasm play-gui/     # restore the build
+          else
+            echo "  could not fetch production's module — comparison skipped"
+            exit 0
+          fi
+
+          echo
+          echo "  === built vs live ==="
+          if diff -u /tmp/val-live.txt /tmp/val-built.txt > /tmp/val.diff; then
+            echo "  IDENTICAL — every deck gives production's numbers"
+          else
+            echo "  DIFFERENCES (expected while production still carries stubs):"
+            sed 's/^/    /' /tmp/val.diff
+          fi
+
       - name: Disk after
         if: always()
         run: df -h / | sed 's/^/  /'
