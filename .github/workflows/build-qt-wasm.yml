@@ -78,8 +78,16 @@ jobs:
         run: |
           set -o pipefail
           rc=0
+          # The host needs every module whose TOOLS the cross-build runs, not just qtbase.
+          # Diagnosed from run 32040220795: configure died with
+          #   "Qt6ShaderToolsTools package could not be found ... build and install the host
+          #    ShaderTools module"  (qtshadertools/tools/qsb/CMakeLists.txt)
+          # because qtdeclarative depends on qtshadertools and its qsb shader compiler has to
+          # run ON THE HOST during the wasm build. The bare linux_gcc_64 package does not
+          # include it. Mirror the target submodule list here.
           { python3 -m pip install --quiet aqtinstall &&
-            python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 -O "$PWD/qt-host"
+            python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 \
+              -m qtshadertools qtsvg qtdeclarative qttools -O "$PWD/qt-host"
           } > /tmp/qtlogs/01-host-qt.txt 2>&1 || rc=$?
           echo "  aqt exit=$rc"
           find "$PWD/qt-host" -maxdepth 3 -name qmake >> /tmp/qtlogs/01-host-qt.txt 2>&1 || true
