@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   patch-tool:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ovh, virtastic]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,7 +53,7 @@ jobs:
   # emcc -fsyntax-only is seconds once emsdk is cached, and it checks the thing that actually
   # bites: whether the entry points these files forward to exist with the signatures used.
   shims:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ovh, virtastic]
     steps:
       - uses: actions/checkout@v4
 
@@ -105,7 +105,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   hygiene:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ovh, virtastic]
     steps:
       - uses: actions/checkout@v4
 

@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   probe:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ovh, virtastic]
     steps:
       - name: Probe through Cloudflare
         run: |

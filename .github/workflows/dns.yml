@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   dns:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ovh, virtastic]
     env:
       CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       ZONE: virtastic.app

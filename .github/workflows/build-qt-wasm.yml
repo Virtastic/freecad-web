@@ -227,7 +227,7 @@ jobs:
           name: qt-wasm-logs
           path: /tmp/qtlogs
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
 
       - name: Report
         if: always()

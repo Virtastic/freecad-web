@@ -524,7 +524,7 @@ jobs:
           name: fcweb-deps-logs
           path: /tmp/deplogs
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
 
       - name: Upload the built libraries
         if: always()
@@ -535,7 +535,7 @@ jobs:
             deps/wasm/lib/*.a
             deps/wasm/include
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
 
       # Always save, even on failure: a run that got three of five dependencies built should
       # leave those three for the next one. That is the whole point of the cache, and the
