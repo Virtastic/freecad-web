@@ -53,11 +53,50 @@ emsdk 3.1.70 ships binaryen v119, which cannot parse wasm-EH and fails the
 link. `wasm-opt` is shimmed to the emsdk2 binary; the
 `unexpected binaryen version: 125 (expected 119)` warning at link is expected.
 
+## The two force-included headers (read this before anything else)
+
+Every build script below passes `-include $DW/include/gl_compat.h`, and the FreeCAD ones add
+`-include $DW/include/coin_intrusive.h`. Ten tracked files consume them:
+
+| header | what it supplies |
+|---|---|
+| `gl_compat.h` | the legacy fixed-function GL declarations Coin3D and FreeCAD compile against on a GLES/WebGL2 target |
+| `coin_intrusive.h` | the `boost::intrusive_ptr` adapters for `SoBase` (a from-source Coin lacks them; the definitions are in `patches/freecad.patch`, in `SoFCDB.cpp`) |
+
+**Neither was tracked in this repository until 2026-08-18, and this document never mentioned
+them.** They existed only on the build machine, under the gitignored `deps/` path, so nothing
+produced them and a clean checkout could not compile Coin or FreeCAD at all — the failure
+arriving as an inscrutable compile error a long way from the cause.
+
+That is the CalculiX defect again: uncaptured build-machine state, invisible because the path
+is gitignored. Treat it the same way.
+
+- `coin_intrusive.h` is now reconstructed and tracked in `toolchain/include/`. Its signatures
+  are dictated by the definitions in `patches/freecad.patch`, so any correct version is
+  equivalent to the original.
+- **`gl_compat.h` is still uncaptured.** On the build machine, run this once and commit:
+
+  ```bash
+  bash tools/capture-build-machine-headers.sh
+  git add toolchain/include && git commit
+  ```
+
+`toolchain/stage-headers.sh` copies the tracked headers into `$DW/include` and refuses to
+continue if one is missing, naming it. The build machine's copy always wins: an existing
+header is never overwritten by a reconstruction, only diffed against it. The Coin and FreeCAD
+configure scripts call it, so this is automatic.
+
+Until `gl_compat.h` is captured, `.github/workflows/build-deps.yml` builds Coin in
+**diagnostic mode** — an empty header — and prints the undeclared identifiers the compiler
+reports. That list is the header's specification, and it is the cheapest route to
+reconstructing it if the build machine is ever lost.
+
 ## Order
 
 Dependencies first — each must finish before the next starts.
 
 ```bash
+bash toolchain/stage-headers.sh    # the force-included headers; fails loudly if one is missing
 bash build-boost-weh.sh            # boost
 bash build-xercesc-weh.sh          # xerces-c
 bash configure-occt-weh.sh         # OCCT   (gates OCC_CONVERT_SIGNALS off, see below)

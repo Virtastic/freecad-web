@@ -10,56 +10,46 @@
 > | 4 | GL no-op inventory | **done** — instrumented and measured; see BUILD-WEH.md |
 > | 5 | Display lists / 11 fps | **scoped** — C change + relink + pixel gate, not a JS patch |
 > | 6 | 2 GB heap | **implemented, opt-in** — `FCWEB_HEAP_BYTES`; needs a link + `heapprobe.js` |
-> | 7 | CalculiX threading | **built, NOT shippable** — production's ccx.wasm is not reproducible; see below |
+> | 7 | CalculiX threading | **reproducibility closed; threading still unshipped** — see below |
 > | 8 | Chrome/Edge only | **decided** — track, don't build |
 >
-> **Item 7 no longer needs the build machine at all.** `.github/workflows/build-ccx.yml`
-> builds CalculiX on a hosted runner: it installs emsdk 3.1.70, fetches CalculiX 2.22,
-> SPOOLES 2.2, f2c and arpack-ng + LAPACK, builds the f2c translator natively, then the four
-> static libs, then links the module. Both configurations build clean — 977 Fortran files,
-> 976 compiled, 0 failed:
+> **Item 7, corrected 2026-08-18. The reproducibility verdict below has been superseded, and
+> this entry said the opposite of the truth for two days.** It read "production's ccx.wasm is
+> not reproducible" and "the ccx.wasm currently in production cannot be reproduced from this
+> repository plus upstream sources". That was accurate when written (run 31996275820's
+> predecessors) and is no longer: `docs-ccx-stubbed-routines.md` is the authority and records
+> the work that closed it.
 >
-> | build | ccx.wasm |
-> |---|---|
-> | serial (today's config) | 3,797,838 bytes |
-> | **threaded** (`FCWEB_CCX_PTHREADS=1`) | **3,885,816 bytes** |
-> | currently live | 4,784,783 bytes |
+> | | then | now |
+> |---|---|---|
+> | stubbed routines | 69 | **19** |
+> | translated | 908/977 | **959/977** |
+> | gap to production's code section | 986,945 B | **97,074 B** |
+> | validation decks vs production | differ | **identical, digit for digit** |
 >
-> **Do not ship either — and the reason turned out to matter more than the schedule.**
+> All four decks (elastic, frequency, plastic, thermal) reproduce production's numbers
+> exactly, including the 1e-13 round-off noise — which is what makes it a reproduction rather
+> than a resemblance, since round-off is where two differently-built solvers diverge first.
+> The gate has been blocking since run 31992713435 and the workflow is green (run 32013729412).
+> So a clean build from this repository plus upstream sources now produces a CalculiX that
+> behaves like the one in production, with no undocumented edits on a build machine.
 >
-> Chasing the size gap produced one very good result and one bad one.
+> **What is genuinely still open, and it is not the schedule:**
 >
-> Good: my serial `ccx.js` is **byte-identical** to the one in production. The CI pipeline
-> reproduces the live build's exact configuration — same emscripten, same flags, same exports.
+> - **Mortar contact is deliberately stubbed** (`SKIP_FILES` in `tools/f77ify.py`). Bounding
+>   `slavintmortar`/`slavintpoints` produced a converged but *physically invalid* answer —
+>   negative contact pressure, asymmetric response to a symmetric model — where production is
+>   correct. A stub aborts by name; a bounded routine returns a wrong number, and for a solver
+>   the second is far worse. Carried as a KNOWN GAP because mortar contact was 100% stubbed in
+>   a clean build, so there is no working state to have regressed from.
+> - **Threading is still unshipped.** `FCWEB_CCX_PTHREADS=1 bash build-ccx-weh.sh` builds
+>   clean, but the decks must **match** today's numbers rather than merely converge — a race in
+>   the assembly is a slightly different answer, not a crash. The threaded artifact is attached
+>   to the run as `ccx-wasm-pthreads`.
 >
-> Bad: the wasm is not close. Production carries **844 KB more compiled code** (code section
-> 4,188,444 vs 3,344,391). That is missing *functionality*, not a leaner binary. Applying
-> `patches/ccx-wasm-automatic-array.patch` — which the workflow had been skipping — moved
-> translation from 908/977 to 910/977 and the module to 3,846,632 bytes, and **still leaves
-> ~938 KB unaccounted for**.
->
-> The conclusion is uncomfortable and worth stating plainly: **the ccx.wasm currently in
-> production cannot be reproduced from this repository plus upstream sources.** There are
-> changes in the build machine's `deps/src/ccx` that were never captured into `patches/` —
-> exactly the failure mode BUILD-WEH.md warns about, since `deps/` is gitignored and an
-> uncaptured edit is invisible until someone builds from clean.
->
-> That makes this a reproducibility problem before it is a threading problem. Shipping the CI
-> module would silently drop working CalculiX routines. And if that Mac is lost, today's
-> solver cannot currently be rebuilt by anyone.
->
-> **Next step is on the build machine, and it is not the threaded build:** diff its
-> `deps/src/ccx/ccx_2.22` against a clean 2.22 extract, capture the delta as a patch beside
-> `ccx-wasm-automatic-array.patch`, and re-run this workflow. When the code section matches,
-> the CI build is trustworthy — and threading becomes the one-flag change it was always
-> meant to be.
->
-> Original note kept for the sequence once that holds: Both CI builds are ~1 MB smaller than the deployed module, and
-> that is unexplained — different flags, a different source revision, or something extra in
-> the live one. Resolve that first, then run `scratchpad/ccxval/run.js` (elas, freq, plast,
-> therm) and `ccxe2e/run-prod.js`: results must **match** today's numbers, not merely
-> converge, because a race in the assembly is a slightly different answer rather than a crash.
-> The threaded artifact is attached to the run as `ccx-wasm-pthreads`.
+> The lesson worth keeping is the one about status blocks: this table asserted a blocker that
+> the work had already removed, and nothing in the repository noticed. Check the gate, not the
+> summary.
 >
 > **Item 6 is still one command, and still needs the build machine.** Both are implemented and
 > parameterised, and both default to exactly today's behaviour so nothing changes until

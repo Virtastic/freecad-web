@@ -56,7 +56,7 @@ So the original defect is closed. A clean build from this repo plus upstream sou
 produces a CalculiX module that behaves like the one in production, with no undocumented
 edits on a build machine. The gate is blocking as of that run.
 
-A note on what the numbers do and do not say. 27 routines are still stubbed and the wasm is
+A note on what the numbers do and do not say. 19 routines are still stubbed and the wasm is
 still 184,901 bytes smaller than production's, so the two modules are not byte-identical and
 this does not prove they agree on analyses the decks do not cover. What it does prove is that
 every path these four exercise is reproduced, and that a regression on them now fails the
@@ -299,7 +299,7 @@ rather than guessed at.
 ## The old work list is obsolete
 
 Every routine in the "core solid/thermal FEM" group that this document used to list as
-needing hand work now translates, including `e_c3d.f`. The current list is the 30 above,
+needing hand work now translates, including `e_c3d.f`. The current list is the 19 above,
 which the build prints on every run — read it there rather than from a copy that goes stale.
 
 ## Note on US3/US45
