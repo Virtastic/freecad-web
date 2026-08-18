@@ -988,10 +988,6 @@ def expand_matmul(text, dims):
             i = j
         return ''.join(out)
 
-    newtemp_stmt = newtemp
-    index_refs_stmt = index_refs
-    mm_counter = counter
-
     def reduce_calls(code, pre):
         """Replace innermost matmul/transpose with temporaries, emitting calls into `pre`."""
         while True:
@@ -1080,53 +1076,7 @@ def expand_matmul(text, dims):
         if is_comment or not code:
             out.extend(raw)
             continue
-        # An actual ARGUMENT can be an array expression: resultsmech_us3.f writes
-        # `call us3_Km(x,Km,Dm/h,h)`, and f2c reports it as "wrong number of subscripts on
-        # dm". F77 has no such thing -- the callee needs a real contiguous array -- so
-        # materialise it into a temporary first and pass that.
-        mcall = re.match(r'^(\s*call\s+[A-Za-z]\w*\s*)\((.*)\)\s*$', code, re.I)
-        if mcall:
-            args = split_top(mcall.group(2))
-            pre, changed = [], False
-            for ai, arg in enumerate(args):
-                a = arg.strip()
-                # a plain name, an element reference or a section is fine as it stands
-                if _shape_of(a, dims) is not None or re.match(r'^[A-Za-z]\w*(\(.*\))?$', a):
-                    continue
-                if not re.search(r'[-+*/]', a):
-                    continue
-                inner = [nm.lower() for nm in re.findall(r'[A-Za-z]\w*', a) if nm.lower() in dims]
-                if not inner:
-                    continue
-                sh = _shape_of(inner[0], dims)
-                if sh is None:
-                    continue
-                t = newtemp_stmt(sh)
-                if sh[0] == 'v':
-                    iv = 'i_fcwm%d' % (mm_counter[0] * 10 + 1)
-                    pre += ['      do %s=1,%s' % (iv, sh[1]),
-                            '        %s(%s)=%s' % (t, iv, index_refs_stmt(a, [iv], sh)),
-                            '      enddo']
-                else:
-                    iv = 'i_fcwm%d' % (mm_counter[0] * 10 + 1)
-                    jv = 'i_fcwm%d' % (mm_counter[0] * 10 + 2)
-                    pre += ['      do %s=1,%s' % (jv, sh[2]),
-                            '        do %s=1,%s' % (iv, sh[1]),
-                            '          %s(%s,%s)=%s' % (t, iv, jv,
-                                                        index_refs_stmt(a, [iv, jv], sh)),
-                            '        enddo',
-                            '      enddo']
-                args[ai] = t
-                changed = True
-            if changed:
-                out.extend(pre)
-                # split_fixed strips columns 1-6; fixed-form code must start at 7
-                out.append('      %s(%s)' % (mcall.group(1).strip(), ','.join(args)))
-                continue
-            out.extend(raw)
-            continue
-
-        if '=' not in code or code.strip().lower().startswith(('if', 'do ')):
+        if '=' not in code or code.strip().lower().startswith(('if', 'call', 'do ')):
             out.extend(raw)
             continue
         lhs, rhs = code.split('=', 1)
