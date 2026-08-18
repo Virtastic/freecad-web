@@ -10,6 +10,7 @@
 # ...but toolchain/include/ IS source: the force-included compat headers that used to
 # exist only on the build machine. /toolchain/*/ silently swallowed them on first commit.
 !/toolchain/include/
+!/toolchain/cmake/
 
 # === Build directories ===
 # One glob rather than a hand-kept list: the enumerated form silently missed every

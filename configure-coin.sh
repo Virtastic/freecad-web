@@ -45,7 +45,10 @@ emcmake cmake -S deps/src/coin3d -B build-coin -G Ninja \
   -DCOIN_BUILD_DOCUMENTATION=OFF \
   -DCOIN_BUILD_GLX=OFF \
   -DCOIN_BUILD_EGL=OFF \
-  -DCMAKE_DISABLE_FIND_PACKAGE_X11=ON \
+  `# Coin does find_package(X11 REQUIRED) under UNIX AND NOT APPLE, which emscripten` \
+  `# satisfies. CMAKE_DISABLE_FIND_PACKAGE cannot be used on a REQUIRED package -- CMake` \
+  `# makes that a fatal error -- so point it at a stub module instead. See the file.` \
+  -DCMAKE_MODULE_PATH="$ROOT/toolchain/cmake" \
   -DCMAKE_INSTALL_PREFIX="$DW" \
   -DCMAKE_CXX_FLAGS="-fexceptions -pthread -O2 -DGLES_SILENCE_DEPRECATION -include $DW/include/gl_compat.h" \
   -DCMAKE_C_FLAGS="-fexceptions -pthread -O2 -include $DW/include/gl_compat.h" \
