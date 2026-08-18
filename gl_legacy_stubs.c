@@ -1,8 +1,21 @@
-/* External-linkage no-op stubs for fixed-function GL calls that Coin3D's
- * viewport makes but emscripten's LEGACY_GL_EMULATION does not provide. These
- * let the FreeCAD GUI link in wasm; the affected viewport bits (attrib stack,
- * raster text, immediate-mode rects/doubles) simply do nothing for now.
- * A full Coin->WebGL viewport port would replace these. */
+/* External-linkage definitions for fixed-function GL calls that Coin3D's viewport makes but
+ * emscripten's LEGACY_GL_EMULATION does not provide. Without them the FreeCAD GUI does not
+ * link at all.
+ *
+ * They are NOT all no-ops, and the distinction matters: an empty body here is not
+ * "unimplemented", it is a draw, a state change or a query silently discarded at run time.
+ * Where the emulation provides an equivalent, these forward to it rather than drop the call
+ * -- the immediate-mode doubles to their float forms, glRect to the quad the spec defines it
+ * as, and the scalar material/light setters to the vector forms the JS glue implements.
+ *
+ * `tools/gl-noop-inventory.py` classifies every entry point below as EMPTY, CONSTANT or
+ * FORWARDING, and the ci.yml `shims` job prints it on every push. The empty count should
+ * only ever fall.
+ *
+ * What remains empty is mostly genuinely absent from WebGL -- stipple patterns, the
+ * accumulation buffer, colour-index mode, pixel transfer -- plus two groups that are real
+ * work rather than impossible: the GL_SELECT name stack, and display lists (see glGenLists
+ * below, and ROADMAP item 5). A full Coin->WebGL viewport port would replace all of it. */
 typedef unsigned int   GLenum;
 typedef unsigned int   GLbitfield;
 typedef int            GLint;
@@ -23,6 +36,11 @@ extern void glColor4f(GLfloat, GLfloat, GLfloat, GLfloat);
 extern void glTexCoord2f(GLfloat, GLfloat);
 extern void glBegin(GLenum);
 extern void glEnd(void);
+extern void glMaterialfv(GLenum, GLenum, const GLfloat*);
+extern void glLightfv(GLenum, GLenum, const GLfloat*);
+extern void glLightModelfv(GLenum, const GLfloat*);
+extern void glTexCoord3f(GLfloat, GLfloat, GLfloat);
+extern void glTexCoord4f(GLfloat, GLfloat, GLfloat, GLfloat);
 
 void glPushAttrib(GLbitfield m) { (void)m; }
 void glPopAttrib(void) {}
@@ -61,7 +79,7 @@ void glDrawPixels(GLsizei w, GLsizei h, GLenum f, GLenum t, const void* p) { (vo
 void glGetDoublev(GLenum pn, GLdouble* p) { (void)pn; if (p) { for (int i=0;i<16;++i) p[i]=(i%5==0)?1.0:0.0; } }
 void glPixelZoom(GLfloat x, GLfloat y) { (void)x;(void)y; }
 void glRasterPos2d(GLdouble x, GLdouble y) { (void)x;(void)y; }
-void glTexCoord4fv(const GLfloat* v) { (void)v; }
+void glTexCoord4fv(const GLfloat* v) { if (v) glTexCoord4f(v[0],v[1],v[2],v[3]); }
 // Returns GLint (hit count in GL_SELECT/GL_FEEDBACK exit) — a void definition
 // is a wasm signature mismatch vs callers expecting the count (mesh picking).
 GLint glRenderMode(GLenum m) { (void)m; return 0; }
@@ -86,14 +104,18 @@ void glCallList(GLuint list) { (void)list; }
 void glDeleteLists(GLuint list, GLsizei range) { (void)list;(void)range; }
 void glClearIndex(GLfloat c) { (void)c; }
 void glIndexi(GLint c) { (void)c; }
-void glLightModeli(GLenum pn, GLint p) { (void)pn;(void)p; }
-void glLightf(GLenum light, GLenum pn, GLfloat p) { (void)light;(void)pn;(void)p; }
-void glMaterialf(GLenum face, GLenum pn, GLfloat p) { (void)face;(void)pn;(void)p; }
+void glLightModeli(GLenum pn, GLint p) { GLfloat f = (GLfloat)p; glLightModelfv(pn, &f); }
+void glLightf(GLenum light, GLenum pn, GLfloat p) { glLightfv(light, pn, &p); }
+/* The scalar forms are defined by the GL spec as the 1-element vector call, and the vector
+ * forms are the ones the JS glue actually implements -- glMaterialfv in particular, which
+ * BUILD-WEH.md records as handling the cases Coin uses (EMISSION, AMBIENT_AND_DIFFUSE).
+ * glMaterialf carries GL_SHININESS, so dropping it silently flattens specular highlights. */
+void glMaterialf(GLenum face, GLenum pn, GLfloat p) { glMaterialfv(face, pn, &p); }
 void glPixelMapfv(GLenum m, GLsizei n, const GLfloat* v) { (void)m;(void)n;(void)v; }
 void glPixelMapuiv(GLenum m, GLsizei n, const GLuint* v) { (void)m;(void)n;(void)v; }
 void glPixelTransferf(GLenum pn, GLfloat p) { (void)pn;(void)p; }
 void glPixelTransferi(GLenum pn, GLint p) { (void)pn;(void)p; }
-void glTexCoord3fv(const GLfloat* v) { (void)v; }
+void glTexCoord3fv(const GLfloat* v) { if (v) glTexCoord3f(v[0],v[1],v[2]); }
 void glTexGenf(GLenum coord, GLenum pn, GLfloat p) { (void)coord;(void)pn;(void)p; }
 void glVertex2s(GLshort x, GLshort y) { glVertex2f((GLfloat)x,(GLfloat)y); }
 

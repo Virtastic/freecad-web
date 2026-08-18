@@ -89,22 +89,20 @@ jobs:
           done
           exit $fail
 
-      # gl_legacy_stubs.c exists to DEFINE symbols the emulation lacks. A "stub" that is an
-      # empty body is a silent wrong answer at run time, so count them and print the list:
-      # the number should only ever go down, and a diff in it should be a deliberate act.
+      # gl_legacy_stubs.c exists to DEFINE the symbols the emulation lacks. An entry point
+      # with an empty body is not 'unimplemented' at run time -- it is a draw, a state change
+      # or a query silently discarded. So the count is worth watching, and it should only ever
+      # fall. The tool classifies EMPTY / CONSTANT / FORWARDING and names them, because a bare
+      # number hides which ones and because glRenderMode returning 0 is deliberate, not a gap.
       - name: Inventory the GL no-ops
         run: |
-          n=$(grep -cE '\{ *(\(void\)[A-Za-z0-9_;() ]*)? *\}$' gl_legacy_stubs.c || true)
-          t=$(grep -cE '^(void|GLint|GLuint) gl[A-Za-z0-9]+\(' gl_legacy_stubs.c || true)
-          echo "  gl_legacy_stubs.c: $t entry points, $n still empty no-ops"
-          echo "| gl_legacy_stubs.c | count |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| entry points defined | $t |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| still empty no-ops | $n |" >> "$GITHUB_STEP_SUMMARY"
-          echo
-          echo "  --- the no-ops, so the list is reviewable rather than a number ---"
-          grep -nE '\{ *(\(void\)[A-Za-z0-9_;() ]*)? *\}$' gl_legacy_stubs.c \
-            | sed -E 's/\(.*//; s/^([0-9]+):.*(gl[A-Za-z0-9]+)$/    \1  \2/' | head -60
+          python3 tools/gl-noop-inventory.py | tee /tmp/glinv.txt
+          {
+            echo '### gl_legacy_stubs.c'
+            echo '```'
+            head -4 /tmp/glinv.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   hygiene:
     runs-on: ubuntu-latest
