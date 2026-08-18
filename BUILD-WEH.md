@@ -53,15 +53,17 @@ emsdk 3.1.70 ships binaryen v119, which cannot parse wasm-EH and fails the
 link. `wasm-opt` is shimmed to the emsdk2 binary; the
 `unexpected binaryen version: 125 (expected 119)` warning at link is expected.
 
-## The two force-included headers (read this before anything else)
+## The three force-included headers (read this before anything else)
 
 Every build script below passes `-include $DW/include/gl_compat.h`, and the FreeCAD ones add
-`-include $DW/include/coin_intrusive.h`. Ten tracked files consume them:
+`-include $DW/include/coin_intrusive.h`. A third, `qprocess_stub.h`, is force-included into
+all of FreeCADGui by `src/Gui/CMakeLists.txt` (added by `patches/freecad.patch`):
 
 | header | what it supplies |
 |---|---|
 | `gl_compat.h` | the legacy fixed-function GL declarations Coin3D and FreeCAD compile against on a GLES/WebGL2 target |
 | `coin_intrusive.h` | the `boost::intrusive_ptr` adapters for `SoBase` (a from-source Coin lacks them; the definitions are in `patches/freecad.patch`, in `SoFCDB.cpp`) |
+| `qprocess_stub.h` | an inert `QProcess`, because Qt-for-WebAssembly has no subprocesses — the external-tools, graphviz, help and network paths compile against it as no-ops |
 
 **Neither was tracked in this repository until 2026-08-18, and this document never mentioned
 them.** They existed only on the build machine, under the gitignored `deps/` path, so nothing
@@ -74,7 +76,8 @@ is gitignored. Treat it the same way.
 - `coin_intrusive.h` is now reconstructed and tracked in `toolchain/include/`. Its signatures
   are dictated by the definitions in `patches/freecad.patch`, so any correct version is
   equivalent to the original.
-- **`gl_compat.h` is still uncaptured.** On the build machine, run this once and commit:
+- **`gl_compat.h` and `qprocess_stub.h` are still uncaptured.** On the build machine, run
+  this once and commit:
 
   ```bash
   bash tools/capture-build-machine-headers.sh

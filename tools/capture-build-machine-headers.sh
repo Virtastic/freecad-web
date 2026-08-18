@@ -7,11 +7,13 @@
 # captures the sources that were never in deps/src at all: files written by hand into
 # deps/wasm/include, which is gitignored.
 #
-# Two of them are force-included into everything -- Coin3D, all of FreeCAD (C and C++),
+# Three of them are force-included into everything -- Coin3D, all of FreeCAD (C and C++),
 # PySide, and all three link commands:
 #
 #     gl_compat.h        legacy fixed-function GL declarations for a GLES/WebGL2 target
 #     coin_intrusive.h   boost::intrusive_ptr adapters for SoBase
+#     qprocess_stub.h    inert QProcess for Qt-for-WebAssembly, which has no subprocesses
+#                        (src/Gui/CMakeLists.txt force-includes it into all of FreeCADGui)
 #
 # Ten tracked files consume them; nothing in the repository produces them. So a clean
 # checkout cannot build FreeCAD, and could not have at any point in this project's history.
@@ -47,7 +49,7 @@ mkdir -p "$dest"
 # The known force-includes, plus anything else that looks hand-written rather than installed.
 # Add to this list rather than widening the glob: a blanket copy would sweep in thousands of
 # OCCT/VTK/boost headers that are already reproduced by their own builds.
-WANTED="gl_compat.h coin_intrusive.h"
+WANTED="gl_compat.h coin_intrusive.h qprocess_stub.h"
 
 captured=0
 for name in $WANTED; do

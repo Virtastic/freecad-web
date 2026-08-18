@@ -4,21 +4,22 @@
 #
 # WHY
 #
-# Two headers are force-included into Coin3D, all of FreeCAD (C *and* C++), PySide and all
-# three link commands:
+# Three headers are force-included into Coin3D, all of FreeCAD (C *and* C++), PySide and
+# all three link commands:
 #
 #     deps/wasm/include/gl_compat.h        legacy fixed-function GL declarations for a
 #                                          GLES/WebGL2 target
 #     deps/wasm/include/coin_intrusive.h   boost::intrusive_ptr adapters for SoBase
+#     deps/wasm/include/qprocess_stub.h    inert QProcess (Qt-for-WebAssembly has none)
 #
 # Ten tracked files consume them. Nothing in the repository produced them: they lived only
 # on the build machine, under a gitignored path. So "clone the repo and follow BUILD-WEH.md"
 # could never work, and the failure surfaced as an inscrutable compile error a long way from
 # the cause -- if it surfaced at all.
 #
-# coin_intrusive.h is now reconstructed and tracked (toolchain/include/). gl_compat.h is NOT
-# -- see the message below. This script makes that gap a named, immediate failure instead of
-# a mystery 40 minutes into a build.
+# coin_intrusive.h is now reconstructed and tracked (toolchain/include/). gl_compat.h and
+# qprocess_stub.h are NOT -- see the message below. This script makes that gap a named,
+# immediate failure instead of a mystery 40 minutes into a build.
 #
 # THE BUILD MACHINE'S COPY ALWAYS WINS. If a header already exists in $DW/include this
 # script leaves it alone and reports a diff against the tracked one. The tracked copies are
@@ -57,9 +58,9 @@ for h in "$SRC"/*.h; do
   fi
 done
 
-# --- the one that is still missing ------------------------------------------------------
+# --- the ones that are still missing -----------------------------------------------------
 missing=0
-for name in gl_compat.h coin_intrusive.h; do
+for name in gl_compat.h coin_intrusive.h qprocess_stub.h; do
   [ -e "$DW/include/$name" ] || { echo "[headers] MISSING: $DW/include/$name"; missing=1; }
 done
 
@@ -69,8 +70,9 @@ if [ "$missing" = 1 ]; then
     # real header has to declare -- the error list is the specification for reconstructing
     # it. The resulting objects are NOT production-equivalent; nothing built this way may be
     # linked into a release.
-    : > "$DW/include/gl_compat.h"
-    [ -e "$DW/include/coin_intrusive.h" ] || : > "$DW/include/coin_intrusive.h"
+    for n in gl_compat.h coin_intrusive.h qprocess_stub.h; do
+      [ -e "$DW/include/$n" ] || : > "$DW/include/$n"
+    done
     echo "::warning::FCWEB_ALLOW_MISSING_GL_COMPAT=1 -- staging an EMPTY gl_compat.h."
     echo "[headers] DIAGNOSTIC BUILD. Not production-equivalent. Do not ship anything linked"
     echo "[headers] from these objects. The compile errors that follow are the header's spec."
@@ -80,12 +82,13 @@ if [ "$missing" = 1 ]; then
 [headers] ---------------------------------------------------------------------------
 [headers] This build cannot proceed: a force-included header is missing.
 [headers]
-[headers] gl_compat.h supplies the legacy fixed-function GL declarations that Coin3D and
-[headers] FreeCAD compile against on a GLES/WebGL2 target. Every build script passes
-[headers] `-include $DW/include/gl_compat.h`, so without it nothing compiles.
+[headers]   gl_compat.h       legacy fixed-function GL declarations (GLES/WebGL2 target)
+[headers]   coin_intrusive.h  boost::intrusive_ptr adapters for SoBase
+[headers]   qprocess_stub.h   inert QProcess -- Qt-for-WebAssembly has no subprocesses
 [headers]
-[headers] It has never been tracked in this repository -- it exists only on the machine
-[headers] that produced the current release, under the gitignored deps/ path.
+[headers] Every build script passes these as `-include`, so without them nothing compiles.
+[headers] The missing ones have never been tracked in this repository -- they exist only on
+[headers] the machine that produced the current release, under the gitignored deps/ path.
 [headers]
 [headers] ON THAT MACHINE, capture it once and commit the result:
 [headers]
