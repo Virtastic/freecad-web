@@ -65,10 +65,19 @@ all of FreeCADGui by `src/Gui/CMakeLists.txt` (added by `patches/freecad.patch`)
 | `coin_intrusive.h` | the `boost::intrusive_ptr` adapters for `SoBase` (a from-source Coin lacks them; the definitions are in `patches/freecad.patch`, in `SoFCDB.cpp`) |
 | `qprocess_stub.h` | an inert `QProcess`, because Qt-for-WebAssembly has no subprocesses — the external-tools, graphviz, help and network paths compile against it as no-ops |
 
-**Neither was tracked in this repository until 2026-08-18, and this document never mentioned
+**None was tracked in this repository until 2026-08-18, and this document never mentioned
 them.** They existed only on the build machine, under the gitignored `deps/` path, so nothing
-produced them and a clean checkout could not compile Coin or FreeCAD at all — the failure
-arriving as an inscrutable compile error a long way from the cause.
+produced them and the failure arrived as an inscrutable compile error a long way from the
+cause.
+
+**How much this actually blocks, measured rather than assumed.** CI run 32099719534 built
+Coin3D to completion against an **empty** `gl_compat.h` — `libCoin.a`, 11,785,732 bytes, zero
+compile errors. So Coin does *not* need it, and the whole C++ dependency stack (boost,
+xerces-c, OCCT, VTK, Coin3D) now builds on a hosted runner from a clean checkout. What remains
+untested is the **FreeCAD** build, which force-includes the header into every C and C++
+translation unit and calls the legacy GL entry points that `gl_legacy_stubs.c` defines — those
+need declarations from somewhere. Do not read "Coin built" as "the header is unnecessary";
+read it as "the blocker is narrower than it looked, and sits at the FreeCAD link, not before".
 
 That is the CalculiX defect again: uncaptured build-machine state, invisible because the path
 is gitignored. Treat it the same way.
@@ -90,9 +99,14 @@ header is never overwritten by a reconstruction, only diffed against it. The Coi
 configure scripts call it, so this is automatic.
 
 Until `gl_compat.h` is captured, `.github/workflows/build-deps.yml` builds Coin in
-**diagnostic mode** — an empty header — and prints the undeclared identifiers the compiler
-reports. That list is the header's specification, and it is the cheapest route to
-reconstructing it if the build machine is ever lost.
+**diagnostic mode** — an empty header — and prints any undeclared identifiers the compiler
+reports, which would be the header's specification. As of run 32099719534 that list is empty
+because Coin compiles cleanly without it. The same mechanism is what will produce the
+specification for the FreeCAD build, where the header is expected to matter.
+
+Objects built this way are still **not production-equivalent**: they were compiled against a
+different set of declarations from the ones the shipped binary saw. Nothing built in
+diagnostic mode may be linked into a release.
 
 ## Order
 

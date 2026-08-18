@@ -13,9 +13,13 @@
 #     deps/wasm/include/qprocess_stub.h    inert QProcess (Qt-for-WebAssembly has none)
 #
 # Ten tracked files consume them. Nothing in the repository produced them: they lived only
-# on the build machine, under a gitignored path. So "clone the repo and follow BUILD-WEH.md"
-# could never work, and the failure surfaced as an inscrutable compile error a long way from
-# the cause -- if it surfaced at all.
+# on the build machine, under a gitignored path, so the failure surfaced as an inscrutable
+# compile error a long way from the cause -- if it surfaced at all.
+#
+# Scope, measured rather than assumed: Coin3D builds fine against an EMPTY gl_compat.h (CI
+# run 32099719534, libCoin.a 11,785,732 bytes, no errors). The FreeCAD build is where the
+# header is expected to matter. Objects built against an empty one are still not
+# production-equivalent and must not be linked into a release.
 #
 # coin_intrusive.h is now reconstructed and tracked (toolchain/include/). gl_compat.h and
 # qprocess_stub.h are NOT -- see the message below. This script makes that gap a named,
@@ -86,9 +90,14 @@ if [ "$missing" = 1 ]; then
 [headers]   coin_intrusive.h  boost::intrusive_ptr adapters for SoBase
 [headers]   qprocess_stub.h   inert QProcess -- Qt-for-WebAssembly has no subprocesses
 [headers]
-[headers] Every build script passes these as `-include`, so without them nothing compiles.
-[headers] The missing ones have never been tracked in this repository -- they exist only on
-[headers] the machine that produced the current release, under the gitignored deps/ path.
+[headers] Every build script passes these as `-include`. The missing ones have never been
+[headers] tracked here -- they exist only on the machine that produced the current release,
+[headers] under the gitignored deps/ path.
+[headers]
+[headers] Coin3D does compile without gl_compat.h (CI run 32099719534 built libCoin.a clean
+[headers] against an empty one). The FreeCAD build is the one expected to need it, since it
+[headers] force-includes it into every C and C++ unit and calls the legacy GL entry points
+[headers] that gl_legacy_stubs.c defines.
 [headers]
 [headers] ON THAT MACHINE, capture it once and commit the result:
 [headers]
