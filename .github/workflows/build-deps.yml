@@ -62,13 +62,20 @@ jobs:
       # Split restore/save with a run-unique key and a prefix restore-key: the restore still
       # finds the newest matching entry, and the save always writes a new one, so the cache
       # accumulates instead of freezing.
+      # The key includes a hash of everything that changes what gets COMPILED -- the patch
+      # set, the configure/build scripts, the staged headers. Without that, applying a source
+      # patch and then hitting a cache-skip guard pairs new source with libraries built before
+      # it, silently. That is the same shape as every other defect in this repository, so it
+      # is worth the rebuilds a script edit now costs.
       - name: Restore built dependencies
         id: depcache
         if: ${{ !inputs.rebuild }}
         uses: actions/cache/restore@v4
         with:
           path: deps/wasm
-          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ github.run_id }}
+          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
+          restore-keys: |
+            fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-
           # ONLY the run-keyed prefix. The bare key was also listed here, and run
           # 32099719534 duly matched the stale fixed-key entry (41 MiB, boost+xerces+VTK)
           # instead of the 76 MiB one with OCCT in it -- so OCCT rebuilt for 77 minutes
@@ -134,27 +141,24 @@ jobs:
             exit 1
           fi
 
-      # patches/apply.sh cannot run here: it requires git checkouts (deps/src/*/.git) and this
-      # workflow fetches tarballs. So the patches it would apply are applied inline, the same
-      # way the OCCT one above is. cpython-ctypes-wasm.patch carries the trampoline change that
-      # makes CPython pick the Reflection trampoline over the JavaScript one -- the JS frame
-      # JSPI cannot suspend across.
-      - name: Patch CPython (ctypes + emscripten trampoline)
+      # THE project's own source patches -- occt.patch, coin3d.patch, cpython-ctypes-wasm.patch,
+      # numpy.patch. None had ever been applied in CI, because apply.sh required git checkouts
+      # (deps/src/*/.git) and this workflow fetches tarballs. It handles both layouts now, so
+      # the libraries built here are patch-equivalent to the build machine's for the first time.
+      #
+      # FCWEB_PATCH_OPTIONAL=1 because CI builds a subset of the stack: a tree that is not here
+      # is skipped rather than fatal. On the build machine the default stays strict.
+      - name: Apply the source patches
         run: |
           set -e
-          cd deps/src/cpython
-          pf="$GITHUB_WORKSPACE/patches/cpython-ctypes-wasm.patch"
-          if patch -p1 --dry-run < "$pf" >/dev/null 2>&1; then
-            patch -p1 < "$pf"; echo "  applied"
-          elif patch -p1 -R --dry-run < "$pf" >/dev/null 2>&1; then
-            echo "  already applied"
-          else
-            echo "::error::cpython-ctypes-wasm.patch does not apply to v3.13.3"
-            exit 1
+          FCWEB_PATCH_OPTIONAL=1 bash patches/apply.sh
+          # A positive signal per patch, not just apply.sh's exit code -- "nothing threw" has
+          # already proven worthless twice in this repository.
+          if [ -d deps/src/cpython ]; then
+            grep -q "typeof Module.PyEM_CountArgs" deps/src/cpython/Python/emscripten_trampoline.c \
+              && echo "  verified: CPython trampoline delta present" \
+              || { echo "::error::cpython patched but the trampoline delta is missing"; exit 1; }
           fi
-          grep -q "typeof Module.PyEM_CountArgs" Python/emscripten_trampoline.c \
-            && echo "  trampoline delta present" \
-            || { echo "::error::patch applied but the trampoline delta is missing"; exit 1; }
 
       # OCCT's script runs `embuilder build freetype >/dev/null 2>&1` and, under set -e, dies
       # silently if that fails -- which is exactly what happened: occt.txt in run 32043014090
@@ -462,7 +466,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: deps/wasm
-          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ github.run_id }}
+          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
 
       - name: Disk after
         if: always()
