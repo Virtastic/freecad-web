@@ -63,10 +63,15 @@ jobs:
       # NATIVE compiler before it can translate a single Fortran file, so a missing cc fails
       # this job minutes in, inside a step whose log nobody reads until it is already red.
       # Name what is missing up front instead.
+      #
+      # `unzip` is in the list because of run 32158073040, the first dispatch to the box: it
+      # got four steps in, fetched CalculiX fine, and died on `unzip: command not found` for
+      # libf2c.zip. Every hosted image ships unzip, so nothing had ever needed to ask for it.
+      # That is the whole failure mode this step exists to convert into one line.
       - name: Preflight -- is this machine able to build at all?
         run: |
           miss=""
-          for t in make python3 patch curl tar; do
+          for t in make python3 patch curl tar unzip; do
             command -v "$t" >/dev/null 2>&1 || miss="$miss $t"
           done
           command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || miss="$miss cc/gcc"

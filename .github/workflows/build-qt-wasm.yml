@@ -66,6 +66,24 @@ jobs:
           df -h / | sed 's/^/  /'
           nproc | sed 's/^/  cpus: /'
 
+      # Same reasoning as build-ccx.yml's preflight. Qt's configure additionally needs perl
+      # and a real ninja; on a hosted image both are given, on the box neither was until it
+      # was provisioned.
+      - name: Preflight -- is this machine able to build at all?
+        run: |
+          miss=""
+          for t in cmake ninja python3 perl make curl tar; do
+            command -v "$t" >/dev/null 2>&1 || miss="$miss $t"
+          done
+          command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || miss="$miss cc/gcc"
+          if [ -n "$miss" ]; then
+            echo "::error::this runner cannot build:$miss"
+            echo "On the OVH box, provision it once with:"
+            echo "    sudo apt-get install -y build-essential cmake ninja-build"
+            exit 1
+          fi
+          echo "  toolchain ok: $(cmake --version | head -1), $(ninja --version)"
+
       - name: Cache the built Qt
         uses: actions/cache@v4
         with:
