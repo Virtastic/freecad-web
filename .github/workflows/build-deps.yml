@@ -113,6 +113,30 @@ jobs:
           restore-keys: |
             fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-
 
+      # A hosted runner ships cmake, ninja and gcc. The OVH box does not: run 32155916113
+      # died eight times in a row with "[Errno 13] Permission denied: 'cmake'" and
+      # "no acceptable C compiler found in $PATH", each failure buried inside a
+      # continue-on-error step and only caught by the gate at the end.
+      #
+      # Check up front and name what is missing, so choosing runner=vps on an unprovisioned
+      # box costs one clear line instead of a log dig.
+      - name: Preflight -- is this machine able to build at all?
+        run: |
+          miss=""
+          for t in cmake ninja python3 patch curl tar; do
+            command -v "$t" >/dev/null 2>&1 || { miss="$miss $t"; continue; }
+            "$t" --version >/dev/null 2>&1 || miss="$miss $t(not executable)"
+          done
+          # CPython's host interpreter needs a native compiler; emcc cannot stand in.
+          command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || miss="$miss cc/gcc"
+          if [ -n "$miss" ]; then
+            echo "::error::this runner cannot build:$miss"
+            echo "On the OVH box, provision it once with:"
+            echo "    sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build"
+            exit 1
+          fi
+          echo "  toolchain ok: $(cmake --version | head -1), $(ninja --version), $(cc --version | head -1)"
+
       - name: Install emsdk 3.1.70
         run: |
           set -e
