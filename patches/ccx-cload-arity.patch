@@ -1,0 +1,45 @@
+Make temploadfem.f's call to cload match cload's actual signature.
+
+CalculiX 2.22 declares the user subroutine with 13 arguments:
+
+    subroutine cload(xload,kstep,kinc,time,node,idof,coords,vold,
+   &  mi,ntrans,trab,inotr,veold)
+
+Three of its four callers -- tempload.f, tempload_em.f, temploaddiff.f -- pass exactly those
+13. temploadfem.f passes 17, adding nmethod,idummy,ddummy,ddummy. On a native Fortran build
+that is harmless: there are no cross-file prototypes and the callee simply ignores the extra
+arguments.
+
+wasm is strictly typed, so it is not harmless here. wasm-ld cannot reconcile the two
+signatures and routes the mismatching call through a TRAPPING stub:
+
+    wasm-ld: warning: function signature mismatch: cload_
+    >>> defined as (i32 x 17) -> void in libccx.a(f_temploadfem.o)
+    >>> defined as (i32 x 13) -> void in libccx.a(f_cload.o)
+
+So reaching that line -- the *CLOAD user-subroutine path -- aborts the solver with
+"unreachable" rather than calling anything. FreeCAD writes ordinary *CLOAD cards and does not
+use the user-subroutine form, so this is latent rather than live, but it is a real trap sitting
+in a linked module and the fix costs one line.
+
+Truncating to 13 is semantically identical on every platform: the callee never had access to
+arguments 14-17, because its dummy argument list stops at veold.
+
+Found in CI run 32142849410, in a wasm-ld warning that had been printing on every build.
+
+Generated with `diff -u` against the real 2.22 file. (patches/occt-freetype-tags-const.patch
+records what happens when one of these is written by hand instead: it silently fails to apply
+and the build fails in exactly the same place as before.)
+
+--- a/src/temploadfem.f
++++ b/src/temploadfem.f
+@@ -250,8 +250,7 @@
+                enddo
+ !
+                call cload(xforcact(i),istep,iinc,abqtime,node,
+-     &              ndirforc(i),coords,vold,mi,ntrans,trab,inotr,veold,
+-     &              nmethod,idummy,ddummy,ddummy)
++     &              ndirforc(i),coords,vold,mi,ntrans,trab,inotr,veold)
+                cycle
+             endif
+          endif

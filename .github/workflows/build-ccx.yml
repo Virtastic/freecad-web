@@ -118,19 +118,28 @@ jobs:
       #
       # ccx is deliberately not in patches/regen.sh's MAP (like VTK), so this one is applied
       # by hand rather than through patches/apply.sh.
-      - name: Apply the CalculiX source patch
+      # Every patches/ccx-*.patch, not one named file. The named form meant adding a second
+      # CalculiX patch required editing this workflow, which is the kind of coupling that
+      # leaves a patch sitting in the tree unapplied.
+      - name: Apply the CalculiX source patches
         run: |
           set -e
           cd deps/src/ccx/ccx_2.22
-          if patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/ccx-wasm-automatic-array.patch" >/dev/null 2>&1; then
-            patch -p1 < "$GITHUB_WORKSPACE/patches/ccx-wasm-automatic-array.patch"
-            echo "  applied ccx-wasm-automatic-array.patch"
-          elif patch -p1 -R --dry-run < "$GITHUB_WORKSPACE/patches/ccx-wasm-automatic-array.patch" >/dev/null 2>&1; then
-            echo "  already applied"
-          else
-            echo "::error::ccx-wasm-automatic-array.patch does not apply to this source"
-            exit 1
-          fi
+          n=0
+          for pf in "$GITHUB_WORKSPACE"/patches/ccx-*.patch; do
+            [ -e "$pf" ] || continue
+            b=$(basename "$pf")
+            if patch -p1 --dry-run --force --silent < "$pf" >/dev/null 2>&1; then
+              patch -p1 --silent < "$pf"; echo "  applied $b"; n=$((n+1))
+            elif patch -p1 -R --dry-run --force --silent < "$pf" >/dev/null 2>&1; then
+              echo "  already applied $b"; n=$((n+1))
+            else
+              echo "::error::$b does not apply to this source"
+              exit 1
+            fi
+          done
+          [ "$n" -gt 0 ] || { echo "::error::no patches/ccx-*.patch found -- the glob or the path is wrong"; exit 1; }
+          echo "  $n CalculiX patch(es) in effect"
 
       # Native, not wasm: this runs ON the runner to translate Fortran to C. f2c is 1990s C
       # and trips several modern-clang/gcc defaults, hence the demotions -- the same reason
