@@ -109,6 +109,8 @@ jobs:
             get VTK-9.3.1 https://www.vtk.org/files/release/9.3/VTK-9.3.1.tar.gz                   1
             get coin3d    https://github.com/coin3d/coin/archive/refs/tags/v4.0.3.tar.gz           1
             get boost     https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.gz      1
+            get yaml-cpp  https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz        1
+            get cpython   https://github.com/python/cpython/archive/refs/tags/v3.13.3.tar.gz       1
             echo "--- deps/src ---"; ls -1 deps/src
             echo "--- deps/wasm/lib (from cache, if any) ---"; ls -1 deps/wasm/lib 2>/dev/null | head -50
             echo "--- disk ---"; df -h /
@@ -131,6 +133,28 @@ jobs:
             echo "::error::occt-freetype-tags-const.patch does not apply -- refusing to build OCCT that will fail 2716 targets in"
             exit 1
           fi
+
+      # patches/apply.sh cannot run here: it requires git checkouts (deps/src/*/.git) and this
+      # workflow fetches tarballs. So the patches it would apply are applied inline, the same
+      # way the OCCT one above is. cpython-ctypes-wasm.patch carries the trampoline change that
+      # makes CPython pick the Reflection trampoline over the JavaScript one -- the JS frame
+      # JSPI cannot suspend across.
+      - name: Patch CPython (ctypes + emscripten trampoline)
+        run: |
+          set -e
+          cd deps/src/cpython
+          pf="$GITHUB_WORKSPACE/patches/cpython-ctypes-wasm.patch"
+          if patch -p1 --dry-run < "$pf" >/dev/null 2>&1; then
+            patch -p1 < "$pf"; echo "  applied"
+          elif patch -p1 -R --dry-run < "$pf" >/dev/null 2>&1; then
+            echo "  already applied"
+          else
+            echo "::error::cpython-ctypes-wasm.patch does not apply to v3.13.3"
+            exit 1
+          fi
+          grep -q "typeof Module.PyEM_CountArgs" Python/emscripten_trampoline.c \
+            && echo "  trampoline delta present" \
+            || { echo "::error::patch applied but the trampoline delta is missing"; exit 1; }
 
       # OCCT's script runs `embuilder build freetype >/dev/null 2>&1` and, under set -e, dies
       # silently if that fails -- which is exactly what happened: occt.txt in run 32043014090
@@ -289,6 +313,56 @@ jobs:
           fi
           exit $rc
 
+      - name: yaml-cpp
+        id: yamlcpp
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/deplogs
+          . emsdk/emsdk_env.sh
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libyaml-cpp.a ]; then
+            echo "  yaml-cpp: already built (cache hit), skipping"; exit 0
+          fi
+          t0=$SECONDS; rc=0
+          {
+            emcmake cmake -S deps/src/yaml-cpp -B build-yamlcpp -G Ninja \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+              -DYAML_BUILD_SHARED_LIBS=OFF -DYAML_CPP_BUILD_TESTS=OFF -DYAML_CPP_BUILD_TOOLS=OFF \
+              -DCMAKE_INSTALL_PREFIX="$PWD/deps/wasm" \
+              -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O2" &&
+            ninja -C build-yamlcpp install
+          } > /tmp/deplogs/yamlcpp.txt 2>&1 || rc=$?
+          [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  yaml-cpp exit=$rc in $((SECONDS-t0))s"; tail -20 /tmp/deplogs/yamlcpp.txt
+          exit $rc
+
+      # CPython is where the -DPY_CALL_TRAMPOLINE=1 fix lands. Its failure mode is a build
+      # that exits 0 and a browser that silently returns the wrong answer from every modal
+      # dialog, so build-cpython*.sh assert the trampoline symbols afterwards.
+      - name: CPython 3.13.3 (host + wasm/pthreads)
+        id: cpython
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/deplogs
+          . emsdk/emsdk_env.sh
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libpython3.13.a ]; then
+            echo "  cpython: already built (cache hit), skipping"; exit 0
+          fi
+          t0=$SECONDS; rc=0
+          bash build-cpython.sh    > /tmp/deplogs/cpython.txt   2>&1 || rc=$?
+          if [ "$rc" = 0 ]; then
+            bash build-cpython-mt.sh > /tmp/deplogs/cpython-mt.txt 2>&1 || rc=$?
+          fi
+          # Stage the -pthread build where the FreeCAD link expects it, so the cache carries it.
+          if [ "$rc" = 0 ]; then
+            mkdir -p deps/wasm/lib
+            cp deps/src/cpython/builddir/emscripten-mt/libpython3.13.a deps/wasm/lib/ || rc=$?
+          fi
+          [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          echo "  cpython exit=$rc in $((SECONDS-t0))s"
+          echo "--- host/stage2 tail ---"; tail -15 /tmp/deplogs/cpython.txt 2>/dev/null
+          echo "--- pthreads tail ---";    tail -25 /tmp/deplogs/cpython-mt.txt 2>/dev/null
+          exit $rc
+
       # THE GATE. Every dependency step above is continue-on-error, which is deliberate -- one
       # failure should still leave the others measured -- but it also meant a run that built
       # NOTHING reported success. Run 32077362742 was green with Coin3D "exit=0 in 3s" and no
@@ -315,6 +389,8 @@ jobs:
           check xerces "deps/wasm/lib/libxerces-c*.a" 1
           check OCCT   "deps/wasm/lib/libTK*.a"      30
           check VTK    "deps/wasm/lib/libvtk*.a"     20
+          check yamlcpp "deps/wasm/lib/libyaml-cpp.a"  1
+          check cpython "deps/wasm/lib/libpython3.13.a" 1
 
           if [ -s deps/wasm/lib/libCoin.a ]; then
             echo "  ok  Coin3D: libCoin.a present"
@@ -339,7 +415,8 @@ jobs:
             echo "|---|---|"
             for p in "boost:${{ steps.boost.outputs.secs }}" "xerces-c:${{ steps.xerces.outputs.secs }}" \
                      "OCCT:${{ steps.occt.outputs.secs }}" "VTK:${{ steps.vtk.outputs.secs }}" \
-                     "Coin3D:${{ steps.coin.outputs.secs }}"; do
+                     "Coin3D:${{ steps.coin.outputs.secs }}" "yaml-cpp:${{ steps.yamlcpp.outputs.secs }}" \
+                     "CPython:${{ steps.cpython.outputs.secs }}"; do
               n="${p%%:*}"; v="${p#*:}"
               echo "| $n | ${v:-**FAILED**} |"
             done

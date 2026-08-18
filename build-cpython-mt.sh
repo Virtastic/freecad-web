@@ -5,7 +5,13 @@ set -e
 cd "$(dirname "$0")"
 . toolchain/env.sh
 SRC="$ROOT/deps/src/cpython"
-BUILD_PY="$SRC/builddir/build/python.exe"
+# CPython names the host binary python.exe on a case-insensitive filesystem (macOS) and
+# plain python elsewhere. Hardcoding python.exe made this script macOS-only, so it could
+# never have run in CI or on Linux. build-cpython.sh already probed for both; match it.
+BUILD_PY="$SRC/builddir/build/python"
+[ -x "$BUILD_PY" ] || BUILD_PY="$SRC/builddir/build/python.exe"
+[ -x "$BUILD_PY" ] || { echo "ERROR: no host python under $SRC/builddir/build -- run build-cpython.sh first." >&2; exit 1; }
+echo "host python: $BUILD_PY"
 # -DPY_CALL_TRAMPOLINE=1 is NOT optional and NOT supplied by CPython's own build.
 # Python/emscripten_trampoline.c opens with `#if defined(PY_CALL_TRAMPOLINE)` on line 1
 # and only includes <Python.h> on line 4, INSIDE the guard -- so pyconfig.h can never
