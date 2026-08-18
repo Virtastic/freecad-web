@@ -1,0 +1,114 @@
+Give patch.f fixed array extents, and tell HYBSVD about them.
+
+patch.f declares six F90 automatic arrays sized by its dummy arguments ipoints and iterms:
+
+    rv1(ipoints), pp(ipoints,iterms), pdat(ipoints,6), pwrk(iterms),
+    pre(ipoints,iterms), z(ipoints,ipoints)
+
+FORTRAN 77 has no automatic arrays, so f2c rejects the file and the build stubs it. patch is
+reachable -- zienzhu.f is its only caller, and that is the Zienkiewicz-Zhu error estimator --
+and the deployed module has it compiled (tools/ccx-stub-diff.py), so this is a real gap
+against production rather than a cosmetic one.
+
+Bounding alone would have been WRONG, and this is the interesting part. The file calls
+
+    call hybsvd(ipoints,ipoints,ipoints,ipoints,ipoints,
+   &            ipoints,iterms,pp,pwrk,matu,pp,matv,pre,z,pdat,nrhs,info,rv1)
+
+and hybsvd's signature is
+
+    SUBROUTINE HYBSVD(NA,NU,NV,NZ,NB,M,N,A,W,MATU,U,MATV,V,Z,B,IRHS,IERR,RV1)
+    REAL*8 A(NA,1), U(NU,1), V(NV,1), Z(NZ,1), B(NB,IRHS)
+
+The first five arguments are the DECLARED leading dimensions; M and N are the actual sizes.
+Upstream passes ipoints for both because the arrays are declared with it. Re-declare them with
+a fixed bound and leave the call alone, and every index hybsvd computes is wrong -- silently,
+in a least-squares fit, which is the failure mode this project has already decided is worse
+than an abort. So the leading dimensions become maxpt while M and N stay ipoints and iterms.
+
+The bounds are read off the source rather than chosen:
+
+  maxtrm=20   zienzhu.f sets iterms to exactly 4, 10, 11, 17 or 20.
+  maxpt=4000  ipoints accumulates 1, 8, 8 or 27 per element in the patch around one node.
+
+z is declared z(ipoints,ipoints) upstream, which would be 128 MB at maxpt. It does not need to
+be square: hybsvd's own header says Z need only be "OF SIZE AT LEAST MIN(M,N)**2", and here
+min(M,N) is iterms. z(maxpt,maxtrm) is larger than the algorithm can address, not smaller. The
+whole set costs about 2.1 MB.
+
+Both bounds carry a guard that stops the run and names the limit.
+
+Generated with `diff -u` against the real 2.22 file.
+
+--- a/src/patch.f
++++ b/src/patch.f
+@@ -29,11 +29,27 @@
+      & iterms,k,iflag,nrhs,info,node,ipnt,
+      & mi(*),irow,ipoints,members(*),linpatch,ielidx,iavflag
+ !
++C
++C     wasm: rv1/pp/pdat/pwrk/pre/z are F90 automatic arrays, sized by the dummy
++C     arguments ipoints and iterms. FORTRAN 77 -- all f2c implements -- has no such
++C     thing, so they take fixed extents here.
++C
++C     maxtrm=20 is not a guess: zienzhu.f is patch's only caller and sets iterms to
++C     exactly 4, 10, 11, 17 or 20.
++C
++C     z is declared z(ipoints,ipoints) upstream, which would be 128 MB at maxpt. It does
++C     not need to be square: hybsvd's own header says Z need only be "OF SIZE AT LEAST
++C     MIN(M,N)**2", and here M=ipoints, N=iterms, so min(M,N) is iterms. z(maxpt,maxtrm)
++C     is therefore larger than the algorithm can use, not smaller.
++C
++      integer maxpt,maxtrm
++      parameter (maxpt=4000,maxtrm=20)
++!
+       real*8 xl(3,20),co(3,*),shp(4,20),
+      & pgauss(3),pol(20),pntdist,w,scpav(6,*),xsj,
+-     & sti(6,mi(1),*),xi,et,ze,rv1(ipoints),pp(ipoints,iterms),
+-     & pdat(ipoints,6),pfit(6),pwrk(iterms),pre(ipoints,iterms),
+-     & z(ipoints,ipoints)
++     & sti(6,mi(1),*),xi,et,ze,rv1(maxpt),pp(maxpt,maxtrm),
++     & pdat(maxpt,6),pfit(6),pwrk(maxtrm),pre(maxpt,maxtrm),
++     & z(maxpt,maxtrm)
+ !
+       real*8 tmpstr(6),gauss3d5e(3,4)
+ !
+@@ -43,6 +59,22 @@
+ !
+       include 'gauss.f'
+ !
++C
++C     Stop rather than overrun. Both bounds are generous -- a patch is the elements
++C     around one node -- but a bound that is silently exceeded is the one failure mode
++C     worth refusing outright in a solver.
++C
++      if(ipoints.gt.maxpt) then
++         write(*,*) '*ERROR in patch: ipoints exceeds maxpt'
++         write(*,*) '       (WebAssembly build array bound)'
++         call exit(201)
++      endif
++      if(iterms.gt.maxtrm) then
++         write(*,*) '*ERROR in patch: iterms exceeds maxtrm'
++         write(*,*) '       (WebAssembly build array bound)'
++         call exit(201)
++      endif
++!
+ !     initialize
+ !
+ !     iavflag: if 1, then build average of integration point values
+@@ -194,7 +226,14 @@
+          matv=.true.
+          nrhs=6
+ !
+-         call hybsvd(ipoints,ipoints,ipoints,ipoints,ipoints,
++C
++C     HYBSVD(NA,NU,NV,NZ,NB,M,N,...) takes the DECLARED leading dimensions first and the
++C     actual sizes second -- A(NA,1), U(NU,1), V(NV,1), Z(NZ,1), B(NB,IRHS). Upstream
++C     passes ipoints for both because the arrays were declared with it. Now that they are
++C     declared with maxpt, the leading dimensions must say maxpt or every index the callee
++C     computes is wrong; M and N stay the runtime ipoints and iterms.
++C
++         call hybsvd(maxpt,maxpt,maxpt,maxpt,maxpt,
+      &        ipoints,iterms,pp,pwrk,matu,pp,matv,
+      &        pre,z,pdat,nrhs,info,rv1)
+          if(info.ne.0) then
