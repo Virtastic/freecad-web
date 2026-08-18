@@ -988,6 +988,10 @@ def expand_matmul(text, dims):
             i = j
         return ''.join(out)
 
+    newtemp_stmt = newtemp
+    index_refs_stmt = index_refs
+    mm_counter = counter
+
     def reduce_calls(code, pre):
         """Replace innermost matmul/transpose with temporaries, emitting calls into `pre`."""
         while True:
@@ -1076,7 +1080,79 @@ def expand_matmul(text, dims):
         if is_comment or not code:
             out.extend(raw)
             continue
-        if '=' not in code or code.strip().lower().startswith(('if', 'call', 'do ')):
+        # An actual ARGUMENT can be an array expression: resultsmech_us3.f writes
+        # `call us3_Km(x,Km,Dm/h,h)`, which f2c reports as "wrong number of subscripts on
+        # dm". F77 has no array expressions and the callee needs a contiguous array, so it
+        # is computed into a temporary and the temporary passed.
+        #
+        # The test is deliberately narrow, because a broader one cost seven working contact
+        # files (run 32193477862: 973 -> 967 translated, decks red). `co(1,node)/2.d0` is a
+        # SCALAR expression that merely mentions an array; materialising it produced a whole
+        # array where the callee wanted one number. So: only when the expression contains a
+        # WHOLE-array reference -- a bare array name, or a section -- is there an array value
+        # to materialise at all.
+        mcall = re.match(r'^(\s*call\s+[A-Za-z]\w*\s*)\((.*)\)\s*$', code, re.I)
+        if mcall:
+            args = split_top(mcall.group(2))
+            pre, changed = [], False
+            for ai, arg in enumerate(args):
+                a = arg.strip()
+                if not re.search(r'[-+*/]', a):
+                    continue                       # not an expression at all
+                if _shape_of(a, dims) is not None:
+                    continue                       # already a plain array value
+                whole = None
+                for m2 in re.finditer(r'\b([A-Za-z]\w*)\b', a):
+                    nm = m2.group(1).lower()
+                    if nm not in dims:
+                        continue
+                    tail = a[m2.end():m2.end() + 1]
+                    if tail == '(':
+                        # subscripted: an array VALUE only if it is a section
+                        k, depth = m2.end(), 0
+                        while k < len(a):
+                            if a[k] == '(':
+                                depth += 1
+                            elif a[k] == ')':
+                                depth -= 1
+                                if depth == 0:
+                                    break
+                            k += 1
+                        if ':' not in a[m2.end():k]:
+                            continue               # a single element -- scalar
+                    whole = nm
+                    break
+                if whole is None:
+                    continue                       # scalar expression; leave it alone
+                sh = _shape_of(whole, dims)
+                if sh is None:
+                    continue
+                t = newtemp_stmt(sh)
+                if sh[0] == 'v':
+                    iv = 'i_fcwm%d' % (mm_counter[0] * 10 + 1)
+                    pre += ['      do %s=1,%s' % (iv, sh[1]),
+                            '        %s(%s)=%s' % (t, iv, index_refs_stmt(a, [iv], sh)),
+                            '      enddo']
+                else:
+                    iv = 'i_fcwm%d' % (mm_counter[0] * 10 + 1)
+                    jv = 'i_fcwm%d' % (mm_counter[0] * 10 + 2)
+                    pre += ['      do %s=1,%s' % (jv, sh[2]),
+                            '        do %s=1,%s' % (iv, sh[1]),
+                            '          %s(%s,%s)=%s' % (t, iv, jv,
+                                                        index_refs_stmt(a, [iv, jv], sh)),
+                            '        enddo',
+                            '      enddo']
+                args[ai] = t
+                changed = True
+            if changed:
+                out.extend(pre)
+                # split_fixed strips columns 1-6; fixed-form code must start at 7
+                out.append('      %s(%s)' % (mcall.group(1).strip(), ','.join(args)))
+                continue
+            out.extend(raw)
+            continue
+
+        if '=' not in code or code.strip().lower().startswith(('if', 'do ')):
             out.extend(raw)
             continue
         lhs, rhs = code.split('=', 1)
