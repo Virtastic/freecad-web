@@ -1101,15 +1101,20 @@ def expand_matmul_units(text):
         dims = declared_dims(unit)
         body, temps = expand_matmul('\n'.join(unit), dims)
         ul = body.split('\n')
-        if temps:
-            decls = []
-            for name, sh in sorted(temps.items()):
-                decls.append('      real*8 %s(%s)' % (name, sh[1] if sh[0] == 'v'
-                                                      else '%s,%s' % (sh[1], sh[2])))
-            idx = sorted({int(m.group(1)) for l in ul
-                          for m in re.finditer(r'\bi_fcwm(\d+)\b', l)})
-            if idx:
-                decls.append('      integer ' + ','.join('i_fcwm%d' % i for i in idx))
+        # Declare the loop variables whenever they are USED, not only when a matmul
+        # temporary happens to exist. extrapolatecontact.f has no matmul at all but does get
+        # whole-array element loops, so gating this on `temps` left i_fcwmN undeclared there
+        # and stubbed a routine that had been translating fine. Run 32160639115 caught it by
+        # listing extrapolatecontact.f as newly stubbed -- a regression, not progress.
+        decls = []
+        for name, sh in sorted(temps.items()):
+            decls.append('      real*8 %s(%s)' % (name, sh[1] if sh[0] == 'v'
+                                                  else '%s,%s' % (sh[1], sh[2])))
+        idx = sorted({int(m.group(1)) for l in ul
+                      for m in re.finditer(r'\bi_fcwm(\d+)\b', l)})
+        if idx:
+            decls.append('      integer ' + ','.join('i_fcwm%d' % i for i in idx))
+        if decls:
             ul = _declare_arrays_in_unit(ul, decls)
         out.extend(ul)
     return '\n'.join(out)
