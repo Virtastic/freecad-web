@@ -12,6 +12,18 @@ typedef float          GLfloat;
 typedef double         GLdouble;
 typedef short          GLshort;
 
+/* The float entry points LEGACY_GL_EMULATION really does implement. This file is compiled
+ * WITHOUT the gl_compat.h force-include (see fcwasm_draw_text_tris below), so naming them
+ * here binds to the emulation rather than to the shims Coin's sources see. */
+extern void glNormal3f(GLfloat, GLfloat, GLfloat);
+extern void glVertex2f(GLfloat, GLfloat);
+extern void glVertex3f(GLfloat, GLfloat, GLfloat);
+extern void glColor3f(GLfloat, GLfloat, GLfloat);
+extern void glColor4f(GLfloat, GLfloat, GLfloat, GLfloat);
+extern void glTexCoord2f(GLfloat, GLfloat);
+extern void glBegin(GLenum);
+extern void glEnd(void);
+
 void glPushAttrib(GLbitfield m) { (void)m; }
 void glPopAttrib(void) {}
 void glPushClientAttrib(GLbitfield m) { (void)m; }
@@ -21,15 +33,24 @@ void glRasterPos2i(GLint x, GLint y) { (void)x;(void)y; }
 void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z) { (void)x;(void)y;(void)z; }
 void glBitmap(GLsizei w, GLsizei h, GLfloat x0, GLfloat y0, GLfloat xi, GLfloat yi, const GLubyte* b)
 { (void)w;(void)h;(void)x0;(void)y0;(void)xi;(void)yi;(void)b; }
-void glRecti(GLint a, GLint b, GLint c, GLint d) { (void)a;(void)b;(void)c;(void)d; }
-void glRectf(GLfloat a, GLfloat b, GLfloat c, GLfloat d) { (void)a;(void)b;(void)c;(void)d; }
-void glVertex2d(GLdouble x, GLdouble y) { (void)x;(void)y; }
-void glVertex3d(GLdouble x, GLdouble y, GLdouble z) { (void)x;(void)y;(void)z; }
-void glVertex3dv(const GLdouble* v) { (void)v; }
-void glColor3d(GLdouble r, GLdouble g, GLdouble b) { (void)r;(void)g;(void)b; }
-void glColor4d(GLdouble r, GLdouble g, GLdouble b, GLdouble a) { (void)r;(void)g;(void)b;(void)a; }
-void glNormal3d(GLdouble x, GLdouble y, GLdouble z) { (void)x;(void)y;(void)z; }
-void glTexCoord2d(GLdouble s, GLdouble t) { (void)s;(void)t; }
+/* glRect(x1,y1,x2,y2) is defined by the GL spec as exactly this quad, in this winding.
+ * Emitting it through glBegin/glEnd -- which the emulation does provide -- turns two more
+ * silently-dropped draws into real ones. */
+static void fcwasm_rect(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2) {
+    const GLenum GL_TRIANGLE_FAN_ = 0x0006;
+    glBegin(GL_TRIANGLE_FAN_);
+    glVertex2f(x1, y1); glVertex2f(x2, y1); glVertex2f(x2, y2); glVertex2f(x1, y2);
+    glEnd();
+}
+void glRecti(GLint a, GLint b, GLint c, GLint d) { fcwasm_rect((GLfloat)a,(GLfloat)b,(GLfloat)c,(GLfloat)d); }
+void glRectf(GLfloat a, GLfloat b, GLfloat c, GLfloat d) { fcwasm_rect(a,b,c,d); }
+void glVertex2d(GLdouble x, GLdouble y) { glVertex2f((GLfloat)x,(GLfloat)y); }
+void glVertex3d(GLdouble x, GLdouble y, GLdouble z) { glVertex3f((GLfloat)x,(GLfloat)y,(GLfloat)z); }
+void glVertex3dv(const GLdouble* v) { if (v) glVertex3f((GLfloat)v[0],(GLfloat)v[1],(GLfloat)v[2]); }
+void glColor3d(GLdouble r, GLdouble g, GLdouble b) { glColor3f((GLfloat)r,(GLfloat)g,(GLfloat)b); }
+void glColor4d(GLdouble r, GLdouble g, GLdouble b, GLdouble a) { glColor4f((GLfloat)r,(GLfloat)g,(GLfloat)b,(GLfloat)a); }
+void glNormal3d(GLdouble x, GLdouble y, GLdouble z) { glNormal3f((GLfloat)x,(GLfloat)y,(GLfloat)z); }
+void glTexCoord2d(GLdouble s, GLdouble t) { glTexCoord2f((GLfloat)s,(GLfloat)t); }
 void glLineStipple(GLint f, GLshort p) { (void)f;(void)p; }
 void glPolygonStipple(const GLubyte* m) { (void)m; }
 
@@ -74,7 +95,7 @@ void glPixelTransferf(GLenum pn, GLfloat p) { (void)pn;(void)p; }
 void glPixelTransferi(GLenum pn, GLint p) { (void)pn;(void)p; }
 void glTexCoord3fv(const GLfloat* v) { (void)v; }
 void glTexGenf(GLenum coord, GLenum pn, GLfloat p) { (void)coord;(void)pn;(void)p; }
-void glVertex2s(GLshort x, GLshort y) { (void)x;(void)y; }
+void glVertex2s(GLshort x, GLshort y) { glVertex2f((GLfloat)x,(GLfloat)y); }
 
 /* glInterleavedArrays: MeshGui's SoFCMeshObject/SoFCIndexedFaceSet feed
  * interleaved vertex/normal/color/texcoord arrays. LEGACY_GL_EMULATION lacks
@@ -132,7 +153,6 @@ void glInterleavedArrays(GLenum format, GLsizei stride, const void* pointer) {
  * client-side vertex arrays render correctly. This file is compiled WITHOUT
  * the gl_compat.h force-include, so the calls below bind to the real
  * emulation entry points (Coin sources see no-op shims for these). */
-extern void glNormal3f(GLfloat, GLfloat, GLfloat);
 extern void glDrawArrays(GLenum, GLint, GLsizei);
 void fcwasm_draw_text_tris(const float* verts, int nverts) {
     const GLenum GL_VERTEX_ARRAY_ = 0x8074, GL_NORMAL_ARRAY_ = 0x8075,

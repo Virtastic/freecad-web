@@ -45,6 +45,67 @@ jobs:
           # Verified against the live loader: every patch reports "already applied", exit 0.
           python3 tools/patch-freecad-js.py /tmp/FreeCAD.js --check
 
+  # The C shims that get LINKED INTO the app -- gl_legacy_stubs.c above all, which supplies
+  # every fixed-function GL entry point Coin calls that LEGACY_GL_EMULATION lacks -- have
+  # never been compiled by CI. They are only ever built during a full FreeCAD link on the
+  # build machine, so a typo in them is invisible here and costs an hour there.
+  #
+  # emcc -fsyntax-only is seconds once emsdk is cached, and it checks the thing that actually
+  # bites: whether the entry points these files forward to exist with the signatures used.
+  shims:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache emsdk
+        id: emsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: emsdk
+          key: emsdk-3.1.70-shims-v1
+
+      - name: Install emsdk 3.1.70
+        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+
+      - name: Compile the linked C shims
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          fail=0
+          for f in gl_legacy_stubs.c bridge/ccx_stubs.c bridge/ccx_threads.c \
+                   bridge/ccx_fortran_rt.c fcweb_export_stub.c postevent_wrap.c; do
+            [ -e "$f" ] || { echo "::error::$f is gone -- the link command still names it"; fail=1; continue; }
+            if emcc -fsyntax-only -pthread "$f" 2>/tmp/err.txt; then
+              echo "  ok  $f"
+            else
+              echo "::error::$f does not compile"
+              sed 's/^/      /' /tmp/err.txt
+              fail=1
+            fi
+          done
+          exit $fail
+
+      # gl_legacy_stubs.c exists to DEFINE symbols the emulation lacks. A "stub" that is an
+      # empty body is a silent wrong answer at run time, so count them and print the list:
+      # the number should only ever go down, and a diff in it should be a deliberate act.
+      - name: Inventory the GL no-ops
+        run: |
+          n=$(grep -cE '\{ *(\(void\)[A-Za-z0-9_;() ]*)? *\}$' gl_legacy_stubs.c || true)
+          t=$(grep -cE '^(void|GLint|GLuint) gl[A-Za-z0-9]+\(' gl_legacy_stubs.c || true)
+          echo "  gl_legacy_stubs.c: $t entry points, $n still empty no-ops"
+          echo "| gl_legacy_stubs.c | count |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| entry points defined | $t |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| still empty no-ops | $n |" >> "$GITHUB_STEP_SUMMARY"
+          echo
+          echo "  --- the no-ops, so the list is reviewable rather than a number ---"
+          grep -nE '\{ *(\(void\)[A-Za-z0-9_;() ]*)? *\}$' gl_legacy_stubs.c \
+            | sed -E 's/\(.*//; s/^([0-9]+):.*(gl[A-Za-z0-9]+)$/    \1  \2/' | head -60
+
   hygiene:
     runs-on: ubuntu-latest
     steps:
