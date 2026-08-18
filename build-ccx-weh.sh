@@ -61,6 +61,16 @@ is_include() {
 
 for f in *.f; do
   if is_include "$f"; then
+    # A file that HAD a subprogram head in the source and lost it here did not become an
+    # include -- f77ify mangled or emptied it, and skipping it would neither translate nor
+    # stub the routine, so it would vanish silently and only surface as a link error much
+    # later. umat_aniso_creep.f did exactly this once. Refuse instead.
+    if [ -e "$CCX/$f" ] && ! is_include "$CCX/$f"; then
+      echo "::error::$f has a subprogram head in the source but none after f77ify --" >&2
+      echo "         it is not an include, it was damaged in translation." >&2
+      echo "         source: $(grep -c . "$CCX/$f") lines, rewritten: $(grep -c . "$f") lines" >&2
+      exit 1
+    fi
     ninc=$((ninc+1))
     echo "  include, not a translation unit (not stubbed, not counted): $f"
     continue
