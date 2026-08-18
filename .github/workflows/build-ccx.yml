@@ -18,8 +18,14 @@ name: build ccx.wasm
 # limit users feel on large FEM jobs. That option is implemented but UNVERIFIED, and it
 # cannot be verified without a build -- which is what this provides.
 #
-# Runs on ubuntu-latest, never the production self-hosted runner: this is a compile, and the
-# box it would otherwise land on is serving another product's database.
+# Runs on the OVH box's self-hosted runner by default, with ubuntu-latest as the opt-out.
+#
+# That is a reversal of this file's original position ("never the production self-hosted
+# runner"), and the reason is cost, not a change of mind about the risk. 45 dispatches of this
+# job burned 413 hosted minutes in three days against a 2000-minute monthly allowance the org
+# had already spent 1823 of. The box it lands on does serve another product's database -- so
+# nothing here raises parallelism, and `ubuntu-latest` remains one dropdown away whenever a
+# deploy or the live site matters more than the minutes.
 on:
   workflow_dispatch:
     inputs:
@@ -28,19 +34,49 @@ on:
         type: boolean
         required: false
         default: false
+      runner:
+        description: "Where to build"
+        type: choice
+        default: vps
+        options:
+          - vps
+          - ubuntu-latest
 
 permissions:
   contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
       - name: Disk before
-        run: df -h / | sed 's/^/  /'
+        run: |
+          echo "  building on $(hostname)"
+          df -h / | sed 's/^/  /'
+          nproc | sed 's/^/  cpus: /'
+
+      # A hosted runner ships a native toolchain; the OVH box did not until it was provisioned
+      # on 2026-08-18. Nothing below builds without one -- f2c is compiled from source with the
+      # NATIVE compiler before it can translate a single Fortran file, so a missing cc fails
+      # this job minutes in, inside a step whose log nobody reads until it is already red.
+      # Name what is missing up front instead.
+      - name: Preflight -- is this machine able to build at all?
+        run: |
+          miss=""
+          for t in make python3 patch curl tar; do
+            command -v "$t" >/dev/null 2>&1 || miss="$miss $t"
+          done
+          command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || miss="$miss cc/gcc"
+          if [ -n "$miss" ]; then
+            echo "::error::this runner cannot build:$miss"
+            echo "On the OVH box, provision it once with:"
+            echo "    sudo apt-get install -y build-essential cmake ninja-build"
+            exit 1
+          fi
+          echo "  toolchain ok: $(cc --version | head -1)"
 
       # Pinned to match BUILD-WEH.md. 3.1.70 is the toolchain everything else here is built
       # with; a different emscripten would produce a module that may not agree with the

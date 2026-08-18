@@ -35,10 +35,10 @@ on:
       runner:
         description: "Where to build"
         type: choice
-        default: ubuntu-latest
+        default: vps
         options:
-          - ubuntu-latest
           - vps
+          - ubuntu-latest
 
 permissions:
   contents: read
@@ -49,18 +49,24 @@ env:
 
 jobs:
   deps:
-    # ubuntu-latest by default; `vps` targets the self-hosted runner on the OVH origin box.
+    # `vps` (the self-hosted runner on the OVH origin box) by default; `ubuntu-latest` is the
+    # opt-out for when the box is busy or being rebuilt.
     #
-    # The box is the better machine for this on paper -- 193 GB with 90 GB free, against a
-    # hosted runner's ~14 GB after the cleanup step below. But it is also the machine SERVING
-    # PRODUCTION, it runs 22 containers including another product's Postgres and login
-    # service, and infra/README.md states the position plainly: "FreeCAD is not compiled on
-    # the box (the build is huge)."
+    # The default flipped on 2026-08-18 for a blunt reason: this workflow was the single
+    # largest consumer of a 2000-minute/month free-plan allowance, and the org reached 1823 of
+    # it in eighteen days -- 948 of those minutes from fifteen runs of THIS job. Hosted minutes
+    # were the scarce resource; the box was sitting at load 0.2.
     #
-    # So this is opt-in per dispatch rather than the default. Two things to know before
-    # choosing it: the build will compete for CPU with the live site (nothing here caps
-    # parallelism), and the `ubuntu` account is shared by three runners registered to three
-    # different GitHub scopes, so a long job here can queue another repo's deploy.
+    # The box is also the better machine: 8 vCPU / 22 GB / 86 GB free, against a hosted
+    # runner's 4 vCPU / 16 GB / ~14 GB after the cleanup step below. It was provisioned with
+    # build-essential, cmake and ninja-build the same day, which is what the preflight below
+    # used to fail on.
+    #
+    # Two things to know, both unchanged by the flip. The build competes for CPU with the live
+    # site (nothing here caps parallelism), and the `ubuntu` account is shared by three runners
+    # registered to three different GitHub scopes -- so a long job here can queue another
+    # Virtastic repo's deploy behind it. Pick `ubuntu-latest` when a deploy matters more than
+    # the minutes.
     runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
     timeout-minutes: 350
     steps:

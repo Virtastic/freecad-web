@@ -26,21 +26,45 @@ name: build Qt 6.9 for wasm (EH + JSPI)
 # that should be compatible", and confirm against deps-versions.txt when it exists.
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "Where to build"
+        type: choice
+        default: vps
+        options:
+          - vps
+          - ubuntu-latest
 
 permissions:
   contents: read
 
 jobs:
   qt:
-    runs-on: ubuntu-latest
+    # `vps` by default -- see the note in build-deps.yml. This is the longest job in the
+    # repository (2-3 h) and the Virtastic runner takes one job at a time, so dispatching it
+    # queues every other Virtastic deploy behind it for that whole window. That is the trade
+    # being made deliberately: hosted minutes were the scarce resource, deploy latency is not.
+    runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
+      # HOSTED RUNNERS ONLY. On a throwaway CI image these trees are reclaimable space; on the
+      # OVH box they are somebody's filesystem, and that box also runs another product's
+      # database. The `|| true` here would have swallowed the mistake rather than prevented
+      # it, so the guard is the `if`, not the error handling.
       - name: Free disk
+        if: ${{ inputs.runner != 'vps' }}
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
           df -h / | sed 's/^/  /'
+
+      - name: Disk before (self-hosted)
+        if: ${{ inputs.runner == 'vps' }}
+        run: |
+          echo "  building on $(hostname) -- NOT deleting anything on this box"
+          df -h / | sed 's/^/  /'
+          nproc | sed 's/^/  cpus: /'
 
       - name: Cache the built Qt
         uses: actions/cache@v4

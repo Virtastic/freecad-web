@@ -6,8 +6,16 @@ triggered by a push to the **`ovhcloud`** branch. The runner builds the containe
 wires it into a shared `edge-caddy` reverse proxy. The container serves its own COOP/COEP headers
 (mandatory for the Qt multi-thread wasm; without SharedArrayBuffer it will not boot).
 
-FreeCAD is **not** compiled on the box (the build is huge). The prebuilt artifacts ride in a
-**GitHub Release**; the deploy workflow pulls them into the build context before `docker build`.
+FreeCAD itself is **not** compiled on the box. The prebuilt artifacts ride in a **GitHub
+Release**; the deploy workflow pulls them into the build context before `docker build`.
+
+The *dependency* builds are a different matter and do now run here. `build-deps.yml`,
+`build-ccx.yml` and `build-qt-wasm.yml` all default to `runner: vps` as of 2026-08-18, because
+hosted minutes turned out to be the binding constraint (1823 of a 2000-minute monthly allowance
+spent in eighteen days) while the box idled at load 0.2. The box was provisioned with
+`build-essential cmake ninja-build` at the same time. Each of those workflows keeps
+`ubuntu-latest` in its dropdown: the Virtastic runner takes one job at a time, so a long build
+queues every other Virtastic deploy behind it.
 
 The origin address is deliberately not recorded in this repo — Cloudflare proxies the hostname so
 the origin stays private. CI reads it from the `ORIGIN_IP` repository variable, and Terraform from

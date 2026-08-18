@@ -31,8 +31,10 @@ mkdir -p "$BUILD/f77"
 for f in "$CCX"/*.f; do
   python3 "$ROOT/tools/f77ify.py" "$f" "$BUILD/f77/$(basename "$f")"
 done
-# already F77; f77ify rewrites maxval/sum into calls on these
+# already F77; f77ify rewrites maxval/sum into calls on these, and matmul/transpose
+# into calls on ccx_matmul.f
 cp "$ROOT/bridge/ccx_reductions.f" "$BUILD/f77/"
+cp "$ROOT/bridge/ccx_matmul.f" "$BUILD/f77/"
 
 cd "$BUILD/f77"
 nf=0

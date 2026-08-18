@@ -797,6 +797,326 @@ def expand_allocatables(text):
 
 
 
+
+# --- F90 MATMUL / TRANSPOSE -------------------------------------------------
+# FORTRAN 77 has no array-valued intrinsics, so `Kshell=matmul(matmul(transpose(tmg),
+# Kshell),tmg)` has no F77 spelling at all and f2c rejects the whole file.
+#
+# The rewrite mirrors expand_reductions: every intermediate result becomes a temporary
+# sized from the DECLARATIONS, and the loops live in bridge/ccx_matmul.f rather than being
+# generated inline. What has to be generated is the element-wise assignment, because the
+# statements this appears in are array arithmetic -- `Kp = (matmul(..) + matmul(..))*Ae`.
+#
+# Anything whose shape cannot be read off a declaration is LEFT ALONE, so f2c fails loudly
+# on it rather than this guessing an extent. That is the same rule expand_reductions uses
+# and the reason it has never produced a wrong number.
+RE_MM_CALL = re.compile(r'\b(matmul|transpose)\s*\(', re.I)
+
+
+def _strip_parens(operand):
+    """`(tmg)` is the same operand as `tmg`. CalculiX writes both."""
+    operand = operand.strip()
+    while operand.startswith('(') and operand.endswith(')'):
+        depth = 0
+        for i, ch in enumerate(operand):
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0 and i != len(operand) - 1:
+                    return operand          # the parens are not the outermost pair
+        operand = operand[1:-1].strip()
+    return operand
+
+
+def _shape_of(operand, dims):
+    """('m', rows, cols) or ('v', n) or None -- for a name, or a section of one."""
+    operand = _strip_parens(operand)
+    m = re.match(r'^([A-Za-z]\w*)\s*\((.*)\)$', operand, re.S)
+    if m:
+        name, subs = m.group(1).lower(), split_top(m.group(2))
+        d = dims.get(name)
+        if not d or len(d) != len(subs):
+            return None
+        free = []
+        for sub, extent in zip(subs, d):
+            sub = sub.strip()
+            if sub == ':':
+                free.append(extent)
+            elif ':' in sub:
+                lo, hi = sub.split(':', 1)
+                free.append('((%s)-(%s)+1)' % (hi.strip(), lo.strip()))
+        if not free:
+            return None                      # a scalar element, not an array value
+        if len(free) == 1:
+            return ('v', free[0])
+        if len(free) == 2:
+            return ('m', free[0], free[1])
+        return None
+    d = dims.get(operand.lower())
+    if not d:
+        return None
+    if len(d) == 1:
+        return ('v', d[0])
+    if len(d) == 2:
+        return ('m', d[0], d[1])
+    return None
+
+
+def _leading(operand, dims):
+    """The DECLARED leading dimension, which is what the helpers must be given."""
+    name = re.match(r'^([A-Za-z]\w*)', _strip_parens(operand))
+    if not name:
+        return None
+    d = dims.get(name.group(1).lower())
+    if not d:
+        return None
+    return d[0] if len(d) >= 2 else '1'
+
+
+def _base(operand):
+    """First element of a section, so the callee sees the right start address."""
+    operand = _strip_parens(operand)
+    m = re.match(r'^([A-Za-z]\w*)\s*\((.*)\)$', operand, re.S)
+    if not m:
+        return operand
+    subs = []
+    for sub in split_top(m.group(2)):
+        sub = sub.strip()
+        if sub == ':':
+            subs.append('1')
+        elif ':' in sub:
+            subs.append(sub.split(':', 1)[0].strip())
+        else:
+            subs.append(sub)
+    return '%s(%s)' % (m.group(1), ','.join(subs))
+
+
+def _split_call(code, pos):
+    """Return (name, arg-strings, end-index) for the intrinsic call starting at pos."""
+    m = RE_MM_CALL.match(code, pos)
+    open_at = code.index('(', pos)
+    depth, i = 0, open_at
+    while i < len(code):
+        if code[i] == '(':
+            depth += 1
+        elif code[i] == ')':
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    return m.group(1).lower(), split_top(code[open_at + 1:i]), i + 1
+
+
+def expand_matmul(text, dims):
+    # A LOCAL copy, because every temporary has to become visible to the next lookup: the
+    # second level of `matmul(matmul(transpose(tmg),Kshell),tmg)` asks for the shape of the
+    # temporary the first level just produced. Without this the nested forms -- which are
+    # most of them -- silently fell back to leaving the statement alone.
+    dims = dict(dims)
+    out, temps, counter = [], {}, [0]
+
+    def newtemp(shape):
+        counter[0] += 1
+        name = 'fcwmt%d' % counter[0]
+        temps[name] = shape
+        dims[name] = [shape[1]] if shape[0] == 'v' else [shape[1], shape[2]]
+        return name
+
+    def index_refs(expr, idx, shape):
+        """Turn whole-array operands into element references for the assignment loop."""
+        def sub(m):
+            name = m.group(1)
+            key = name.lower()
+            sh = temps.get(name) or (('m',) + tuple(dims[key]) if key in dims and len(dims[key]) == 2
+                                     else (('v', dims[key][0]) if key in dims and len(dims[key]) == 1
+                                           else None))
+            if sh is None:
+                return name
+            if expr[m.end():m.end() + 1] == '(':
+                return name                       # already subscripted
+            if sh[0] == 'v':
+                return '%s(%s)' % (name, idx[0])
+            return '%s(%s,%s)' % (name, idx[0], idx[1] if len(idx) > 1 else idx[0])
+        return re.sub(r'\b([A-Za-z]\w*)\b', sub, expr)
+
+    def reduce_calls(code, pre):
+        """Replace innermost matmul/transpose with temporaries, emitting calls into `pre`."""
+        while True:
+            hits = [m.start() for m in RE_MM_CALL.finditer(code)]
+            if not hits:
+                return code
+            # innermost first: the last hit that contains no other hit inside it
+            target = None
+            for pos in reversed(hits):
+                name, args, end = _split_call(code, pos)
+                if not RE_MM_CALL.search(code[code.index('(', pos) + 1:end - 1]):
+                    target = (pos, name, args, end)
+                    break
+            if target is None:
+                return code
+            pos, name, args, end = target
+            # An operand can be an array-valued EXPRESSION rather than a name --
+            # resultsmech_us3.f writes matmul(transpose(Bm),(Km+Kp)). Materialise it into a
+            # temporary first, taking the shape from the arrays inside it, so the helper
+            # still receives a plain contiguous array.
+            for ai, arg in enumerate(args):
+                if _shape_of(arg, dims) is not None:
+                    continue
+                inner = [nm.lower() for nm in re.findall(r'[A-Za-z]\w*', arg)
+                         if nm.lower() in dims]
+                if not inner:
+                    continue
+                sh = _shape_of(inner[0], dims)
+                if sh is None:
+                    continue
+                t = newtemp(sh)
+                if sh[0] == 'v':
+                    iv = 'i_fcwm%d' % (counter[0] * 10 + 1)
+                    pre.append('do %s=1,%s' % (iv, sh[1]))
+                    pre.append('  %s(%s)=%s' % (t, iv, index_refs(arg, [iv], sh)))
+                    pre.append('enddo')
+                else:
+                    iv = 'i_fcwm%d' % (counter[0] * 10 + 1)
+                    jv = 'i_fcwm%d' % (counter[0] * 10 + 2)
+                    pre.append('do %s=1,%s' % (jv, sh[2]))
+                    pre.append('  do %s=1,%s' % (iv, sh[1]))
+                    pre.append('    %s(%s,%s)=%s' % (t, iv, jv, index_refs(arg, [iv, jv], sh)))
+                    pre.append('  enddo')
+                    pre.append('enddo')
+                args[ai] = t
+
+            if name == 'transpose':
+                if len(args) != 1:
+                    return code
+                sh = _shape_of(args[0], dims)
+                ld = _leading(args[0], dims)
+                if not sh or sh[0] != 'm' or not ld:
+                    return code
+                t = newtemp(('m', sh[2], sh[1]))
+                pre.append('call fcwtr(%s,%s,%s,%s,%s,%s)'
+                           % (_base(args[0]), ld, t, sh[2], sh[1], sh[2]))
+            else:
+                if len(args) != 2:
+                    return code
+                a, b = _shape_of(args[0], dims), _shape_of(args[1], dims)
+                la, lb = _leading(args[0], dims), _leading(args[1], dims)
+                if not a or not b:
+                    return code
+                if a[0] == 'm' and b[0] == 'm':
+                    t = newtemp(('m', a[1], b[2]))
+                    pre.append('call fcwmm(%s,%s,%s,%s,%s,%s,%s,%s,%s)'
+                               % (_base(args[0]), la, _base(args[1]), lb, t, a[1],
+                                  a[1], a[2], b[2]))
+                elif a[0] == 'm' and b[0] == 'v':
+                    t = newtemp(('v', a[1]))
+                    pre.append('call fcwmv(%s,%s,%s,%s,%s,%s)'
+                               % (_base(args[0]), la, _base(args[1]), t, a[1], a[2]))
+                elif a[0] == 'v' and b[0] == 'm':
+                    t = newtemp(('v', b[2]))
+                    pre.append('call fcwvm(%s,%s,%s,%s,%s,%s)'
+                               % (_base(args[0]), _base(args[1]), lb, t, b[1], b[2]))
+                else:
+                    return code
+            code = code[:pos] + t + code[end:]
+
+    for stmt, raw in join_continuations(text.split('\n')):
+        if stmt is None:
+            out.extend(raw)
+            continue
+        label, cont, code, is_comment = split_fixed(stmt)
+        if is_comment or not code or not RE_MM_CALL.search(code):
+            out.extend(raw)
+            continue
+        if '=' not in code or code.strip().lower().startswith(('if', 'call', 'do ')):
+            out.extend(raw)
+            continue
+        lhs, rhs = code.split('=', 1)
+        lhs, rhs = lhs.strip(), rhs.strip()
+        lsh = _shape_of(lhs, dims)
+        if lsh is None:
+            out.extend(raw)
+            continue
+
+        pre = []
+        new_rhs = reduce_calls(rhs, pre)
+        if RE_MM_CALL.search(new_rhs):
+            out.extend(raw)                        # something unhandled; leave for f2c to reject
+            continue
+
+        body = []
+        for c in pre:
+            body.append('      ' + c)
+        if lsh[0] == 'v':
+            i = 'i_fcwm%d' % (counter[0] + 1)
+            body.append('      do %s=1,%s' % (i, lsh[1]))
+            body.append('        %s=%s' % (index_refs(lhs, [i], lsh) if ':' in lhs else
+                                           '%s(%s)' % (lhs, i) if '(' not in lhs else
+                                           index_refs(lhs, [i], lsh),
+                                           index_refs(new_rhs, [i], lsh)))
+            body.append('      enddo')
+        else:
+            i = 'i_fcwm%d' % (counter[0] + 1)
+            j = 'i_fcwm%d' % (counter[0] + 2)
+            body.append('      do %s=1,%s' % (j, lsh[2]))
+            body.append('        do %s=1,%s' % (i, lsh[1]))
+            body.append('          %s=%s' % (index_refs(lhs, [i, j], lsh),
+                                             index_refs(new_rhs, [i, j], lsh)))
+            body.append('        enddo')
+            body.append('      enddo')
+        out.extend(body)
+
+    return '\n'.join(out), temps
+
+
+def expand_matmul_units(text):
+    """Run expand_matmul per subprogram and declare its temporaries there.
+
+    Two things force the split. declared_dims must be computed per unit, because these files
+    reuse names -- us3_sub.f declares tm(3,3) in a dozen different subprograms. And a
+    temporary used in the fourth subprogram must be DECLARED in the fourth: declaring them
+    all in the first is the exact defect that made 94 i_fcwN references undefined.
+    """
+    lines = text.split('\n')
+    heads = [i for i, l in enumerate(lines) if RE_SUBPROG_HEAD.match(l)]
+    if not heads:
+        return text
+    out = lines[:heads[0]]
+    for n, start in enumerate(heads):
+        end = heads[n + 1] if n + 1 < len(heads) else len(lines)
+        unit = lines[start:end]
+        dims = declared_dims(unit)
+        body, temps = expand_matmul('\n'.join(unit), dims)
+        ul = body.split('\n')
+        if temps:
+            decls = []
+            for name, sh in sorted(temps.items()):
+                decls.append('      real*8 %s(%s)' % (name, sh[1] if sh[0] == 'v'
+                                                      else '%s,%s' % (sh[1], sh[2])))
+            idx = sorted({int(m.group(1)) for l in ul
+                          for m in re.finditer(r'\bi_fcwm(\d+)\b', l)})
+            if idx:
+                decls.append('      integer ' + ','.join('i_fcwm%d' % i for i in idx))
+            ul = _declare_arrays_in_unit(ul, decls)
+        out.extend(ul)
+    return '\n'.join(out)
+
+
+def _declare_arrays_in_unit(lines, decls):
+    """Insert declaration lines at the last point a declaration is still legal."""
+    for i, l in enumerate(lines):
+        if not l.strip() or l[:1] in 'cC*!' or (len(l) > 5 and l[5] not in ' 0'):
+            continue
+        head = l.strip().lower()
+        if head.startswith(('data ', 'include ')):
+            return lines[:i] + decls + lines[i:]
+        if head.startswith(('subroutine', 'function', 'end', 'entry')) or RE_DECL_KW.match(l):
+            continue
+        if re.match(r'^\s{6,}\S', l):
+            return lines[:i] + decls + lines[i:]
+    return lines
+
+
 def sink_data_statements(text):
     """Move DATA below the declarations it follows.
 
@@ -1651,6 +1971,10 @@ def convert(text):
     text = RE_OPEN_POSITION.sub(r"\1access=", text)
     text = split_semicolons(text)
     text = expand_array_ctors(text)
+    # After expand_array_ctors, because that is where `REAL*8, INTENT(IN) :: xg(3,3)`
+    # becomes a declaration declared_dims can read. Before it, us3_sub.f's shapes are
+    # invisible and every matmul in the file is left for f2c to reject.
+    text = expand_matmul_units(text)
     lines = text.splitlines()
     taken = used_labels(lines)
     counter = [8000]
@@ -2000,6 +2324,32 @@ def selftest():
     CURRENT_FILE = ''
 
     # A file on the skip list must come back untouched, however convertible it looks.
+    # matmul/transpose: nested calls, a temporary per intermediate, and the temporaries
+    # must be visible to the NEXT lookup or the second level silently gives up.
+    _mmdims = {'kshell': ['18', '18'], 'tmg': ['18', '18']}
+    _mm, _mmt = expand_matmul(NL.join([
+        '      subroutine probe_mm(kshell,tmg)',
+        '      real*8 kshell(18,18),tmg(18,18)',
+        '      kshell=matmul(matmul(transpose(tmg),kshell),tmg)',
+        '      end']), _mmdims)
+    assert 'matmul' not in _mm.lower(), _mm
+    assert 'call fcwtr(' in _mm and _mm.count('call fcwmm(') == 2, _mm
+    assert len(_mmt) == 3, _mmt
+    # a redundant paren pair around an operand is the same operand
+    _mm2, _ = expand_matmul(NL.join([
+        '      subroutine probe_mm2(kshell,tmg)',
+        '      real*8 kshell(18,18),tmg(18,18)',
+        '      kshell=matmul(matmul(transpose(tmg),kshell),(tmg))',
+        '      end']), _mmdims)
+    assert 'matmul' not in _mm2.lower(), _mm2
+    # matrix x vector picks the vector helper, not the matrix one
+    _mm3, _ = expand_matmul(NL.join([
+        '      subroutine probe_mm3(bs,ushell,ys)',
+        '      real*8 bs(3,18),ushell(18),ys(3)',
+        '      ys=matmul(bs,ushell)',
+        '      end']), {'bs': ['3', '18'], 'ushell': ['18'], 'ys': ['3']})
+    assert 'call fcwmv(' in _mm3 and 'call fcwmm(' not in _mm3, _mm3
+
     # Generated loop variables must be declared in EVERY subprogram that uses them, not
     # only the first (us3_sub.f has 14 subprograms).
     _multi = [
