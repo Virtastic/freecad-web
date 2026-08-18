@@ -52,12 +52,26 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
           df -h / | sed 's/^/  /'
 
-      - name: Cache built dependencies
+      # actions/cache SAVES ONLY WHEN THE RESTORE MISSED. With a fixed key that restored
+      # cleanly, the post step is a no-op -- so this cache was created on 2026-08-17T15:27,
+      # when only boost and xerces had ever built, and froze at 41 MiB. Every run since has
+      # restored those two, rebuilt OCCT (90 min) and VTK (42 min) because they were absent,
+      # and then discarded both. Four runs, ~2.2 h of recompilation each, thrown away every
+      # time, and the entry could never grow because the key never changed.
+      #
+      # Split restore/save with a run-unique key and a prefix restore-key: the restore still
+      # finds the newest matching entry, and the save always writes a new one, so the cache
+      # accumulates instead of freezing.
+      - name: Restore built dependencies
+        id: depcache
         if: ${{ !inputs.rebuild }}
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: deps/wasm
-          key: fcweb-deps-${{ env.DEPS_KEY }}
+          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ github.run_id }}
+          restore-keys: |
+            fcweb-deps-${{ env.DEPS_KEY }}-
+            fcweb-deps-${{ env.DEPS_KEY }}
 
       - name: Install emsdk 3.1.70
         run: |
@@ -358,6 +372,16 @@ jobs:
             deps/wasm/include
           if-no-files-found: warn
           retention-days: 14
+
+      # Always save, even on failure: a run that got three of five dependencies built should
+      # leave those three for the next one. That is the whole point of the cache, and the
+      # reason the previous fixed-key form never delivered it.
+      - name: Save built dependencies
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: deps/wasm
+          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ github.run_id }}
 
       - name: Disk after
         if: always()
