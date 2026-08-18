@@ -577,13 +577,8 @@ RE_DECL_KW = re.compile(
     r'common|data|implicit|parameter|external|intrinsic|save|equivalence|include)\b', re.I)
 
 
-def declare_generated(lines):
-    """Declare the loop variables the section rules invent.
-
-    ccx compiles with `implicit none`, so an undeclared i_fcwN is a hard error. They
-    are inserted just before the first executable statement, which is the last point
-    a declaration is still legal.
-    """
+def _declare_in_unit(lines):
+    """declare_generated for ONE subprogram. See there for why the split matters."""
     used = sorted({m.group(0) for l in lines for m in re.finditer(r'\bi_fcw\d+\b', l)},
                   key=lambda x: int(x[5:]))
     if not used:
@@ -602,6 +597,34 @@ def declare_generated(lines):
         if re.match(r'^\s{6,}\S', l):
             return lines[:i] + ['      integer ' + ','.join(used)] + lines[i:]
     return lines
+
+
+def declare_generated(lines):
+    """Declare the loop variables the section rules invent, PER SUBPROGRAM.
+
+    ccx compiles with `implicit none`, so an undeclared i_fcwN is a hard error.
+
+    This used to scan the whole file and emit one declaration at the first executable
+    statement it found -- which is correct only when the file holds a single subprogram.
+    ccx has several that do not: us3_sub.f has 14, us4_sub.f 13, umat_ciarlet_el.f 6. Every
+    i_fcwN in the file was declared in the FIRST subprogram, so f2c reported both halves of
+    the same mistake at once (run 32140989422):
+
+        109 Warning ... local variable i_fcwN never used          <- in the first subprogram
+         94 Error ... Declaration error for i_fcwN: attempt to
+                      use undefined variable                       <- in all the others
+
+    and the file was stubbed. Splitting on subprogram heads and declaring only what each one
+    actually uses fixes both. A file with one subprogram behaves exactly as before.
+    """
+    heads = [i for i, l in enumerate(lines) if RE_SUBPROG_HEAD.match(l)]
+    if len(heads) <= 1:
+        return _declare_in_unit(lines)
+    out = lines[:heads[0]]
+    for n, start in enumerate(heads):
+        end = heads[n + 1] if n + 1 < len(heads) else len(lines)
+        out.extend(_declare_in_unit(lines[start:end]))
+    return out
 
 
 
@@ -1977,6 +2000,24 @@ def selftest():
     CURRENT_FILE = ''
 
     # A file on the skip list must come back untouched, however convertible it looks.
+    # Generated loop variables must be declared in EVERY subprogram that uses them, not
+    # only the first (us3_sub.f has 14 subprograms).
+    _multi = [
+        '      subroutine one(x,n)', '      real*8 x(*)', '      integer n',
+        '      write(6,*) (x(i_fcw1),i_fcw1=1,n)', '      end',
+        '      subroutine two(y,m)', '      real*8 y(*)', '      integer m',
+        '      write(6,*) (y(i_fcw2),i_fcw2=1,m)', '      end',
+    ]
+    _dg = declare_generated(_multi)
+    _decls = [i for i, l in enumerate(_dg) if l.strip().startswith('integer i_fcw')]
+    assert len(_decls) == 2, _dg
+    # each declaration must sit inside the subprogram that uses it
+    _ones = _dg.index('      subroutine one(x,n)')
+    _twos = _dg.index('      subroutine two(y,m)')
+    assert _ones < _decls[0] < _twos < _decls[1], (_decls, _ones, _twos)
+    assert _dg[_decls[0]].strip() == 'integer i_fcw1', _dg[_decls[0]]
+    assert _dg[_decls[1]].strip() == 'integer i_fcw2', _dg[_decls[1]]
+
     # A FUNCTION head must not be read as an array declaration (calcview.f's fform).
     CURRENT_FILE = 'probe_fform.f'
     _fn = NL.join([
