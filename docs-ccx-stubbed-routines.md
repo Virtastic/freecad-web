@@ -11,6 +11,40 @@ then recorded the failure as a stubbed routine. `build-ccx-weh.sh` now recognise
 include and skips it -- verified against all 977 `.f` files, where the rule selects exactly
 those two and nothing else.
 
+## Where this ended up (run 32196565134)
+
+**974 of 975 routines translate. Three stubs remain, and only two are a gap.**
+
+| | production | this build |
+|---|---|---|
+| `e_c3d_us45` | STUBBED | STUBBED — matches |
+| `slavintmortar`, `slavintpoints` | compiled | **STUBBED — the deliberate gap** |
+| `e_c3d_us3`, `resultsmech_us3`, `resultsmech_us45`, `umat_ciarlet_el` | STUBBED | **compiled — ahead of production** |
+| everything else probed | compiled | compiled |
+
+Read off both binaries with `tools/ccx-stub-diff.py`, controls passing.
+
+    ccx.wasm      4,783,704 bytes
+    production    4,784,783 bytes
+    gap               1,079 bytes      (was 986,945 when this document opened)
+
+So the only routines this build refuses that production runs are the two mortar-contact
+ones, and they are refused ON PURPOSE: bounded, they converge to a physically invalid
+answer (negative contact pressure on a symmetric model), and an abort that names the routine
+beats a solver that returns a wrong number. `e_c3d_us45` is stubbed in the module being
+served today as well, so it is not a divergence; it is a US45 user shell element that
+FreeCAD-web has never supported.
+
+What closed the rest, in order: `gauss.f`/`xlocal.f` were never routines; bounds for
+`netet`, `norien`, `nfront`/`nfronteq`, `numpts`, `netet_`, `ng`; `patch.f` via HYBSVD's
+declared leading dimensions; F90 `matmul`/`transpose` (`bridge/ccx_matmul.f`); whole-array
+assignment; sectioned operands inside the generated loops; and array expressions passed as
+call arguments.
+
+Every step was gated on the four decks staying identical to production, and two of them
+caught real damage on the way -- a SIGPIPE race that deleted `allocation.f` from the build,
+and a call-argument rewrite that broke seven contact files and was reverted.
+
 ## What this is
 
 f2c implements FORTRAN 77. CalculiX uses some F90, so 69 of its 977 routines failed to
