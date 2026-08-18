@@ -233,6 +233,28 @@ jobs:
           echo "  --- failed to compile ---"
           grep -E '^CC-FAIL' "$f" | sed 's/^/    /' || echo "    (none)"
 
+      # The error says "line 221" and I spent a long time reading line 221 of a LOCALLY
+      # generated file, guessing whether it matched what CI fed f2c. It is the rewritten
+      # file that f2c numbers, so print the offending lines from that file directly. Cheap,
+      # and it removes the guess entirely.
+      - name: Show the exact lines f2c rejected
+        if: always()
+        run: |
+          set -e
+          shopt -s nullglob
+          for log in build-ccx-weh/f2c-*.log; do
+            f=$(basename "$log" .log); f=${f#f2c-}
+            src="build-ccx-weh/f77/$f"
+            [ -e "$src" ] || continue
+            grep -E '^Error' "$log" 2>/dev/null | head -4 | while read -r line; do
+              n=$(echo "$line" | sed -nE 's/^Error on line ([0-9]+) of.*/\1/p')
+              echo "  $f: $line"
+              [ -n "$n" ] || continue
+              awk -v n="$n" 'NR>=n-2 && NR<=n+1 {printf "      %5d| %s\n", NR, $0}' "$src"
+              echo
+            done
+          done
+
       # WHY each routine fails, which is the thing that makes f77ify.py extendable. Without
       # this the gap is a list of names; with it, it is a list of unsupported constructs.
       - name: Why f2c rejected them
