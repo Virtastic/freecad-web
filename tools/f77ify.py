@@ -1107,6 +1107,61 @@ STATIC_DIM_BOUNDS = {
     # extrapolatecontact. The stride hazard is real but needs the array to ESCAPE the routine.
     'nfield': 20,
     'nobject': 1000,
+
+    # --- added 2026-08-18, working through the remaining stub list -------------------
+    # Orientations. gen3dfrom2d.f declares neworien(0:norien); norien is a dummy scalar, so
+    # the array is automatic. CalculiX bounds it itself one line later --
+    # `if(norien.gt.norien_) *ERROR ... increase norien_` -- and neworien never leaves the
+    # routine (0 call sites), so the single dimension bounded here is also the last one and
+    # no callee can disagree about the stride. 10000 orientations is 40 KB.
+    'norien': 10000,
+
+    # Tets in the master mesh. basis.f declares node(netet), idummy1(netet), idummy2(netet)
+    # and iparentel(netet) -- and its own comment two lines above says what they really hold:
+    #
+    #     !     100 nearest nodes: node(100),idummy1(100),idummy2(100),iparentel(100)
+    #
+    # so the declared extent is an upper bound the routine never approaches. All four are
+    # single-dimension scratch, so bounding is the last dimension in each case.
+    'netet': 200000,
+
+    # Crack-front nodes. extendmesh.f declares x0/y0/z0/x/y/z(nfront), nx/ny/nz(nfront),
+    # ifronteq/neighbor(nfronteq). Every one is SINGLE-dimension, so the bounded dimension is
+    # necessarily the last and no stride can change -- which is what makes it safe that these
+    # DO escape, to dsort() and near3d(). Both callees take the runtime count k and index
+    # against that, not against the declared extent.
+    #
+    # 50000 keeps the widest array at 400 KB (50000 real*8) and the whole set near 3 MB, under
+    # the per-array stack ceiling, so they stay automatic rather than needing `save`. A front is
+    # a 1-D curve through a 3-D mesh; 50000 nodes on one is already implausible.
+    'nfront': 50000,
+    'nfronteq': 50000,
+
+    # Points on a contact face. interpolateinface.f declares list/ip/ibin(numpts) and, more
+    # importantly, koncont(3,2*numpts+1), imastop(3,2*numpts+1), cg(2,2*numpts+1),
+    # straight(9,2*numpts+1), coi(2,numpts+3) -- numpts is the LAST dimension in every
+    # multi-dimensional case, which is the rule this table exists to respect.
+    # 10000 puts the widest (straight) at 1.4 MB, inside the per-array stack ceiling.
+    'numpts': 10000,
+
+    # Allocated tet capacity for the cavity remesher. cavity_refine.f and
+    # cavityext_refine.f declare ig(4*netet_), ifcav(4*netet_), ige/iecav/inewel(netet_) --
+    # all 1-D -- plus incav(4,netet_), where netet_ is again the LAST dimension.
+    #
+    # 50000 rather than netet's 200000, and the reason is the budget: ig and ifcav are
+    # 4*netet_ each, so 200000 would put a single array at 3.2 MB and the file's set at
+    # ~13 MB of stack against a 16 MB limit. At 50000 the widest is 800 KB and the set is
+    # ~3.4 MB. If a remesh ever needs more the guard stops the run and says so.
+    'netet_': 50000,
+
+    # Radiation view-factor integration grid. calcview.f declares xy(ng) with ng a dummy
+    # scalar. Its own commented-out default two lines below says what the value is:
+    #
+    #     c      ng=160
+    #
+    # so 10000 is ~60x the real grid and costs 80 KB. covered(ng,ng) is SQUARE but is a dummy
+    # ARGUMENT, so it keeps its adjustable dimensions and needs nothing from this table.
+    'ng': 10000,
 }
 
 # Files we deliberately leave STUBBED, even though the bounds machinery could convert them.
@@ -1349,6 +1404,15 @@ def _automatic_arrays(text, args):
         if len(ln) < 7 or (ln and ln[0] in 'CcDd*!'):
             continue
         if ln[5] in ' 0':
+            # A FUNCTION head is not a declaration, even though it starts with a type.
+            # calcview.f contains `real*8 function fform(x,y,idata,rdata)`, which matches
+            # RE_DECL_LINE and made this loop record `fform` as an automatic array with four
+            # symbolic dimensions -- none of which exist. The file was then unfixable by
+            # construction: no bound can satisfy a function's argument list. Check this BEFORE
+            # RE_DECL_LINE, because the head also ends the previous declaration section.
+            if RE_SUBPROG_HEAD.match(ln):
+                in_decl = False
+                continue
             in_decl = bool(RE_DECL_LINE.match(ln))
         if not in_decl:
             continue
@@ -1913,6 +1977,26 @@ def selftest():
     CURRENT_FILE = ''
 
     # A file on the skip list must come back untouched, however convertible it looks.
+    # A FUNCTION head must not be read as an array declaration (calcview.f's fform).
+    CURRENT_FILE = 'probe_fform.f'
+    _fn = NL.join([
+        '      subroutine probe_fform(n,a)',
+        '      integer n',
+        '      real*8 a(n)',
+        '      a(1)=0.d0',
+        '      end',
+        '      real*8 function fform(x,y,idata,rdata)',
+        '      real*8 x,y',
+        '      integer idata(*)',
+        '      real*8 rdata(*)',
+        '      fform=0.d0',
+        '      end',
+    ])
+    _args = _dummy_args(_fn.split(NL))
+    _autos = _automatic_arrays(_fn, _args)
+    assert 'fform' not in _autos, _autos
+    CURRENT_FILE = ''
+
     global SKIP_FILES
     _saved_skip = SKIP_FILES
     SKIP_FILES = frozenset(('probe_skip.f',))
