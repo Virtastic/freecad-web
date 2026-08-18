@@ -253,6 +253,15 @@ done
 # and reappear as duplicate symbols at link time.
 rm -f "$PREFIX/lib/libccx.a"
 emar rcs "$PREFIX/lib/libccx.a" "$BUILD"/obj/*.o
+# Keep the REWRITTEN source of every file that failed to translate. f2c numbers its own
+# input, so "Error on line 221" refers to these bytes and to nothing that exists locally --
+# which is why reading a locally regenerated copy got me nowhere on e_c3d_us45.f.
+mkdir -p "$BUILD/f77-stubbed"
+while read -r u; do
+  b=$(basename "$u")
+  [ -e "$BUILD/f77/$b" ] && cp "$BUILD/f77/$b" "$BUILD/f77-stubbed/$b" || true
+done < <(grep -vE '^(STUB-FAIL|CC-FAIL)' "$BUILD/UNCONVERTED.txt" 2>/dev/null || true)
+
 echo "fortran translated : $nf / $(( $(ls "$CCX"/*.f | wc -l | tr -d ' ') - ninc ))  (excludes $ninc data include(s), which are not routines)"
 echo "fortran compiled   : ${nf2:-0}"
 echo "native C compiled  : $nc"
