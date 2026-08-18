@@ -1,0 +1,147 @@
+name: cache rules (freecad.virtastic.app)
+
+# Apply the edge cache rule that infra/terraform/main.tf declares but production does not have.
+#
+# THE MEASUREMENT THAT PROMPTED THIS (2026-08-18, against live production):
+#
+#   FreeCAD.wasm   cf-cache-status: DYNAMIC   (152,506,718 B raw; 53,509,184 B brotli)
+#   FreeCAD.data   cf-cache-status: DYNAMIC   ( 65,666,637 B gzip)
+#   FreeCAD.js     cf-cache-status: HIT
+#   icon-192.png   cf-cache-status: MISS
+#
+# DYNAMIC means Cloudflare judged the response ineligible for caching and went to the origin.
+# It was stable across repeated requests, so it is not a cold cache. The .png being MISS is the
+# control: MISS is "eligible, not populated yet", so default extension caching works fine -- and
+# .js is HIT only because .js is a Cloudflare default-cacheable extension. .wasm and .data are
+# not, which is exactly what the terraform ruleset exists to fix.
+#
+# So every first-time visitor pulls ~119 MB from the single OVH VPS instead of the edge. That is
+# the whole first load, uncached, on every cold visit.
+#
+# WHY THIS IS NOT TERRAFORM
+#
+# infra/terraform declares the ruleset correctly, but its state is local and gitignored and it is
+# applied by hand -- so "declared" and "in effect" drifted apart with nothing to notice. dns.yml
+# already solved the same problem for the A record by being stateless and idempotent against the
+# API. This is that pattern for the cache rule.
+#
+# WHY DISPATCH-ONLY, AND DRY-RUN BY DEFAULT
+#
+# virtastic.app is a SHARED zone (openmw-wasm, ja2-web). The rulesets API entrypoint PUT replaces
+# every rule in the phase, so a blind write would silently delete the other sites' cache rules.
+# This job therefore reads the current phase first, replaces ONLY the rule whose ref is
+# freecad_assets, preserves the rest, and shows the diff. `apply: false` (the default) prints what
+# it would do and writes nothing -- which also makes it a fine diagnostic for "is the rule there?".
+#
+# The token needs Cache Rules:Edit in addition to dns.yml's Zone:Read + DNS:Edit.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually write the ruleset (false = show the plan only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-rules-freecad
+  cancel-in-progress: false
+
+jobs:
+  cache-rules:
+    runs-on: ubuntu-latest
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      ZONE: virtastic.app
+      HOSTNAME: freecad.virtastic.app
+      APPLY: ${{ inputs.apply }}
+    steps:
+      - name: Upsert the freecad cache rule (preserving every other rule in the phase)
+        run: |
+          set -euo pipefail
+          [ -n "${CF_TOKEN:-}" ] || { echo "::error::CLOUDFLARE_API_TOKEN secret not set"; exit 1; }
+          auth=(-H "Authorization: Bearer ${CF_TOKEN}" -H "Content-Type: application/json")
+          api=https://api.cloudflare.com/client/v4
+          phase=http_request_cache_settings
+
+          zid=$(curl -fsS "${auth[@]}" "$api/zones?name=${ZONE}" \
+                | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"][0]["id"])')
+          echo "zone $ZONE -> $zid"
+
+          # The phase entrypoint may not exist yet; a 404 here is a normal first run.
+          cur=$(curl -sS "${auth[@]}" "$api/zones/$zid/rulesets/phases/$phase/entrypoint" || true)
+          echo "$cur" > /tmp/current.json
+
+          python3 - "$HOSTNAME" <<'PY' > /tmp/plan.json
+          import json, sys
+          host = sys.argv[1]
+          try:
+              cur = json.load(open('/tmp/current.json'))
+          except Exception:
+              cur = {}
+          rules = (cur.get('result') or {}).get('rules') or []
+          print_ = lambda *a: print(*a, file=sys.stderr)
+
+          print_(f"--- existing rules in this phase: {len(rules)} ---")
+          for r in rules:
+              print_(f"  ref={r.get('ref','-'):<20} enabled={r.get('enabled')}  {r.get('description','')}")
+
+          want = {
+              "ref": "freecad_assets",
+              "description": "Cache-everything for freecad.virtastic.app immutable assets",
+              "expression": ('(http.host eq "%s" and http.request.uri.path.extension in '
+                             '{"wasm" "data" "js" "css" "png" "svg"})' % host),
+              "action": "set_cache_settings",
+              "enabled": True,
+              "action_parameters": {
+                  "cache": True,
+                  # 30 days at the edge for immutable engine blobs.
+                  "edge_ttl": {"mode": "override_origin", "default": 2592000},
+                  # The origin already sends `immutable`; do not second-guess it.
+                  "browser_ttl": {"mode": "respect_origin"},
+              },
+          }
+
+          kept = [r for r in rules if r.get('ref') != 'freecad_assets']
+          dropped = len(rules) - len(kept)
+          print_(f"--- preserving {len(kept)} other rule(s); replacing {dropped} freecad rule(s) ---")
+
+          # Strip server-managed fields; the API rejects them on write.
+          out = []
+          for r in kept:
+              out.append({k: v for k, v in r.items()
+                          if k in ('ref','description','expression','action','enabled','action_parameters')})
+          out.append(want)
+          json.dump({"rules": out}, sys.stdout, indent=2)
+          PY
+
+          echo "--- plan ---"; cat /tmp/plan.json
+
+          if [ "${APPLY}" != "true" ]; then
+            echo
+            echo "::notice::Dry run. Nothing written. Re-run with apply=true to put this live."
+            exit 0
+          fi
+
+          curl -fsS -X PUT "${auth[@]}" \
+               "$api/zones/$zid/rulesets/phases/$phase/entrypoint" \
+               --data @/tmp/plan.json \
+            | python3 -c 'import sys,json;d=json.load(sys.stdin);print("applied:",len(d["result"]["rules"]),"rule(s) in phase")'
+
+      - name: Verify at the edge
+        if: ${{ inputs.apply }}
+        run: |
+          # A rule that is live shows up as HIT/MISS/EXPIRED. DYNAMIC means still not eligible --
+          # the whole point of this workflow, so do not call it a success.
+          echo "first request populates; second should not say DYNAMIC"
+          for i in 1 2; do
+            s=$(curl -sSI -H "Accept-Encoding: br" "https://${HOSTNAME}/FreeCAD.wasm" \
+                | tr -d '\r' | grep -i '^cf-cache-status:' | awk '{print $2}')
+            echo "  attempt $i: cf-cache-status=$s"
+            sleep 3
+          done
+          if [ "${s:-}" = "DYNAMIC" ]; then
+            echo "::warning::still DYNAMIC -- the rule did not take effect. Check the token has Cache Rules:Edit, and that no higher-priority rule bypasses cache."
+          fi
