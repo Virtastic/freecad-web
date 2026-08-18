@@ -1,8 +1,15 @@
 # CalculiX: making a clean build reproduce production's solver
 
 Measured by `.github/workflows/build-ccx.yml` from CalculiX 2.22 upstream. Started at 69
-stubbed routines (run 31985042689); now **19**, and all four validation decks reproduce
+stubbed routines (run 31985042689); now **17**, and all four validation decks reproduce
 production exactly (run 31996275820).
+
+The count was 19 until 2026-08-18, and two of those were never routines: `gauss.f` and
+`xlocal.f` are INCLUDE files of Gauss-point data with no subprogram head anywhere in them.
+The build handed each to f2c as though it were a translation unit, which cannot work, and
+then recorded the failure as a stubbed routine. `build-ccx-weh.sh` now recognises a data
+include and skips it -- verified against all 977 `.f` files, where the rule selects exactly
+those two and nothing else.
 
 ## What this is
 
@@ -18,10 +25,21 @@ wants cannot run.
 Production's solver demonstrably DOES work -- validated to under 1% against beam theory --
 so the build machine has f2c workarounds that were never captured into `patches/`.
 
-(An earlier version of this file also called `gauss.f` a stubbed routine. It is not a
-routine at all: it is an INCLUDE file of Gauss-point data, pulled into 60 others. Its
-appearing in `UNCONVERTED.txt` is meaningless -- f2c cannot translate a bare data include on
-its own, and `e_c3d.f` translating proves the include resolves fine.)
+(An earlier version of this file called `gauss.f` a stubbed routine. It is not a routine at
+all: it is an INCLUDE file of Gauss-point data, pulled into 60 others. Its appearing in
+`UNCONVERTED.txt` was meaningless -- f2c cannot translate a bare data include on its own, and
+`e_c3d.f` translating proves the include resolves fine.
+
+**The same was true of `xlocal.f`, and this file said otherwise for two days.** It listed it
+under "separate root causes" as a routine needing a fix, and the root-cause table attributed
+one failure to `subscripts on scalar variable`. It is an include of 3D local Gauss-point
+coordinates, pulled into `calcexternalwork.f`, `printoutface.f` and `printoutfacefem.f` --
+all three of which translate fine, which is the same proof used for `gauss.f`. Those
+"errors" were the single largest group in the build: **375 of them in run 32140989422**, every
+one an artifact of asking f2c to translate a bare data include.
+
+Neither is handed to f2c any more, so both the error noise and the two phantom entries are
+gone.)
 
 That is the actual defect: `deps/` is gitignored, so those edits are invisible until
 someone builds from clean. Nobody had, until 2026-08-16.
@@ -98,8 +116,8 @@ Two constraints shaped the implementation:
 
 ## What is still stubbed
 
-    basis  calcview  cavity_refine  cavityext_refine  extendmesh  gauss  gen3dfrom2d
-    interpolateinface  patch  slavintmortar  slavintpoints  umat_ciarlet_el  xlocal
+    basis  calcview  cavity_refine  cavityext_refine  extendmesh  gen3dfrom2d
+    interpolateinface  patch  slavintmortar  slavintpoints  umat_ciarlet_el
     e_c3d_us3  e_c3d_us45  resultsmech_us3  resultsmech_us45  us3_sub  us4_sub
 
 (Read from CI run 32140989422's own output, not maintained by hand. The previous copy of
@@ -110,15 +128,40 @@ below explains are stubbed on purpose.)
 | group | note |
 |---|---|
 | US3/US45 user shells (6) | BUILD-WEH.md records FreeCAD never emits them — these can stay stubbed |
-| `gauss.f` | not a routine; an INCLUDE of Gauss-point data. Its presence here means nothing |
+| ~~`gauss.f`, `xlocal.f`~~ | INCLUDE files of Gauss-point data, not routines. No longer handed to f2c, so no longer listed |
 | CalculiX's own remesher (`cavity_refine`, `cavityext_refine`, `extendmesh`, `basis`, `interpolateinface`) | FreeCAD meshes with gmsh, so this path is unused |
 | deliberately excluded dimensions (`calcview`, `patch`) | see the exclusion list in `tools/f77ify.py` — each would be unsafe to token-match |
 | mortar contact (`slavintmortar`, `slavintpoints`) | `SKIP_FILES` in `tools/f77ify.py` — bounded, they converge to a physically invalid answer, so an abort is the lesser evil. See the contact section below |
-| `xlocal.f`, `umat_ciarlet_el`, `gen3dfrom2d` | separate root causes |
+| `umat_ciarlet_el`, `gen3dfrom2d` | separate root causes |
 
 None is reached by the four decks. That is a statement about coverage, not correctness: an
 analysis that does reach one stops with a message naming it, rather than returning a wrong
 answer.
+
+### What would actually be needed to convert the rest
+
+Measured against CalculiX 2.22 by running `tools/f77ify.py`'s own analysis over each stubbed
+file, so this is the dimension names that have no bound rather than a guess:
+
+| dimension | file(s) | note |
+|---|---|---|
+| `netet` | basis.f | tets in the master mesh |
+| `netet_` | cavity_refine.f, cavityext_refine.f | all-or-nothing: `iecav`, `ifcav`, `ig`, `ige` stay adjustable and the file reverts |
+| `nfront`, `nfronteq` | extendmesh.f | mesh front |
+| `numpts` | interpolateinface.f | points on a face |
+| `norien` | gen3dfrom2d.f | orientations |
+| `ipoints`, `iterms` | patch.f | `z(ipoints,ipoints)` is SQUARE — any generous bound explodes, and the per-array budget refuses it |
+| `x`, `y`, `idata`, `rdata`, `ng` | calcview.f | `fform(x,y,idata,rdata)` is a FUNCTION declaration, not an array |
+
+Every one of these routines is CalculiX's own remesher, its cavity-radiation view factors, or
+a user-element hook. **FreeCAD reaches none of them** — it meshes with gmsh — so converting
+them buys a smaller number and nothing else, while spending stack or static memory and taking
+on the stride and `save` hazards documented below. The decks cannot help either: they do not
+exercise these paths, so a green run after converting them would prove only "no regression",
+never "correct".
+
+That is the argument for leaving them. It is written down so the next person weighs it rather
+than rediscovering it.
 
 ### Two techniques, and knowing which applies
 

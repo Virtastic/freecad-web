@@ -36,7 +36,33 @@ cp "$ROOT/bridge/ccx_reductions.f" "$BUILD/f77/"
 
 cd "$BUILD/f77"
 nf=0
+ninc=0
+
+# Not every .f in ccx is a translation unit. gauss.f and xlocal.f are INCLUDE files of
+# Gauss-point data -- no SUBROUTINE, FUNCTION or PROGRAM head anywhere in them -- pulled into
+# 60 and 3 other files respectively. f2c cannot translate a bare data include on its own, so
+# handing it one produces errors that mean nothing and put a non-routine on the stub list.
+#
+# That was not cosmetic. xlocal.f alone accounted for 375 of the f2c errors in run
+# 32140989422 -- the single largest group, all of them "subscripts on scalar variable
+# xlocalN" -- and it made the stubbed-routine count read 19 when the real number of stubbed
+# ROUTINES is 17. The docs had already worked this out for gauss.f and never applied it to
+# xlocal.f, which sat in the work list as a routine needing a fix it could never need.
+#
+# The check is fail-safe by construction: misclassifying a REAL routine as an include means
+# it is neither translated nor stubbed, so it is simply absent and the link fails by name.
+# There is no silent outcome.
+is_include() {
+  ! grep -viE '^[cC*!]' "$1" \
+    | grep -qiE '^ {6,}([a-z0-9_*() ]*[[:space:]])?(subroutine|function|program|block[[:space:]]*data)[[:space:]]+[a-z_]'
+}
+
 for f in *.f; do
+  if is_include "$f"; then
+    ninc=$((ninc+1))
+    echo "  include, not a translation unit (not stubbed, not counted): $f"
+    continue
+  fi
   if "$F2C" -a -A -NC1000 -d"$BUILD/c" "$f" >/dev/null 2>"$BUILD/f2c-$f.log" \
      && ! grep -q '^Error' "$BUILD/f2c-$f.log"; then
     nf=$((nf+1))
@@ -199,7 +225,7 @@ done
 # and reappear as duplicate symbols at link time.
 rm -f "$PREFIX/lib/libccx.a"
 emar rcs "$PREFIX/lib/libccx.a" "$BUILD"/obj/*.o
-echo "fortran translated : $nf / $(ls "$CCX"/*.f | wc -l | tr -d ' ')"
+echo "fortran translated : $nf / $(( $(ls "$CCX"/*.f | wc -l | tr -d ' ') - ninc ))  (excludes $ninc data include(s), which are not routines)"
 echo "fortran compiled   : ${nf2:-0}"
 echo "native C compiled  : $nc"
 echo "failed             : $failed  (see $BUILD/UNCONVERTED.txt)"
