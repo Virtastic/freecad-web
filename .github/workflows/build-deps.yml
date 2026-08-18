@@ -135,6 +135,12 @@ jobs:
         run: |
           mkdir -p /tmp/deplogs
           . emsdk/emsdk_env.sh
+          # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
+          # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
+          # already on disk. Honour the cache this workflow already pays to save.
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libboost_*.a 2>/dev/null | wc -l)" -ge 5 ]; then
+            echo "  boost: already built (cache hit), skipping"; exit 0
+          fi
           t0=$SECONDS; rc=0
           bash build-boost-weh.sh > /tmp/deplogs/boost.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
@@ -147,6 +153,12 @@ jobs:
         run: |
           mkdir -p /tmp/deplogs
           . emsdk/emsdk_env.sh
+          # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
+          # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
+          # already on disk. Honour the cache this workflow already pays to save.
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libxerces-c*.a 2>/dev/null | wc -l)" -ge 1 ]; then
+            echo "  xerces: already built (cache hit), skipping"; exit 0
+          fi
           t0=$SECONDS; rc=0
           bash build-xercesc-weh.sh > /tmp/deplogs/xerces.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
@@ -185,6 +197,12 @@ jobs:
         run: |
           mkdir -p /tmp/deplogs
           . emsdk/emsdk_env.sh
+          # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
+          # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
+          # already on disk. Honour the cache this workflow already pays to save.
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libTK*.a 2>/dev/null | wc -l)" -ge 30 ]; then
+            echo "  OCCT: already built (cache hit), skipping"; exit 0
+          fi
           t0=$SECONDS; rc=0
           bash configure-occt-weh.sh > /tmp/deplogs/occt.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
@@ -197,11 +215,34 @@ jobs:
         run: |
           mkdir -p /tmp/deplogs
           . emsdk/emsdk_env.sh
+          # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
+          # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
+          # already on disk. Honour the cache this workflow already pays to save.
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libvtk*.a 2>/dev/null | wc -l)" -ge 20 ]; then
+            echo "  VTK: already built (cache hit), skipping"; exit 0
+          fi
           t0=$SECONDS; rc=0
           bash configure-vtk-weh.sh > /tmp/deplogs/vtk.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
           echo "  vtk exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/vtk.txt
           exit $rc
+
+      # gl_compat.h and coin_intrusive.h are force-included into Coin, all of FreeCAD, PySide
+      # and all three link commands, and until 2026-08-18 neither was tracked: they existed
+      # only on the build machine, under gitignored deps/. coin_intrusive.h is reconstructed
+      # and staged from toolchain/include. gl_compat.h is not, so Coin builds here in
+      # DIAGNOSTIC mode -- an empty header, whose compile errors enumerate what the real one
+      # must declare. Nothing built this way is production-equivalent.
+      - name: Stage the force-included compat headers
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/deplogs
+          if [ -e toolchain/include/gl_compat.h ]; then
+            bash toolchain/stage-headers.sh 2>&1 | tee /tmp/deplogs/03-headers.txt
+          else
+            echo "::warning::gl_compat.h is not tracked -- Coin3D builds in DIAGNOSTIC mode. Capture it with tools/capture-build-machine-headers.sh on the build machine."
+            FCWEB_ALLOW_MISSING_GL_COMPAT=1 bash toolchain/stage-headers.sh 2>&1 | tee /tmp/deplogs/03-headers.txt
+          fi
 
       - name: Coin3D
         id: coin
@@ -209,11 +250,64 @@ jobs:
         run: |
           mkdir -p /tmp/deplogs
           . emsdk/emsdk_env.sh
+          # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
+          # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
+          # already on disk. Honour the cache this workflow already pays to save.
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libCoin.a 2>/dev/null | wc -l)" -ge 1 ]; then
+            echo "  Coin3D: already built (cache hit), skipping"; exit 0
+          fi
+          export FCWEB_ALLOW_MISSING_GL_COMPAT=1   # a no-op once gl_compat.h is tracked
           t0=$SECONDS; rc=0
           bash configure-coin-weh.sh > /tmp/deplogs/coin.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
           echo "  coin exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/coin.txt
+          # The point of a diagnostic run is the error list, which tail -30 truncates.
+          # Distinct undeclared identifiers, most frequent first: gl_compat.h's specification.
+          if [ "$rc" != 0 ]; then
+            echo "--- identifiers Coin needs that nothing declares (candidate gl_compat.h) ---"
+            grep -ohE "(undeclared identifier|unknown type name) .[A-Za-z0-9_]+" \
+                 /tmp/deplogs/coin.txt 2>/dev/null \
+              | grep -oE "[A-Za-z0-9_]+$" | sort | uniq -c | sort -rn | head -80 \
+              | tee /tmp/deplogs/coin-missing-symbols.txt
+          fi
           exit $rc
+
+      # THE GATE. Every dependency step above is continue-on-error, which is deliberate -- one
+      # failure should still leave the others measured -- but it also meant a run that built
+      # NOTHING reported success. Run 32077362742 was green with Coin3D "exit=0 in 3s" and no
+      # libCoin.a anywhere: its cmake configure had died on Boost and `| tail -25` swallowed
+      # the status. A green build that produced no library is worse than a red one.
+      #
+      # So judge the run by what is on disk, not by what exited 0. Coin is a KNOWN GAP only
+      # while gl_compat.h is untracked; the moment that header is captured this gate arms
+      # itself, with no edit here.
+      - name: Assert the libraries actually exist
+        if: always()
+        run: |
+          fail=0
+          check() {  # check <label> <glob> <min-count>
+            n=$(ls -1 $2 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$n" -lt "$3" ]; then
+              echo "::error::$1: found $n of at least $3 expected libraries ($2)"; fail=1
+            else
+              echo "  ok  $1: $n libraries"
+            fi
+          }
+          check boost  "deps/wasm/lib/libboost_*.a"   5
+          check xerces "deps/wasm/lib/libxerces-c*.a" 1
+          check OCCT   "deps/wasm/lib/libTK*.a"      30
+          check VTK    "deps/wasm/lib/libvtk*.a"     20
+
+          if [ -s deps/wasm/lib/libCoin.a ]; then
+            echo "  ok  Coin3D: libCoin.a present"
+          elif [ -e toolchain/include/gl_compat.h ]; then
+            echo "::error::Coin3D: no libCoin.a, and gl_compat.h IS tracked -- a real failure, not the known gap."
+            fail=1
+          else
+            echo "::warning::Coin3D: KNOWN GAP -- gl_compat.h untracked, so Coin cannot compile here."
+            echo "           Capture it: bash tools/capture-build-machine-headers.sh (on the build machine)"
+          fi
+          exit $fail
 
       # To the step summary, not just stdout: `gh run view --log` came back empty for the
       # probe run and the timings -- the entire point -- were unreadable afterwards.
