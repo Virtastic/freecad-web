@@ -1025,7 +1025,7 @@ def expand_matmul(text, dims):
             out.extend(raw)
             continue
         label, cont, code, is_comment = split_fixed(stmt)
-        if is_comment or not code or not RE_MM_CALL.search(code):
+        if is_comment or not code:
             out.extend(raw)
             continue
         if '=' not in code or code.strip().lower().startswith(('if', 'call', 'do ')):
@@ -1037,6 +1037,19 @@ def expand_matmul(text, dims):
         if lsh is None:
             out.extend(raw)
             continue
+        # Whole-array assignment is F90 too, with or without an intrinsic in it:
+        # `Q4 = (Q1 + Q2)*0.5d0` is exactly as untranslatable as the matmul forms, and it is
+        # what these files fell to next once matmul was handled ("wrong number of subscripts
+        # on Q4"). Anything whose LHS resolves to an array shape gets the element loop; a
+        # fully-subscripted LHS resolves to None above and is left alone.
+        if not RE_MM_CALL.search(code):
+            if '=' in code and re.match(r'^[A-Za-z]\w*$', lhs):
+                pass                      # bare array name: expand below
+            elif RE_SECTION.search(lhs) if 'RE_SECTION' in globals() else (':' in lhs):
+                pass                      # a section: the existing machinery may also see it
+            else:
+                out.extend(raw)
+                continue
 
         pre = []
         new_rhs = reduce_calls(rhs, pre)
