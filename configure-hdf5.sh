@@ -6,6 +6,13 @@ set -e
 cd "$(dirname "$0")"
 . toolchain/env.sh
 
+# emsdk ships whichever node its installer chose -- 22.16.0 here, 24.19.0 on a hosted
+# runner -- so a hardcoded path is a build that only works on one machine. emsdk_env.sh
+# exports EMSDK_NODE; fall back to PATH, and fail by name rather than handing cmake a
+# CMAKE_CROSSCOMPILING_EMULATOR that does not exist.
+FCWEB_NODE="${EMSDK_NODE:-$(command -v node)}"
+[ -x "$FCWEB_NODE" ] || { echo "ERROR: no node found (EMSDK_NODE unset and none on PATH)" >&2; exit 1; }
+
 SRC="$ROOT/deps/src/hdf5-1.14.3"
 BUILD="$ROOT/build-hdf5"
 
@@ -31,7 +38,7 @@ emcmake cmake -S "$SRC" -B "$BUILD" -G Ninja \
   -DCMAKE_INSTALL_PREFIX="$DW" \
   -DCMAKE_C_FLAGS="-fexceptions -pthread -O2" \
   -DCMAKE_CXX_FLAGS="-fexceptions -pthread -O2" \
-  -DCMAKE_CROSSCOMPILING_EMULATOR="$ROOT/emsdk/node/22.16.0_64bit/bin/node"
+  -DCMAKE_CROSSCOMPILING_EMULATOR="$FCWEB_NODE"
 
 echo "=== HDF5 configure done; building ==="
 ninja -C "$BUILD"
