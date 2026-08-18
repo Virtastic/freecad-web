@@ -32,6 +32,13 @@ on:
         description: "Ignore the cache and rebuild from scratch"
         type: boolean
         default: false
+      runner:
+        description: "Where to build"
+        type: choice
+        default: ubuntu-latest
+        options:
+          - ubuntu-latest
+          - vps
 
 permissions:
   contents: read
@@ -42,15 +49,40 @@ env:
 
 jobs:
   deps:
-    runs-on: ubuntu-latest
+    # ubuntu-latest by default; `vps` targets the self-hosted runner on the OVH origin box.
+    #
+    # The box is the better machine for this on paper -- 193 GB with 90 GB free, against a
+    # hosted runner's ~14 GB after the cleanup step below. But it is also the machine SERVING
+    # PRODUCTION, it runs 22 containers including another product's Postgres and login
+    # service, and infra/README.md states the position plainly: "FreeCAD is not compiled on
+    # the box (the build is huge)."
+    #
+    # So this is opt-in per dispatch rather than the default. Two things to know before
+    # choosing it: the build will compete for CPU with the live site (nothing here caps
+    # parallelism), and the `ubuntu` account is shared by three runners registered to three
+    # different GitHub scopes, so a long job here can queue another repo's deploy.
+    runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
+      # HOSTED RUNNERS ONLY. This deletes /usr/share/dotnet, /usr/local/lib/android and the
+      # ghc trees to claw back space on a 14 GB image. On the OVH box those are not throwaway
+      # CI images, they are somebody's filesystem -- and that box also runs another product's
+      # database. `|| true` would have hidden the mistake rather than prevented it.
       - name: Free disk (this stack is large)
+        if: ${{ inputs.runner != 'vps' }}
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
           df -h / | sed 's/^/  /'
+
+      - name: Disk before (self-hosted)
+        if: ${{ inputs.runner == 'vps' }}
+        run: |
+          echo "building on $(hostname) -- NOT deleting anything on this box"
+          df -h / | sed 's/^/  /'
+          nproc | sed 's/^/  cpus: /'
+          free -g 2>/dev/null | sed 's/^/  /' || true
 
       # actions/cache SAVES ONLY WHEN THE RESTORE MISSED. With a fixed key that restored
       # cleanly, the post step is a no-op -- so this cache was created on 2026-08-17T15:27,
