@@ -74,14 +74,12 @@ jobs:
         with:
           path: deps/wasm
           key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
+          # ONLY the source-hash prefix. A bare `fcweb-deps-<KEY>` fallback used to be listed
+          # too, and run 32099719534 duly matched the stale fixed-key entry (41 MiB,
+          # boost+xerces+VTK) instead of the 76 MiB one with OCCT in it -- so OCCT rebuilt for
+          # 77 minutes again. That entry is deleted; no fallback re-creates the trap.
           restore-keys: |
             fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-
-          # ONLY the run-keyed prefix. The bare key was also listed here, and run
-          # 32099719534 duly matched the stale fixed-key entry (41 MiB, boost+xerces+VTK)
-          # instead of the 76 MiB one with OCCT in it -- so OCCT rebuilt for 77 minutes
-          # again. That entry has been deleted; this stops anything re-creating the trap.
-          restore-keys: |
-            fcweb-deps-${{ env.DEPS_KEY }}-
 
       - name: Install emsdk 3.1.70
         run: |
