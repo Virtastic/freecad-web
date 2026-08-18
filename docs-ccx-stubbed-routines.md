@@ -138,6 +138,48 @@ None is reached by the four decks. That is a statement about coverage, not corre
 analysis that does reach one stops with a message naming it, rather than returning a wrong
 answer.
 
+### Production stubs five routines too, and the binary says which
+
+`tools/ccx-stub-diff.py` reads the stub list straight out of a built module. This document
+claimed the binary "cannot be mined for a stub list" because the routine name reaches the
+abort as a runtime `%s`. That is true of the format string and false of the argument:
+`ccx_make_stubs.py` emits `call ccxstb('<name>')`, and f2c turns that Fortran literal into an
+ordinary NUL-terminated C string sitting in the data section.
+
+The control that makes it trustworthy: `e_c3d`, `mafilldm`, `resultsmech`, `resultstherm`,
+`e_c3d_th` and `extrapolate` are all documented as compiled in production, and not one of them
+produces such a literal. The tool refuses to report if any control fails.
+
+Run against the deployed `ccx.wasm`:
+
+| routine | production | this build (run 32145598043) |
+|---|---|---|
+| `e_c3d_us3`, `e_c3d_us45` | **STUBBED** | STUBBED |
+| `resultsmech_us3`, `resultsmech_us45` | **STUBBED** | STUBBED |
+| `umat_ciarlet_el` | **STUBBED** | STUBBED |
+| `us3_sub`, `us4_sub` | compiled | STUBBED |
+| `patch` | compiled | STUBBED |
+| `slavintmortar`, `slavintpoints` | compiled | STUBBED |
+| everything else above | compiled | compiled |
+
+**So five of the ten are not a gap at all.** US3/US45 user shell elements and the Ciarlet user
+material abort in the module being served today, exactly as they do here. Converting them
+would not restore functionality that production has; it would add functionality production
+lacks, and the "must match production" gate could not validate it, because production aborts
+on those paths.
+
+That leaves five genuine divergences, and they are not equally hard:
+
+- `us3_sub`, `us4_sub` — compiled in production, but their only callers (`e_c3d_us3`,
+  `e_c3d_us45`) are stubbed there, so they are dead code in the shipped module. Converting
+  them closes the byte gap and changes no behaviour.
+- `patch` — compiled in production, reachable through `zienzhu`, and worth closing.
+- `slavintmortar`, `slavintpoints` — compiled in production; bounded here they converge to a
+  physically invalid answer, which is why they are in `SKIP_FILES`.
+
+It also explains the size gap arithmetic. Those five files are 126,914 bytes of source
+against a 137,647-byte gap between this build's `ccx.wasm` and production's.
+
 ### What would actually be needed to convert the rest
 
 Measured against CalculiX 2.22 by running `tools/f77ify.py`'s own analysis over each stubbed
