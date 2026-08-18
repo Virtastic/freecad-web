@@ -122,27 +122,27 @@ jobs:
           } 2>&1 | tee /tmp/deplogs/00-fetch.txt
           tail -20 /tmp/deplogs/00-fetch.txt
 
-      # OCCT 7.8.1 does not compile against a current freetype: FT_Outline::tags became
-      # unsigned char*, and StdPrs_BRepFont.cxx assigns it to a const char*. Found at target
-      # 2716/5480 in run 32046710386. Cast only -- see the patch header.
-      - name: Patch OCCT for current freetype
-        run: |
-          set -e
-          cd deps/src/occt
-          if patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/occt-freetype-tags-const.patch" >/dev/null 2>&1; then
-            patch -p1 < "$GITHUB_WORKSPACE/patches/occt-freetype-tags-const.patch"
-            echo "  applied"
-          elif patch -p1 -R --dry-run < "$GITHUB_WORKSPACE/patches/occt-freetype-tags-const.patch" >/dev/null 2>&1; then
-            echo "  already applied"
-          else
-            echo "::error::occt-freetype-tags-const.patch does not apply -- refusing to build OCCT that will fail 2716 targets in"
-            exit 1
-          fi
-
       # THE project's own source patches -- occt.patch, coin3d.patch, cpython-ctypes-wasm.patch,
       # numpy.patch. None had ever been applied in CI, because apply.sh required git checkouts
       # (deps/src/*/.git) and this workflow fetches tarballs. It handles both layouts now, so
       # the libraries built here are patch-equivalent to the build machine's for the first time.
+      #
+      # This replaces a separate "Patch OCCT for current freetype" step, and removing it fixed
+      # a defect rather than merely tidying. That step applied occt-freetype-tags-const.patch,
+      # which fixes the SAME line of StdPrs_BRepFont.cxx as occt.patch's second hunk (FT_Outline
+      # ::tags became unsigned char* in current freetype; OCCT assigns it to a const char*).
+      # With it applied first, occt.patch no longer matched and apply.sh failed the whole file
+      # -- taking with it occt.patch's FIRST hunk, which nothing else supplies:
+      #
+      #     -  set (CMAKE_CXX_FLAGS "... -fexceptions -fPIC")
+      #     -  add_definitions(-DOCC_CONVERT_SIGNALS)
+      #     +  if (NOT EMSCRIPTEN)   ... endif()
+      #
+      # So every CI build of OCCT compiled with -fexceptions and OCC_CONVERT_SIGNALS on top of
+      # configure-occt-weh.sh's -fwasm-exceptions: two exception models at once, plus setjmp-
+      # based signal conversion that the patch's own comment says makes LLVM emit invalid wasm.
+      # Verified that occt.patch applies cleanly to a pristine V7_8_1 tree, so the standalone
+      # patch was only ever needed because apply.sh could not run here.
       #
       # FCWEB_PATCH_OPTIONAL=1 because CI builds a subset of the stack: a tree that is not here
       # is skipped rather than fatal. On the build machine the default stays strict.
