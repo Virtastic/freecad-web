@@ -923,22 +923,70 @@ def expand_matmul(text, dims):
         dims[name] = [shape[1]] if shape[0] == 'v' else [shape[1], shape[2]]
         return name
 
+    def _sub_section(name, subs, idx):
+        """`bs1(:,:)` -> `bs1(i,j)`, `B1(:,1:6)` -> `B1(i,(1)+j-1)`.
+
+        A section operand is NOT already-indexed just because it has parentheses: the colons
+        have to become the loop's indices, or they survive into f2c as a syntax error. That
+        is what `B1(:,1:6)=a3*bs1(:,:)` did -- loops emitted around untouched sections.
+        """
+        out, free = [], 0
+        for sub in subs:
+            sub = sub.strip()
+            if sub == ':':
+                out.append(idx[free] if free < len(idx) else idx[-1])
+                free += 1
+            elif ':' in sub:
+                lo = sub.split(':', 1)[0].strip()
+                i = idx[free] if free < len(idx) else idx[-1]
+                out.append('(%s)+%s-1' % (lo, i))
+                free += 1
+            else:
+                out.append(sub)                   # a fixed subscript stays put
+        return '%s(%s)' % (name, ','.join(out))
+
     def index_refs(expr, idx, shape):
-        """Turn whole-array operands into element references for the assignment loop."""
-        def sub(m):
+        """Turn whole-array and sectioned operands into element references."""
+        out, i = [], 0
+        while i < len(expr):
+            m = re.compile(r'\b([A-Za-z]\w*)\b').match(expr, i)
+            if not m:
+                out.append(expr[i])
+                i += 1
+                continue
             name = m.group(1)
             key = name.lower()
             sh = temps.get(name) or (('m',) + tuple(dims[key]) if key in dims and len(dims[key]) == 2
                                      else (('v', dims[key][0]) if key in dims and len(dims[key]) == 1
                                            else None))
+            j = m.end()
             if sh is None:
-                return name
-            if expr[m.end():m.end() + 1] == '(':
-                return name                       # already subscripted
+                out.append(name)
+                i = j
+                continue
+            if j < len(expr) and expr[j] == '(':
+                depth, k = 0, j
+                while k < len(expr):
+                    if expr[k] == '(':
+                        depth += 1
+                    elif expr[k] == ')':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    k += 1
+                inner = expr[j + 1:k]
+                if ':' in inner:
+                    out.append(_sub_section(name, split_top(inner), idx))
+                else:
+                    out.append(expr[m.start():k + 1])   # a real element reference; leave it
+                i = k + 1
+                continue
             if sh[0] == 'v':
-                return '%s(%s)' % (name, idx[0])
-            return '%s(%s,%s)' % (name, idx[0], idx[1] if len(idx) > 1 else idx[0])
-        return re.sub(r'\b([A-Za-z]\w*)\b', sub, expr)
+                out.append('%s(%s)' % (name, idx[0]))
+            else:
+                out.append('%s(%s,%s)' % (name, idx[0], idx[1] if len(idx) > 1 else idx[0]))
+            i = j
+        return ''.join(out)
 
     def reduce_calls(code, pre):
         """Replace innermost matmul/transpose with temporaries, emitting calls into `pre`."""
