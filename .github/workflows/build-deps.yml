@@ -295,9 +295,10 @@ jobs:
       # libCoin.a anywhere: its cmake configure had died on Boost and `| tail -25` swallowed
       # the status. A green build that produced no library is worse than a red one.
       #
-      # So judge the run by what is on disk, not by what exited 0. Coin is a KNOWN GAP only
-      # while gl_compat.h is untracked; the moment that header is captured this gate arms
-      # itself, with no edit here.
+      # So judge the run by what is on disk, not by what exited 0. Coin was carried as a
+      # known gap while gl_compat.h was untracked; run 32099719534 then built libCoin.a
+      # clean against an EMPTY gl_compat.h, so Coin is now a hard requirement like the
+      # rest. The header still matters for the FreeCAD build, not for this one.
       - name: Assert the libraries actually exist
         if: always()
         run: |
@@ -321,8 +322,8 @@ jobs:
             echo "::error::Coin3D: no libCoin.a, and gl_compat.h IS tracked -- a real failure, not the known gap."
             fail=1
           else
-            echo "::warning::Coin3D: KNOWN GAP -- gl_compat.h untracked, so Coin cannot compile here."
-            echo "           Capture it: bash tools/capture-build-machine-headers.sh (on the build machine)"
+            echo "::error::Coin3D: no libCoin.a. This is NOT the gl_compat.h gap -- run 32099719534
+                     built Coin clean against an empty one, so a missing library here is a real failure."
           fi
           exit $fail
 
