@@ -452,5 +452,6 @@ jobs:
             play-gui/ccx.wasm
             build-ccx-weh/UNCONVERTED.txt
             build-ccx-weh/f2c-*.log
+            build-ccx-weh/f77-stubbed/*.f
           if-no-files-found: warn
           retention-days: 7
