@@ -39,20 +39,36 @@ ls -la libpython3.13.a pyconfig.h 2>/dev/null
 # above, Python/emscripten_trampoline.c compiles to a ~273-byte empty object and
 # pycore_emscripten_trampoline.h:28 takes its #else branch -- no trampoline at all, and
 # patches/cpython-ctypes-wasm.patch becomes dead code.
+#
+# Only _PyEM_TrampolineCall_Reflection is an ordinary C function. The other three
+# (_PyEM_TrampolineCall_JavaScript, _PyEM_detect_type_reflection, _PyEM_CountFuncParams)
+# are EM_JS, which emscripten emits as JS-library imports plus __em_js__ metadata rather
+# than text symbols -- so demanding "T" for those fails on a perfectly good build. That is
+# exactly what CI run 32140673586 did: Reflection present, build correct, assertion wrong.
 NM="$ROOT/emsdk/upstream/emscripten/emnm"
+syms="$("$NM" libpython3.13.a 2>/dev/null || true)"
 missing=0
-for sym in _PyEM_TrampolineCall_Reflection _PyEM_TrampolineCall_JavaScript _PyEM_detect_type_reflection; do
-  if "$NM" libpython3.13.a 2>/dev/null | grep -q "T $sym"; then
-    echo "  ok  $sym"
+# The decisive one: a plain C definition that only exists when the guard was satisfied.
+if printf '%s' "$syms" | grep -q "T _PyEM_TrampolineCall_Reflection"; then
+  echo "  ok  _PyEM_TrampolineCall_Reflection (C definition -- the guard was on)"
+else
+  echo "  MISSING: _PyEM_TrampolineCall_Reflection"
+  missing=1
+fi
+# The EM_JS half: accept either a text symbol or the __em_js__ metadata emscripten emits.
+for sym in _PyEM_TrampolineCall_JavaScript _PyEM_detect_type_reflection _PyEM_CountFuncParams; do
+  if printf '%s' "$syms" | grep -qE "(T|D) $sym|__em_js__$sym"; then
+    echo "  ok  $sym (EM_JS)"
   else
     echo "  MISSING: $sym"
     missing=1
   fi
 done
 if [ "$missing" != 0 ]; then
-  echo "ERROR: libpython3.13.a has no trampoline symbols. PY_CALL_TRAMPOLINE did not reach" >&2
-  echo "       the compiler, so JSPI cannot suspend across a Python call and every modal" >&2
-  echo "       dialog will return the wrong answer -- silently. See BUILD-WEH.md." >&2
+  echo "ERROR: libpython3.13.a is missing trampoline symbols. If _PyEM_TrampolineCall_Reflection" >&2
+  echo "       is the missing one, PY_CALL_TRAMPOLINE did not reach the compiler: JSPI then" >&2
+  echo "       cannot suspend across a Python call and every modal dialog returns the wrong" >&2
+  echo "       answer, silently. See BUILD-WEH.md." >&2
   ls -la ./Python/emscripten_trampoline.o 2>/dev/null >&2
   exit 1
 fi

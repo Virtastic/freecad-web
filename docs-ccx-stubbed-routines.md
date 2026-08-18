@@ -99,15 +99,21 @@ Two constraints shaped the implementation:
 ## What is still stubbed
 
     basis  calcview  cavity_refine  cavityext_refine  extendmesh  gauss  gen3dfrom2d
-    interpolateinface  near2d  near3d  patch  umat_ciarlet_el  xlocal
+    interpolateinface  patch  slavintmortar  slavintpoints  umat_ciarlet_el  xlocal
     e_c3d_us3  e_c3d_us45  resultsmech_us3  resultsmech_us45  us3_sub  us4_sub
+
+(Read from CI run 32140989422's own output, not maintained by hand. The previous copy of
+this list was wrong in both directions: it still named `near2d` and `near3d`, which the
+file-scoped bounds fixed, and it omitted `slavintmortar`/`slavintpoints`, which the text
+below explains are stubbed on purpose.)
 
 | group | note |
 |---|---|
 | US3/US45 user shells (6) | BUILD-WEH.md records FreeCAD never emits them — these can stay stubbed |
 | `gauss.f` | not a routine; an INCLUDE of Gauss-point data. Its presence here means nothing |
 | CalculiX's own remesher (`cavity_refine`, `cavityext_refine`, `extendmesh`, `basis`, `interpolateinface`) | FreeCAD meshes with gmsh, so this path is unused |
-| deliberately excluded dimensions (`near2d`, `near3d`, `calcview`, `patch`) | see the exclusion list in `tools/f77ify.py` — each would be unsafe to token-match |
+| deliberately excluded dimensions (`calcview`, `patch`) | see the exclusion list in `tools/f77ify.py` — each would be unsafe to token-match |
+| mortar contact (`slavintmortar`, `slavintpoints`) | `SKIP_FILES` in `tools/f77ify.py` — bounded, they converge to a physically invalid answer, so an abort is the lesser evil. See the contact section below |
 | `xlocal.f`, `umat_ciarlet_el`, `gen3dfrom2d` | separate root causes |
 
 None is reached by the four decks. That is a statement about coverage, not correctness: an
