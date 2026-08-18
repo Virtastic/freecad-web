@@ -54,9 +54,25 @@ ninc=0
 # The check is fail-safe by construction: misclassifying a REAL routine as an include means
 # it is neither translated nor stubbed, so it is simply absent and the link fails by name.
 # There is no silent outcome.
+# grep -c, NOT grep -q, and the reason is a real defect this had:
+#
+# with `set -o pipefail` (line 11), `grep -v ... | grep -q ...` returns 141 when grep -q
+# finds a match EARLY -- it exits at once, the upstream grep dies of SIGPIPE, and pipefail
+# reports that. The leading `!` then turns "found a subprogram head" into "this is an
+# include", and the routine is neither translated nor stubbed. It simply vanishes, its
+# callers resolve to trapping stubs, and every validation deck dies with
+# `RuntimeError: unreachable`.
+#
+# It is a RACE -- whether the upstream grep has finished writing before grep -q exits -- so
+# it struck a different large file on each run: umat_aniso_creep.f in 32158104737,
+# allocation.f in 32194356226, neither reproducible locally. grep -c consumes all input, so
+# there is no early exit and no SIGPIPE.
 is_include() {
-  ! grep -viE '^[cC*!]' "$1" \
-    | grep -qiE '^ {6,}([a-z0-9_*() ]*[[:space:]])?(subroutine|function|program|block[[:space:]]*data)[[:space:]]+[a-z_]'
+  local n
+  n=$(grep -viE '^[cC*!]' "$1" \
+      | grep -ciE '^ {6,}([a-z0-9_*() ]*[[:space:]])?(subroutine|function|program|block[[:space:]]*data)[[:space:]]+[a-z_]' \
+      || true)
+  [ "${n:-0}" -eq 0 ]
 }
 
 for f in *.f; do
