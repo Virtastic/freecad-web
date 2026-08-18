@@ -272,6 +272,41 @@ it immediately earned its place:
    Negative contact pressure is impossible: contact pushes, it cannot pull. The model is
    perfectly symmetric, so an asymmetric response is a second tell.
 
+### Two more hypotheses eliminated, 2026-08-18
+
+Both were checked against the real 2.22 source and the code f77ify actually emits, and both
+are wrong. Recorded so the next attempt starts further along.
+
+**An out-of-bounds read at index 0.** `slavintmortar.f:392` has the guard commented out --
+
+    c     if(id.ne.0 .and. icoveredmelem(id).eq.nelemm)then
+
+-- which looks like `icoveredmelem(0)` could be read when `nident` returns id=0, giving a
+value that depends on what precedes the array in memory, and therefore on the build. It is
+not: the line below replaces the guard with `if(id.gt.0) then`, and the comparison sits
+inside it. `slavintpoints.f:298` keeps the original combined form. Both are safe.
+
+**The `cycle` rewrite jumping to the wrong place.** The `cycle` at `slavintmortar.f:397` sits
+inside an `if ... endif` with the covered-stack insertion after it, so it must skip that
+insertion -- and a rewrite that landed just after the `endif` would silently add master
+elements that should have been skipped, which would look exactly like this defect. It does
+not: f77ify emits `goto 8001`, and label 8001 is `continue` immediately before the loop's
+`enddo`, ~300 lines later. Correct.
+
+**The strongest remaining hypothesis, and how to test it.** `tools/ccx-stub-diff.py` now
+shows production has both routines COMPILED, and the stub format string proves production was
+built with this repo's tooling -- so the build machine's f2c accepted these automatic arrays
+by some means this one does not. That points at the translator rather than at the source: an
+f2c built with different flags, a patched f2c, or a post-processing step that emits C99
+variable-length arrays instead of fixed bounds. If that is what happened, production's
+routines are faithful translations and every bounded version here is an approximation, which
+would explain why the bound VALUE provably does not reach the results (halving it gave
+byte-identical wrong numbers) while the results are still wrong.
+
+Test it by capturing the build machine's `deps/src/f2c` and diffing it against netlib's
+`src.tgz`, the same way `tools/capture-build-machine-headers.sh` captures the compat headers.
+That is a read-only command on that machine and it would settle the question.
+
 ### What the investigation established
 
 Four hypotheses were tested and eliminated, and every transformation on the contact path was
