@@ -10,6 +10,18 @@
 > | 11 | **Clean-checkout build** | **still blocked, but by one command.** `gl_compat.h` and `qprocess_stub.h` are force-included into everything and exist only on the build machine. `bash tools/capture-build-machine-headers.sh` there, and commit. |
 > | 12 | **CI trustworthiness** | Coin3D had never been built at all; `patches/apply.sh` had never applied a patch in CI; OCCT was compiling with two exception models at once; CPython lost JSPI entirely without `-DPY_CALL_TRAMPOLINE=1`. All fixed, all gated. Eight of 23 dependencies now build on a hosted runner. |
 >
+> **Status 2026-08-19: what "fully usable" still needs.** Asked directly whether the app has
+> network access and plugins. Checked rather than assumed, and the answer is *partly*, with
+> four gaps that are now tracked items rather than surprises.
+>
+> | # | item | state |
+> |---|---|---|
+> | 13 | **Outbound HTTP** | **works in principle, constrained in practice.** QtNetwork is part of qtbase and IS built (`-submodules qtbase,qtsvg,qtdeclarative,qttools`), and Qt-for-wasm implements `QNetworkAccessManager` over the browser's fetch. `DownloadItem`/`DownloadManager` use it. BUT `infra/nginx.conf` sets `Cross-Origin-Embedder-Policy: require-corp`, which SharedArrayBuffer (and therefore threads) requires -- and under it every cross-origin response must carry CORP/CORS headers or the browser refuses it. Most third-party hosts do not. So requests to arbitrary sites will mostly fail, and anything that needs to reach the wider web needs a same-origin proxy. Not yet built. |
+> | 14 | **`NetworkRetriever` is inert** | FreeCAD's own "fetch from the web" helper shells out to **wget through QProcess**, and Qt-for-wasm has no QProcess -- `toolchain/include/qprocess_stub.h` makes it compile by making it do nothing. Anything routed through it silently does nothing. Should be rewritten onto QNetworkAccessManager, or removed so it fails honestly. |
+> | 15 | **Addon Manager / plugins** | **off entirely.** `BUILD_ADDONMGR=OFF`, because AddonManager is a git *submodule* and GitHub tarballs carry none. Beyond fetching it, installing an addon at runtime assumes `git` and a writable install tree, both via QProcess -- so it needs a wasm-native install path (fetch a zip over HTTP, unpack into IDBFS) before it means anything. This is the single biggest gap against "usable by anyone". |
+> | 16 | **Compiled Python addons** | **not possible by construction, and that is worth stating.** This is one static monolith: every C extension is registered in `MainGui.cpp`'s inittab at link time. There is no `pip`, no dynamic loading. Pure-Python addons can be dropped into the virtual filesystem and will work; an addon shipping a compiled extension cannot be installed without relinking the whole binary. |
+> | 17 | **Web workbench** | `BUILD_WEB=ON` compiles, but Qt is built `-skip qtwebengine`, so the embedded browser view has no engine behind it. Needs checking against what the workbench actually does at runtime before it can be called working. |
+
 > **Status 2026-08-16** (the original table; items 1-8 below are unchanged unless noted).
 >
 > | # | item | state |
