@@ -76,6 +76,18 @@ jobs:
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
 
+      # CPython gets its OWN cache, keyed only on the scripts that build it, and saved
+      # even when a later lane fails. Sharing the pydeps key meant every numpy fix
+      # invalidated the CPython build too -- and since the pydeps cache only saves on full
+      # success, three failed numpy attempts cost three 25-minute CPython rebuilds for a
+      # tree that had not changed.
+      - name: Restore CPython build tree
+        id: cpycache
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/src/cpython
+          key: fcweb-cpython-3.13.3-emsdk3.1.70-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
+
       - name: Cache emsdk
         id: emsdk-cache
         uses: actions/cache@v4
@@ -164,6 +176,13 @@ jobs:
             done
           fi
           ls -la python3-native
+
+      - name: Save CPython build tree
+        if: always() && steps.cpycache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/src/cpython
+          key: fcweb-cpython-3.13.3-emsdk3.1.70-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
 
       - name: numpy
         id: numpy
