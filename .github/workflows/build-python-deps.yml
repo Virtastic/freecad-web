@@ -71,7 +71,9 @@ jobs:
             deps/wasm/lib/libffi.a
             deps/src/cpython
             deps/src/numpy
+            deps/src/pivy
             build-numpy
+            build-pivy-wasm
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
@@ -81,6 +83,18 @@ jobs:
       # invalidated the CPython build too -- and since the pydeps cache only saves on full
       # success, three failed numpy attempts cost three 25-minute CPython rebuilds for a
       # tree that had not changed.
+      # pivy needs Coin3D and the force-included headers from the C++ stack, so restore
+      # that cache too. Prefix key: build-deps.yml hashes its own scripts into the full
+      # key, and none of that is anything this workflow changes.
+      - name: Restore the C++ dependency stack
+        id: depcache
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/wasm
+          key: fcweb-deps-v1-emsdk3.1.70-pydeps-consumer
+          restore-keys: |
+            fcweb-deps-v1-emsdk3.1.70-
+
       - name: Restore CPython build tree
         id: cpycache
         uses: actions/cache/restore@v4
@@ -166,6 +180,7 @@ jobs:
           get kiwisolver https://github.com/nucleic/kiwi/archive/refs/tags/1.4.7.tar.gz 1 py/src/kiwisolver.cpp
           get Pillow     https://github.com/python-pillow/Pillow/archive/refs/tags/10.4.0.tar.gz 1 src/_imaging.c
           get matplotlib https://github.com/matplotlib/matplotlib/archive/refs/tags/v3.9.2.tar.gz 1 meson.build
+          get pivy       https://github.com/coin3d/pivy/archive/refs/tags/0.6.9.tar.gz 1 CMakeLists.txt
 
       - name: Apply the source patches
         run: |
@@ -317,6 +332,23 @@ jobs:
       # One gate at the end, so a single broken lane does not hide the state of the
       # others. Every archive named here is one MainGui.cpp registers in its inittab; a
       # missing one is a trapping PyInit_* in the browser, not a link error.
+      # pivy: the SWIG Coin3D bindings, registered by MainGui.cpp as the builtin `_coin`.
+      # Needs the staged compat headers, so stage them from toolchain/include first --
+      # forcing the tracked copies over whatever a restored cache happens to hold, for the
+      # same reason build-deps.yml does.
+      - name: pivy (_coin)
+        id: lane_pivy
+        continue-on-error: true
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          . .qtvenv/bin/activate
+          if [ -s build-pivy-wasm/interfaces/_coin.a ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+            echo "  pivy: already built"; exit 0
+          fi
+          FCWEB_FORCE_STAGE_HEADERS=1 bash toolchain/stage-headers.sh
+          bash configure-pivy-weh.sh
+
       - name: Gate -- every archive the link needs
         run: |
           fail=0
@@ -331,6 +363,7 @@ jobs:
           need deps/wasm/lib/ctypes-mod/lib_ctypes.a              "_ctypes"
           need deps/wasm/lib/libffi.a                             "libffi"
           need deps/wasm/lib/pil-mod/libpil__imaging.a            "PIL _imaging"
+          need build-pivy-wasm/interfaces/_coin.a                  "pivy _coin"
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
           if [ "$n" -ge 8 ]; then echo "  ok       matplotlib ($n archives)"
           else echo "::error::matplotlib has $n archives, expected at least 8"; fail=1; fi
@@ -378,5 +411,7 @@ jobs:
             deps/wasm/lib/libffi.a
             deps/src/cpython
             deps/src/numpy
+            deps/src/pivy
             build-numpy
+            build-pivy-wasm
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
