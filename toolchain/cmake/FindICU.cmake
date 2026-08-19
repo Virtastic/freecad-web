@@ -97,11 +97,21 @@ endif()
 
 set(ICU_INCLUDE_DIRS "${ICU_INCLUDE_DIR}")
 
+# Report the diagnosis as plain status lines rather than through FAIL_MESSAGE: the
+# missing-component list is a CMake list, and interpolating it into that argument makes its
+# semicolons split the string into extra arguments -- which surfaces as the thoroughly
+# unhelpful "Unknown keywords given to find_package_handle_standard_args()".
+if(_icu_missing)
+    message(STATUS "FindICU: emscripten sysroot ${_icu_sysroot}")
+    foreach(_m IN LISTS _icu_missing)
+        message(STATUS "FindICU: component not found: ${_m}")
+    endforeach()
+endif()
+
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(ICU
     REQUIRED_VARS ICU_INCLUDE_DIR ICU_LIBRARIES
     VERSION_VAR ICU_VERSION
-    FAIL_MESSAGE "emscripten ICU port not usable (sysroot: ${_icu_sysroot}; missing: ${_icu_missing})"
 )
 
 mark_as_advanced(ICU_INCLUDE_DIR ICU_DATA_LIBRARY)
