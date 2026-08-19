@@ -40,16 +40,30 @@ PIVYFLAGS="-pthread -fwasm-exceptions -O2 -include $DW/include/gl_compat.h"
 #
 # Assemble an include path that has both: Python.h from the source tree, pyconfig.h from
 # the WASM build (never the host one, which would misreport the word size).
-PYINC="$CPY/Include"
+#
+# It must be ONE directory. Passing a ";"-separated list makes FindPython splat it into its
+# own arguments and fail with:
+#
+#     Unknown keywords given to find_package_handle_standard_args(): ".../Include"
+#
+# So assemble a single include tree: CPython's Include/ copied whole, with the WASM
+# pyconfig.h dropped in beside it. Cheap, and it does not depend on another job having
+# staged headers somewhere.
+PYINC="$ROOT/build-pyinc-wasm"
 if [ -f "$PYMT/pyconfig.h" ]; then
-    PYINC="$PYMT;$CPY/Include"
+    rm -rf "$PYINC" && mkdir -p "$PYINC"
+    cp -r "$CPY/Include/." "$PYINC/"
+    cp "$PYMT/pyconfig.h" "$PYINC/pyconfig.h"
 elif [ -f "$DW/include/python3.13/pyconfig.h" ]; then
     PYINC="$DW/include/python3.13"
 else
     echo "!! no wasm pyconfig.h under $PYMT or $DW/include/python3.13 --"
-    echo "   FindPython will fail to read it. Check build-cpython-mt.sh ran."
+    echo "   FindPython cannot read it. Check build-cpython-mt.sh ran."
+    exit 1
 fi
-echo "Python include path: $PYINC"
+[ -f "$PYINC/Python.h" ] && [ -f "$PYINC/pyconfig.h" ] || {
+    echo "!! $PYINC lacks Python.h or pyconfig.h"; ls "$PYINC" | head; exit 1; }
+echo "Python include dir: $PYINC (Python.h + wasm pyconfig.h)"
 
 # pivy declares its SWIG target with TYPE MODULE, i.e. a dynamically loaded .so:
 #
