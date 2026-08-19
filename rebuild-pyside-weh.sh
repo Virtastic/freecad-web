@@ -43,6 +43,25 @@ done
 [ -n "$WASMPY_HOST" ] || { echo "ERROR: no CPython host build under $CPY/builddir/build" >&2; exit 1; }
 echo "cpython host: $WASMPY_HOST"
 
+# CMake's FindPython reads pyconfig.h out of Python_INCLUDE_DIR, and CPython does not ship
+# it in Include/ -- configure generates it into the build tree:
+#   file STRINGS ".../deps/src/cpython/Include/pyconfig.h" cannot be read
+# It must be ONE directory holding both, so assemble one. Fourth script to need this
+# (numpy, matplotlib, pivy, IfcOpenShell were the others); the wasm pyconfig.h, never the
+# host's, or every target unit fails on LONG_BIT instead.
+PYINC="$ROOT/build-pyinc-wasm"
+if [ ! -f "$PYINC/Python.h" ] || [ ! -f "$PYINC/pyconfig.h" ]; then
+    if [ -f "$CPY/builddir/emscripten-mt/pyconfig.h" ]; then
+        rm -rf "$PYINC" && mkdir -p "$PYINC"
+        cp -r "$CPY/Include/." "$PYINC/"
+        cp "$CPY/builddir/emscripten-mt/pyconfig.h" "$PYINC/pyconfig.h"
+    else
+        echo "ERROR: no wasm pyconfig.h under $CPY/builddir/emscripten-mt" >&2
+        exit 1
+    fi
+fi
+echo "python inc:   $PYINC"
+
 [ -d "$ROOT/deps/host/shiboken6" ] || {
     echo "ERROR: no host shiboken at $ROOT/deps/host/shiboken6." >&2
     echo "       The wasm shiboken needs the HOST generator, which is built against" >&2
@@ -60,7 +79,7 @@ cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja
   -DQt6_DIR="$QNEW/lib/cmake/Qt6" -DQT_HOST_PATH="$QT_HOST" \
   -DQFP_PYTHON_HOST_PATH="$HOSTPY3" -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
   -DShiboken_SKIP_GENERATOR_BUILD=ON \
-  -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$CPY/Include" \
+  -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
   -DCMAKE_INSTALL_PREFIX="$ROOT/deps/wasm/shiboken6" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
@@ -79,7 +98,7 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   -DQFP_PYTHON_HOST_PATH="$HOSTPY3" -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
   -DShiboken6_DIR="$ROOT/deps/wasm/shiboken6/lib/cmake/Shiboken6" \
   -DMODULES="Core;Gui;Widgets" -DFORCE_LIMITED_API=no \
-  -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$CPY/Include" \
+  -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
   -DCMAKE_INSTALL_PREFIX="$ROOT/emsdk/upstream/emscripten/cache/sysroot" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
