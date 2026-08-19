@@ -36,6 +36,26 @@ refuses to patch a `deps/src/freecad` reporting a different `PACKAGE_VERSION` --
 was written against, and a patch applied to the wrong source does not fail loudly. It places
 hunks in plausible but wrong scopes.
 
+### Rebasing: two checks worth running before you trust the result
+
+```bash
+python tools/check-patch-applies.py patches/freecad.patch deps/src/freecad
+python tools/check-hunk-placement.py OLD.patch NEW.patch     # both need `diff -p` context
+```
+
+The first compares every context line to the tree byte for byte, because GNU patch and the
+msys patch(1) disagree about line endings and the lenient one must not be the judge.
+
+The second is the more interesting one. `patch` will place a hunk in a *different function*
+that happens to look similar, report success, and leave a file that is brace-balanced,
+preprocessor-balanced and completely wrong. Three such survived every structural check here
+and were found only by compiling FreeCAD: the save-path block inside
+`getSuffixesDescription()` instead of `getSaveFileName()`; the wasm menu branch inside
+`getHistoryGroupName()`, where the `#else` swallowed the end of the enclosing class; and the
+composite blit at the end of `getDimensions()` instead of `renderScene()`. The check compares
+each added line's enclosing function between the old and new patch. Expect some noise from
+module-level Python and from upstream signature changes -- it reports, it does not judge.
+
 `apply.sh` also applies at **zero fuzz** (`-F0`). The 1.0.0 -> 1.1.3 rebase found four hunks
 that patch(1) had placed wrongly at the default fuzz of 2: an `if(EMSCRIPTEN)` block inside a
 `SET(...)` source list (CMake would not parse it), the same block nested inside `if (MSVC)` in
