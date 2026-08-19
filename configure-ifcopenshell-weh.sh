@@ -46,6 +46,24 @@ if [ ! -f "$PYINC/pyconfig.h" ] || [ ! -f "$PYINC/Python.h" ]; then
 fi
 echo "python include dir: $PYINC"
 
+# IfcGeom includes <Eigen/Dense>, so EIGEN_DIR must be the directory CONTAINING Eigen/,
+# not a generic include root. deps/wasm/include has no Eigen in it at all -- Eigen is
+# header-only and nothing stages it there -- so the previous value was wrong on every
+# machine. It simply was not reached until a compile got deep enough to say:
+#     taxonomy.h:13:10: fatal error: 'Eigen/Dense' file not found
+EIGEN_DIR=""
+for d in "$ROOT/deps/src/eigen" "$DW/include/eigen3" "$DW/include"; do
+    [ -f "$d/Eigen/Dense" ] && { EIGEN_DIR="$d"; break; }
+done
+[ -n "$EIGEN_DIR" ] || {
+    echo "!! no Eigen/Dense found. Looked in:"
+    echo "     $ROOT/deps/src/eigen"
+    echo "     $DW/include/eigen3"
+    echo "     $DW/include"
+    echo "   Fetch Eigen 3.4.0 the way build-freecad.yml does."
+    exit 1; }
+echo "eigen dir: $EIGEN_DIR"
+
 # IfcOpenShell's cmake root is src/cmake/../cmake (the top cmake/ dir points at src via WASM logic);
 # the actual CMakeLists is deps/src/ifcopenshell/cmake/CMakeLists.txt.
 emcmake cmake -S "$SRC/cmake" -B "$BUILD" -G Ninja \
@@ -69,7 +87,7 @@ emcmake cmake -S "$SRC/cmake" -B "$BUILD" -G Ninja \
   -DBOOST_ROOT="$DW" \
   -DBoost_INCLUDE_DIR="$DW/include" \
   -DBoost_USE_STATIC_LIBS=ON \
-  -DEIGEN_DIR="$DW/include" \
+  -DEIGEN_DIR="$EIGEN_DIR" \
   -DSWIG_EXECUTABLE="$(command -v swig)" \
   -DPYTHON_EXECUTABLE="$HOSTPY" \
   -DPYTHON_INCLUDE_DIR="$PYINC" \
