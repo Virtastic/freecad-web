@@ -127,6 +127,8 @@ jobs:
           need deps/wasm/lib/libpython3.13.a         "CPython (wasm/mt)"   build-deps.yml
           need deps/wasm/include/python3.13/Python.h "CPython headers"     build-deps.yml
           need qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6    "Qt 6.9.0 for wasm"   build-qt-wasm.yml
+          echo "  Qt modules present:"
+          ls -d qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6*/ 2>/dev/null | sed 's|.*/cmake/||; s|/$||' | xargs echo | fold -sw 100 | sed 's/^/    /'
           if [ "$fail" != 0 ]; then
             echo
             echo "deps cache key hit: ${{ steps.depcache.outputs.cache-matched-key || '(none)' }}"
@@ -230,6 +232,22 @@ jobs:
       # then runs `swig -python -external-runtime` to check its runtime version against
       # pivy's. It is a host tool, so it comes from PyPI rather than apt -- the runner has
       # no root, and this keeps the job self-contained.
+      # Eigen is header-only and the dependency stack never built it -- deps/wasm/include
+      # has no Eigen at all, which is why FindEigen3 reported "version .. found" with an
+      # empty version and then refused. Fetch the headers; there is nothing to compile.
+      - name: Eigen 3.4.0 headers
+        id: eigen
+        run: |
+          set -e
+          if [ ! -e deps/src/eigen/Eigen/Core ]; then
+            mkdir -p deps/src/eigen
+            curl -fsSL -o /tmp/eigen.tar.gz https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+            tar xzf /tmp/eigen.tar.gz -C deps/src/eigen --strip-components=1
+          fi
+          d="$PWD/deps/src/eigen"
+          echo "dir=$d" >> "$GITHUB_OUTPUT"
+          grep -hE '#define EIGEN_(WORLD|MAJOR|MINOR)_VERSION' "$d/Eigen/src/Core/util/Macros.h" | sed 's/^/  /'
+
       - name: SWIG (required by BUILD_SKETCHER)
         run: |
           set -e
@@ -335,7 +353,7 @@ jobs:
             -DFREECAD_QT_VERSION=6 \
             -DVTK_DIR="$DW/lib/cmake/vtk-9.3" \
             -DOpenCASCADE_DIR="$DW/lib/cmake/opencascade" \
-            -DEIGEN3_INCLUDE_DIR="$DW/include" \
+            -DEIGEN3_INCLUDE_DIR="${{ steps.eigen.outputs.dir }}" \
             -DCOIN3D_INCLUDE_DIRS="$DW/include" \
             -DCOIN3D_LIBRARIES="$DW/lib/libCoin.a" \
             -DCOIN3D_FOUND=ON \
