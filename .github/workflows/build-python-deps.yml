@@ -90,17 +90,28 @@ jobs:
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git
           cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
 
-      # meson and ninja drive every lane here. The build machine keeps them in .qtvenv,
-      # which the scripts source when present; CI has no such venv, so make one rather
-      # than fighting the system Python's PEP 668 refusal.
+      # The VPS system Python is 3.14 and ships no ensurepip, so `python3 -m venv` fails
+      # outright ("you need to install the python3.14-venv package"), and there is no root
+      # here to install it with. setup-python brings its own complete interpreter -- and at
+      # 3.13, which matches the CPython being cross-compiled rather than sitting a version
+      # ahead of it.
+      - name: Host Python 3.13
+        id: hostpy
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # meson and ninja drive every lane. The build machine keeps them in .qtvenv, which
+      # these scripts source when it exists; make the same thing here so they need no
+      # special-casing for CI.
       - name: Build tools (meson, ninja, pybind11, setuptools)
         run: |
           set -e
-          python3 -m venv .qtvenv
+          '${{ steps.hostpy.outputs.python-path }}' -m venv .qtvenv
           . .qtvenv/bin/activate
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet meson ninja pybind11 setuptools wheel
-          echo "  meson $(meson --version), ninja $(ninja --version)"
+          echo "  python $(python -V), meson $(meson --version), ninja $(ninja --version)"
 
       - name: Fetch sources
         run: |
