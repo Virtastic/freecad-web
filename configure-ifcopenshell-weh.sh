@@ -64,6 +64,11 @@ done
     exit 1; }
 echo "eigen dir: $EIGEN_DIR"
 
+# OpaqueCoordinate's forwarding constructor is unconstrained and hijacks copy-construction
+# from non-const lvalues, which is exactly what SWIG's generated wrapper does. Without this
+# the Python bindings do not compile at all. Idempotent; see the tool for the full account.
+python3 "$ROOT/tools/patch-ifcopenshell.py" "$SRC"
+
 # IfcOpenShell's cmake root is src/cmake/../cmake (the top cmake/ dir points at src via WASM logic);
 # the actual CMakeLists is deps/src/ifcopenshell/cmake/CMakeLists.txt.
 emcmake cmake -S "$SRC/cmake" -B "$BUILD" -G Ninja \

@@ -47,7 +47,7 @@ on:
       - 'build-cpython.sh'
       - 'build-cpython-mt.sh'
       - 'patches/apply.sh'
-      - 'tools/gen-crossfiles.sh'
+      - 'tools/**'
       # the cmake shims decide whether Coin, ICU and OpenGL are found at all
       - 'toolchain/**'
 
