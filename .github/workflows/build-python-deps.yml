@@ -421,7 +421,7 @@ jobs:
           set -e
           . emsdk/emsdk_env.sh
           . .qtvenv/bin/activate
-          if [ -s build-pivy-wasm/interfaces/_coin.a ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+          if [ -s deps/wasm/lib/pivy-mod/lib_coin.a ] && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  pivy: already built"; exit 0
           fi
           FCWEB_FORCE_STAGE_HEADERS=1 bash toolchain/stage-headers.sh
@@ -443,7 +443,6 @@ jobs:
           need deps/wasm/lib/pil-mod/libpil__imaging.a            "PIL _imaging"
           need deps/wasm/lib/pivy-mod/lib_coin.a                  "pivy _coin"
           need deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a   "IfcOpenShell wrapper"
-          need build-pivy-wasm/interfaces/_coin.a                  "pivy _coin"
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
           if [ "$n" -ge 8 ]; then echo "  ok       matplotlib ($n archives)"
           else echo "::error::matplotlib has $n archives, expected at least 8"; fail=1; fi
