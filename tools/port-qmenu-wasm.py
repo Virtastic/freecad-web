@@ -66,6 +66,20 @@ def port_function(fn):
     fn = re.sub(r'&%s\b' % re.escape(name), name, fn)
     fn = re.sub(r'\b%s\.' % re.escape(name), '%s->' % name, fn)
 
+    # MenuManager::setupContextMenu takes a QMenu&. The stack object was passed by name, so
+    # once it becomes a pointer it has to be dereferenced. Missing this compiles nowhere, and
+    # it is invisible in a diff that otherwise looks correct.
+    fn = re.sub(r'(setupContextMenu\s*\(\s*&view\s*,\s*)%s\b' % re.escape(name),
+                r'\1*%s' % name, fn)
+
+    # Any other bare use may want the same treatment -- or may legitimately want the pointer
+    # (a QMenu* parameter, a QObject parent, connect()). Report rather than guess.
+    bare = sorted({m2.group(0) for m2 in
+                   re.finditer(r'[(,]\s*%s\s*[,)]' % re.escape(name), fn)})
+    if bare:
+        print('    NOTE  %s passed bare: %s  -- check if the callee wants QMenu& (needs *)'
+              % (name, ' '.join(bare)))
+
     # exec(...) -> guarded popup(...)
     ex = re.search(r'^(\s*)%s->exec\s*\(([^;]*)\);\s*$' % re.escape(name), fn, re.M)
     if not ex:
