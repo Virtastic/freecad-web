@@ -221,6 +221,12 @@ jobs:
 
       # The publication gate, as a test. Each of these was a real finding, and each would
       # silently come back the next time someone regenerates a build file.
+      # PyYAML keeps the last of a duplicated key and says nothing; GitHub refuses the
+      # workflow, and the only symptom is a run that fails in under a second with no log
+      # and no jobs -- "log not found", which reads like an API fault, not a syntax error.
+      - name: Workflow files have no duplicate keys
+        run: python3 tools/check-workflows.py
+
       - name: No absolute home directories in tracked files
         run: |
           if git grep -nE '/Users/[a-z]+/|C:\\\\Users\\\\' -- $(git ls-files) ; then

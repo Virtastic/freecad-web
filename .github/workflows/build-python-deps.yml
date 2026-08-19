@@ -209,7 +209,6 @@ jobs:
       - name: numpy
         id: lane_numpy
         continue-on-error: true
-        id: numpy
         run: |
           set -e
           . emsdk/emsdk_env.sh
