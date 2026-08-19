@@ -149,7 +149,15 @@ jobs:
           # cython: numpy's meson.build declares it as a compiler, so meson refuses to configure
           # without it -- "Unknown compiler(s): [['cython'], ['cython3']]". cppy is
           # kiwisolver's build dependency.
-          python -m pip install --quiet meson ninja pybind11 setuptools wheel cppy cython
+          # swig is PINNED. Whatever happens to be on the runner was 4.4.1, and IfcOpenShell
+          # 0.8's SWIG interfaces do not compile against it:
+          #   error: calling a private constructor of class 'SwigValueWrapper<OpaqueCoordinate<3>>'
+          #   ConversionResult.h:205: static assertion failed: Incorrect number of arguments
+          # 4.2.1 is what IfcOpenShell 0.8 is developed against, and pivy 0.6.9 only requires
+          # >= 4.0, so one version serves both lanes. An unpinned host tool deciding whether
+          # the build works is the same defect class as the unversioned deps/ trees.
+          python -m pip install --quiet meson ninja pybind11 setuptools wheel cppy cython 'swig==4.2.1'
+          echo "  swig $(swig -version 2>/dev/null | grep -i 'SWIG Version' | head -1)"
           echo "  python $(python -V), meson $(meson --version), ninja $(ninja --version)"
 
       # libffi is the one lane that still uses autotools: configure-ctypes.sh clones
