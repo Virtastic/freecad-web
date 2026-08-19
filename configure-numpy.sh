@@ -112,6 +112,27 @@ if [ "$MESON" = "meson" ]; then
     echo "   (numpy-<version>.tar.gz from the release page); a git archive omits it."
 fi
 
+# _PYTHON_SYSCONFIGDATA_NAME fixes what sysconfig REPORTS, but not the include ORDER.
+# meson's python dependency contributes, in this order:
+#
+#     -I<cpython>/Include  -I<cpython>/builddir/build  -I<cpython>/builddir/emscripten-mt
+#
+# because a Python running from a build tree reports that tree as its projectbase. The
+# host build directory therefore precedes the wasm one, its 64-bit pyconfig.h is found
+# first, and every target translation unit dies on LONG_BIT -- with sysconfig cheerfully
+# reporting SIZEOF_LONG = 4 the whole time.
+#
+# Nothing in the numpy build compiles host code: the host interpreter is already built and
+# is only run. So move the host pyconfig.h aside for the duration and the wasm one wins by
+# being the only one on the path. Restored on exit, including on failure.
+HOST_PYCONFIG="$ROOT/deps/src/cpython/builddir/build/pyconfig.h"
+if [ -f "$HOST_PYCONFIG" ]; then
+    mv "$HOST_PYCONFIG" "$HOST_PYCONFIG.hostonly"
+    # shellcheck disable=SC2064
+    trap "mv -f '$HOST_PYCONFIG.hostonly' '$HOST_PYCONFIG' 2>/dev/null || true" EXIT
+    echo "host pyconfig.h moved aside so the wasm one is found first"
+fi
+
 rm -rf build-numpy
 $MESON setup build-numpy "$NPY" --cross-file emscripten-crossfile.meson \
     -Dbuildtype=release -Db_lto=false -Dallow-noblas=true
