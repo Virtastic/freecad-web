@@ -425,9 +425,14 @@ jobs:
           fi
           echo "  targets: $t"
           echo "  jobs:    $n"
-          cmake --build build-freecad-weh -j "$n" --target $t 2>&1 | tee /tmp/fclogs/compile.txt
+          # -k 0: keep going after a failure. The point of this job is the error LIST,
+          # and stopping at the first one turns 1,699 targets into one defect per CI
+          # round trip. ninja still reports every failure at the end.
+          cmake --build build-freecad-weh -j "$n" --target $t -- -k 0 2>&1 | tee /tmp/fclogs/compile.txt
           rc=${PIPESTATUS[0]}
           echo "compile_rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "  reached: $(grep -oE '\[[0-9]+/[0-9]+\]' /tmp/fclogs/compile.txt | tail -1)"
+          echo "  failed targets: $(grep -c '^FAILED:' /tmp/fclogs/compile.txt || true)"
           exit $rc
 
       # The point of the workflow is the error list, so surface it rather than burying it.

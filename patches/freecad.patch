@@ -627,6 +627,28 @@ diff -ruN a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
          //
          // Plug in a format target to receive the resultant
          // XML stream from the serializer.
+diff -ruN a/src/Base/Tools.cpp b/src/Base/Tools.cpp
+--- a/src/Base/Tools.cpp
++++ b/src/Base/Tools.cpp
+@@ -301,10 +301,18 @@
+ 
+ std::string Base::Tools::currentDateTimeString()
+ {
++#if defined(__EMSCRIPTEN__)
++    // Qt for WebAssembly is built without the timezone feature -- it needs a tz database
++    // the browser does not provide -- so QTimeZone has no systemTimeZone(). Nothing is
++    // lost by dropping the conversion: currentDateTime() already returns local time here,
++    // so toTimeZone(systemTimeZone()) would be a no-op even where it compiles.
++    return QDateTime::currentDateTime().toString(Qt::ISODate).toStdString();
++#else
+     return QDateTime::currentDateTime()
+         .toTimeZone(QTimeZone::systemTimeZone())
+         .toString(Qt::ISODate)
+         .toStdString();
++#endif
+ }
+ 
+ std::vector<std::string> Base::Tools::splitSubName(const std::string& subname)
 diff -ruN a/src/FCConfig.h b/src/FCConfig.h
 --- a/src/FCConfig.h
 +++ b/src/FCConfig.h
