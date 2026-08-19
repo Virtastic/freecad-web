@@ -24,6 +24,7 @@ typedef unsigned char  GLubyte;
 typedef float          GLfloat;
 typedef double         GLdouble;
 typedef short          GLshort;
+typedef unsigned short GLushort;
 
 /* The float entry points LEGACY_GL_EMULATION really does implement. This file is compiled
  * WITHOUT the gl_compat.h force-include (see fcwasm_draw_text_tris below), so naming them
@@ -69,7 +70,12 @@ void glColor3d(GLdouble r, GLdouble g, GLdouble b) { glColor3f((GLfloat)r,(GLflo
 void glColor4d(GLdouble r, GLdouble g, GLdouble b, GLdouble a) { glColor4f((GLfloat)r,(GLfloat)g,(GLfloat)b,(GLfloat)a); }
 void glNormal3d(GLdouble x, GLdouble y, GLdouble z) { glNormal3f((GLfloat)x,(GLfloat)y,(GLfloat)z); }
 void glTexCoord2d(GLdouble s, GLdouble t) { glTexCoord2f((GLfloat)s,(GLfloat)t); }
-void glLineStipple(GLint f, GLshort p) { (void)f;(void)p; }
+/* GLushort, not GLshort: the GL spec has always had the stipple pattern unsigned, and
+ * emscripten's own <GL/gl.h> declares it that way. This file is compiled without that
+ * header, so the mismatch stayed invisible until gl_compat.h -- generated from these
+ * signatures -- was included alongside it and the two declarations collided. Harmless
+ * in wasm (both pass as i32) but wrong, and it broke every unit that sees both. */
+void glLineStipple(GLint f, GLushort p) { (void)f;(void)p; }
 void glPolygonStipple(const GLubyte* m) { (void)m; }
 
 /* second batch */

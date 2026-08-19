@@ -815,7 +815,7 @@ void glColor3d(GLdouble r, GLdouble g, GLdouble b);
 void glColor4d(GLdouble r, GLdouble g, GLdouble b, GLdouble a);
 void glNormal3d(GLdouble x, GLdouble y, GLdouble z);
 void glTexCoord2d(GLdouble s, GLdouble t);
-void glLineStipple(GLint f, GLshort p);
+void glLineStipple(GLint f, GLushort p);
 void glPolygonStipple(const GLubyte* m);
 void glAccum(GLenum op, GLfloat v);
 void glColorMaterial(GLenum f, GLenum m);
