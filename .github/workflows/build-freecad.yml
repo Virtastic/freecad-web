@@ -283,6 +283,23 @@ jobs:
           set -e
           python3 tools/check-patch-applies.py patches/freecad.patch deps/src/freecad
 
+      # GitHub's source tarballs do not contain git submodules, and FreeCAD keeps four:
+      # GSL, OndselSolver, AddonManager and googletest. Only GSL matters for this module
+      # set -- the other three belong to BUILD_ASSEMBLY, BUILD_ADDONMGR and the test suite,
+      # all off. src/Gui/CMakeLists.txt line 10 SEND_ERRORs without it:
+      #   "The C++ Guidelines Support Library (GSL) submodule is not available."
+      # It is header-only, so fetching the release is enough.
+      - name: GSL (submodule absent from the source tarball)
+        run: |
+          set -e
+          gsl=deps/src/freecad/src/3rdParty/GSL
+          if [ ! -e "$gsl/include/gsl/gsl" ]; then
+            mkdir -p "$gsl"
+            curl -fsSL -o /tmp/gsl.tar.gz https://github.com/microsoft/GSL/archive/refs/tags/v4.0.0.tar.gz
+            tar xzf /tmp/gsl.tar.gz -C "$gsl" --strip-components=1
+          fi
+          ls "$gsl/include/gsl/" | sed 's/^/  /'
+
       # This is itself a test: apply.sh gates on patches/freecad.version and applies at zero
       # fuzz, so "the patch still applies to a pristine 1.1.3 tree" is proven on Linux here
       # and not only on the machine that generated it.
