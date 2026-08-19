@@ -127,6 +127,27 @@ jobs:
             exit 1
           fi
 
+      # A WRONG constant is worse than a missing one: it compiles and then misbehaves at
+      # run time. gl_compat.h carries 236 legacy GL enum values, and for every one that a
+      # real GL header also defines, this asserts the two agree -- at preprocess time, so
+      # a disagreement is an error and not a silent difference.
+      #
+      # Compiled WITHOUT the force-include, deliberately: the system headers have to be the
+      # authority here, and the generated unit embeds the table's values as literals.
+      - name: gl_compat.h constants match the system GL headers
+        run: |
+          set +e
+          . emsdk/emsdk_env.sh
+          python3 tools/gen-gl-compat.py --check > /tmp/gl_compat_check.c
+          n=$(grep -c '^#error' /tmp/gl_compat_check.c)
+          if emcc -fsyntax-only -pthread /tmp/gl_compat_check.c 2>/tmp/gce.txt; then
+            echo "  ok  $n constants checked against the system headers, no disagreement"
+            exit 0
+          fi
+          echo "::error::gl_compat.h disagrees with a system GL header on a constant value"
+          grep -E "error" /tmp/gce.txt | head -20
+          exit 1
+
       # gl_compat.h is force-included into every C and C++ unit, and Coin3D's sources
       # include <GL/gl.h> -- emscripten's own legacy header, which declares part of the
       # same API. If the two disagree on any signature, every Coin translation unit fails,
