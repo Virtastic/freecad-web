@@ -89,6 +89,70 @@ jobs:
           done
           exit $fail
 
+      # gl_compat.h is GENERATED from gl_legacy_stubs.c: one declaration per entry point
+      # the stub file defines. Regenerating here and diffing catches the case where someone
+      # adds, removes or re-signs a stub and hand-edits the header (or forgets to).
+      - name: gl_compat.h is in sync with gl_legacy_stubs.c
+        run: |
+          set -e
+          python3 tools/gen-gl-compat.py > /tmp/gl_compat.regen.h
+          # --strip-trailing-cr: the header is checked out CRLF on Windows (autocrlf),
+          # while the generator writes whatever the platform gives it. Only content
+          # drift should fail this.
+          if diff -u --strip-trailing-cr toolchain/include/gl_compat.h /tmp/gl_compat.regen.h; then
+            echo "  ok  gl_compat.h matches the generator"
+          else
+            echo "::error::toolchain/include/gl_compat.h is stale. Regenerate it:"
+            echo "::error::  python tools/gen-gl-compat.py > toolchain/include/gl_compat.h"
+            exit 1
+          fi
+
+      # The decisive check on the reconstruction. gl_compat.h DECLARES exactly what
+      # gl_legacy_stubs.c DEFINES, so compiling the stub file with the header force-included
+      # makes the compiler compare all 58 signatures for us: any disagreement in return type
+      # or parameter list is a hard error here rather than a mystery in the FreeCAD build.
+      #
+      # Note the real build compiles gl_legacy_stubs.c WITHOUT this header, deliberately --
+      # see the comment at the top of that file. This is a validation compile, not the build.
+      - name: gl_compat.h agrees with every stub signature
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          if emcc -fsyntax-only -pthread -include toolchain/include/gl_compat.h                   gl_legacy_stubs.c 2>/tmp/glc.txt; then
+            n=$(grep -cE '^[A-Za-z].*\);$' toolchain/include/gl_compat.h)
+            echo "  ok  $n declarations agree with their definitions"
+          else
+            echo "::error::gl_compat.h disagrees with gl_legacy_stubs.c"
+            sed 's/^/      /' /tmp/glc.txt
+            exit 1
+          fi
+
+      # qprocess_stub.h needs Qt headers, which this job does not have, so the most that can
+      # be checked here is that it is self-consistent C++ and that the design contract still
+      # holds: no Q_OBJECT (it cannot be moc'd), and therefore no signals for anything to
+      # connect to. patches/freecad.patch depends on both.
+      - name: qprocess_stub.h keeps its no-moc contract
+        run: |
+          set -e
+          h=toolchain/include/qprocess_stub.h
+          fail=0
+          if grep -qE '^\s*Q_OBJECT' "$h"; then
+            echo "::error::$h declares Q_OBJECT -- a force-included header cannot be moc'd"
+            fail=1
+          fi
+          if grep -qE '^\s*(signals|Q_SIGNALS)\s*:' "$h"; then
+            echo "::error::$h declares signals -- without moc they cannot be connected"
+            fail=1
+          fi
+          grep -q 'class QProcess: public QObject' "$h" || {
+            echo "::error::$h must still derive from QObject -- kill() is used as a slot"
+            fail=1
+          }
+          if [ "$fail" = 0 ]; then
+            echo "  ok  no Q_OBJECT, no signals, still a QObject"
+          fi
+          exit $fail
+
       # gl_legacy_stubs.c exists to DEFINE the symbols the emulation lacks. An entry point
       # with an empty body is not 'unimplemented' at run time -- it is a draw, a state change
       # or a query silently discarded. So the count is worth watching, and it should only ever
