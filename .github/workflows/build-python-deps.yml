@@ -128,6 +128,28 @@ jobs:
           python -m pip install --quiet meson ninja pybind11 setuptools wheel cppy cython
           echo "  python $(python -V), meson $(meson --version), ninja $(ninja --version)"
 
+      # libffi is the one lane that still uses autotools: configure-ctypes.sh clones
+      # hoodmane/libffi-emscripten and runs ./autogen.sh, which needs libtool's m4 macros.
+      # Without them autoreconf stops at
+      #   configure.ac:219: error: possibly undefined macro: LT_SYS_SYMBOL_USCORE
+      # Try to install them; if there is no sudo here, say so plainly -- that is a
+      # provisioning fact about the box, not a mystery about the build.
+      - name: autotools for libffi
+        continue-on-error: true
+        run: |
+          if command -v libtoolize >/dev/null 2>&1 && [ -e /usr/share/aclocal/libtool.m4 ]; then
+            echo "  libtool already present"
+            exit 0
+          fi
+          if sudo -n true 2>/dev/null; then
+            sudo -n apt-get update -qq && sudo -n apt-get install -y -qq libtool automake autoconf
+            echo "  installed libtool/automake/autoconf"
+          else
+            echo "::warning::no libtool and no passwordless sudo on this runner."
+            echo "  libffi (and therefore _ctypes) cannot be autoreconf'd here."
+            echo "  Provision once with: sudo apt-get install -y libtool automake autoconf"
+          fi
+
       - name: Fetch sources
         run: |
           set -e
@@ -185,6 +207,8 @@ jobs:
           key: fcweb-cpython-3.13.3-emsdk3.1.70-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
 
       - name: numpy
+        id: lane_numpy
+        continue-on-error: true
         id: numpy
         run: |
           set -e
@@ -200,6 +224,8 @@ jobs:
       # with -sERROR_ON_UNDEFINED_SYMBOLS=0, so an archive that never got built becomes a
       # trapping PyInit_* at run time instead of an error at build time.
       - name: kiwisolver (matplotlib layout dependency)
+        id: lane_kiwisolver
+        continue-on-error: true
         run: |
           set -e
           . emsdk/emsdk_env.sh
@@ -212,6 +238,8 @@ jobs:
           [ -s deps/wasm/lib/kiwi-mod/libkiwi__cext.a ]             || { echo "::error::kiwi-mod/libkiwi__cext.a not produced"; exit 1; }
 
       - name: _ctypes (+ libffi)
+        id: lane_ctypes
+        continue-on-error: true
         run: |
           set -e
           . emsdk/emsdk_env.sh
@@ -225,6 +253,8 @@ jobs:
           [ -s deps/wasm/lib/libffi.a ] || { echo "::error::libffi.a not produced"; exit 1; }
 
       - name: Pillow _imaging
+        id: lane_pillow
+        continue-on-error: true
         run: |
           set -e
           . emsdk/emsdk_env.sh
@@ -238,6 +268,8 @@ jobs:
 
       # Last, because it reaches into build-numpy for numpy's generated headers.
       - name: matplotlib
+        id: lane_matplotlib
+        continue-on-error: true
         run: |
           set -e
           . emsdk/emsdk_env.sh
@@ -252,6 +284,28 @@ jobs:
           # 8 extensions + freetype/qhull/agg/ttconv. The darwin-only glob this script used
           # to have produced an empty directory and a silently crippled link.
           [ "$n" -ge 8 ] || { echo "::error::mpl-mod has $n archives, expected at least 8"; exit 1; }
+
+      # One gate at the end, so a single broken lane does not hide the state of the
+      # others. Every archive named here is one MainGui.cpp registers in its inittab; a
+      # missing one is a trapping PyInit_* in the browser, not a link error.
+      - name: Gate -- every archive the link needs
+        run: |
+          fail=0
+          need() {
+            if [ -s "$1" ]; then echo "  ok       $2"; else echo "::error::missing $2 ($1)"; fail=1; fi
+          }
+          need deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a "numpy _multiarray_umath"
+          need deps/wasm/lib/numpy-mod/libnpy__pocketfft_umath.a  "numpy _pocketfft_umath"
+          need deps/wasm/lib/numpy-mod/libnpy__umath_linalg.a     "numpy _umath_linalg"
+          need deps/wasm/lib/numpy-mod/libnpy_lapack_lite.a       "numpy lapack_lite"
+          need deps/wasm/lib/kiwi-mod/libkiwi__cext.a             "kiwisolver _cext"
+          need deps/wasm/lib/ctypes-mod/lib_ctypes.a              "_ctypes"
+          need deps/wasm/lib/libffi.a                             "libffi"
+          need deps/wasm/lib/pil-mod/libpil__imaging.a            "PIL _imaging"
+          n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$n" -ge 8 ]; then echo "  ok       matplotlib ($n archives)"
+          else echo "::error::matplotlib has $n archives, expected at least 8"; fail=1; fi
+          exit $fail
 
       - name: What exists now
         if: always()
@@ -278,8 +332,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # always(), not success(). The gate is meant to REPORT what is missing, not to throw
+      # away the lanes that worked -- numpy alone is 19 archives and a long build, and
+      # discarding it because _ctypes needs libtool would make every iteration pay for it
+      # again. Partial progress is exactly what is worth caching here.
       - name: Save the Python extension libraries
-        if: success()
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: |
