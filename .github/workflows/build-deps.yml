@@ -428,6 +428,38 @@ jobs:
           echo "--- pthreads tail ---";    tail -25 /tmp/deplogs/cpython-mt.txt 2>/dev/null
           exit $rc
 
+      # Only deps/wasm is cached, so until now a consumer restoring this cache got
+      # libpython3.13.a and no Python.h -- which is why nothing downstream could configure
+      # FreeCAD from a cache hit alone. This runs whether or not the step above rebuilt,
+      # because on a cache hit that one exits early and would never reach it.
+      #
+      # Include/ comes from the source tarball; pyconfig.h is GENERATED into the build
+      # directory, so if no build directory survives, cpython has to be rebuilt to get it.
+      # That is bounded (one library, not the whole stack) and happens once.
+      - name: Stage the CPython headers into the cache
+        id: cpyheaders
+        continue-on-error: true
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          dest=deps/wasm/include/python3.13
+          if [ -s "$dest/Python.h" ] && [ -s "$dest/pyconfig.h" ]; then
+            echo "  cpython headers: already staged"
+            exit 0
+          fi
+          cfg=deps/src/cpython/builddir/emscripten-mt/pyconfig.h
+          if [ ! -s "$cfg" ]; then
+            echo "  no pyconfig.h -- rebuilding cpython to generate it"
+            bash build-cpython.sh    > /tmp/deplogs/cpython-hdr.txt   2>&1 || {
+              echo "::error::cpython host build failed"; tail -25 /tmp/deplogs/cpython-hdr.txt; exit 1; }
+            bash build-cpython-mt.sh > /tmp/deplogs/cpython-hdr-mt.txt 2>&1 || {
+              echo "::error::cpython wasm build failed"; tail -25 /tmp/deplogs/cpython-hdr-mt.txt; exit 1; }
+          fi
+          mkdir -p "$dest"
+          cp -r deps/src/cpython/Include/. "$dest/"
+          cp "$cfg" "$dest/"
+          echo "  staged $(find "$dest" -name '*.h' | wc -l) python headers into $dest"
+
       # FreeCAD's bundled SMESH reads MED through HDF5, so the FEM file formats need it.
       # Pure C and cmake-driven, which makes it one of the cheaper remaining dependencies.
       - name: HDF5 1.14.3
