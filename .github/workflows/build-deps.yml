@@ -105,19 +105,24 @@ jobs:
       # patch and then hitting a cache-skip guard pairs new source with libraries built before
       # it, silently. That is the same shape as every other defect in this repository, so it
       # is worth the rebuilds a script edit now costs.
+      # The hash names the patches that affect deps/wasm INDIVIDUALLY rather than globbing
+      # patches/**. It used to glob, which meant freecad.patch -- 4,373 lines of FreeCAD
+      # port that never touches this stack -- invalidated the whole dependency cache and
+      # rebuilt OCCT (77 minutes), VTK and the rest from scratch. Run 32224571660 did
+      # exactly that, purely because the port had been rebased onto 1.1.3.
       - name: Restore built dependencies
         id: depcache
         if: ${{ !inputs.rebuild }}
         uses: actions/cache/restore@v4
         with:
           path: deps/wasm
-          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
+          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
           # ONLY the source-hash prefix. A bare `fcweb-deps-<KEY>` fallback used to be listed
           # too, and run 32099719534 duly matched the stale fixed-key entry (41 MiB,
           # boost+xerces+VTK) instead of the 76 MiB one with OCCT in it -- so OCCT rebuilt for
           # 77 minutes again. That entry is deleted; no fallback re-creates the trap.
           restore-keys: |
-            fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-
+            fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-
 
       # A hosted runner ships cmake, ninja and gcc. The OVH box does not: run 32155916113
       # died eight times in a row with "[Errno 13] Permission denied: 'cmake'" and
@@ -577,7 +582,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: deps/wasm
-          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/**', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
+          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
 
       - name: Disk after
         if: always()
