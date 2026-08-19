@@ -63,16 +63,35 @@ if [ -z "$CAND" ]; then
     done
 fi
 
-if [ -z "$CAND" ]; then
-    for d in /usr/lib/llvm-18 /usr/lib/llvm-17 /usr/lib/llvm-16 /usr/lib/llvm-15 \
-             /usr/lib/llvm-14 /usr /usr/local "$ROOT/emsdk/upstream"; do
-        if ls "$d"/lib/libclang.so* "$d"/lib/libclang.dylib >/dev/null 2>&1; then
+# Glob rather than enumerate versions. An earlier hardcoded list stopped at llvm-18, so
+# when apt installed llvm-21 the search missed it and fell through to downloading a 700 MB
+# tarball that then would not link. Newest first.
+llvm_prefixes() {
+    # shellcheck disable=SC2012
+    ls -d /usr/lib/llvm-* /usr/local/lib/llvm-* 2>/dev/null \
+        | sed 's/.*llvm-//' | sort -rn | sed 's#^#/usr/lib/llvm-#'
+    echo /usr
+    echo /usr/local
+    echo "$ROOT/emsdk/upstream"
+}
+
+find_libclang() {
+    local d
+    while IFS= read -r d; do
+        [ -d "$d" ] || continue
+        if ls "$d"/lib/libclang.so* "$d"/lib/libclang.dylib \
+              "$d"/lib/x86_64-linux-gnu/libclang.so* >/dev/null 2>&1; then
             report "$d" "has libclang"
-            CAND="$d"; break
-        else
-            report "$d" "no libclang"
+            printf '%s\n' "$d"
+            return 0
         fi
-    done
+        report "$d" "no libclang"
+    done < <(llvm_prefixes)
+    return 1
+}
+
+if [ -z "$CAND" ]; then
+    CAND="$(find_libclang || true)"
 fi
 
 # Nothing installed. Try the distro first (cheapest, and correct if it works), then fall
@@ -83,10 +102,9 @@ if [ -z "$CAND" ] && [ "${FCWEB_NO_LIBCLANG_FETCH:-0}" != "1" ]; then
     if sudo -n true 2>/dev/null; then
         echo "  trying: sudo apt-get install libclang-dev llvm-dev"
         if sudo -n apt-get update -qq && sudo -n apt-get install -y -qq libclang-dev llvm-dev; then
-            for d in /usr/lib/llvm-18 /usr/lib/llvm-17 /usr/lib/llvm-16 /usr/lib/llvm-15 \
-                     /usr/lib/llvm-14 /usr; do
-                if ls "$d"/lib/libclang.so* >/dev/null 2>&1; then CAND="$d"; break; fi
-            done
+            # Same globbing search, not a second hardcoded list: apt installed llvm-21
+            # here, and a list stopping at llvm-18 missed it entirely.
+            CAND="$(find_libclang || true)"
             [ -n "$CAND" ] && report "apt" "installed -> $CAND"
         fi
     else
@@ -95,8 +113,11 @@ if [ -z "$CAND" ] && [ "${FCWEB_NO_LIBCLANG_FETCH:-0}" != "1" ]; then
 fi
 
 if [ -z "$CAND" ] && [ "${FCWEB_NO_LIBCLANG_FETCH:-0}" != "1" ]; then
-    LLVM_VER="${FCWEB_LLVM_VERSION:-18.1.8}"
-    LLVM_TARBALL="clang+llvm-${LLVM_VER}-x86_64-linux-gnu-ubuntu-18.04.tar.xz"
+    LLVM_VER="${FCWEB_LLVM_VERSION:-17.0.6}"
+    # ubuntu-22.04, NOT 18.04. The 18.04 build links against libtinfo.so.5 (ncurses 5),
+    # which nothing modern has, and fails with
+    #   undefined reference to setupterm@NCURSES_TINFO_5.0.19991023
+    LLVM_TARBALL="clang+llvm-${LLVM_VER}-x86_64-linux-gnu-ubuntu-22.04.tar.xz"
     LLVM_DIR="$ROOT/deps/host/llvm-${LLVM_VER}"
     if [ ! -e "$LLVM_DIR/lib/libclang.so" ] && ! ls "$LLVM_DIR"/lib/libclang.so* >/dev/null 2>&1; then
         echo "  fetching LLVM ${LLVM_VER} (for libclang only; ~700 MB, cached afterwards)"
