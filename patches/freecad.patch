@@ -234,7 +234,21 @@ diff -ruN a/src/3rdParty/salomesmesh/CMakeLists.txt b/src/3rdParty/salomesmesh/C
 diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc/aptrte.h
 --- a/src/3rdParty/salomesmesh/inc/aptrte.h
 +++ b/src/3rdParty/salomesmesh/inc/aptrte.h
-@@ -205,7 +205,9 @@
+@@ -193,7 +193,12 @@
+ // quamin : qualite minimale des triangles actuels
+ // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 
+-extern "C" {  void
++// int (not void): the f2c-translated trte.c declares and calls this as
++// `int tempscpu_(doublereal*)`. A void definition is a wasm function-signature
++// mismatch and wasm-ld routes the call to a trapping stub. The .cpp side was
++// already changed; this declaration was left behind, which the compiler catches
++// as "functions that differ only in their return type cannot be overloaded".
++extern "C" {  int
+ #ifdef WIN32
+ #ifdef F2C_BUILD
+ #else
+@@ -205,7 +210,9 @@
      
  //Retourne le temps CPU utilise en secondes
  
@@ -245,7 +259,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -218,7 +220,7 @@
+@@ -218,7 +225,7 @@
  //Retourne le temps CPU utilise en secondes depuis le precedent appel
  
  //initialiser le tableau mnsoar pour le hachage des aretes
@@ -254,7 +268,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -229,7 +231,7 @@
+@@ -229,7 +236,7 @@
  }
  
  //mettre a zero les nb entiers de tab
@@ -263,7 +277,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -239,7 +241,7 @@
+@@ -239,7 +246,7 @@
    azeroi( Z & nb, Z * tab );
  }
  
@@ -272,7 +286,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -416,7 +418,7 @@
+@@ -416,7 +423,7 @@
  // modification de la topologie des groupes de triangles
  // mise en delaunay de la triangulation
   
@@ -686,7 +700,7 @@ diff -ruN a/src/Gui/Application.cpp b/src/Gui/Application.cpp
 +            // QMessageBox::critical() runs a nested event loop (QDialog::exec),
 +            // which needs asyncify on wasm; the error text is already on the
 +            // console, so do not trap the whole app for the dialog.
-+            Base::Console().Error("Workbench failure: %s\n", (const char*)msg.toUtf8());
++            Base::Console().error("Workbench failure: %s\n", (const char*)msg.toUtf8());
 +#else
              QMessageBox::critical(
                  getMainWindow(),
@@ -1045,10 +1059,10 @@ diff -ruN a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
  
  using namespace Gui;
  
-@@ -216,6 +225,22 @@
- 
-     QRegularExpressionMatchIterator i = rx.globalMatch(*suffixDescriptions);
-     while (i.hasNext()) {
+@@ -285,6 +294,22 @@
+     // NOTE: We must not change the specified file name afterwards as we may return the name of an
+     // already existing file. Hence we must extract the first matching suffix from the filter list
+     // and append it before showing the file dialog.
 +#ifdef __EMSCRIPTEN__
 +    {
 +        // Return a real staging path under the IDBFS home; the caller writes the file there in
@@ -1065,9 +1079,9 @@ diff -ruN a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
 +        return outPath;
 +    }
 +#endif
-         QRegularExpressionMatch match = i.next();
-         QString suffix = match.captured(0);
-         suffixes << suffix;
+     QString file;
+     if (DialogOptions::dontUseNativeFileDialog()) {
+         QList<QUrl> urls = fetchSidebarUrls();
 @@ -376,6 +401,15 @@
          windowTitle = FileDialog::tr("Open");
      }
@@ -1662,10 +1676,10 @@ diff -ruN a/src/Gui/OverlayWidgets.cpp b/src/Gui/OverlayWidgets.cpp
 diff -ruN a/src/Gui/PrefWidgets.cpp b/src/Gui/PrefWidgets.cpp
 --- a/src/Gui/PrefWidgets.cpp
 +++ b/src/Gui/PrefWidgets.cpp
-@@ -691,6 +691,28 @@
-     QByteArray getHistoryGroupName(QByteArray name) const
-     {
-         return name + "_History";
+@@ -755,6 +755,28 @@
+     clearListAction->setDisabled(history.empty());
+ 
+     // call the menu
 +#if defined(__EMSCRIPTEN__)
 +    // exec() deadlocks the single-threaded Qt-for-WebAssembly event loop; hand the
 +    // menu's ownership to Qt (WA_DeleteOnClose) and dispatch on triggered() + popup().
@@ -1688,9 +1702,9 @@ diff -ruN a/src/Gui/PrefWidgets.cpp b/src/Gui/PrefWidgets.cpp
 +    rawMenu->setAttribute(Qt::WA_DeleteOnClose);
 +    rawMenu->popup(event->globalPos());
 +#else
-     }
+     QAction* userAction = menu->exec(event->globalPos());
  
-     void restoreHistory(ParameterGrp::handle hGrp)
+     // look what the user has chosen
 @@ -770,6 +792,7 @@
              lineEdit()->setText(prop.toString());
          }
@@ -1722,7 +1736,7 @@ diff -ruN a/src/Gui/PreferencePackManager.cpp b/src/Gui/PreferencePackManager.cp
 +        // the first paint. Log once and return false instead.
 +        static std::set<std::string> warned;
 +        if (warned.insert(preferencePackName).second) {
-+            Base::Console().Warning("Preference pack not found (ignored): %s\n",
++            Base::Console().warning("Preference pack not found (ignored): %s\n",
 +                                    preferencePackName.c_str());
 +        }
 +        return false;
@@ -2427,7 +2441,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
              action->setCheckable(true);
              action->setStatusTip(tr("Activates document %1").arg(label));
              action->setData(QByteArray((*it)->getName()));
-@@ -1278,14 +1283,14 @@
+@@ -1278,14 +1283,17 @@
          if (active) {
              active->setChecked(true);
          }
@@ -2436,16 +2450,21 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
      }
  
      // add a submenu to present the settings of the tree.
-     QMenu settingsMenu;
-     settingsMenu.setTitle(tr("Tree Settings"));
+-    QMenu settingsMenu;
+-    settingsMenu.setTitle(tr("Tree Settings"));
 -    contextMenu.addSeparator();
 -    contextMenu.addMenu(&settingsMenu);
++    // Heap-allocated and parented to the context menu: on wasm the menu is shown
++    // non-blocking, so a submenu on this frame stack would be gone by the time the
++    // user opened it. The two addAction calls below already use pointer syntax.
++    QMenu* settingsMenu = new QMenu(contextMenu);
++    settingsMenu->setTitle(tr("Tree Settings"));
 +    contextMenu->addSeparator();
-+    contextMenu->addMenu(&settingsMenu);
++    contextMenu->addMenu(settingsMenu);
  
      QAction* action = new QAction(tr("Show Description"), this);
      QAction* internalNameAction = new QAction(tr("Show Internal Name"), this);
-@@ -1300,7 +1305,7 @@
+@@ -1300,7 +1308,7 @@
      );
      action->setChecked(!hGrp->GetBool("HideColumn", true));
  
@@ -2454,7 +2473,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
      QObject::connect(action, &QAction::triggered, this, [this, action, internalNameAction, hGrp]() {
          bool show = action->isChecked();
          hGrp->SetBool("HideColumn", !show);
-@@ -1314,7 +1319,7 @@
+@@ -1314,7 +1322,7 @@
  
      internalNameAction->setChecked(!hGrp->GetBool("HideInternalNames", true));
  
@@ -2463,7 +2482,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
  
      QObject::connect(
          internalNameAction,
-@@ -1328,9 +1333,18 @@
+@@ -1328,9 +1336,18 @@
          }
      );
  
@@ -2484,7 +2503,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
          }
          catch (Base::Exception& e) {
              e.reportException();
-@@ -1342,6 +1356,12 @@
+@@ -1342,6 +1359,12 @@
              FC_ERR("Unknown exception");
          }
          contextItem = nullptr;
@@ -2538,7 +2557,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    if (!enable3d) {
 +        static bool warned = false;
 +        if (!warned) {
-+            Base::Console().Warning("3D viewport rendering disabled in wasm (enable: ?render3d=1)\n");
++            Base::Console().warning("3D viewport rendering disabled in wasm (enable: ?render3d=1)\n");
 +            warned = true;
 +        }
 +        return;
@@ -2549,7 +2568,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // (INVALID_ENUM getParameter storms) and the frame renders into the wrong
 +    // context ("no valid shader program", foreign attrib locations). Make the 3D
 +    // widget's context current before doing anything.
-+    if (auto* fcGlw = qobject_cast<QtGLWidget*>(this->getGLWidget())) {
++    if (auto* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
 +        fcGlw->makeCurrent();
 +    }
 +    // Signal the page (before ANY Coin draw this frame) that the C++ native
@@ -2652,11 +2671,10 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2751,6 +2854,52 @@
-     else {
-         fHeight *= aspectRatio;
-     }
-+
+@@ -2679,6 +2782,51 @@
+     glClearColor(0, 0, 0, 1);
+     glClear(GL_COLOR_BUFFER_BIT);
+     glPopAttrib();
 +#if defined(__EMSCRIPTEN__)
 +    // NATIVE COMPOSITE (replaces the JS overlay/readPixels+CSS path):
 +    // Coin (+ nav cube, axis cross, foreground) has now rendered completely into
@@ -2668,7 +2686,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // mid-render FBO rebind, so the widget FBO receives the full, clean frame.
 +    if (fcTex != 0) {
 +        GLint widgetFbo = 0;
-+        if (auto* fcGlw = qobject_cast<QtGLWidget*>(this->getGLWidget())) {
++        if (auto* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
 +            widgetFbo = (GLint)fcGlw->defaultFramebufferObject();
 +        }
 +        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)widgetFbo);
@@ -2702,6 +2720,14 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +        EM_ASM({ window.__fcNativeComposite = 1; });
 +    }
 +#endif
+ }
+ 
+ void View3DInventorViewer::setSeekMode(bool on)
+@@ -2751,6 +2899,7 @@
+     else {
+         fHeight *= aspectRatio;
+     }
++
  }
  
  void View3DInventorViewer::printDimension() const
