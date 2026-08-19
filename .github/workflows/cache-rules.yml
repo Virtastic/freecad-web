@@ -2,6 +2,18 @@ name: cache rules (freecad.virtastic.app)
 
 # Apply the edge cache rule that infra/terraform/main.tf declares but production does not have.
 #
+# APPLIED 2026-08-18, run 32209996790. The phase held exactly one rule beforehand --
+# morrowind_assets -- and now holds two; the merge preserved it, which is the thing this
+# workflow exists to get right. Verified at the edge afterwards:
+#
+#   FreeCAD.data  HIT      FreeCAD.wasm  HIT      FreeCAD.js  HIT
+#
+# (wasm went MISS -> HIT -> HIT on consecutive requests, which is a populating cache rather
+# than the flat DYNAMIC it returned for months.)
+#
+# Re-running this is safe and idempotent; it is how the rule gets restored if the zone is
+# ever rebuilt.
+#
 # THE MEASUREMENT THAT PROMPTED THIS (2026-08-18, against live production):
 #
 #   FreeCAD.wasm   cf-cache-status: DYNAMIC   (152,506,718 B raw; 53,509,184 B brotli)
