@@ -22,6 +22,8 @@
 > | 16 | **Compiled Python addons** | **not possible by construction, and that is worth stating.** This is one static monolith: every C extension is registered in `MainGui.cpp`'s inittab at link time. There is no `pip`, no dynamic loading. Pure-Python addons can be dropped into the virtual filesystem and will work; an addon shipping a compiled extension cannot be installed without relinking the whole binary. |
 > | 17 | **Web workbench** | `BUILD_WEB=ON` compiles, but Qt is built `-skip qtwebengine`, so the embedded browser view has no engine behind it. Needs checking against what the workbench actually does at runtime before it can be called working. |
 
+> | 18 | **PySide/shiboken lane** | **the last archive lane, and the one written most tightly to one machine.** `rebuild-pyside-weh.sh` passes `-DQT_HOST_PATH=$ROOT/qt/6.9.0/macos` (macOS-only), `-DPython_EXECUTABLE=.../build/python.exe` (macOS-only name), `-DQFP_PYTHON_HOST_PATH=/usr/bin/python3` (hardcoded), and needs `deps/host/shiboken6` -- a HOST shiboken built against libclang, which nothing in CI produces. Every one of these is the same defect the numpy/pivy/IfcOpenShell lanes each hit; they are just all in one script. Needed for `deps/wasm/pyside-pkg`, which the link preloads. |
+>
 > **Status 2026-08-16** (the original table; items 1-8 below are unchanged unless noted).
 >
 > | # | item | state |

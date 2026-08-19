@@ -89,9 +89,10 @@ Nine archives, all verified by name rather than by exit status:
 | kiwisolver 1.4.7 | `libkiwi__cext.a` |
 | Pillow 10.4.0 | `libpil__imaging.a` |
 | libffi + `_ctypes` | `libffi.a`, `lib_ctypes.a` |
+| pivy 0.6.9 | `lib_coin.a` -- `PyInit__coin` |
+| IfcOpenShell 0.8.0 @481676e5 | `lib_ifcopenshell_wrapper.a` + IfcParse/IfcGeom/Serializers, 358/358 targets |
 
-Those versions are now **pinned in `build-python-deps.yml`**, which is five fewer entries
-on the list of dependencies whose version is "whatever is on the build machine's disk".
+Those versions are now **pinned in `build-python-deps.yml`** -- along with pivy, IfcOpenShell (to a commit, since 0.8 has no tag), its `svgfill` submodule, Eigen 3.4.0 and SWIG 4.2.1. Nine fewer entries on the list of dependencies whose version is "whatever is on the build machine's disk", and SWIG in particular was silently deciding whether the build worked.
 
 Getting there took eight defects, none of which a passing script would have revealed:
 
