@@ -33,7 +33,8 @@ on:
       - 'patches/freecad.patch'
       - 'patches/freecad.version'
       - 'patches/apply.sh'
-      - 'toolchain/include/**'
+      - 'toolchain/**'
+      - 'tools/check-patch-applies.py'
   workflow_dispatch:
     inputs:
       runner:
