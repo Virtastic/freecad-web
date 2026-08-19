@@ -357,13 +357,20 @@ jobs:
             -DCMAKE_DISABLE_FIND_PACKAGE_Shiboken6=ON -DCMAKE_DISABLE_FIND_PACKAGE_PySide6=ON \
             -DBUILD_PART=ON -DBUILD_PART_DESIGN=ON -DBUILD_SKETCHER=ON \
             -DBUILD_MESH=ON -DBUILD_MESH_PART=ON -DBUILD_SMESH=ON \
-            -DBUILD_MATERIAL=ON -DBUILD_POINTS=ON -DBUILD_SPREADSHEET=OFF  `# Spreadsheet requires Draft, Draft requires pivy` \
+            -DBUILD_MATERIAL=ON -DBUILD_POINTS=ON \
             -DBUILD_IMPORT=ON -DBUILD_MEASURE=ON \
-            -DBUILD_ADDONMGR=OFF -DBUILD_BIM=OFF -DBUILD_DRAFT=OFF -DBUILD_FEM=OFF \
-            -DBUILD_CAM=OFF -DBUILD_ASSEMBLY=OFF -DBUILD_TECHDRAW=OFF -DBUILD_HELP=OFF \
-            -DBUILD_IDF=OFF -DBUILD_INSPECTION=OFF -DBUILD_OPENSCAD=OFF -DBUILD_PLOT=OFF \
-            -DBUILD_REVERSEENGINEERING=OFF -DBUILD_ROBOT=OFF -DBUILD_SHOW=OFF \
-            -DBUILD_START=OFF -DBUILD_SURFACE=OFF -DBUILD_TUX=OFF -DBUILD_WEB=OFF \
+            `# Everything the dependency cache can satisfy is now ON. None of these` \
+            `# modules pulls an exotic find_package of its own; what kept them off was` \
+            `# caution, not a missing library.` \
+            -DBUILD_BIM=ON -DBUILD_DRAFT=ON -DBUILD_FEM=ON -DBUILD_SPREADSHEET=ON \
+            -DBUILD_CAM=ON -DBUILD_TECHDRAW=ON -DBUILD_HELP=ON \
+            -DBUILD_IDF=ON -DBUILD_INSPECTION=ON -DBUILD_OPENSCAD=ON -DBUILD_PLOT=ON \
+            -DBUILD_REVERSEENGINEERING=ON -DBUILD_ROBOT=ON -DBUILD_SHOW=ON \
+            -DBUILD_START=ON -DBUILD_SURFACE=ON -DBUILD_TUX=ON -DBUILD_WEB=ON \
+            `# The two the source tarball genuinely cannot build: Assembly needs the` \
+            `# OndselSolver submodule and AddonManager is itself a submodule, and` \
+            `# GitHub tarballs carry no submodules.` \
+            -DBUILD_ASSEMBLY=OFF -DBUILD_ADDONMGR=OFF \
             -DBUILD_TEST=OFF -DENABLE_DEVELOPER_TESTS=OFF \
             -DBUILD_FLAT_MESH=OFF \
             -DFREECAD_USE_FREETYPE=OFF \
@@ -421,7 +428,7 @@ jobs:
             # FreeCADGui is the one that matters most: it force-includes BOTH headers and is
             # where the bulk of the port lives. MeshGui and MeshPartGui are the other two
             # qprocess_stub.h consumers. PartGui carries the GL-heavy files.
-            t="FreeCADApp FreeCADGui Part PartGui Sketcher SketcherGui PartDesign PartDesignGui Mesh MeshGui MeshPart MeshPartGui"
+            t="FreeCADApp FreeCADGui Part PartGui Sketcher SketcherGui PartDesign PartDesignGui Mesh MeshGui MeshPart MeshPartGui Materials MatGui Points PointsGui Import ImportGui Measure MeasureGui Fem FemGui DraftUtils Spreadsheet SpreadsheetGui Start StartGui Surface SurfaceGui Inspection InspectionGui Robot RobotGui ReverseEngineering ReverseEngineeringGui TechDraw TechDrawGui Path PathGui PathSimulator CAMSimulator"
           fi
           echo "  targets: $t"
           echo "  jobs:    $n"
