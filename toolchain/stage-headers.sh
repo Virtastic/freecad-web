@@ -21,9 +21,19 @@
 # header is expected to matter. Objects built against an empty one are still not
 # production-equivalent and must not be linked into a release.
 #
-# coin_intrusive.h is now reconstructed and tracked (toolchain/include/). gl_compat.h and
-# qprocess_stub.h are NOT -- see the message below. This script makes that gap a named,
-# immediate failure instead of a mystery 40 minutes into a build.
+# ALL THREE are now reconstructed and tracked in toolchain/include/, so a clean checkout
+# no longer hits the gap this script was written to name:
+#
+#   coin_intrusive.h  signatures dictated by the definitions in patches/freecad.patch
+#   gl_compat.h       GENERATED from gl_legacy_stubs.c by tools/gen-gl-compat.py -- the
+#                     stub file defines exactly the entry points emscripten omits, so the
+#                     declarations follow from it mechanically (58 of them). Regenerate
+#                     rather than hand-editing.
+#   qprocess_stub.h   an inert QProcess, no Q_OBJECT (see the header for why), covering
+#                     every member the tree calls
+#
+# They are still RECONSTRUCTIONS, not the build machine's originals, and have not yet been
+# through a FreeCAD compile. The check below stays as the safety net.
 #
 # THE BUILD MACHINE'S COPY ALWAYS WINS. If a header already exists in $DW/include this
 # script leaves it alone and reports a diff against the tracked one. The tracked copies are

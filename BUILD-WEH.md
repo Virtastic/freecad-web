@@ -82,11 +82,34 @@ read it as "the blocker is narrower than it looked, and sits at the FreeCAD link
 That is the CalculiX defect again: uncaptured build-machine state, invisible because the path
 is gitignored. Treat it the same way.
 
-- `coin_intrusive.h` is now reconstructed and tracked in `toolchain/include/`. Its signatures
-  are dictated by the definitions in `patches/freecad.patch`, so any correct version is
-  equivalent to the original.
-- **`gl_compat.h` and `qprocess_stub.h` are still uncaptured.** On the build machine, run
-  this once and commit:
+**All three are now reconstructed and tracked in `toolchain/include/`**, so a clean checkout
+no longer stops here.
+
+- `coin_intrusive.h` — signatures dictated by the definitions in `patches/freecad.patch`,
+  so any correct version is equivalent to the original.
+- `gl_compat.h` — **generated**, not hand-written: `tools/gen-gl-compat.py` reads
+  `gl_legacy_stubs.c` and emits a declaration for each of the 58 entry points it defines.
+  That file exists precisely because emscripten's `LEGACY_GL_EMULATION` does not provide
+  them, so it *is* the specification. Keeping the two mechanically linked means a stub
+  without a declaration is a compile error and a declaration without a stub is a link
+  error, instead of the two drifting. Regenerate rather than editing:
+
+  ```bash
+  python tools/gen-gl-compat.py > toolchain/include/gl_compat.h
+  ```
+
+  The one symbol it omits is `fcwasm_draw_text_tris`, which `patches/coin3d.patch`
+  declares at its own call site.
+- `qprocess_stub.h` — an inert `QProcess`. Derived from every member the tree actually
+  calls, cross-checked against all five consumers. It has **no `Q_OBJECT` and no signals**,
+  because a header force-included into hundreds of translation units cannot be run through
+  moc — which is why `patches/freecad.patch` `#if`s out every `connect()` to a `QProcess`
+  signal. It does derive from `QObject`, since `kill()` is used as a slot. Verified: every
+  signal `connect` and the one `QTextStream(proc)` sit inside a wasm guard.
+
+These are RECONSTRUCTIONS and have **not yet been through a FreeCAD compile** — that is the
+next thing to prove. If the build machine's originals are still available they remain the
+reference; capture them and let `stage-headers.sh` diff the two:
 
   ```bash
   bash tools/capture-build-machine-headers.sh
