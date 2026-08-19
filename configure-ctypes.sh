@@ -19,6 +19,16 @@ cd deps/src/libffi
 #   configure.ac:219: error: possibly undefined macro: LT_SYS_SYMBOL_USCORE
 # which reads like a missing package when it is really a missing step.
 if [ ! -f configure ]; then
+  # ACLOCAL_PATH so aclocal can see libtool.m4 wherever the distro put it. libtoolize
+  # --install copies the macros into m4/, but autogen.sh re-runs autoreconf which
+  # invokes plain `libtoolize --copy` and aclocal -I m4; if the copy did not land,
+  # LT_SYS_SYMBOL_USCORE is undefined again. Giving aclocal the system macro directory
+  # makes it work either way.
+  for d in /usr/share/aclocal /usr/local/share/aclocal; do
+    [ -d "$d" ] && ACLOCAL_PATH="${ACLOCAL_PATH:+$ACLOCAL_PATH:}$d"
+  done
+  export ACLOCAL_PATH
+  echo "ACLOCAL_PATH=$ACLOCAL_PATH"
   if command -v libtoolize >/dev/null 2>&1; then
     libtoolize --copy --install --force >/dev/null 2>&1 || libtoolize --copy --force || true
   fi

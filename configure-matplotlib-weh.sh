@@ -60,6 +60,27 @@ for h in _numpyconfig.h __multiarray_api.h __ufunc_api.h; do
   cp "$(find build-numpy -name "$h" | head -1)" "$NPINC/$h"
 done
 
+# 1b. Same host/target header collision numpy hits: meson's python dependency puts
+# <cpython>/builddir/build (the HOST build tree, 64-bit pyconfig.h) on the include path
+# ahead of builddir/emscripten-mt, so every target unit dies on
+#   pyport.h:399: "LONG_BIT definition appears wrong for platform"
+# Point sysconfig at the cross build, and move the host pyconfig.h aside for the duration
+# -- nothing here compiles host code, the host interpreter is only run. Restored on exit.
+MT="$ROOT/deps/src/cpython/builddir/emscripten-mt"
+SYSCFG="$(find "$MT" -maxdepth 4 -name '_sysconfigdata_*.py' 2>/dev/null | head -1)"
+if [ -n "$SYSCFG" ]; then
+  export _PYTHON_SYSCONFIGDATA_NAME="$(basename "$SYSCFG" .py)"
+  export PYTHONPATH="$(dirname "$SYSCFG")${PYTHONPATH:+:$PYTHONPATH}"
+  echo "cross sysconfig: $_PYTHON_SYSCONFIGDATA_NAME"
+fi
+HOST_PYCONFIG="$ROOT/deps/src/cpython/builddir/build/pyconfig.h"
+if [ -f "$HOST_PYCONFIG" ]; then
+  mv "$HOST_PYCONFIG" "$HOST_PYCONFIG.hostonly"
+  # shellcheck disable=SC2064
+  trap "mv -f '$HOST_PYCONFIG.hostonly' '$HOST_PYCONFIG' 2>/dev/null || true" EXIT
+  echo "host pyconfig.h moved aside so the wasm one is found first"
+fi
+
 # 2. configure (crossfile provides numpy-include-dir + devnull)
 bash tools/gen-crossfiles.sh
 rm -rf build-matplotlib
