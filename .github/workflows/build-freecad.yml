@@ -226,6 +226,20 @@ jobs:
           echo "dir=$d" >> "$GITHUB_OUTPUT"
           echo "  pybind11_DIR=$d"
 
+      # SetupSwig.cmake makes SWIG a hard requirement whenever BUILD_SKETCHER is on, and
+      # then runs `swig -python -external-runtime` to check its runtime version against
+      # pivy's. It is a host tool, so it comes from PyPI rather than apt -- the runner has
+      # no root, and this keeps the job self-contained.
+      - name: SWIG (required by BUILD_SKETCHER)
+        run: |
+          set -e
+          if command -v swig >/dev/null 2>&1; then
+            echo "  system swig: $(swig -version | grep -i version | head -1)"
+          else
+            python3 -m pip install --quiet --break-system-packages swig 2>/dev/null \n              || python3 -m pip install --quiet swig
+          fi
+          swig -version | grep -i version | head -1 | sed 's/^/  /'
+
       - name: Fetch FreeCAD ${{ steps.ver.outputs.tag }}
         run: |
           set -e
