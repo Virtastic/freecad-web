@@ -12,7 +12,9 @@ symptom was a run with a zero-second duration.
 """
 import io
 import sys
+import fnmatch
 import glob
+import re
 import yaml
 
 
@@ -33,12 +35,48 @@ def _mapping(loader, node, deep=False):
 
 NoDuplicates.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
 
+def scripts_vs_paths(path, doc, text):
+    """A workflow that runs a script but does not watch it will not rerun when it changes.
+
+    This has cost two silent no-op iterations: a fix was committed and pushed, no run was
+    triggered, and the last result shown was the failure the fix addressed -- which reads
+    exactly like the fix not working. Cheap to check, so check it.
+    """
+    on = doc.get('on') or doc.get(True) or {}
+    watched = set()
+    for evt in ('push', 'pull_request'):
+        spec = on.get(evt) if isinstance(on, dict) else None
+        if isinstance(spec, dict):
+            watched.update(spec.get('paths') or [])
+    if not watched:
+        return []          # watches everything, or is dispatch-only
+
+    invoked = set(re.findall(r'(?:^|\s)(?:bash|sh)\s+([A-Za-z0-9_./-]+\.sh)', text))
+    missing = []
+    for s in sorted(invoked):
+        if any(fnmatch.fnmatch(s, pat.strip("'\"")) for pat in watched):
+            continue
+        missing.append(s)
+    return missing
+
+
 bad = 0
 for path in sorted(glob.glob('.github/workflows/*.yml')):
+    text = io.open(path, encoding='utf-8').read()
     try:
-        yaml.load(io.open(path, encoding='utf-8'), NoDuplicates)
-        print('  ok    %s' % path)
+        doc = yaml.load(io.StringIO(text), NoDuplicates)
     except Exception as exc:
         print('  FAIL  %s: %s' % (path, str(exc).replace('\n', ' ')))
         bad += 1
+        continue
+    missing = scripts_vs_paths(path, doc, text) if isinstance(doc, dict) else []
+    if missing:
+        print('  FAIL  %s runs these but does not watch them:' % path)
+        for m in missing:
+            print('          %s' % m)
+        print('        Add them to on.push.paths, or the workflow will not rerun when '
+              'they change.')
+        bad += 1
+    else:
+        print('  ok    %s' % path)
 sys.exit(1 if bad else 0)

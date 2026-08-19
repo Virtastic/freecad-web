@@ -43,6 +43,10 @@ on:
       - 'emscripten-crossfile.meson.in'
       - 'matplotlib-crossfile.meson.in'
       - 'configure-pivy-weh.sh'
+      - 'configure-ifcopenshell-weh.sh'
+      - 'build-cpython.sh'
+      - 'build-cpython-mt.sh'
+      - 'patches/apply.sh'
       - 'tools/gen-crossfiles.sh'
       # the cmake shims decide whether Coin, ICU and OpenGL are found at all
       - 'toolchain/**'
