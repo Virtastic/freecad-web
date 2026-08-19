@@ -110,7 +110,7 @@ jobs:
           '${{ steps.hostpy.outputs.python-path }}' -m venv .qtvenv
           . .qtvenv/bin/activate
           python -m pip install --quiet --upgrade pip
-          python -m pip install --quiet meson ninja pybind11 setuptools wheel
+          python -m pip install --quiet meson ninja pybind11 setuptools wheel cppy
           echo "  python $(python -V), meson $(meson --version), ninja $(ninja --version)"
 
       - name: Fetch sources
@@ -126,6 +126,9 @@ jobs:
           }
           get cpython https://github.com/python/cpython/archive/refs/tags/v3.13.3.tar.gz 1 configure
           get numpy   https://github.com/numpy/numpy/releases/download/v2.1.3/numpy-2.1.3.tar.gz 1 meson.build
+          get kiwisolver https://github.com/nucleic/kiwi/archive/refs/tags/1.4.7.tar.gz 1 py/src/kiwisolver.cpp
+          get Pillow     https://github.com/python-pillow/Pillow/archive/refs/tags/10.4.0.tar.gz 1 src/_imaging.c
+          get matplotlib https://github.com/matplotlib/matplotlib/archive/refs/tags/v3.9.2.tar.gz 1 meson.build
 
       - name: Apply the source patches
         run: |
@@ -171,6 +174,63 @@ jobs:
           fi
           bash configure-numpy.sh
 
+      # Each lane checks its own product rather than its own exit status. The link runs
+      # with -sERROR_ON_UNDEFINED_SYMBOLS=0, so an archive that never got built becomes a
+      # trapping PyInit_* at run time instead of an error at build time.
+      - name: kiwisolver (matplotlib layout dependency)
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          . .qtvenv/bin/activate
+          if [ ! -s deps/wasm/lib/kiwi-mod/libkiwi__cext.a ] || [ "${{ inputs.rebuild }}" = "true" ]; then
+            bash configure-kiwisolver-weh.sh
+          else
+            echo "  kiwisolver: already built"
+          fi
+          [ -s deps/wasm/lib/kiwi-mod/libkiwi__cext.a ]             || { echo "::error::kiwi-mod/libkiwi__cext.a not produced"; exit 1; }
+
+      - name: _ctypes (+ libffi)
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          . .qtvenv/bin/activate
+          if [ ! -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ] || [ "${{ inputs.rebuild }}" = "true" ]; then
+            bash configure-ctypes.sh
+          else
+            echo "  _ctypes: already built"
+          fi
+          [ -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ]             || { echo "::error::ctypes-mod/lib_ctypes.a not produced"; exit 1; }
+          [ -s deps/wasm/lib/libffi.a ] || { echo "::error::libffi.a not produced"; exit 1; }
+
+      - name: Pillow _imaging
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          . .qtvenv/bin/activate
+          if [ ! -s deps/wasm/lib/pil-mod/libpil__imaging.a ] || [ "${{ inputs.rebuild }}" = "true" ]; then
+            bash configure-pillow.sh
+          else
+            echo "  Pillow: already built"
+          fi
+          [ -s deps/wasm/lib/pil-mod/libpil__imaging.a ]             || { echo "::error::pil-mod/libpil__imaging.a not produced"; exit 1; }
+
+      # Last, because it reaches into build-numpy for numpy's generated headers.
+      - name: matplotlib
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          . .qtvenv/bin/activate
+          if [ ! -s deps/wasm/lib/mpl-mod/libmpl__backend_agg.a ] || [ "${{ inputs.rebuild }}" = "true" ]; then
+            bash configure-matplotlib-weh.sh
+          else
+            echo "  matplotlib: already built"
+          fi
+          n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
+          echo "  mpl-mod: $n archives"
+          # 8 extensions + freetype/qhull/agg/ttconv. The darwin-only glob this script used
+          # to have produced an empty directory and a silently crippled link.
+          [ "$n" -ge 8 ] || { echo "::error::mpl-mod has $n archives, expected at least 8"; exit 1; }
+
       - name: What exists now
         if: always()
         run: |
@@ -178,7 +238,13 @@ jobs:
             n=$(ls -1 deps/wasm/lib/$d/*.a 2>/dev/null | wc -l | tr -d ' ')
             echo "  deps/wasm/lib/$d: $n archive(s)"
           done
-          ls -la deps/wasm/lib/numpy-mod/ 2>/dev/null | head -20 || true
+          echo '--- PyInit_* symbols actually present ---'
+          . emsdk/emsdk_env.sh 2>/dev/null || true
+          for a in deps/wasm/lib/*/*.a; do
+            [ -e "$a" ] || continue
+            syms=$(emsdk/upstream/bin/llvm-nm "$a" 2>/dev/null | grep -c ' T PyInit' || true)
+            [ "$syms" != 0 ] && echo "  ${a#deps/wasm/lib/}: $syms PyInit"
+          done | sort
 
       - name: Upload build logs
         if: always()
