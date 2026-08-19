@@ -32,6 +32,7 @@ on:
       - '.github/workflows/build-freecad.yml'
       - 'patches/freecad.patch'
       - 'patches/freecad.version'
+      - 'patches/apply.sh'
       - 'toolchain/include/**'
   workflow_dispatch:
     inputs:

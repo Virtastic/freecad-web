@@ -47,7 +47,17 @@ apply_one() {
   elif patch -d "$tree" -p1 -F0 --dry-run --force --silent < "$patch" >/dev/null 2>&1; then
     patch -d "$tree" -p1 -F0 --silent < "$patch"; echo "  ++ $1: applied ${2} (tarball)"
   else
-    echo "  !! $1: $2 does NOT apply cleanly — tree may be at the wrong version"; return 1
+    # "does not apply cleanly" with nothing else is a message that costs an hour. Re-run
+    # WITHOUT --silent and show what actually rejected, plus enough about the two inputs to
+    # tell a wrong tree from a mangled patch file.
+    echo "  !! $1: $2 does NOT apply cleanly — tree may be at the wrong version"
+    echo "     patch:  $(wc -l < "$patch") lines, $(grep -c '^--- ' "$patch") files, md5 $(md5sum < "$patch" | cut -c1-12)"
+    echo "     patch file: $(file -b "$patch")"
+    echo "     tree:   $tree"
+    echo "     patch(1): $(patch --version 2>/dev/null | head -1)"
+    echo "     --- first failures ---"
+    patch -d "$tree" -p1 -F0 --dry-run --force < "$patch" 2>&1       | grep -vE "^checking file" | head -25 | sed 's/^/     /'
+    return 1
   fi
 }
 
