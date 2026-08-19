@@ -11,6 +11,34 @@ then recorded the failure as a stubbed routine. `build-ccx-weh.sh` now recognise
 include and skips it -- verified against all 977 `.f` files, where the rule selects exactly
 those two and nothing else.
 
+## Diagnosing a stub without a CI run
+
+`tools/build-f2c-local.sh` builds f2c natively using the clang that ships inside emsdk
+(`emsdk/upstream/bin/clang` -- emsdk carries upstream LLVM, so no gcc, make or MSVC is
+needed). The loop becomes: run `tools/f77ify.py` on a source, run that f2c on the result,
+read the error. Seconds, against the exact bytes the build feeds it.
+
+This matters more than convenience. f2c numbers ITS OWN input -- the rewritten file under
+`build-ccx-weh/f77` -- so "Error on line 221 of e_c3d_us45.f" points at a file that only
+exists on the runner, and several CI runs were spent reading line 221 of a locally
+regenerated copy that might not have been the same bytes.
+
+**And the reported line can be a long way from the cause.** For `e_c3d_us45.f`, line 221 is
+`real*8 co(3,*),...` -- a declaration that is valid, and that f2c accepts on its own. What
+was proven locally, in minutes rather than runs:
+
+- f77ify's only change to that declaration is `elconloc(ncmat_)` -> `elconloc(1000)`, the
+  bound the automatic-array rule must apply. So f2c is rejecting essentially upstream source.
+- The subroutine header (80 dummy arguments, 12 lines) parses on its own.
+- Everything between the header and line 221 is 172 comment lines and one blank.
+- Splitting the declaration, or removing `elcon(0:ncmat_,ntmat_,*)`, does not help; the error
+  simply moves.
+
+So it is an f2c parse failure on stock CalculiX, not damage this repository does -- which
+fits the last fact: **production stubs `e_c3d_us45` too**. Closing it would put this build
+ahead of the module being served, on a US45 user shell element FreeCAD never emits, with no
+deck able to validate the result.
+
 ## Where this ended up (run 32196565134)
 
 **974 of 975 routines translate. Three stubs remain, and only two are a gap.**
