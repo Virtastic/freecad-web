@@ -1,7 +1,7 @@
-diff -ruN a/cMake/FindOCC.cmake b/cMake/FindOCC.cmake
+diff -ruNp a/cMake/FindOCC.cmake b/cMake/FindOCC.cmake
 --- a/cMake/FindOCC.cmake
 +++ b/cMake/FindOCC.cmake
-@@ -122,7 +122,8 @@
+@@ -122,7 +122,8 @@ if (OCC_FOUND)
              TKLCAF
              TKVCAF
              TKCDF
@@ -11,10 +11,10 @@ diff -ruN a/cMake/FindOCC.cmake b/cMake/FindOCC.cmake
              TKService
              TKV3d
              TKRWMesh
-diff -ruN a/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake b/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake
+diff -ruNp a/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake b/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake
 --- a/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake
 +++ b/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake
-@@ -75,7 +75,7 @@
+@@ -75,7 +75,7 @@ macro(CompilerChecksAndSetups)
                  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-undefined")
              endif()
          else(BUILD_DYNAMIC_LINK_PYTHON)
@@ -23,10 +23,10 @@ diff -ruN a/cMake/FreeCAD_Helpers/CompilerChecksAndSetups.cmake b/cMake/FreeCAD_
                  if(APPLE)
                      set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-undefined,dynamic_lookup")
                  elseif(UNIX)
-diff -ruN a/cMake/FreeCAD_Helpers/SetupQt.cmake b/cMake/FreeCAD_Helpers/SetupQt.cmake
+diff -ruNp a/cMake/FreeCAD_Helpers/SetupQt.cmake b/cMake/FreeCAD_Helpers/SetupQt.cmake
 --- a/cMake/FreeCAD_Helpers/SetupQt.cmake
 +++ b/cMake/FreeCAD_Helpers/SetupQt.cmake
-@@ -90,10 +90,8 @@
+@@ -90,10 +90,8 @@ configure_file(${CMAKE_SOURCE_DIR}/src/Q
  configure_file(${CMAKE_SOURCE_DIR}/src/QtWidgets.h.cmake ${CMAKE_BINARY_DIR}/src/QtWidgets.h)
  
  function(qt_find_and_add_translation _qm_files _tr_dir _qm_dir)
@@ -39,10 +39,10 @@ diff -ruN a/cMake/FreeCAD_Helpers/SetupQt.cmake b/cMake/FreeCAD_Helpers/SetupQt.
  endfunction()
  
  function(qt_create_resource_file outfile)
-diff -ruN a/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake b/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake
+diff -ruNp a/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake b/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake
 --- a/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake
 +++ b/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake
-@@ -89,7 +89,16 @@
+@@ -89,7 +89,16 @@ macro(SetupSalomeSMESH)
          # on openSUSE 13.1 VTK_LIBRARIES ends with "optimized" keyword
          list(REMOVE_ITEM VTK_LIBRARIES "optimized" "debug")
  
@@ -60,10 +60,10 @@ diff -ruN a/cMake/FreeCAD_Helpers/SetupSalomeSMESH.cmake b/cMake/FreeCAD_Helpers
              find_package(MEDFile REQUIRED)
              # See https://www.hdfgroup.org/HDF5/release/cmakebuild.html
              if (MSVC)
-diff -ruN a/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake b/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake
+diff -ruNp a/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake b/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake
 --- a/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake
 +++ b/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake
-@@ -88,6 +88,86 @@
+@@ -88,6 +88,86 @@ macro(SetupShibokenAndPyside)
      file(WRITE ${CMAKE_BINARY_DIR}/Ext/PySide/QtCore.py "from PySide${PYSIDE_MAJOR_VERSION}.QtCore import *\n\n"
                                  "#QCoreApplication.CodecForTr=0\n"
                                  "#QCoreApplication.UnicodeUTF8=1\n")
@@ -150,10 +150,10 @@ diff -ruN a/cMake/FreeCAD_Helpers/SetupShibokenAndPyside.cmake b/cMake/FreeCAD_H
      file(WRITE ${CMAKE_BINARY_DIR}/Ext/PySide/QtNetwork.py  "from PySide${PYSIDE_MAJOR_VERSION}.QtNetwork import *\n")
      if(BUILD_GUI)
          file(WRITE ${CMAKE_BINARY_DIR}/Ext/PySide/QtGui.py  "from PySide${PYSIDE_MAJOR_VERSION}.QtGui import *\n"
-diff -ruN a/src/3rdParty/CMakeLists.txt b/src/3rdParty/CMakeLists.txt
+diff -ruNp a/src/3rdParty/CMakeLists.txt b/src/3rdParty/CMakeLists.txt
 --- a/src/3rdParty/CMakeLists.txt
 +++ b/src/3rdParty/CMakeLists.txt
-@@ -6,7 +6,11 @@
+@@ -6,7 +6,11 @@ endif()
  add_subdirectory(lazy_loader)
  
  if(NOT FREECAD_USE_EXTERNAL_E57FORMAT)
@@ -166,7 +166,7 @@ diff -ruN a/src/3rdParty/CMakeLists.txt b/src/3rdParty/CMakeLists.txt
  endif()
  
  if(BUILD_MATERIAL_EXTERNAL)
-diff -ruN a/src/3rdParty/libE57Format/src/CheckedFile.cpp b/src/3rdParty/libE57Format/src/CheckedFile.cpp
+diff -ruNp a/src/3rdParty/libE57Format/src/CheckedFile.cpp b/src/3rdParty/libE57Format/src/CheckedFile.cpp
 --- a/src/3rdParty/libE57Format/src/CheckedFile.cpp
 +++ b/src/3rdParty/libE57Format/src/CheckedFile.cpp
 @@ -57,6 +57,13 @@
@@ -183,7 +183,7 @@ diff -ruN a/src/3rdParty/libE57Format/src/CheckedFile.cpp b/src/3rdParty/libE57F
  #elif defined( __APPLE__ )
  #include <sys/types.h>
  #include <unistd.h>
-@@ -484,9 +491,9 @@
+@@ -484,9 +491,9 @@ uint64_t CheckedFile::lseek64( int64_t o
  
  #if defined( _WIN32 )
     __int64 result = _lseeki64( fd_, offset, whence );
@@ -195,10 +195,10 @@ diff -ruN a/src/3rdParty/libE57Format/src/CheckedFile.cpp b/src/3rdParty/libE57F
     int64_t result = ::lseek( fd_, offset, whence );
  #else
  #error "no supported OS platform defined"
-diff -ruN a/src/3rdParty/salomesmesh/CMakeLists.txt b/src/3rdParty/salomesmesh/CMakeLists.txt
+diff -ruNp a/src/3rdParty/salomesmesh/CMakeLists.txt b/src/3rdParty/salomesmesh/CMakeLists.txt
 --- a/src/3rdParty/salomesmesh/CMakeLists.txt
 +++ b/src/3rdParty/salomesmesh/CMakeLists.txt
-@@ -166,7 +166,14 @@
+@@ -166,7 +166,14 @@ ENDIF(${CMAKE_SIZEOF_VOID_P} MATCHES "8"
  ######################################################
  IF(UNIX)
      # Same settings are used for both MacOSX and Unix/Linux
@@ -214,7 +214,7 @@ diff -ruN a/src/3rdParty/salomesmesh/CMakeLists.txt b/src/3rdParty/salomesmesh/C
  ELSE(UNIX)
    IF(WIN32)
      ######### Windows ###########
-@@ -254,6 +261,16 @@
+@@ -254,6 +261,16 @@ SET_BIN_DIR(SMESHDS SMESHDS)
  # SMESH #
  #########
  FILE(GLOB SMESH_source_files src/SMESH/*.c src/SMESH/*.cpp src/Controls/*.cpp inc/SMESH_*.h*)
@@ -231,10 +231,10 @@ diff -ruN a/src/3rdParty/salomesmesh/CMakeLists.txt b/src/3rdParty/salomesmesh/C
  ADD_LIBRARY(SMESH SHARED ${SMESH_source_files})
  TARGET_LINK_LIBRARIES(SMESH SMDS SMESHDS  Driver DriverSTL DriverDAT DriverUNV ${SMESH_LIBS} ${OPENCASCADE_LIBRARIES} ${OCC_LIBRARIES} ${OCC_DEBUG_LIBRARIES} ${OCC_OCAF_DEBUG_LIBRARIES} ${OCC_OCAF_LIBRARIES} ${MEDFILE_LIBRARIES} ${VTK_LIBRARIES})
   
-diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc/aptrte.h
+diff -ruNp a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc/aptrte.h
 --- a/src/3rdParty/salomesmesh/inc/aptrte.h
 +++ b/src/3rdParty/salomesmesh/inc/aptrte.h
-@@ -193,7 +193,12 @@
+@@ -193,7 +193,12 @@ extern "C" { int
  // quamin : qualite minimale des triangles actuels
  // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  
@@ -248,7 +248,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -205,7 +210,9 @@
+@@ -205,7 +210,9 @@ extern "C" {  void
      
  //Retourne le temps CPU utilise en secondes
  
@@ -259,7 +259,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -218,7 +225,7 @@
+@@ -218,7 +225,7 @@ extern "C" { void
  //Retourne le temps CPU utilise en secondes depuis le precedent appel
  
  //initialiser le tableau mnsoar pour le hachage des aretes
@@ -268,7 +268,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -229,7 +236,7 @@
+@@ -229,7 +236,7 @@ extern "C" {void
  }
  
  //mettre a zero les nb entiers de tab
@@ -277,7 +277,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -239,7 +246,7 @@
+@@ -239,7 +246,7 @@ extern "C" {void
    azeroi( Z & nb, Z * tab );
  }
  
@@ -286,7 +286,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -416,7 +423,7 @@
+@@ -416,7 +423,7 @@ extern "C" { int
  // modification de la topologie des groupes de triangles
  // mise en delaunay de la triangulation
   
@@ -295,7 +295,7 @@ diff -ruN a/src/3rdParty/salomesmesh/inc/aptrte.h b/src/3rdParty/salomesmesh/inc
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-diff -ruN a/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp b/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp
+diff -ruNp a/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp b/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp
 --- a/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp
 +++ b/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp
 @@ -29,7 +29,9 @@
@@ -309,7 +309,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp b/src/3rdPar
  #endif
  
  
-@@ -106,7 +108,9 @@
+@@ -106,7 +108,9 @@ namespace Kernel_Utils
      return guid;
    }
  
@@ -320,10 +320,10 @@ diff -ruN a/src/3rdParty/salomesmesh/src/DriverSTL/Basics_Utils.cpp b/src/3rdPar
    void print_traceback()
    {
      void *array[50];
-diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp
+diff -ruNp a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp
 --- a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp
 +++ b/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp
-@@ -33,8 +33,13 @@
+@@ -33,8 +33,13 @@ using namespace std;
  extern "C"
  {
    R aretemaxface_;
@@ -339,7 +339,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salo
    #ifdef WIN32
    #ifdef F2C_BUILD
    #else
-@@ -44,7 +49,7 @@
+@@ -44,7 +49,7 @@ extern "C"
        areteideale(R &_areteideale)
    {
          _areteideale = aretemaxface_;
@@ -348,7 +348,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salo
    }
  }
  //calcul de la longueur ideale de l'arete au sommet xyz (z ici inactif)
-@@ -54,7 +59,7 @@
+@@ -54,7 +59,7 @@ extern "C"
  
  static double cpunew, cpuold=0;
  
@@ -357,7 +357,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salo
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -66,10 +71,11 @@
+@@ -66,10 +71,11 @@ tempscpu_( double & tempsec )
  {  
    tempsec = ( (double) clock() ) / CLOCKS_PER_SEC;
    //MESSAGE( "temps cpu=" << tempsec );
@@ -370,7 +370,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salo
  #ifdef WIN32
  #ifdef F2C_BUILD
  #else
-@@ -83,7 +89,7 @@
+@@ -83,7 +89,7 @@ deltacpu_( R & dtcpu )
    dtcpu  = R( cpunew - cpuold );
    cpuold = cpunew;
    //MESSAGE( "delta temps cpu=" << dtcpu );
@@ -379,7 +379,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salo
  }
  
  
-@@ -246,7 +252,7 @@
+@@ -246,7 +252,7 @@ void  aptrte( Z   nutysu, R      aretmx,
      ns0 = nudslf[n-1];
      mnpxyd[ns0].x = uvslf[ns0].x;
      mnpxyd[ns0].y = uvslf[ns0].y;
@@ -388,7 +388,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salo
  //     MESSAGE("Sommet " << ns0 << ": " << mnpxyd[ns0].x
  //       << " " << mnpxyd[ns0].y << " longueur arete=" << mnpxyd[ns0].z);
  
-@@ -301,7 +307,7 @@
+@@ -301,7 +307,7 @@ void  aptrte( Z   nutysu, R      aretmx,
  //fin   ajout  5/10/2006  ................................................
        mnpxyd[ns].x = uvslf[ns].x;
        mnpxyd[ns].y = uvslf[ns].y;
@@ -397,7 +397,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salo
  //       MESSAGE("Sommet " << ns << ": " << mnpxyd[ns].x
  //         << " " << mnpxyd[ns].y << " longueur arete=" << mnpxyd[ns].z);
  
-@@ -393,7 +399,7 @@
+@@ -393,7 +399,7 @@ void  aptrte( Z   nutysu, R      aretmx,
      //les 2 coordonnees du point i de sommet nbs
      mnpxyd[ns1].x = uvpti[i].x;
      mnpxyd[ns1].y = uvpti[i].y;
@@ -406,10 +406,10 @@ diff -ruN a/src/3rdParty/salomesmesh/src/MEFISTO2/aptrte.cpp b/src/3rdParty/salo
      //le numero i du point interne
      mnslig[ns1] = i+1;
      ns1++;
-diff -ruN a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp
+diff -ruNp a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp
 --- a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp
 +++ b/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp
-@@ -530,6 +530,10 @@
+@@ -530,6 +530,10 @@ int SMESH_Mesh::UNVToMesh(const char* th
  
  int SMESH_Mesh::MEDToMesh(const char* theFileName, const char* theMeshName)
  {
@@ -420,7 +420,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/sal
    if(MYDEBUG) MESSAGE("MEDToMesh - theFileName = "<<theFileName<<", mesh name = "<<theMeshName);
    if(_isShapeToMesh)
      throw SALOME_Exception(LOCALIZED("a shape to mesh has already been defined"));
-@@ -564,6 +568,7 @@
+@@ -564,6 +568,7 @@ int SMESH_Mesh::MEDToMesh(const char* th
      }
    }
    return (int) status;
@@ -428,7 +428,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/sal
  }
  
  //=======================================================================
-@@ -1437,6 +1442,10 @@
+@@ -1437,6 +1442,10 @@ void SMESH_Mesh::ExportMED(const char *
                             bool                theAutoDimension,
                             bool                theAddODOnVertices)
  {
@@ -439,7 +439,7 @@ diff -ruN a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/sal
    SMESH_TRY;
  
    DriverMED_W_SMESHDS_Mesh myWriter;
-@@ -1487,6 +1496,7 @@
+@@ -1487,6 +1496,7 @@ void SMESH_Mesh::ExportMED(const char *
    myWriter.Perform();
  
    SMESH_CATCH( SMESH::throwSalomeEx );
@@ -447,10 +447,10 @@ diff -ruN a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/sal
  }
  
  //================================================================================
-diff -ruN a/src/App/Application.cpp b/src/App/Application.cpp
+diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
 --- a/src/App/Application.cpp
 +++ b/src/App/Application.cpp
-@@ -1757,7 +1757,7 @@
+@@ -1757,7 +1757,7 @@ static void freecadNewHandler ()
  }
  #endif
  
@@ -459,7 +459,7 @@ diff -ruN a/src/App/Application.cpp b/src/App/Application.cpp
  #include <execinfo.h>
  #include <dlfcn.h>
  #include <cxxabi.h>
-@@ -1814,7 +1814,7 @@
+@@ -1814,7 +1814,7 @@ void printBacktrace(size_t skip=0)
  
  void segmentation_fault_handler(int sig)
  {
@@ -468,7 +468,7 @@ diff -ruN a/src/App/Application.cpp b/src/App/Application.cpp
      (void)sig;
      std::cerr << "Program received signal SIGSEGV, Segmentation fault.\n";
      printBacktrace(2);
-@@ -1898,7 +1898,9 @@
+@@ -1898,7 +1898,9 @@ void Application::init(int argc, char **
          std::signal(SIGABRT,segmentation_fault_handler);
          std::set_terminate(unhandled_exception_handler);
             ::set_unexpected(unexpection_error_handler);
@@ -479,7 +479,7 @@ diff -ruN a/src/App/Application.cpp b/src/App/Application.cpp
          std::signal(SIGSEGV,segmentation_fault_handler);
  #endif
  #if defined(FC_SE_TRANSLATOR)
-@@ -3058,7 +3060,13 @@
+@@ -3058,7 +3060,13 @@ namespace {
  QString getUserHome()
  {
      QString path;
@@ -494,7 +494,7 @@ diff -ruN a/src/App/Application.cpp b/src/App/Application.cpp
      // Default paths for the user specific stuff
      struct passwd pwd;
      struct passwd *result;
-@@ -3171,7 +3179,26 @@
+@@ -3171,7 +3179,26 @@ std::filesystem::path findPath(const QSt
      // In order to write to our data path, we must create some directories, first.
      if (create && !std::filesystem::exists(appData) && !Py_IsInitialized()) {
          try {
@@ -521,7 +521,7 @@ diff -ruN a/src/App/Application.cpp b/src/App/Application.cpp
          } catch (const std::filesystem::filesystem_error& e) {
              throw Base::FileSystemError("Could not create directories. Failed with: " + e.code().message());
          }
-@@ -3351,7 +3378,16 @@
+@@ -3351,7 +3378,16 @@ std::string Application::FindHomePath(co
      // Python interpreter is already initialized.
      std::string absPath;
      std::string homePath;
@@ -538,7 +538,7 @@ diff -ruN a/src/App/Application.cpp b/src/App/Application.cpp
          // Note: realpath is known to cause a buffer overflow because it
          // expands the given path to an absolute path of unknown length.
          // Even setting PATH_MAX does not necessarily solve the problem
-@@ -3388,7 +3424,16 @@
+@@ -3388,7 +3424,16 @@ std::string Application::FindHomePath(co
      // Python interpreter is already initialized.
      std::string absPath;
      std::string homePath;
@@ -555,10 +555,10 @@ diff -ruN a/src/App/Application.cpp b/src/App/Application.cpp
          // Note: realpath is known to cause a buffer overflow because it
          // expands the given path to an absolute path of unknown length.
          // Even setting PATH_MAX does not necessarily solve the problem
-diff -ruN a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
+diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
 --- a/src/Base/Interpreter.cpp
 +++ b/src/Base/Interpreter.cpp
-@@ -619,6 +619,21 @@
+@@ -619,6 +619,21 @@ void initInterpreter(int argc, char* arg
      config.isolated = 0;
      config.user_site_directory = 1;
  
@@ -580,7 +580,7 @@ diff -ruN a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
      status = PyConfig_SetBytesArgv(&config, argc, argv);
      if (PyStatus_Exception(status)) {
          throw Base::RuntimeError("Failed to set config");
-@@ -626,7 +641,20 @@
+@@ -626,7 +641,20 @@ void initInterpreter(int argc, char* arg
  
      status = Py_InitializeFromConfig(&config);
      if (PyStatus_Exception(status)) {
@@ -602,10 +602,10 @@ diff -ruN a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
      }
  
      // If FreeCAD was run from within a Python virtual environment, ensure that the site-packages
-diff -ruN a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
+diff -ruNp a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
 --- a/src/Base/Parameter.cpp
 +++ b/src/Base/Parameter.cpp
-@@ -1854,6 +1854,9 @@
+@@ -1854,6 +1854,9 @@ int ParameterManager::LoadDocument(const
  {
      try {
          Base::FileInfo file(sFileName);
@@ -615,7 +615,7 @@ diff -ruN a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
          QLockFile lock(getLockFile(file));
          if (!lock.tryLock(getTimeout())) {
              // Continue with empty config
-@@ -1862,6 +1865,7 @@
+@@ -1862,6 +1865,7 @@ int ParameterManager::LoadDocument(const
              std::cerr << "Failed to access file for reading: " << sFileName << std::endl;
              return 1;
          }
@@ -623,7 +623,7 @@ diff -ruN a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
  #if defined(FC_OS_WIN32)
          std::wstring name = file.toStdWString();
          // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-@@ -1961,11 +1965,17 @@
+@@ -1961,11 +1965,17 @@ void ParameterManager::SaveDocument(cons
  {
      try {
          Base::FileInfo file(sFileName);
@@ -641,10 +641,10 @@ diff -ruN a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
          //
          // Plug in a format target to receive the resultant
          // XML stream from the serializer.
-diff -ruN a/src/Base/Tools.cpp b/src/Base/Tools.cpp
+diff -ruNp a/src/Base/Tools.cpp b/src/Base/Tools.cpp
 --- a/src/Base/Tools.cpp
 +++ b/src/Base/Tools.cpp
-@@ -301,10 +301,18 @@
+@@ -301,10 +301,18 @@ std::string Base::Tools::joinList(const
  
  std::string Base::Tools::currentDateTimeString()
  {
@@ -663,7 +663,7 @@ diff -ruN a/src/Base/Tools.cpp b/src/Base/Tools.cpp
  }
  
  std::vector<std::string> Base::Tools::splitSubName(const std::string& subname)
-diff -ruN a/src/FCConfig.h b/src/FCConfig.h
+diff -ruNp a/src/FCConfig.h b/src/FCConfig.h
 --- a/src/FCConfig.h
 +++ b/src/FCConfig.h
 @@ -57,6 +57,14 @@
@@ -681,7 +681,7 @@ diff -ruN a/src/FCConfig.h b/src/FCConfig.h
  #elif defined(linux) || defined(__linux) || defined(__linux__) || defined(__GLIBC__)
  #   ifndef FC_OS_LINUX
  #   define FC_OS_LINUX
-diff -ruN a/src/Gui/Application.cpp b/src/Gui/Application.cpp
+diff -ruNp a/src/Gui/Application.cpp b/src/Gui/Application.cpp
 --- a/src/Gui/Application.cpp
 +++ b/src/Gui/Application.cpp
 @@ -27,6 +27,7 @@
@@ -692,7 +692,7 @@ diff -ruN a/src/Gui/Application.cpp b/src/Gui/Application.cpp
  #include <QDir>
  #include <QFileInfo>
  #include <QLocale>
-@@ -1918,11 +1919,18 @@
+@@ -1918,11 +1919,18 @@ bool Application::activateWorkbench(cons
  
          if (!d->startingUp) {
              wc.restoreCursor();
@@ -711,7 +711,7 @@ diff -ruN a/src/Gui/Application.cpp b/src/Gui/Application.cpp
              wc.setWaitCursor();
          }
      }
-@@ -2197,6 +2205,22 @@
+@@ -2197,6 +2205,22 @@ _qt_msg_handler_old old_qtmsg_handler =
  
  void messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
  {
@@ -734,7 +734,7 @@ diff -ruN a/src/Gui/Application.cpp b/src/Gui/Application.cpp
      QByteArray output;
      if (context.category && strcmp(context.category, "default") != 0) {
          output.append('(');
-@@ -2550,7 +2574,31 @@
+@@ -2550,7 +2574,31 @@ void Application::runApplication()
      Base::Console().log("Init: Creating Gui::Application and QApplication\n");
  
      int argc = App::Application::GetARGC();
@@ -766,7 +766,7 @@ diff -ruN a/src/Gui/Application.cpp b/src/Gui/Application.cpp
  
  #if (COIN_MAJOR_VERSION * 100 + COIN_MINOR_VERSION * 10 + COIN_MICRO_VERSION < 406) \
      && (defined(FC_OS_LINUX) || defined(FC_OS_BSD))
-@@ -2576,8 +2624,13 @@
+@@ -2576,8 +2624,13 @@ void Application::runApplication()
      StartupProcess process;
      process.execute();
  
@@ -780,10 +780,10 @@ diff -ruN a/src/Gui/Application.cpp b/src/Gui/Application.cpp
      mw.setProperty("QuitOnClosed", true);
  
      // https://forum.freecad.org/viewtopic.php?f=3&t=15540
-diff -ruN a/src/Gui/Assistant.cpp b/src/Gui/Assistant.cpp
+diff -ruNp a/src/Gui/Assistant.cpp b/src/Gui/Assistant.cpp
 --- a/src/Gui/Assistant.cpp
 +++ b/src/Gui/Assistant.cpp
-@@ -53,19 +53,25 @@
+@@ -53,19 +53,25 @@ void Assistant::showDocumentation(const
      if (!startAssistant()) {
          return;
      }
@@ -809,10 +809,10 @@ diff -ruN a/src/Gui/Assistant.cpp b/src/Gui/Assistant.cpp
      }
  
      if (proc->state() != QProcess::Running) {
-diff -ruN a/src/Gui/CMakeLists.txt b/src/Gui/CMakeLists.txt
+diff -ruNp a/src/Gui/CMakeLists.txt b/src/Gui/CMakeLists.txt
 --- a/src/Gui/CMakeLists.txt
 +++ b/src/Gui/CMakeLists.txt
-@@ -1553,6 +1553,12 @@
+@@ -1553,6 +1553,12 @@ if (MSVC)
      target_compile_options(FreeCADGui PRIVATE /wd4251 /wd4273 /wd4275)
  endif()
  
@@ -825,10 +825,10 @@ diff -ruN a/src/Gui/CMakeLists.txt b/src/Gui/CMakeLists.txt
  if (FREECAD_WARN_ERROR)
      target_compile_warn_error(FreeCADGui)
  endif()
-diff -ruN a/src/Gui/DAGView/DAGModel.cpp b/src/Gui/DAGView/DAGModel.cpp
+diff -ruNp a/src/Gui/DAGView/DAGModel.cpp b/src/Gui/DAGView/DAGModel.cpp
 --- a/src/Gui/DAGView/DAGModel.cpp
 +++ b/src/Gui/DAGView/DAGModel.cpp
-@@ -1056,25 +1056,34 @@
+@@ -1056,25 +1056,34 @@ void Model::contextMenuEvent(QGraphicsSc
  
          MenuItem view;
          Gui::Application::Instance->setupContextMenu("Tree", &view);
@@ -870,10 +870,10 @@ diff -ruN a/src/Gui/DAGView/DAGModel.cpp b/src/Gui/DAGView/DAGModel.cpp
          }
      }
  
-diff -ruN a/src/Gui/Dialogs/DlgParameterImp.cpp b/src/Gui/Dialogs/DlgParameterImp.cpp
+diff -ruNp a/src/Gui/Dialogs/DlgParameterImp.cpp b/src/Gui/Dialogs/DlgParameterImp.cpp
 --- a/src/Gui/Dialogs/DlgParameterImp.cpp
 +++ b/src/Gui/Dialogs/DlgParameterImp.cpp
-@@ -756,7 +756,12 @@
+@@ -756,7 +756,12 @@ void ParameterValue::contextMenuEvent(QC
          // A workaround is to simply call exec() instead.
          //
          // menuNew->popup(event->globalPos());
@@ -886,10 +886,10 @@ diff -ruN a/src/Gui/Dialogs/DlgParameterImp.cpp b/src/Gui/Dialogs/DlgParameterIm
      }
  }
  
-diff -ruN a/src/Gui/Dialogs/DlgPreferencesImp.cpp b/src/Gui/Dialogs/DlgPreferencesImp.cpp
+diff -ruNp a/src/Gui/Dialogs/DlgPreferencesImp.cpp b/src/Gui/Dialogs/DlgPreferencesImp.cpp
 --- a/src/Gui/Dialogs/DlgPreferencesImp.cpp
 +++ b/src/Gui/Dialogs/DlgPreferencesImp.cpp
-@@ -770,7 +770,9 @@
+@@ -770,7 +770,9 @@ void DlgPreferencesImp::onButtonBoxClick
  
  void DlgPreferencesImp::showResetOptions()
  {
@@ -900,7 +900,7 @@ diff -ruN a/src/Gui/Dialogs/DlgPreferencesImp.cpp b/src/Gui/Dialogs/DlgPreferenc
  
      auto currentPageItem = getCurrentPage();
      auto currentGroupItem = static_cast<PreferencesPageItem*>(currentPageItem->parent());
-@@ -779,33 +781,41 @@
+@@ -779,33 +781,41 @@ void DlgPreferencesImp::showResetOptions
      auto groupText = currentGroupItem->text();
  
      // Reset per page
@@ -950,10 +950,10 @@ diff -ruN a/src/Gui/Dialogs/DlgPreferencesImp.cpp b/src/Gui/Dialogs/DlgPreferenc
  }
  
  void DlgPreferencesImp::restoreDefaults()
-diff -ruN a/src/Gui/Dialogs/DlgRunExternal.cpp b/src/Gui/Dialogs/DlgRunExternal.cpp
+diff -ruNp a/src/Gui/Dialogs/DlgRunExternal.cpp b/src/Gui/Dialogs/DlgRunExternal.cpp
 --- a/src/Gui/Dialogs/DlgRunExternal.cpp
 +++ b/src/Gui/Dialogs/DlgRunExternal.cpp
-@@ -47,8 +47,10 @@
+@@ -47,8 +47,10 @@ DlgRunExternal::DlgRunExternal(QWidget*
      // clang-format off
      ui->setupUi(this);
      connect(ui->chooseProgram, &QPushButton::clicked, this, &DlgRunExternal::onChooseProgramClicked);
@@ -964,10 +964,10 @@ diff -ruN a/src/Gui/Dialogs/DlgRunExternal.cpp b/src/Gui/Dialogs/DlgRunExternal.
      connect(ui->buttonAccept, &QPushButton::clicked, this, &DlgRunExternal::accept);
      connect(ui->buttonDiscard, &QPushButton::clicked, this, &DlgRunExternal::reject);
      connect(ui->buttonAbort, &QPushButton::clicked, this, &DlgRunExternal::abort);
-diff -ruN a/src/Gui/DocumentRecovery.cpp b/src/Gui/DocumentRecovery.cpp
+diff -ruNp a/src/Gui/DocumentRecovery.cpp b/src/Gui/DocumentRecovery.cpp
 --- a/src/Gui/DocumentRecovery.cpp
 +++ b/src/Gui/DocumentRecovery.cpp
-@@ -636,9 +636,15 @@
+@@ -636,9 +636,15 @@ void DocumentRecovery::contextMenuEvent(
  {
      QList<QTreeWidgetItem*> items = d_ptr->ui.treeWidget->selectedItems();
      if (!items.isEmpty()) {
@@ -986,10 +986,10 @@ diff -ruN a/src/Gui/DocumentRecovery.cpp b/src/Gui/DocumentRecovery.cpp
      }
  }
  
-diff -ruN a/src/Gui/DownloadItem.cpp b/src/Gui/DownloadItem.cpp
+diff -ruNp a/src/Gui/DownloadItem.cpp b/src/Gui/DownloadItem.cpp
 --- a/src/Gui/DownloadItem.cpp
 +++ b/src/Gui/DownloadItem.cpp
-@@ -444,10 +444,19 @@
+@@ -444,10 +444,19 @@ void DownloadItem::tryAgain()
  
  void DownloadItem::contextMenuEvent(QContextMenuEvent* e)
  {
@@ -1012,10 +1012,10 @@ diff -ruN a/src/Gui/DownloadItem.cpp b/src/Gui/DownloadItem.cpp
  }
  
  void DownloadItem::downloadReadyRead()
-diff -ruN a/src/Gui/ExpressionCompleter.cpp b/src/Gui/ExpressionCompleter.cpp
+diff -ruNp a/src/Gui/ExpressionCompleter.cpp b/src/Gui/ExpressionCompleter.cpp
 --- a/src/Gui/ExpressionCompleter.cpp
 +++ b/src/Gui/ExpressionCompleter.cpp
-@@ -1278,6 +1278,16 @@
+@@ -1278,6 +1278,16 @@ void ExpressionTextEdit::contextMenuEven
          match->setVisible(false);
      }
  
@@ -1032,7 +1032,7 @@ diff -ruN a/src/Gui/ExpressionCompleter.cpp b/src/Gui/ExpressionCompleter.cpp
      QAction* action = menu->exec(event->globalPos());
  
      if (completer) {
-@@ -1287,6 +1297,7 @@
+@@ -1287,6 +1297,7 @@ void ExpressionTextEdit::contextMenuEven
      }
  
      delete menu;
@@ -1040,7 +1040,7 @@ diff -ruN a/src/Gui/ExpressionCompleter.cpp b/src/Gui/ExpressionCompleter.cpp
  }
  
  void ExpressionTextEdit::adjustCompleterToCursor()
-diff -ruN a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
+diff -ruNp a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
 --- a/src/Gui/FileDialog.cpp
 +++ b/src/Gui/FileDialog.cpp
 @@ -48,6 +48,15 @@
@@ -1059,7 +1059,7 @@ diff -ruN a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
  
  using namespace Gui;
  
-@@ -285,6 +294,22 @@
+@@ -285,6 +294,22 @@ QString FileDialog::getSaveFileName(
      // NOTE: We must not change the specified file name afterwards as we may return the name of an
      // already existing file. Hence we must extract the first matching suffix from the filter list
      // and append it before showing the file dialog.
@@ -1082,7 +1082,7 @@ diff -ruN a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
      QString file;
      if (DialogOptions::dontUseNativeFileDialog()) {
          QList<QUrl> urls = fetchSidebarUrls();
-@@ -376,6 +401,15 @@
+@@ -376,6 +401,15 @@ QString FileDialog::getOpenFileName(
          windowTitle = FileDialog::tr("Open");
      }
  
@@ -1098,7 +1098,7 @@ diff -ruN a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
      QString file;
      if (DialogOptions::dontUseNativeFileDialog()) {
          QList<QUrl> urls = fetchSidebarUrls();
-@@ -441,6 +475,14 @@
+@@ -441,6 +475,14 @@ QStringList FileDialog::getOpenFileNames
          windowTitle = FileDialog::tr("Open");
      }
  
@@ -1113,10 +1113,10 @@ diff -ruN a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
      QStringList files;
      if (DialogOptions::dontUseNativeFileDialog()) {
          QList<QUrl> urls = fetchSidebarUrls();
-diff -ruN a/src/Gui/Flag.cpp b/src/Gui/Flag.cpp
+diff -ruNp a/src/Gui/Flag.cpp b/src/Gui/Flag.cpp
 --- a/src/Gui/Flag.cpp
 +++ b/src/Gui/Flag.cpp
-@@ -159,22 +159,34 @@
+@@ -159,22 +159,34 @@ void Flag::mousePressEvent(QMouseEvent*
  
  void Flag::contextMenuEvent(QContextMenuEvent* e)
  {
@@ -1160,10 +1160,10 @@ diff -ruN a/src/Gui/Flag.cpp b/src/Gui/Flag.cpp
  }
  
  QSize Flag::sizeHint() const
-diff -ruN a/src/Gui/FreeCADGuiInit.py b/src/Gui/FreeCADGuiInit.py
+diff -ruNp a/src/Gui/FreeCADGuiInit.py b/src/Gui/FreeCADGuiInit.py
 --- a/src/Gui/FreeCADGuiInit.py
 +++ b/src/Gui/FreeCADGuiInit.py
-@@ -220,21 +220,35 @@
+@@ -220,21 +220,35 @@ Gui.HintManager = HintManager()
  
  
  def InitApplications():
@@ -1200,7 +1200,7 @@ diff -ruN a/src/Gui/FreeCADGuiInit.py b/src/Gui/FreeCADGuiInit.py
              except Exception as inst:
                  Log("Init:      Initializing " + Dir + "... failed\n")
                  Log("-" * 100 + "\n")
-@@ -340,6 +354,8 @@
+@@ -340,6 +354,8 @@ def InitApplications():
              else:
                  RunInitGuiPy(Dir)
      Log("All modules with GUIs using InitGui.py are now initialized\n")
@@ -1209,10 +1209,10 @@ diff -ruN a/src/Gui/FreeCADGuiInit.py b/src/Gui/FreeCADGuiInit.py
  
      try:
          import pkgutil
-diff -ruN a/src/Gui/ImageView.cpp b/src/Gui/ImageView.cpp
+diff -ruNp a/src/Gui/ImageView.cpp b/src/Gui/ImageView.cpp
 --- a/src/Gui/ImageView.cpp
 +++ b/src/Gui/ImageView.cpp
-@@ -175,19 +175,31 @@
+@@ -175,19 +175,31 @@ bool ImageView::isDragging() const
  
  void ImageView::contextMenuEvent(QContextMenuEvent* event)
  {
@@ -1249,10 +1249,10 @@ diff -ruN a/src/Gui/ImageView.cpp b/src/Gui/ImageView.cpp
  }
  
  void ImageView::mousePressEvent(QMouseEvent* event)
-diff -ruN a/src/Gui/InputField.cpp b/src/Gui/InputField.cpp
+diff -ruNp a/src/Gui/InputField.cpp b/src/Gui/InputField.cpp
 --- a/src/Gui/InputField.cpp
 +++ b/src/Gui/InputField.cpp
-@@ -233,6 +233,18 @@
+@@ -233,6 +233,18 @@ void InputField::contextMenuEvent(QConte
          values.push_back(savedValue);
      }
  
@@ -1271,7 +1271,7 @@ diff -ruN a/src/Gui/InputField.cpp b/src/Gui/InputField.cpp
      // call the menu and wait until its back
      QAction* saveAction = menu->exec(event->globalPos());
  
-@@ -250,6 +262,7 @@
+@@ -250,6 +262,7 @@ void InputField::contextMenuEvent(QConte
      }
  
      delete menu;
@@ -1279,10 +1279,10 @@ diff -ruN a/src/Gui/InputField.cpp b/src/Gui/InputField.cpp
  }
  
  void InputField::newInput(const QString& text)
-diff -ruN a/src/Gui/MainWindow.cpp b/src/Gui/MainWindow.cpp
+diff -ruNp a/src/Gui/MainWindow.cpp b/src/Gui/MainWindow.cpp
 --- a/src/Gui/MainWindow.cpp
 +++ b/src/Gui/MainWindow.cpp
-@@ -341,7 +341,7 @@
+@@ -341,7 +341,7 @@ MainWindow::MainWindow(QWidget* parent,
      d->whatsthis = false;
      d->assistant = new Assistant();
  
@@ -1291,7 +1291,7 @@ diff -ruN a/src/Gui/MainWindow.cpp b/src/Gui/MainWindow.cpp
      // this forces QT to switch to OpenGL mode, this prevents delay and flickering of the window
      // after opening project and prevent issues with double initialization of the window
      //
-@@ -2049,6 +2049,13 @@
+@@ -2049,6 +2049,13 @@ void MainWindow::saveWindowSettings(bool
  
  void MainWindow::startSplasher()
  {
@@ -1305,10 +1305,10 @@ diff -ruN a/src/Gui/MainWindow.cpp b/src/Gui/MainWindow.cpp
      // startup splasher
      // when running in verbose mode no splasher
      if (!(App::Application::Config()["Verbose"] == "Strict")
-diff -ruN a/src/Gui/ManualAlignment.cpp b/src/Gui/ManualAlignment.cpp
+diff -ruNp a/src/Gui/ManualAlignment.cpp b/src/Gui/ManualAlignment.cpp
 --- a/src/Gui/ManualAlignment.cpp
 +++ b/src/Gui/ManualAlignment.cpp
-@@ -1374,20 +1374,25 @@
+@@ -1374,20 +1374,25 @@ void ManualAlignment::probePickedCallbac
              else {
                  nPoints = self->myFixedGroup.countPoints();
              }
@@ -1342,7 +1342,7 @@ diff -ruN a/src/Gui/ManualAlignment.cpp b/src/Gui/ManualAlignment.cpp
              if (id == fi) {
                  // call align->align();
                  QTimer::singleShot(300, self, &ManualAlignment::onAlign);
-@@ -1425,6 +1430,17 @@
+@@ -1425,6 +1430,17 @@ void ManualAlignment::probePickedCallbac
                      self->d->sensorCam2->detach();
                  }
              }
@@ -1360,10 +1360,10 @@ diff -ruN a/src/Gui/ManualAlignment.cpp b/src/Gui/ManualAlignment.cpp
          }
      }
  }
-diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
+diff -ruNp a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
 --- a/src/Gui/NaviCube.cpp
 +++ b/src/Gui/NaviCube.cpp
-@@ -798,6 +798,31 @@
+@@ -798,6 +798,31 @@ void NaviCubeImplementation::handleResiz
      }
  }
  
@@ -1395,7 +1395,7 @@ diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
  void NaviCubeImplementation::drawNaviCube(bool pickMode, float opacity)
  {
      if (!m_Prepared) {
-@@ -896,6 +921,17 @@
+@@ -896,6 +921,17 @@ void NaviCubeImplementation::drawNaviCub
              a, a, c,  // Z2
              a, a, a   // 0
          };
@@ -1413,7 +1413,7 @@ diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
          glVertexPointer(3, GL_FLOAT, 0, pointData);
  
          glColor4f(m_xColor.r, m_xColor.g, m_xColor.b, opacity);
-@@ -909,6 +945,7 @@
+@@ -909,6 +945,7 @@ void NaviCubeImplementation::drawNaviCub
          glColor4f(m_zColor.r, m_zColor.g, m_zColor.b, opacity);
          glDrawArrays(GL_LINES, 4, 2);
          glDrawArrays(GL_POINTS, 4, 2);
@@ -1421,7 +1421,7 @@ diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
      }
  
      // cube faces
-@@ -925,8 +962,12 @@
+@@ -925,8 +962,12 @@ void NaviCubeImplementation::drawNaviCub
              QColor& c = m_HiliteId == pickId ? m_HiliteColor : m_BaseColor;
              glColor4f(c.redF(), c.greenF(), c.blueF(), c.alphaF() * opacity);
          }
@@ -1434,7 +1434,7 @@ diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
      }
      if (!pickMode) {
          // cube borders
-@@ -937,8 +978,12 @@
+@@ -937,8 +978,12 @@ void NaviCubeImplementation::drawNaviCub
                  continue;
              }
              glColor4f(cb.redF(), cb.greenF(), cb.blueF(), cb.alphaF() * opacity);
@@ -1447,7 +1447,7 @@ diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
          }
  
          // Label textures
-@@ -952,9 +997,13 @@
+@@ -952,9 +997,13 @@ void NaviCubeImplementation::drawNaviCub
          for (const auto& pair : m_LabelTextures) {
              auto f = pair.second;
              PickId pickId = pair.first;
@@ -1462,7 +1462,7 @@ diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
          }
          glDisableClientState(GL_TEXTURE_COORD_ARRAY);
          glDisable(GL_TEXTURE_2D);
-@@ -982,12 +1031,20 @@
+@@ -982,12 +1031,20 @@ void NaviCubeImplementation::drawNaviCub
              QColor& c = m_HiliteId == pickId ? m_HiliteColor : m_BaseColor;
              glColor4f(c.redF(), c.greenF(), c.blueF(), c.alphaF() * opacity);
          }
@@ -1483,7 +1483,7 @@ diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
      }
  
      // Restore original state.
-@@ -1069,7 +1126,17 @@
+@@ -1069,7 +1126,17 @@ bool NaviCubeImplementation::mousePresse
  
  void NaviCubeImplementation::handleMenu()
  {
@@ -1501,10 +1501,10 @@ diff -ruN a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
  }
  
  SbRotation NaviCubeImplementation::getNearestOrientation(PickId pickId)
-diff -ruN a/src/Gui/Navigation/NavigationStyle.cpp b/src/Gui/Navigation/NavigationStyle.cpp
+diff -ruNp a/src/Gui/Navigation/NavigationStyle.cpp b/src/Gui/Navigation/NavigationStyle.cpp
 --- a/src/Gui/Navigation/NavigationStyle.cpp
 +++ b/src/Gui/Navigation/NavigationStyle.cpp
-@@ -537,9 +537,13 @@
+@@ -537,9 +537,13 @@ std::shared_ptr<NavigationAnimation> Nav
      }
  
      // Start an animation and return it
@@ -1518,10 +1518,10 @@ diff -ruN a/src/Gui/Navigation/NavigationStyle.cpp b/src/Gui/Navigation/Navigati
  
      // or set the pose directly
  
-diff -ruN a/src/Gui/NetworkRetriever.cpp b/src/Gui/NetworkRetriever.cpp
+diff -ruNp a/src/Gui/NetworkRetriever.cpp b/src/Gui/NetworkRetriever.cpp
 --- a/src/Gui/NetworkRetriever.cpp
 +++ b/src/Gui/NetworkRetriever.cpp
-@@ -90,12 +90,14 @@
+@@ -90,12 +90,14 @@ NetworkRetriever::NetworkRetriever(QObje
      wget = new QProcess(this);
  
      // if wgets exits emit signal
@@ -1536,10 +1536,10 @@ diff -ruN a/src/Gui/NetworkRetriever.cpp b/src/Gui/NetworkRetriever.cpp
  
      // if application quits kill wget immediately to avoid dangling processes
      connect(qApp, &QApplication::lastWindowClosed, wget, &QProcess::kill);
-diff -ruN a/src/Gui/NotificationArea.cpp b/src/Gui/NotificationArea.cpp
+diff -ruNp a/src/Gui/NotificationArea.cpp b/src/Gui/NotificationArea.cpp
 --- a/src/Gui/NotificationArea.cpp
 +++ b/src/Gui/NotificationArea.cpp
-@@ -699,9 +699,12 @@
+@@ -699,9 +699,12 @@ protected:
          QObject::connect(tableWidget, &QTreeWidget::customContextMenuRequested, [&](const QPoint& pos) {
              auto selectedItems = tableWidget->selectedItems();
  
@@ -1554,7 +1554,7 @@ diff -ruN a/src/Gui/NotificationArea.cpp b/src/Gui/NotificationArea.cpp
                  for (auto it : std::as_const(selectedItems)) {
                      delete it;
                  }
-@@ -709,9 +712,9 @@
+@@ -709,9 +712,9 @@ protected:
  
              del->setEnabled(!selectedItems.isEmpty());
  
@@ -1566,7 +1566,7 @@ diff -ruN a/src/Gui/NotificationArea.cpp b/src/Gui/NotificationArea.cpp
                  tr("Delete User Notifications"),
                  this,
                  &NotificationsAction::deleteNotifications
-@@ -719,13 +722,20 @@
+@@ -719,13 +722,20 @@ protected:
  
              delnotifications->setEnabled(tableWidget->topLevelItemCount() > 0);
  
@@ -1590,7 +1590,7 @@ diff -ruN a/src/Gui/NotificationArea.cpp b/src/Gui/NotificationArea.cpp
          });
          // NOLINTEND
  
-@@ -996,12 +1006,15 @@
+@@ -996,12 +1006,15 @@ void NotificationArea::mousePressEvent(Q
      // Contextual menu (e.g. to delete Notifications or all messages (Notifications, Errors,
      // Warnings and Critical messages)
      if (e->button() == Qt::RightButton && hitButton(e->pos())) {
@@ -1608,7 +1608,7 @@ diff -ruN a/src/Gui/NotificationArea.cpp b/src/Gui/NotificationArea.cpp
              // guard to avoid modifying the notification list and indices while creating the tooltip
              lock_guard<std::mutex> g(pImp->mutexNotification);
              na->deleteNotifications();
-@@ -1010,7 +1023,7 @@
+@@ -1010,7 +1023,7 @@ void NotificationArea::mousePressEvent(Q
  
          delnotifications->setEnabled(!na->isEmpty());
  
@@ -1617,7 +1617,7 @@ diff -ruN a/src/Gui/NotificationArea.cpp b/src/Gui/NotificationArea.cpp
              // guard to avoid modifying the notification list and indices while creating the tooltip
              lock_guard<std::mutex> g(pImp->mutexNotification);
              na->deleteAll();
-@@ -1020,9 +1033,15 @@
+@@ -1020,9 +1033,15 @@ void NotificationArea::mousePressEvent(Q
  
          delall->setEnabled(!na->isEmpty());
  
@@ -1635,10 +1635,10 @@ diff -ruN a/src/Gui/NotificationArea.cpp b/src/Gui/NotificationArea.cpp
      }
      QPushButton::mousePressEvent(e);
  }
-diff -ruN a/src/Gui/OverlayWidgets.cpp b/src/Gui/OverlayWidgets.cpp
+diff -ruNp a/src/Gui/OverlayWidgets.cpp b/src/Gui/OverlayWidgets.cpp
 --- a/src/Gui/OverlayWidgets.cpp
 +++ b/src/Gui/OverlayWidgets.cpp
-@@ -1116,6 +1116,26 @@
+@@ -1116,6 +1116,26 @@ void OverlayTabWidget::syncAutoMode()
  void OverlayTabWidget::onAction(QAction* action)
  {
      if (action == &actAutoMode) {
@@ -1665,7 +1665,7 @@ diff -ruN a/src/Gui/OverlayWidgets.cpp b/src/Gui/OverlayWidgets.cpp
          action = autoModeMenu.exec(QCursor::pos());
          if (action == &actNoAutoMode) {
              setAutoMode(AutoMode::NoAutoMode);
-@@ -1133,6 +1153,7 @@
+@@ -1133,6 +1153,7 @@ void OverlayTabWidget::onAction(QAction*
              setAutoMode(AutoMode::EditHide);
          }
          return;
@@ -1673,10 +1673,10 @@ diff -ruN a/src/Gui/OverlayWidgets.cpp b/src/Gui/OverlayWidgets.cpp
      }
      else if (action == &actOverlay) {
          OverlayManager::instance()->setOverlayMode(OverlayManager::OverlayMode::ToggleActive);
-diff -ruN a/src/Gui/PrefWidgets.cpp b/src/Gui/PrefWidgets.cpp
+diff -ruNp a/src/Gui/PrefWidgets.cpp b/src/Gui/PrefWidgets.cpp
 --- a/src/Gui/PrefWidgets.cpp
 +++ b/src/Gui/PrefWidgets.cpp
-@@ -755,6 +755,28 @@
+@@ -755,6 +755,28 @@ void PrefQuantitySpinBox::contextMenuEve
      clearListAction->setDisabled(history.empty());
  
      // call the menu
@@ -1705,7 +1705,7 @@ diff -ruN a/src/Gui/PrefWidgets.cpp b/src/Gui/PrefWidgets.cpp
      QAction* userAction = menu->exec(event->globalPos());
  
      // look what the user has chosen
-@@ -770,6 +792,7 @@
+@@ -770,6 +792,7 @@ void PrefQuantitySpinBox::contextMenuEve
              lineEdit()->setText(prop.toString());
          }
      }
@@ -1713,7 +1713,7 @@ diff -ruN a/src/Gui/PrefWidgets.cpp b/src/Gui/PrefWidgets.cpp
  }
  
  void PrefQuantitySpinBox::wheelEvent(QWheelEvent* event)
-diff -ruN a/src/Gui/PreferencePackManager.cpp b/src/Gui/PreferencePackManager.cpp
+diff -ruNp a/src/Gui/PreferencePackManager.cpp b/src/Gui/PreferencePackManager.cpp
 --- a/src/Gui/PreferencePackManager.cpp
 +++ b/src/Gui/PreferencePackManager.cpp
 @@ -27,6 +27,7 @@
@@ -1724,7 +1724,7 @@ diff -ruN a/src/Gui/PreferencePackManager.cpp b/src/Gui/PreferencePackManager.cp
  #include <boost/algorithm/string.hpp>
  #include <QDir>
  
-@@ -391,7 +392,17 @@
+@@ -391,7 +392,17 @@ bool PreferencePackManager::apply(const
          return wasApplied;
      }
      else {
@@ -1743,10 +1743,10 @@ diff -ruN a/src/Gui/PreferencePackManager.cpp b/src/Gui/PreferencePackManager.cp
      }
  }
  
-diff -ruN a/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp b/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp
+diff -ruNp a/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp b/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp
 --- a/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp
 +++ b/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp
-@@ -269,7 +269,14 @@
+@@ -269,7 +269,14 @@ DlgSettingsWorkbenchesImp::DlgSettingsWo
          ui->wbList,
          &QListWidget::customContextMenuRequested,
          this,
@@ -1762,10 +1762,10 @@ diff -ruN a/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp b/src/Gui/Pref
      );
  
      connect(
-diff -ruN a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
+diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
 --- a/src/Gui/ProgressBar.cpp
 +++ b/src/Gui/ProgressBar.cpp
-@@ -179,7 +179,11 @@
+@@ -179,7 +179,11 @@ void SequencerBar::checkAbort()
              return;
          }
          d->checkAbortTime.restart();
@@ -1777,7 +1777,7 @@ diff -ruN a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
          return;
      }
      // restore cursor
-@@ -266,7 +270,9 @@
+@@ -266,7 +270,9 @@ void SequencerBar::setValue(int step)
              }
              else {
                  d->bar->setValueEx(d->bar->value() + 1);
@@ -1787,7 +1787,7 @@ diff -ruN a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
              }
          }
      }
-@@ -292,7 +298,18 @@
+@@ -292,7 +298,18 @@ void SequencerBar::setValue(int step)
                      showRemainingTime();
                  }
                  d->bar->resetObserveEventFilter();
@@ -1806,10 +1806,10 @@ diff -ruN a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
              }
          }
      }
-diff -ruN a/src/Gui/PythonConsole.cpp b/src/Gui/PythonConsole.cpp
+diff -ruNp a/src/Gui/PythonConsole.cpp b/src/Gui/PythonConsole.cpp
 --- a/src/Gui/PythonConsole.cpp
 +++ b/src/Gui/PythonConsole.cpp
-@@ -1331,57 +1331,74 @@
+@@ -1331,57 +1331,74 @@ void PythonConsole::overrideCursor(const
  
  void PythonConsole::contextMenuEvent(QContextMenuEvent* e)
  {
@@ -1905,10 +1905,10 @@ diff -ruN a/src/Gui/PythonConsole.cpp b/src/Gui/PythonConsole.cpp
  }
  
  void PythonConsole::onClearConsole()
-diff -ruN a/src/Gui/PythonEditor.cpp b/src/Gui/PythonEditor.cpp
+diff -ruNp a/src/Gui/PythonEditor.cpp b/src/Gui/PythonEditor.cpp
 --- a/src/Gui/PythonEditor.cpp
 +++ b/src/Gui/PythonEditor.cpp
-@@ -184,8 +184,14 @@
+@@ -184,8 +184,14 @@ void PythonEditor::contextMenuEvent(QCon
          execInConsole->setShortcut(QKeySequence(QStringLiteral("ALT+Shift+P")));
      }
  
@@ -1923,10 +1923,10 @@ diff -ruN a/src/Gui/PythonEditor.cpp b/src/Gui/PythonEditor.cpp
  }
  
  void PythonEditor::keyPressEvent(QKeyEvent* e)
-diff -ruN a/src/Gui/ReportView.cpp b/src/Gui/ReportView.cpp
+diff -ruNp a/src/Gui/ReportView.cpp b/src/Gui/ReportView.cpp
 --- a/src/Gui/ReportView.cpp
 +++ b/src/Gui/ReportView.cpp
-@@ -732,8 +732,14 @@
+@@ -732,8 +732,14 @@ void ReportOutput::contextMenuEvent(QCon
      menu->addSeparator();
      menu->addAction(tr("Save As…"), this, &ReportOutput::onSaveAs);
  
@@ -1941,10 +1941,10 @@ diff -ruN a/src/Gui/ReportView.cpp b/src/Gui/ReportView.cpp
  }
  
  void ReportOutput::onSaveAs()
-diff -ruN a/src/Gui/Selection/SelectionView.cpp b/src/Gui/Selection/SelectionView.cpp
+diff -ruNp a/src/Gui/Selection/SelectionView.cpp b/src/Gui/Selection/SelectionView.cpp
 --- a/src/Gui/Selection/SelectionView.cpp
 +++ b/src/Gui/Selection/SelectionView.cpp
-@@ -650,38 +650,46 @@
+@@ -650,38 +650,46 @@ void SelectionView::onItemContextMenu(co
      if (!item) {
          return;
      }
@@ -2000,10 +2000,10 @@ diff -ruN a/src/Gui/Selection/SelectionView.cpp b/src/Gui/Selection/SelectionVie
  }
  
  void SelectionView::onUpdate()
-diff -ruN a/src/Gui/Selection/SoFCUnifiedSelection.cpp b/src/Gui/Selection/SoFCUnifiedSelection.cpp
+diff -ruNp a/src/Gui/Selection/SoFCUnifiedSelection.cpp b/src/Gui/Selection/SoFCUnifiedSelection.cpp
 --- a/src/Gui/Selection/SoFCUnifiedSelection.cpp
 +++ b/src/Gui/Selection/SoFCUnifiedSelection.cpp
-@@ -919,6 +919,17 @@
+@@ -919,6 +919,17 @@ void SoFCUnifiedSelection::handleEvent(S
  
  void SoFCUnifiedSelection::GLRenderBelowPath(SoGLRenderAction* action)
  {
@@ -2021,10 +2021,10 @@ diff -ruN a/src/Gui/Selection/SoFCUnifiedSelection.cpp b/src/Gui/Selection/SoFCU
      inherited::GLRenderBelowPath(action);
  
      // nothing picked, so restore the arrow cursor if needed
-diff -ruN a/src/Gui/SoFCColorBar.cpp b/src/Gui/SoFCColorBar.cpp
+diff -ruNp a/src/Gui/SoFCColorBar.cpp b/src/Gui/SoFCColorBar.cpp
 --- a/src/Gui/SoFCColorBar.cpp
 +++ b/src/Gui/SoFCColorBar.cpp
-@@ -345,26 +345,40 @@
+@@ -345,26 +345,40 @@ void SoFCColorBar::handleEvent(SoHandleE
          else if ((e->getButton() == SoMouseButtonEvent::BUTTON2)) {
              if (e->getState() == SoButtonEvent::UP) {
                  SoFCColorBarBase* current = getActiveBar();
@@ -2078,10 +2078,10 @@ diff -ruN a/src/Gui/SoFCColorBar.cpp b/src/Gui/SoFCColorBar.cpp
              }
          }
      }
-diff -ruN a/src/Gui/SoFCDB.cpp b/src/Gui/SoFCDB.cpp
+diff -ruNp a/src/Gui/SoFCDB.cpp b/src/Gui/SoFCDB.cpp
 --- a/src/Gui/SoFCDB.cpp
 +++ b/src/Gui/SoFCDB.cpp
-@@ -784,3 +784,11 @@
+@@ -784,3 +784,11 @@ SoGroup* Gui::SoFCDB::getStorage()
      assert(storage);  // call init first.
      return storage;
  }
@@ -2093,7 +2093,7 @@ diff -ruN a/src/Gui/SoFCDB.cpp b/src/Gui/SoFCDB.cpp
 +void intrusive_ptr_add_ref(const SoBase* p) { if (p) { p->ref(); } }
 +void intrusive_ptr_release(const SoBase* p) { if (p) { p->unref(); } }
 +#endif
-diff -ruN a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
+diff -ruNp a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
 --- a/src/Gui/StartupProcess.cpp
 +++ b/src/Gui/StartupProcess.cpp
 @@ -22,6 +22,10 @@
@@ -2128,7 +2128,7 @@ diff -ruN a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
  using namespace Gui;
  
  
-@@ -233,11 +244,34 @@
+@@ -233,11 +244,34 @@ void StartupPostProcess::execute()
      setQtStyle();
      setStyleSheet();
      checkOpenGL();
@@ -2163,7 +2163,7 @@ diff -ruN a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
      checkVersionMigration();
  }
  
-@@ -402,6 +436,12 @@
+@@ -402,6 +436,12 @@ void StartupPostProcess::loadOpenInvento
          // init the Inventor subsystem
          Application::initOpenInventor();
      }
@@ -2176,7 +2176,7 @@ diff -ruN a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
  }
  
  void StartupPostProcess::setBranding()
-@@ -520,6 +560,11 @@
+@@ -520,6 +560,11 @@ void StartupPostProcess::activateWorkben
      if (!Application::hiddenMainWindow()) {
          Base::Console().log("Init: Showing main window\n");
          mainWindow->loadWindowSettings();
@@ -2188,10 +2188,10 @@ diff -ruN a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
      }
  
      // initialize spaceball.
-diff -ruN a/src/Gui/ToolBarManager.cpp b/src/Gui/ToolBarManager.cpp
+diff -ruNp a/src/Gui/ToolBarManager.cpp b/src/Gui/ToolBarManager.cpp
 --- a/src/Gui/ToolBarManager.cpp
 +++ b/src/Gui/ToolBarManager.cpp
-@@ -179,6 +179,14 @@
+@@ -179,6 +179,14 @@ ToolBar::ToolBar(QWidget* parent)
      setupConnections();
  }
  
@@ -2206,7 +2206,7 @@ diff -ruN a/src/Gui/ToolBarManager.cpp b/src/Gui/ToolBarManager.cpp
  void ToolBar::undock()
  {
      {
-@@ -1047,7 +1055,9 @@
+@@ -1047,7 +1055,9 @@ bool ToolBarManager::addToolBarToArea(QO
  
  bool ToolBarManager::showContextMenu(QObject* source)
  {
@@ -2217,7 +2217,7 @@ diff -ruN a/src/Gui/ToolBarManager.cpp b/src/Gui/ToolBarManager.cpp
      QLayout* layout = nullptr;
      ToolBarAreaWidget* area = nullptr;
      if (getMainWindow()->statusBar() == source) {
-@@ -1057,10 +1067,12 @@
+@@ -1057,10 +1067,12 @@ bool ToolBarManager::showContextMenu(QOb
      else if (getMainWindow()->menuBar() == source) {
          area = findToolBarAreaWidget();
          if (!area) {
@@ -2230,7 +2230,7 @@ diff -ruN a/src/Gui/ToolBarManager.cpp b/src/Gui/ToolBarManager.cpp
          return false;
      }
  
-@@ -1068,17 +1080,23 @@
+@@ -1068,17 +1080,23 @@ bool ToolBarManager::showContextMenu(QOb
          auto action = toolbar->toggleViewAction();
          if ((action->isVisible() || toolbar->isVisible()) && action->text().size()) {
              action->setVisible(true);
@@ -2257,10 +2257,10 @@ diff -ruN a/src/Gui/ToolBarManager.cpp b/src/Gui/ToolBarManager.cpp
      return true;
  }
  
-diff -ruN a/src/Gui/ToolBarManager.h b/src/Gui/ToolBarManager.h
+diff -ruNp a/src/Gui/ToolBarManager.h b/src/Gui/ToolBarManager.h
 --- a/src/Gui/ToolBarManager.h
 +++ b/src/Gui/ToolBarManager.h
-@@ -132,7 +132,13 @@
+@@ -132,7 +132,13 @@ public:
      ToolBar();
      explicit ToolBar(QWidget* parent);
  
@@ -2274,10 +2274,10 @@ diff -ruN a/src/Gui/ToolBarManager.h b/src/Gui/ToolBarManager.h
  
      void undock();
      void updateCustomGripVisibility();
-diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
+diff -ruNp a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
 --- a/src/Gui/Tree.cpp
 +++ b/src/Gui/Tree.cpp
-@@ -1139,14 +1139,19 @@
+@@ -1139,14 +1139,19 @@ void TreeWidget::contextMenuEvent(QConte
      view << "Std_Properties" << "Separator" << "Std_Expressions";
      Workbench::createLinkMenu(&view);
  
@@ -2305,7 +2305,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
  
      // get the current item
      this->contextItem = itemAt(e->pos());
-@@ -1160,41 +1165,41 @@
+@@ -1160,41 +1165,41 @@ void TreeWidget::contextMenuEvent(QConte
          // App::GetApplication().setActiveDocument(doc);
  
          showHiddenAction->setChecked(docitem->showHidden());
@@ -2360,7 +2360,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
      }
      else if (this->contextItem && this->contextItem->type() == ObjectType) {
          auto objitem = static_cast<DocumentObjectItem*>(this->contextItem);
-@@ -1212,45 +1217,45 @@
+@@ -1212,45 +1217,45 @@ void TreeWidget::contextMenuEvent(QConte
          }
  
          showHiddenAction->setChecked(doc->ShowHidden.getValue());
@@ -2422,7 +2422,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
              }
          }
      }
-@@ -1259,14 +1264,14 @@
+@@ -1259,14 +1264,14 @@ void TreeWidget::contextMenuEvent(QConte
      // add a submenu to active a document if two or more exist
      std::vector<App::Document*> docs = App::GetApplication().getDocuments();
      if (docs.size() >= 2) {
@@ -2441,7 +2441,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
              action->setCheckable(true);
              action->setStatusTip(tr("Activates document %1").arg(label));
              action->setData(QByteArray((*it)->getName()));
-@@ -1278,14 +1283,17 @@
+@@ -1278,14 +1283,17 @@ void TreeWidget::contextMenuEvent(QConte
          if (active) {
              active->setChecked(true);
          }
@@ -2464,7 +2464,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
  
      QAction* action = new QAction(tr("Show Description"), this);
      QAction* internalNameAction = new QAction(tr("Show Internal Name"), this);
-@@ -1300,7 +1308,7 @@
+@@ -1300,7 +1308,7 @@ void TreeWidget::contextMenuEvent(QConte
      );
      action->setChecked(!hGrp->GetBool("HideColumn", true));
  
@@ -2473,7 +2473,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
      QObject::connect(action, &QAction::triggered, this, [this, action, internalNameAction, hGrp]() {
          bool show = action->isChecked();
          hGrp->SetBool("HideColumn", !show);
-@@ -1314,7 +1322,7 @@
+@@ -1314,7 +1322,7 @@ void TreeWidget::contextMenuEvent(QConte
  
      internalNameAction->setChecked(!hGrp->GetBool("HideInternalNames", true));
  
@@ -2482,7 +2482,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
  
      QObject::connect(
          internalNameAction,
-@@ -1328,9 +1336,18 @@
+@@ -1328,9 +1336,18 @@ void TreeWidget::contextMenuEvent(QConte
          }
      );
  
@@ -2503,7 +2503,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
          }
          catch (Base::Exception& e) {
              e.reportException();
-@@ -1342,6 +1359,12 @@
+@@ -1342,6 +1359,12 @@ void TreeWidget::contextMenuEvent(QConte
              FC_ERR("Unknown exception");
          }
          contextItem = nullptr;
@@ -2516,7 +2516,7 @@ diff -ruN a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
      }
  }
  
-diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
+diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 --- a/src/Gui/View3DInventorViewer.cpp
 +++ b/src/Gui/View3DInventorViewer.cpp
 @@ -21,6 +21,9 @@
@@ -2529,7 +2529,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  
  #include <Inventor/SoFCPlacementIndicatorKit.h>
  
-@@ -1473,6 +1476,15 @@
+@@ -1473,6 +1476,15 @@ void View3DInventorViewer::setRenderCach
  
      auto caching = mode == 0 ? SoSeparator::AUTO : (mode == 1 ? SoSeparator::ON : SoSeparator::OFF);
  
@@ -2545,7 +2545,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      SoFCSeparator::setCacheMode(caching);
  }
  
-@@ -2490,6 +2502,32 @@
+@@ -2490,6 +2502,32 @@ void View3DInventorViewer::renderGLImage
      glRasterPos2f(0, 0);
      glDrawPixels(glImage.width(), glImage.height(), GL_BGRA, GL_UNSIGNED_BYTE, glImage.bits());
  
@@ -2578,7 +2578,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      printDimension();
  
      for (auto it : this->graphicsItems) {
-@@ -2522,6 +2560,47 @@
+@@ -2522,6 +2560,47 @@ void View3DInventorViewer::renderScene()
      const SbViewportRegion vp = this->getSoRenderManager()->getViewportRegion();
      SbVec2s origin = vp.getViewportOriginPixels();
      SbVec2s size = vp.getViewportSizePixels();
@@ -2626,7 +2626,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      glViewport(origin[0], origin[1], size[0], size[1]);
  
      const QColor col = this->backgroundColor();
-@@ -2535,6 +2614,15 @@
+@@ -2535,6 +2614,15 @@ void View3DInventorViewer::renderScene()
  #endif
  
      SoGLRenderAction* glra = this->getSoRenderManager()->getGLRenderAction();
@@ -2642,7 +2642,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      SoState* state = glra->getState();
  
      // Render our scenegraph with the image.
-@@ -2545,6 +2633,10 @@
+@@ -2545,6 +2633,10 @@ void View3DInventorViewer::renderScene()
          SoGLRenderActionElement::set(state, glra);
          SoGLVBOActivatedElement::set(state, this->vboEnabled);
          drawSingleBackground(col);
@@ -2653,7 +2653,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          glra->apply(this->backgroundroot);
      }
  
-@@ -2555,6 +2647,17 @@
+@@ -2555,6 +2647,17 @@ void View3DInventorViewer::renderScene()
      }
  
      try {
@@ -2671,7 +2671,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +2782,51 @@
+@@ -2679,6 +2782,51 @@ void View3DInventorViewer::renderScene()
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -2723,7 +2723,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  }
  
  void View3DInventorViewer::setSeekMode(bool on)
-@@ -2751,6 +2899,7 @@
+@@ -2751,6 +2899,7 @@ void View3DInventorViewer::getDimensions
      else {
          fHeight *= aspectRatio;
      }
@@ -2731,7 +2731,7 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  }
  
  void View3DInventorViewer::printDimension() const
-@@ -3564,9 +3713,13 @@
+@@ -3564,9 +3713,13 @@ void View3DInventorViewer::viewAll()
                                                                                / 4.0);  // NOLINT
              }
  
@@ -2745,10 +2745,10 @@ diff -ruN a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  
              // make sure everything is visible
              if (cam) {
-diff -ruN a/src/Gui/ViewProvider.cpp b/src/Gui/ViewProvider.cpp
+diff -ruNp a/src/Gui/ViewProvider.cpp b/src/Gui/ViewProvider.cpp
 --- a/src/Gui/ViewProvider.cpp
 +++ b/src/Gui/ViewProvider.cpp
-@@ -551,6 +551,13 @@
+@@ -551,6 +551,13 @@ const string ViewProvider::getOverrideMo
  
  void ViewProvider::setModeSwitch()
  {
@@ -2762,10 +2762,10 @@ diff -ruN a/src/Gui/ViewProvider.cpp b/src/Gui/ViewProvider.cpp
      if (viewOverrideMode == -1) {
          pcModeSwitch->whichChild = _iActualMode;
      }
-diff -ruN a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/PropertyEditor.cpp
+diff -ruNp a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/PropertyEditor.cpp
 --- a/src/Gui/propertyeditor/PropertyEditor.cpp
 +++ b/src/Gui/propertyeditor/PropertyEditor.cpp
-@@ -954,7 +954,10 @@
+@@ -954,7 +954,10 @@ void PropertyEditor::removeProperties(co
  
  void PropertyEditor::contextMenuEvent(QContextMenuEvent*)
  {
@@ -2777,7 +2777,7 @@ diff -ruN a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/P
      auto contextIndex = currentIndex();
  
      std::unordered_set<App::Property*> props = acquireSelectedProperties();
-@@ -963,15 +966,15 @@
+@@ -963,15 +966,15 @@ void PropertyEditor::contextMenuEvent(QC
      if (props.size() == 1) {
          const QVariant valueToCopy = contextIndex.data(Qt::DisplayRole);
          if (valueToCopy.isValid()) {
@@ -2796,7 +2796,7 @@ diff -ruN a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/P
      }
  
      // rename property group
-@@ -979,7 +982,7 @@
+@@ -979,7 +982,7 @@ void PropertyEditor::contextMenuEvent(QC
              return prop->testStatus(App::Property::PropDynamic)
                  && !boost::starts_with(prop->getName(), prop->getGroup());
          })) {
@@ -2805,7 +2805,7 @@ diff -ruN a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/P
      }
  
      // rename property
-@@ -987,8 +990,8 @@
+@@ -987,8 +990,8 @@ void PropertyEditor::contextMenuEvent(QC
          auto prop = *props.begin();
          if (prop->testStatus(App::Property::PropDynamic)
              && !prop->testStatus(App::Property::LockDynamic)) {
@@ -2816,7 +2816,7 @@ diff -ruN a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/P
          }
      }
  
-@@ -1005,22 +1008,22 @@
+@@ -1005,22 +1008,22 @@ void PropertyEditor::contextMenuEvent(QC
          }
      }
      if (canRemove) {
@@ -2845,7 +2845,7 @@ diff -ruN a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/P
  
      // expression
      if (props.size() == 1) {
-@@ -1031,17 +1034,17 @@
+@@ -1031,17 +1034,17 @@ void PropertyEditor::contextMenuEvent(QC
              && !(prop->getType() & App::Prop_ReadOnly)) {
              contextIndex = propertyModel->buddy(contextIndex);
              setCurrentIndex(contextIndex);
@@ -2868,7 +2868,7 @@ diff -ruN a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/P
  
          QAction* action;
          QString text;
-@@ -1072,178 +1075,194 @@
+@@ -1072,178 +1075,194 @@ void PropertyEditor::contextMenuEvent(QC
          _ACTION_SETUP(EvalOnRestore);
          _ACTION_SETUP(CopyOnChange);
  
@@ -3213,10 +3213,10 @@ diff -ruN a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/P
  }
  
  
-diff -ruN a/src/Main/CMakeLists.txt b/src/Main/CMakeLists.txt
+diff -ruNp a/src/Main/CMakeLists.txt b/src/Main/CMakeLists.txt
 --- a/src/Main/CMakeLists.txt
 +++ b/src/Main/CMakeLists.txt
-@@ -25,6 +25,133 @@
+@@ -25,6 +25,133 @@ if(BUILD_GUI)
          )
      endif(NOT BUILD_DYNAMIC_LINK_PYTHON)
  
@@ -3350,7 +3350,7 @@ diff -ruN a/src/Main/CMakeLists.txt b/src/Main/CMakeLists.txt
      add_executable(FreeCADMain WIN32 ${FreeCAD_SRCS})
      target_link_libraries(FreeCADMain ${FreeCAD_LIBS})
      if (FREECAD_WARN_ERROR)
-@@ -73,6 +200,16 @@
+@@ -73,6 +200,16 @@ if(NOT BUILD_DYNAMIC_LINK_PYTHON)
      )
  endif(NOT BUILD_DYNAMIC_LINK_PYTHON)
  
@@ -3367,10 +3367,10 @@ diff -ruN a/src/Main/CMakeLists.txt b/src/Main/CMakeLists.txt
  target_link_libraries(FreeCADMainCmd
      ${FreeCADMainCmd_LIBS}
  )
-diff -ruN a/src/Main/MainCmd.cpp b/src/Main/MainCmd.cpp
+diff -ruNp a/src/Main/MainCmd.cpp b/src/Main/MainCmd.cpp
 --- a/src/Main/MainCmd.cpp
 +++ b/src/Main/MainCmd.cpp
-@@ -52,12 +52,24 @@
+@@ -52,12 +52,24 @@ const auto sBanner = fmt::format(
      FCCopyrightYear
  );
  
@@ -3395,10 +3395,10 @@ diff -ruN a/src/Main/MainCmd.cpp b/src/Main/MainCmd.cpp
  #if defined(__MINGW32__)
      const char* mingw_prefix = getenv("MINGW_PREFIX");
      const char* py_home = getenv("PYTHONHOME");
-diff -ruN a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
+diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -130,8 +130,194 @@
+@@ -130,8 +130,194 @@ static void displayCritical(const QStrin
      }
  }
  
@@ -3593,10 +3593,10 @@ diff -ruN a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
  #if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
      setlocale(LC_ALL, "");       // use native environment settings
      setlocale(LC_NUMERIC, "C");  // except for numbers to not break XML import
-diff -ruN a/src/Mod/Draft/draftobjects/shapestring.py b/src/Mod/Draft/draftobjects/shapestring.py
+diff -ruNp a/src/Mod/Draft/draftobjects/shapestring.py b/src/Mod/Draft/draftobjects/shapestring.py
 --- a/src/Mod/Draft/draftobjects/shapestring.py
 +++ b/src/Mod/Draft/draftobjects/shapestring.py
-@@ -42,6 +42,35 @@
+@@ -42,6 +42,35 @@ from draftutils.messages import _err, _l
  from draftutils.translate import translate
  
  
@@ -3632,7 +3632,7 @@ diff -ruN a/src/Mod/Draft/draftobjects/shapestring.py b/src/Mod/Draft/draftobjec
  class ShapeString(DraftObject):
      """The ShapeString object"""
  
-@@ -164,6 +193,11 @@
+@@ -164,6 +193,11 @@ class ShapeString(DraftObject):
          else:
              font_file = obj.FontFile
  
@@ -3644,7 +3644,7 @@ diff -ruN a/src/Mod/Draft/draftobjects/shapestring.py b/src/Mod/Draft/draftobjec
          # File checks:
          if not os.path.exists(font_file):
              _err(obj.Label + ": " + translate("draft", "Font file not found"))
-diff -ruN a/src/Mod/Fem/App/FemVTKTools.cpp b/src/Mod/Fem/App/FemVTKTools.cpp
+diff -ruNp a/src/Mod/Fem/App/FemVTKTools.cpp b/src/Mod/Fem/App/FemVTKTools.cpp
 --- a/src/Mod/Fem/App/FemVTKTools.cpp
 +++ b/src/Mod/Fem/App/FemVTKTools.cpp
 @@ -60,6 +60,7 @@
@@ -3655,24 +3655,24 @@ diff -ruN a/src/Mod/Fem/App/FemVTKTools.cpp b/src/Mod/Fem/App/FemVTKTools.cpp
  #include <vtkXMLUnstructuredGridReader.h>
  #include <vtkXMLUnstructuredGridWriter.h>
  
-@@ -616,6 +617,13 @@
+@@ -616,6 +617,13 @@ App::DocumentObject* FemVTKTools::readRe
          Base::Console().error("file name extension is not supported\n");
      }
  
 +    if (!ds.Get()) {
 +        // Nothing was read (unsupported extension, unreadable file, or a reader this build
 +        // cannot use). importVTKMesh() below dereferences the dataset, so stop here.
-+        Base::Console().Error("Failed to load VTK file %s\n", filename);
++        Base::Console().error("Failed to load VTK file %s\n", filename);
 +        return nullptr;
 +    }
 +
      App::Document* pcDoc = App::GetApplication().getActiveDocument();
      if (!pcDoc) {
          Base::Console().message("No active document is found thus created\n");
-diff -ruN a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
+diff -ruNp a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 --- a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 +++ b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
-@@ -56,6 +56,17 @@
+@@ -56,6 +56,17 @@ ViewProviderFemConstraint::ViewProviderF
      , pExtraTrans(nullptr)
      , ivFile(nullptr)
  {
@@ -3690,10 +3690,10 @@ diff -ruN a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/View
      pShapeSep = new SoSeparator();
      pShapeSep->ref();
      pMultCopy = new SoMultipleCopy();
-diff -ruN a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
+diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 --- a/src/Mod/Fem/femmesh/gmshtools.py
 +++ b/src/Mod/Fem/femmesh/gmshtools.py
-@@ -30,6 +30,7 @@
+@@ -30,6 +30,7 @@ __url__ = "https://www.freecad.org"
  import os
  import re
  import shutil
@@ -3701,7 +3701,7 @@ diff -ruN a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
  import subprocess
  from PySide.QtCore import QProcess, QThread
  
-@@ -46,6 +47,84 @@
+@@ -46,6 +47,84 @@ from femtools.objecttools import ObjectT
  
  class GmshError(Exception):
      pass
@@ -3786,7 +3786,7 @@ diff -ruN a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
  
  
  class GmshTools(ObjectTools):
-@@ -219,6 +298,16 @@
+@@ -219,6 +298,16 @@ class GmshTools(ObjectTools):
      def update_properties(self):
          self.mesh_obj.FemMesh = Fem.read(self.temp_file_mesh)
          self.rename_groups()
@@ -3803,7 +3803,7 @@ diff -ruN a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
  
      def create_mesh(self):
          # for backward compatibility only
-@@ -336,6 +425,13 @@
+@@ -336,6 +425,13 @@ class GmshTools(ObjectTools):
              from platform import system
  
              gmsh_path = shutil.which("gmsh")
@@ -3817,7 +3817,7 @@ diff -ruN a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
              if system() == "Darwin" and not gmsh_path:
                  gmsh_path = shutil.which("/Applications/Gmsh.app/Contents/MacOS/gmsh")
  
-@@ -413,6 +509,15 @@
+@@ -413,6 +509,15 @@ class GmshTools(ObjectTools):
                  fem_mesh.renameGroup(i, m.group("item"))
  
      def version(self):
@@ -3833,7 +3833,7 @@ diff -ruN a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
          self.get_gmsh_command()
          if shutil.which(self.gmsh_bin):
              found_message = "file found: " + self.gmsh_bin
-@@ -913,6 +1018,25 @@
+@@ -913,6 +1018,25 @@ class GmshTools(ObjectTools):
          geo.close()
  
      def run_gmsh_with_geo(self):
@@ -3859,10 +3859,10 @@ diff -ruN a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
          command_list = [self.gmsh_bin, "-", self.temp_file_geo]
          # print(command_list)
          try:
-diff -ruN a/src/Mod/Fem/femsolver/calculix/tasks.py b/src/Mod/Fem/femsolver/calculix/tasks.py
+diff -ruNp a/src/Mod/Fem/femsolver/calculix/tasks.py b/src/Mod/Fem/femsolver/calculix/tasks.py
 --- a/src/Mod/Fem/femsolver/calculix/tasks.py
 +++ b/src/Mod/Fem/femsolver/calculix/tasks.py
-@@ -38,6 +38,20 @@
+@@ -38,6 +38,20 @@ import FreeCAD
  from . import writer
  from .. import run
  from .. import settings
@@ -3883,7 +3883,7 @@ diff -ruN a/src/Mod/Fem/femsolver/calculix/tasks.py b/src/Mod/Fem/femsolver/calc
  from feminout import importCcxDatResults
  from feminout import importCcxFrdResults
  from femmesh import meshsetsgetter
-@@ -112,6 +126,18 @@
+@@ -112,6 +126,18 @@ class Solve(run.Solve):
      def run(self):
          self.pushStatus("Executing solver...\n")
  
@@ -3902,10 +3902,10 @@ diff -ruN a/src/Mod/Fem/femsolver/calculix/tasks.py b/src/Mod/Fem/femsolver/calc
          # get solver binary
          self.pushStatus("Get solver binary...\n")
          binary = settings.get_binary("Calculix")
-diff -ruN a/src/Mod/Fem/femsolver/task.py b/src/Mod/Fem/femsolver/task.py
+diff -ruNp a/src/Mod/Fem/femsolver/task.py b/src/Mod/Fem/femsolver/task.py
 --- a/src/Mod/Fem/femsolver/task.py
 +++ b/src/Mod/Fem/femsolver/task.py
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,7 @@ __url__ = "https://www.freecad.org"
  ## \addtogroup FEM
  #  @{
  
@@ -3913,7 +3913,7 @@ diff -ruN a/src/Mod/Fem/femsolver/task.py b/src/Mod/Fem/femsolver/task.py
  import threading
  import time
  
-@@ -127,6 +128,23 @@
+@@ -127,6 +128,23 @@ class Thread(Task):
  
      def start(self):
          super().start()
@@ -3937,10 +3937,10 @@ diff -ruN a/src/Mod/Fem/femsolver/task.py b/src/Mod/Fem/femsolver/task.py
          self._thread = threading.Thread(target=self.protector)
          self._thread.daemon = True
          self._thread.start()
-diff -ruN a/src/Mod/Fem/femtaskpanels/base_femlogtaskpanel.py b/src/Mod/Fem/femtaskpanels/base_femlogtaskpanel.py
+diff -ruNp a/src/Mod/Fem/femtaskpanels/base_femlogtaskpanel.py b/src/Mod/Fem/femtaskpanels/base_femlogtaskpanel.py
 --- a/src/Mod/Fem/femtaskpanels/base_femlogtaskpanel.py
 +++ b/src/Mod/Fem/femtaskpanels/base_femlogtaskpanel.py
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,7 @@ __url__ = "https://www.freecad.org"
  #  \ingroup FEM
  #  \brief base task panel for logging
  
@@ -3948,7 +3948,7 @@ diff -ruN a/src/Mod/Fem/femtaskpanels/base_femlogtaskpanel.py b/src/Mod/Fem/femt
  from abc import ABC, abstractmethod
  
  from PySide import QtCore
-@@ -244,6 +245,18 @@
+@@ -244,6 +245,18 @@ class _BaseLogTaskPanel(base_femtaskpane
          self.update_timer_text()
          self.timer.start(100)
  
@@ -3967,10 +3967,10 @@ diff -ruN a/src/Mod/Fem/femtaskpanels/base_femlogtaskpanel.py b/src/Mod/Fem/femt
          self._thread.start()
  
      def get_version(self):
-diff -ruN a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py b/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
+diff -ruNp a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py b/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
 --- a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
 +++ b/src/Mod/Fem/femtaskpanels/task_result_mechanical.py
-@@ -34,14 +34,25 @@
+@@ -34,14 +34,25 @@ __url__ = "https://www.freecad.org"
  import CreateLabels
  import inspect, sys
  
@@ -3999,7 +3999,7 @@ diff -ruN a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py b/src/Mod/Fem/fe
  import numpy as np
  import time, math
  
-@@ -444,6 +455,10 @@
+@@ -444,6 +455,10 @@ class _TaskPanel:
              self.none_selected(True)
  
      def show_histogram_clicked(self):
@@ -4010,7 +4010,7 @@ diff -ruN a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py b/src/Mod/Fem/fe
          if len(plt.get_fignums()) > 0:
              plt.show()
          else:
-@@ -602,6 +617,10 @@
+@@ -602,6 +617,10 @@ class _TaskPanel:
          (minm, maxm) = self.get_result_stats(res_type)
          self.update_colors_stats(res_values, res_unit, minm, maxm)
  
@@ -4021,10 +4021,10 @@ diff -ruN a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py b/src/Mod/Fem/fe
          if len(plt.get_fignums()) > 0:
              plt.close()
          plt.ioff()  # disable interactive mode so we have full control when plot is shown
-diff -ruN a/src/Mod/Fem/femtools/ccxtools.py b/src/Mod/Fem/femtools/ccxtools.py
+diff -ruNp a/src/Mod/Fem/femtools/ccxtools.py b/src/Mod/Fem/femtools/ccxtools.py
 --- a/src/Mod/Fem/femtools/ccxtools.py
 +++ b/src/Mod/Fem/femtools/ccxtools.py
-@@ -37,6 +37,20 @@
+@@ -37,6 +37,20 @@ import shutil
  import FreeCAD
  
  from femtools import femutils
@@ -4045,7 +4045,7 @@ diff -ruN a/src/Mod/Fem/femtools/ccxtools.py b/src/Mod/Fem/femtools/ccxtools.py
  from femtools import membertools
  
  from PySide import QtCore  # there might be a special reason this is not guarded ?!?
-@@ -400,6 +414,12 @@
+@@ -400,6 +414,12 @@ class FemToolsCcx(QtCore.QRunnable, QtCo
          ccx_binary_sig : str, optional
              Defaults to 'CalculiX'. Expected output from `ccx` when run empty.
  
@@ -4058,7 +4058,7 @@ diff -ruN a/src/Mod/Fem/femtools/ccxtools.py b/src/Mod/Fem/femtools/ccxtools.py
          """
          error_title = self.tr("No or wrong CalculiX binary ccx")
          self.ccx_binary = ccx_binary
-@@ -487,6 +507,15 @@
+@@ -487,6 +507,15 @@ class FemToolsCcx(QtCore.QRunnable, QtCo
          cwd = QtCore.QDir.currentPath()
          f = QtCore.QFileInfo(self.inp_file_name)
          QtCore.QDir.setCurrent(f.path())
@@ -4074,10 +4074,10 @@ diff -ruN a/src/Mod/Fem/femtools/ccxtools.py b/src/Mod/Fem/femtools/ccxtools.py
          p = subprocess.Popen(
              [self.ccx_binary, "-i ", f.baseName()],
              stdout=subprocess.PIPE,
-diff -ruN a/src/Mod/Mesh/App/Core/Functional.h b/src/Mod/Mesh/App/Core/Functional.h
+diff -ruNp a/src/Mod/Mesh/App/Core/Functional.h b/src/Mod/Mesh/App/Core/Functional.h
 --- a/src/Mod/Mesh/App/Core/Functional.h
 +++ b/src/Mod/Mesh/App/Core/Functional.h
-@@ -34,6 +34,12 @@
+@@ -34,6 +34,12 @@ namespace MeshCore
  template<class Iter, class Pred>
  static void parallel_sort(Iter begin, Iter end, Pred comp, int threads)
  {
@@ -4090,10 +4090,10 @@ diff -ruN a/src/Mod/Mesh/App/Core/Functional.h b/src/Mod/Mesh/App/Core/Functiona
      if (threads < 2 || end - begin < 2) {
          std::sort(begin, end, comp);
      }
-diff -ruN a/src/Mod/Mesh/Gui/CMakeLists.txt b/src/Mod/Mesh/Gui/CMakeLists.txt
+diff -ruNp a/src/Mod/Mesh/Gui/CMakeLists.txt b/src/Mod/Mesh/Gui/CMakeLists.txt
 --- a/src/Mod/Mesh/Gui/CMakeLists.txt
 +++ b/src/Mod/Mesh/Gui/CMakeLists.txt
-@@ -172,6 +172,11 @@
+@@ -172,6 +172,11 @@ if (MSVC)
      target_compile_options(MeshGui PRIVATE /wd4251 /wd4273 /wd4275)
  endif()
  
@@ -4105,10 +4105,10 @@ diff -ruN a/src/Mod/Mesh/Gui/CMakeLists.txt b/src/Mod/Mesh/Gui/CMakeLists.txt
  if (FREECAD_WARN_ERROR)
      target_compile_warn_error(MeshGui)
  endif()
-diff -ruN a/src/Mod/Mesh/Gui/RemeshGmsh.cpp b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
+diff -ruNp a/src/Mod/Mesh/Gui/RemeshGmsh.cpp b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
 --- a/src/Mod/Mesh/Gui/RemeshGmsh.cpp
 +++ b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
-@@ -115,6 +115,9 @@
+@@ -115,6 +115,9 @@ GmshWidget::~GmshWidget()
  void GmshWidget::setupConnections()
  {
      // clang-format off
@@ -4118,7 +4118,7 @@ diff -ruN a/src/Mod/Mesh/Gui/RemeshGmsh.cpp b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
      connect(&d->gmsh, &QProcess::started, this, &GmshWidget::started);
      connect(&d->gmsh, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
              this, &GmshWidget::finished);
-@@ -124,6 +127,7 @@
+@@ -124,6 +127,7 @@ void GmshWidget::setupConnections()
              this, &GmshWidget::readyReadStandardError);
      connect(&d->gmsh, &QProcess::readyReadStandardOutput,
              this, &GmshWidget::readyReadStandardOutput);
@@ -4126,10 +4126,10 @@ diff -ruN a/src/Mod/Mesh/Gui/RemeshGmsh.cpp b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
      connect(d->ui.killButton, &QPushButton::clicked,
              this, &GmshWidget::onKillButtonClicked);
      connect(d->ui.clearButton, &QPushButton::clicked,
-diff -ruN a/src/Mod/MeshPart/Gui/CMakeLists.txt b/src/Mod/MeshPart/Gui/CMakeLists.txt
+diff -ruNp a/src/Mod/MeshPart/Gui/CMakeLists.txt b/src/Mod/MeshPart/Gui/CMakeLists.txt
 --- a/src/Mod/MeshPart/Gui/CMakeLists.txt
 +++ b/src/Mod/MeshPart/Gui/CMakeLists.txt
-@@ -83,6 +83,11 @@
+@@ -83,6 +83,11 @@ if (MSVC)
      target_compile_options(MeshPartGui PRIVATE /wd4275)
  endif()
  
@@ -4141,10 +4141,10 @@ diff -ruN a/src/Mod/MeshPart/Gui/CMakeLists.txt b/src/Mod/MeshPart/Gui/CMakeList
  if (FREECAD_WARN_ERROR)
      target_compile_warn_error(MeshPartGui)
  endif()
-diff -ruN a/src/Mod/OpenSCAD/OpenSCADUtils.py b/src/Mod/OpenSCAD/OpenSCADUtils.py
+diff -ruNp a/src/Mod/OpenSCAD/OpenSCADUtils.py b/src/Mod/OpenSCAD/OpenSCADUtils.py
 --- a/src/Mod/OpenSCAD/OpenSCADUtils.py
 +++ b/src/Mod/OpenSCAD/OpenSCADUtils.py
-@@ -75,6 +75,12 @@
+@@ -75,6 +75,12 @@ def searchforopenscadexe():
      py3_find = shutil.which("openscad")
      if py3_find:
          return py3_find
@@ -4157,7 +4157,7 @@ diff -ruN a/src/Mod/OpenSCAD/OpenSCADUtils.py b/src/Mod/OpenSCAD/OpenSCADUtils.p
      FreeCAD.Console.PrintError(
          "shutil.which('openscad') did not return a result. Using fallback.\n"
      )
-diff -ruN a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
+diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
 --- a/src/Mod/Part/App/AppPart.cpp
 +++ b/src/Mod/Part/App/AppPart.cpp
 @@ -27,6 +27,9 @@
@@ -4170,7 +4170,7 @@ diff -ruN a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
  
  #include <FCConfig.h>
  
-@@ -222,6 +225,18 @@
+@@ -222,6 +225,18 @@ PyMOD_INIT_FUNC(Part)
      }
      Base::Console().log("Module: Part\n");
  
@@ -4189,10 +4189,10 @@ diff -ruN a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
      // This is highly experimental and we should keep an eye on it
      // if we have mysterious crashes
      // The argument must be 'Standard_False' to avoid FPE caused by
-diff -ruN a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
+diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
-@@ -493,6 +493,16 @@
+@@ -493,6 +493,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
              &mb,
              mindices,
              &tb,
@@ -4209,7 +4209,7 @@ diff -ruN a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.
              tindices,
              nbind,
              mbind,
-@@ -508,6 +518,19 @@
+@@ -508,6 +518,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
  }
  
  //****************************************************************************
@@ -4229,7 +4229,7 @@ diff -ruN a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.
  // renderSimpleArray: normal and coord from vertex_array;
  // no texture, color, highlight or selection but highet possible speed;
  // all vertices written in one go!
-@@ -716,15 +739,31 @@
+@@ -716,15 +739,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
          }
      }
  
@@ -4262,7 +4262,7 @@ diff -ruN a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.
          Binding mbind = this->findMaterialBinding(state);
          Binding nbind = this->findNormalBinding(state);
  
-@@ -2005,6 +2044,22 @@
+@@ -2005,6 +2044,22 @@ void SoBrepFaceSet::renderShape(
      SbBool texture
  )
  {
@@ -4285,7 +4285,7 @@ diff -ruN a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.
      // Can we use vertex buffer objects?
      if (hasVBO) {
          int nbinding = nbind;
-@@ -2067,6 +2122,24 @@
+@@ -2067,6 +2122,24 @@ void SoBrepFaceSet::renderShape(
          }
      }
  
@@ -4310,10 +4310,10 @@ diff -ruN a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.
      glBegin(GL_TRIANGLES);
      while (viptr + 2 < viendptr) {
          v1 = *viptr++;
-diff -ruN a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProviderExt.cpp
+diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProviderExt.cpp
 --- a/src/Mod/Part/Gui/ViewProviderExt.cpp
 +++ b/src/Mod/Part/Gui/ViewProviderExt.cpp
-@@ -1097,7 +1097,14 @@
+@@ -1097,7 +1097,14 @@ void ViewProviderPartExt::setupCoinGeome
      meshParams.Deflection = deflection;
      meshParams.Relative = Standard_False;
      meshParams.Angle = AngDeflectionRads;
@@ -4328,10 +4328,10 @@ diff -ruN a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProvider
      meshParams.AllowQualityDecrease = Standard_True;
  
      // Clear triangulation and PCurves from geometry which can slow down the process
-diff -ruN a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
+diff -ruNp a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
 --- a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
 +++ b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
-@@ -63,7 +63,14 @@
+@@ -63,7 +63,14 @@ using namespace PartDesignGui;
  PROPERTY_SOURCE_WITH_EXTENSIONS(PartDesignGui::ViewProviderDatum, Gui::ViewProviderGeometryObject)
  
  // static data
@@ -4346,10 +4346,10 @@ diff -ruN a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp b/src/Mod/PartDesign/Gu
  
  ViewProviderDatum::ViewProviderDatum()
  {
-diff -ruN a/src/Mod/Sketcher/App/planegcs/GCS.cpp b/src/Mod/Sketcher/App/planegcs/GCS.cpp
+diff -ruNp a/src/Mod/Sketcher/App/planegcs/GCS.cpp b/src/Mod/Sketcher/App/planegcs/GCS.cpp
 --- a/src/Mod/Sketcher/App/planegcs/GCS.cpp
 +++ b/src/Mod/Sketcher/App/planegcs/GCS.cpp
-@@ -4901,6 +4901,12 @@
+@@ -4901,6 +4901,12 @@ int System::diagnose(Algorithm alg)
          // identifyDependentParametersDenseQR(J, jacobianconstraintmap, pdiagnoselist, true)
          //
          auto fut = std::async(
@@ -4362,7 +4362,7 @@ diff -ruN a/src/Mod/Sketcher/App/planegcs/GCS.cpp b/src/Mod/Sketcher/App/planegc
              &System::identifyDependentParametersDenseQR,
              this,
              J,
-@@ -4978,6 +4984,12 @@
+@@ -4978,6 +4984,12 @@ int System::diagnose(Algorithm alg)
          // std::async(std::launch::deferred,&System::identifyDependentParametersSparseQR, this,
          // J, jacobianconstraintmap, pdiagnoselist, false);
          auto fut = std::async(
@@ -4375,10 +4375,46 @@ diff -ruN a/src/Mod/Sketcher/App/planegcs/GCS.cpp b/src/Mod/Sketcher/App/planegc
              &System::identifyDependentParametersSparseQR,
              this,
              J,
-diff -ruN a/src/Mod/TechDraw/Gui/QGIViewPart.cpp b/src/Mod/TechDraw/Gui/QGIViewPart.cpp
+diff -ruNp a/src/Mod/Start/App/CMakeLists.txt b/src/Mod/Start/App/CMakeLists.txt
+--- a/src/Mod/Start/App/CMakeLists.txt
++++ b/src/Mod/Start/App/CMakeLists.txt
+@@ -50,6 +50,11 @@ if(FREECAD_USE_PCH)
+ endif(FREECAD_USE_PCH)
+ 
+ target_link_libraries(Start ${Start_LIBS})
++if(EMSCRIPTEN)
++    # ThumbnailSource shells out to render document thumbnails, and Qt-for-wasm has no
++    # QProcess. Same inert stub FreeCADGui, MeshGui and MeshPartGui force-include.
++    target_compile_options(Start PRIVATE -include ${FCWEB_DW}/include/qprocess_stub.h)
++endif()
+ if (FREECAD_WARN_ERROR)
+     target_compile_warn_error(Start)
+ endif()
+diff -ruNp a/src/Mod/Start/App/FileUtilities.cpp b/src/Mod/Start/App/FileUtilities.cpp
+--- a/src/Mod/Start/App/FileUtilities.cpp
++++ b/src/Mod/Start/App/FileUtilities.cpp
+@@ -99,8 +99,17 @@ std::string Start::humanReadableSize(uin
+ std::string Start::getLastModifiedAsString(const Base::FileInfo& file)
+ {
+     Base::TimeInfo lastModified = file.lastModified();
++#if defined(__EMSCRIPTEN__)
++    // Qt for WebAssembly is built without the timezone feature, so QTimeZone has no utc().
++    // QDateTime::toUTC() is unconditional and means exactly the same thing.
++    return QDateTime::fromSecsSinceEpoch(lastModified.getTime_t())
++        .toUTC()
++        .toString(Qt::ISODate)
++        .toStdString();
++#else
+     return QDateTime::fromSecsSinceEpoch(lastModified.getTime_t())
+         .toTimeZone(QTimeZone::utc())
+         .toString(Qt::ISODate)
+         .toStdString();
++#endif
+ }
+diff -ruNp a/src/Mod/TechDraw/Gui/QGIViewPart.cpp b/src/Mod/TechDraw/Gui/QGIViewPart.cpp
 --- a/src/Mod/TechDraw/Gui/QGIViewPart.cpp
 +++ b/src/Mod/TechDraw/Gui/QGIViewPart.cpp
-@@ -71,7 +71,12 @@
+@@ -71,7 +71,12 @@ using namespace std;
  using DU = DrawUtil;
  using FillMode = QGIFace::FillMode;
  
@@ -4392,7 +4428,16 @@ diff -ruN a/src/Mod/TechDraw/Gui/QGIViewPart.cpp b/src/Mod/TechDraw/Gui/QGIViewP
  
  QGIViewPart::QGIViewPart()
  {
-diff -ruN a/src/Mod/TechDraw/Gui/Rez.cpp b/src/Mod/TechDraw/Gui/Rez.cpp
+@@ -1294,7 +1299,7 @@ void QGIViewPart::setGroupSelection(bool
+ double QGIViewPart::getLineWidth() {
+     auto vp{static_cast<ViewProviderViewPart*>(getViewProvider(getViewObject()))};
+ 
+-    return vp->LineWidth.getValue() * lineScaleFactor; // Thick
++    return vp->LineWidth.getValue() * lineScaleFactor(); // Thick
+ }
+ 
+ double QGIViewPart::getVertexSize() {
+diff -ruNp a/src/Mod/TechDraw/Gui/Rez.cpp b/src/Mod/TechDraw/Gui/Rez.cpp
 --- a/src/Mod/TechDraw/Gui/Rez.cpp
 +++ b/src/Mod/TechDraw/Gui/Rez.cpp
 @@ -29,12 +29,20 @@
