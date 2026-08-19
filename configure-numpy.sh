@@ -60,16 +60,24 @@ bash tools/gen-crossfiles.sh
 # of the interpreter's own, so the paths and sizes reported are the target's. This is the
 # same route pyodide takes. configure-matplotlib-weh.sh works around the identical problem
 # by hand for pybind11; this fixes it at the source for anything that asks.
+# `emmake make` writes it to builddir/emscripten-mt/build/lib.emscripten-<arch>-<ver>/,
+# not to the build root, so search deep enough to actually find it.
 MT="$ROOT/deps/src/cpython/builddir/emscripten-mt"
-SYSCFG="$(find "$MT" -maxdepth 2 -name '_sysconfigdata_*emscripten*.py' 2>/dev/null | head -1)"
+SYSCFG="$(find "$MT" -maxdepth 4 -name '_sysconfigdata_*.py' 2>/dev/null | head -1)"
 if [ -n "$SYSCFG" ]; then
     export _PYTHON_SYSCONFIGDATA_NAME="$(basename "$SYSCFG" .py)"
     export PYTHONPATH="$(dirname "$SYSCFG")${PYTHONPATH:+:$PYTHONPATH}"
-    echo "cross sysconfig: $_PYTHON_SYSCONFIGDATA_NAME (from $(dirname "$SYSCFG"))"
+    echo "cross sysconfig: $_PYTHON_SYSCONFIGDATA_NAME"
+    echo "                 from $(dirname "$SYSCFG")"
+    # Prove it took: the host interpreter should now report the TARGET's word size.
+    python3 -c "import sysconfig; print('  sysconfig reports SIZEOF_LONG =',
+                sysconfig.get_config_var('SIZEOF_LONG'), 'platform =', sysconfig.get_platform())" || true
 else
-    echo "!! no _sysconfigdata_*emscripten*.py under $MT."
+    echo "!! no _sysconfigdata_*.py under $MT (searched 4 levels)."
     echo "   Without it the host interpreter reports HOST include paths, meson puts them"
-    echo "   first, and every translation unit fails on LONG_BIT. Check build-cpython-mt.sh."
+    echo "   first, and every translation unit fails on LONG_BIT. What is actually there:"
+    find "$MT" -maxdepth 3 -name 'lib.*' -o -maxdepth 3 -name 'build' 2>/dev/null | sed 's/^/     /' | head
+    exit 1
 fi
 
 # meson's python= entry points at the non-.exe symlink deliberately (see the cross-file);
