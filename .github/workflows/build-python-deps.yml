@@ -1,0 +1,196 @@
+name: build the Python extension libraries (wasm)
+
+# The FreeCAD C++ compiles clean (2676/2676) but does not LINK, and this is most of what
+# stands between the two. MainGui.cpp's inittab registers builtin modules whose archives
+# have to exist at link time:
+#
+#   numpy._core._multiarray_umath, numpy.fft._pocketfft_umath,
+#   numpy.linalg._umath_linalg, numpy.linalg.lapack_lite   -> deps/wasm/lib/numpy-mod
+#   matplotlib.* (8 extensions)                            -> deps/wasm/lib/mpl-mod
+#   kiwisolver._cext                                       -> deps/wasm/lib/kiwi-mod
+#   _ctypes                                                -> deps/wasm/lib/ctypes-mod
+#   PIL._imaging                                           -> deps/wasm/lib/pil-mod
+#
+# The link is run with -sERROR_ON_UNDEFINED_SYMBOLS=0, so a missing archive does NOT fail
+# the build -- it produces a binary whose PyInit_* is a trapping stub and whose `import
+# numpy` dies in the browser. That is exactly the failure mode this repository keeps
+# getting caught by, so every lane below asserts its own output.
+#
+# Separate from build-deps.yml on purpose: these need the CPython BUILD TREE
+# (deps/src/cpython/builddir), not the staged libpython3.13.a, and rebuilding the whole
+# C++ stack to add a Python extension would be absurd. Own cache, own key.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lanes:
+        description: "which lanes to build (space separated, or 'all')"
+        type: string
+        default: "all"
+      rebuild:
+        description: "ignore the cache and rebuild"
+        type: boolean
+        default: false
+  push:
+    branches: [freecad-1.1.3]
+    paths:
+      - '.github/workflows/build-python-deps.yml'
+      - 'configure-numpy.sh'
+      - 'configure-kiwisolver-weh.sh'
+      - 'configure-matplotlib-weh.sh'
+      - 'configure-ctypes.sh'
+      - 'configure-pillow.sh'
+      - 'emscripten-crossfile.meson.in'
+      - 'matplotlib-crossfile.meson.in'
+      - 'tools/gen-crossfiles.sh'
+
+permissions:
+  contents: read
+
+env:
+  PYDEPS_KEY: v1-emsdk3.1.70-cpython3.13.3-numpy2.1.3-mpl3.9.2
+
+jobs:
+  pydeps:
+    timeout-minutes: 360
+    runs-on: [self-hosted, ovh, virtastic]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore the Python extension libraries
+        id: pycache
+        if: ${{ !inputs.rebuild }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            deps/wasm/lib/numpy-mod
+            deps/wasm/lib/mpl-mod
+            deps/wasm/lib/kiwi-mod
+            deps/wasm/lib/ctypes-mod
+            deps/wasm/lib/pil-mod
+            deps/wasm/lib/libffi.a
+            deps/src/cpython
+            deps/src/numpy
+            build-numpy
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
+          restore-keys: |
+            fcweb-pydeps-${{ env.PYDEPS_KEY }}-
+
+      - name: Cache emsdk
+        id: emsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: emsdk
+          key: emsdk-3.1.70-shims-v1
+
+      - name: Install emsdk 3.1.70
+        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+
+      # meson and ninja drive every lane here. The build machine keeps them in .qtvenv,
+      # which the scripts source when present; CI has no such venv, so make one rather
+      # than fighting the system Python's PEP 668 refusal.
+      - name: Build tools (meson, ninja, pybind11, setuptools)
+        run: |
+          set -e
+          python3 -m venv .qtvenv
+          . .qtvenv/bin/activate
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet meson ninja pybind11 setuptools wheel
+          echo "  meson $(meson --version), ninja $(ninja --version)"
+
+      - name: Fetch sources
+        run: |
+          set -e
+          mkdir -p deps/src
+          get() {  # get <dir> <url> <strip> <marker>
+            if [ -e "deps/src/$1/$4" ]; then echo "  $1: present"; return 0; fi
+            echo "  $1: fetching"
+            mkdir -p "deps/src/$1"
+            curl -fsSL -o /tmp/s.tar.gz "$2"
+            tar xzf /tmp/s.tar.gz -C "deps/src/$1" --strip-components="$3"
+          }
+          get cpython https://github.com/python/cpython/archive/refs/tags/v3.13.3.tar.gz 1 configure
+          get numpy   https://github.com/numpy/numpy/releases/download/v2.1.3/numpy-2.1.3.tar.gz 1 meson.build
+
+      - name: Apply the source patches
+        run: |
+          set -e
+          FCWEB_PATCH_OPTIONAL=1 bash patches/apply.sh
+
+      # numpy's code generators run on the host interpreter, and the meson cross-file points
+      # at CPython's own build of it -- not the system python, whose version would not match
+      # the wasm headers.
+      - name: CPython 3.13.3 (host + wasm/pthreads)
+        id: cpython
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          if [ -e deps/src/cpython/builddir/emscripten-mt/libpython3.13.a ] \
+             && [ -e deps/src/cpython/builddir/build/python3-native ]; then
+            echo "  cpython: already built (cache hit)"
+            exit 0
+          fi
+          t0=$SECONDS
+          bash build-cpython.sh
+          bash build-cpython-mt.sh
+          echo "  cpython built in $((SECONDS-t0))s"
+          # The cross-file names python3-native specifically; CPython does not always
+          # create it, and meson mono-wraps the .exe name if we point at that instead.
+          cd deps/src/cpython/builddir/build
+          if [ ! -e python3-native ]; then
+            for c in python python.exe python3; do
+              [ -x "$c" ] && ln -sf "$c" python3-native && break
+            done
+          fi
+          ls -la python3-native
+
+      - name: numpy
+        id: numpy
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          . .qtvenv/bin/activate
+          if [ -s deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+            echo "  numpy: already built (cache hit)"
+            exit 0
+          fi
+          bash configure-numpy.sh
+
+      - name: What exists now
+        if: always()
+        run: |
+          for d in numpy-mod mpl-mod kiwi-mod ctypes-mod pil-mod; do
+            n=$(ls -1 deps/wasm/lib/$d/*.a 2>/dev/null | wc -l | tr -d ' ')
+            echo "  deps/wasm/lib/$d: $n archive(s)"
+          done
+          ls -la deps/wasm/lib/numpy-mod/ 2>/dev/null | head -20 || true
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pydeps-logs
+          path: |
+            build-numpy/meson-logs
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Save the Python extension libraries
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            deps/wasm/lib/numpy-mod
+            deps/wasm/lib/mpl-mod
+            deps/wasm/lib/kiwi-mod
+            deps/wasm/lib/ctypes-mod
+            deps/wasm/lib/pil-mod
+            deps/wasm/lib/libffi.a
+            deps/src/cpython
+            deps/src/numpy
+            build-numpy
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
