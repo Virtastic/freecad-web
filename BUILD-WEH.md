@@ -42,6 +42,34 @@ that a clean rebuild has a target to hit and any drift is a diff rather than a m
 Until that file exists, treat every "reproduce the build" instruction below as
 best-effort rather than exact.
 
+## The FreeCAD C++ compiles clean on 1.1.3 (CI run 32247556806)
+
+`build-freecad.yml` reached **1699/1699 targets, 0 failed** -- 1,419 objects and 27 static
+libraries, including `libFreeCADApp.a`, `libFreeCADGui.a`, `libFreeCADBase.a`, `Part`,
+`PartGui`, `Sketcher`, `SketcherGui`, `_PartDesign`, `PartDesignGui`, `Mesh`, `MeshGui`,
+`MeshPart`, `MeshPartGui`, `Materials`, `MatGui` and the SMESH stack.
+
+That is the first time anything other than the build machine has compiled this port, and
+the first time it has been compiled at all against 1.1.3. It does **not** link -- see the
+job's own header for why, and what the link still needs.
+
+Read the scope honestly:
+
+- **Compiled, not linked.** The final binary additionally needs PySide6, shiboken, pivy,
+  IfcOpenShell, numpy, matplotlib, `_ctypes`, Pillow, and the gmsh and CalculiX modules.
+  None of those are in the dependency cache, and none of them change whether the port's
+  C++ is correct.
+- **A subset of modules.** BIM, CAM, Draft, FEM, TechDraw, Assembly, Start, Web and the
+  rest are off, because they need IfcOpenShell, libarea, pivy, gmsh and freetype. Their
+  absence says nothing about this port; turning them on is the next increment.
+- **Compiling is not running.** Nothing here exercises the GL emulation, the JSPI shims or
+  the 3D viewport. `gl_compat.h` is proven consistent and proven to build Coin3D and all of
+  FreeCADGui; it is not proven to render a pixel.
+
+What it does establish: `patches/freecad.patch` applies at zero fuzz to a pristine 1.1.3
+tree and every one of its hunks compiles, on a machine that is not the build machine, from
+a clean checkout.
+
 ## FreeCAD 1.1.3 needs four things 1.0 did not
 
 Established by getting `build-freecad.yml` to configure, one error at a time. Anyone doing
