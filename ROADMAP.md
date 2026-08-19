@@ -1,13 +1,23 @@
 # Roadmap: from "works" to "someone can do their job in it"
 
-> **Status 2026-08-16.**
+> **Status 2026-08-18.** Four things changed today and two of them were defects nobody knew
+> about, so read this table before the prose below it -- the prose is older.
+>
+> | # | item | state |
+> |---|---|---|
+> | 9 | **Edge caching** | **fixed and live.** `FreeCAD.wasm` and `FreeCAD.data` returned `cf-cache-status: DYNAMIC` -- Cloudflare judged them ineligible and went to the origin every time, so every cold visitor pulled ~119 MB off the single OVH VPS. The rule `infra/terraform` declares had never been applied. Applied via `.github/workflows/cache-rules.yml` (run 32209996790); all three assets now HIT. |
+> | 10 | **CalculiX stubs** | **19 -> 3**, 974/975 routines translate, and the module is within **1,079 bytes** of production (was 986,945). Of the three left, `e_c3d_us45` is stubbed in production too, and the two mortar-contact routines are refused on purpose. See `docs-ccx-stubbed-routines.md`. |
+> | 11 | **Clean-checkout build** | **still blocked, but by one command.** `gl_compat.h` and `qprocess_stub.h` are force-included into everything and exist only on the build machine. `bash tools/capture-build-machine-headers.sh` there, and commit. |
+> | 12 | **CI trustworthiness** | Coin3D had never been built at all; `patches/apply.sh` had never applied a patch in CI; OCCT was compiling with two exception models at once; CPython lost JSPI entirely without `-DPY_CALL_TRAMPOLINE=1`. All fixed, all gated. Eight of 23 dependencies now build on a hosted runner. |
+>
+> **Status 2026-08-16** (the original table; items 1-8 below are unchanged unless noted).
 >
 > | # | item | state |
 > |---|---|---|
 > | 1 | QInputDialog | **shipped** — natives restored, live, harness written |
 > | 2 | Error reporting | **shipped** — four anonymous counters, live and recording |
 > | 3 | Storage evictable | **shipped** — user-nominated backup folder, live |
-> | 4 | GL no-op inventory | **done** — instrumented and measured; see BUILD-WEH.md |
+> | 4 | GL no-op inventory | **done, and acted on** — 49 empty entry points down to 34. `glMaterialf` was discarding `GL_SHININESS`; eight immediate-mode doubles were discarding geometry outright. `tools/gl-noop-inventory.py` tracks the rest and ci.yml compiles the shims. |
 > | 5 | Display lists / 11 fps | **scoped** — C change + relink + pixel gate, not a JS patch |
 > | 6 | 2 GB heap | **implemented, opt-in** — `FCWEB_HEAP_BYTES`; needs a link + `heapprobe.js` |
 > | 7 | CalculiX threading | **reproducibility closed; threading still unshipped** — see below |
