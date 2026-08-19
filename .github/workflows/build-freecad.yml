@@ -121,6 +121,29 @@ jobs:
           fi
           exit $fail
 
+      # FreeCAD does find_package(Python3 COMPONENTS Interpreter Development REQUIRED),
+      # and CMake insists the two be CONSISTENT. The Development artifacts here are the
+      # wasm CPython 3.13 from the deps cache, so the host interpreter must be 3.13 too --
+      # the runner's own python3 (3.12 on ubuntu-24.04) would fail as "unsuitable version".
+      - name: Host Python 3.13 (must match the wasm CPython)
+        id: hostpy
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Confirm the interpreter matches the headers
+        run: |
+          set -e
+          py='${{ steps.hostpy.outputs.python-path }}'
+          echo "  interpreter: $("$py" -V) at $py"
+          hdr="$(grep -oE '"3\.[0-9]+' deps/wasm/include/python3.13/patchlevel.h | head -1 | tr -d '"')"
+          echo "  headers:     ${hdr:-unknown}"
+          got="$("$py" -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
+          if [ -n "$hdr" ] && [ "$hdr" != "$got" ]; then
+            echo "::error::host interpreter $got does not match the wasm headers $hdr"
+            exit 1
+          fi
+
       - name: Cache emsdk
         id: emsdk-cache
         uses: actions/cache@v4
@@ -252,7 +275,7 @@ jobs:
             -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
             -DQt6_DIR="$QT/lib/cmake/Qt6" \
             -DQT_HOST_PATH="${{ steps.hostqt.outputs.path }}" \
-            -DPython3_EXECUTABLE="$(command -v python3)" \
+            -DPython3_EXECUTABLE="${{ steps.hostpy.outputs.python-path }}" \
             -DPython3_INCLUDE_DIR="$DW/include/python3.13" \
             -DPython3_LIBRARY="$DW/lib/libpython3.13.a" \
             -DPYTHON_VERSION_STRING=3.13 \
