@@ -81,10 +81,19 @@ for f in *.f; do
       | grep -ciE '^ {6,}([a-z0-9_*() ]*[[:space:]])?(subroutine|function|program|block[[:space:]]*data)[[:space:]]+[a-z_]' \
       || true)
   if [ "${n:-0}" -eq 0 ]; then inc=$((inc+1)); continue; fi
-  if "$F2C" -a -A -NC1000 -d"$work/c" "$f" >/dev/null 2>"$work/$f.log" \
-     && ! grep -q '^Error' "$work/$f.log"; then
+  # "no Error line" is NOT success on its own. A missing INCLUDE makes f2c print
+  # "Cannot open file gauss.f", exit 0, and leave a ZERO-BYTE .c behind -- which would
+  # be counted here as a clean translation. The real build catches that later, when the
+  # empty file fails to compile; this script does not compile, so it must check that an
+  # output actually exists.
+  "$F2C" -a -A -NC1000 -d"$work/c" "$f" >/dev/null 2>"$work/$f.log"
+  cfile="$work/c/${f%.f}.c"
+  if ! grep -q '^Error' "$work/$f.log" && [ -s "$cfile" ]; then
     ok=$((ok+1))
   else
+    if [ ! -s "$cfile" ] && ! grep -q '^Error' "$work/$f.log"; then
+      echo "  (empty output, no error line: $f -- $(head -c 100 "$work/$f.log" | tr -d '\n'))"
+    fi
     fail+=("$f")
   fi
 done
