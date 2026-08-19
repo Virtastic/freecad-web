@@ -194,6 +194,27 @@ jobs:
           echo "path=$host" >> "$GITHUB_OUTPUT"
           echo "  QT_HOST_PATH=$host"
 
+      # FreeCAD 1.1 added `find_package(ICU REQUIRED COMPONENTS uc i18n)` at the top of
+      # CMakeLists.txt and links ICU into Base. 1.0 had no such dependency, so this is a
+      # genuinely new third-party library the wasm stack has to supply. emscripten ships an
+      # ICU port, so it costs a prebuild rather than another cross-compile -- the same route
+      # build-deps.yml already uses for freetype.
+      - name: Pre-build the emscripten ICU port (new hard dep in FreeCAD 1.1)
+        id: icu
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          embuilder build icu
+          sysroot="$(em-config CACHE)/sysroot"
+          echo "sysroot=$sysroot" >> "$GITHUB_OUTPUT"
+          echo "  sysroot: $sysroot"
+          echo "  libraries:"
+          find "$sysroot" -name 'libicu*.a' | sed 's/^/    /'
+          if [ ! -e "$sysroot/include/unicode/uversion.h" ]; then
+            echo "::error::ICU port built but no unicode/ headers under $sysroot"
+            exit 1
+          fi
+
       - name: pybind11 (FreeCAD 1.1 build dependency)
         id: pybind
         run: |
@@ -284,7 +305,7 @@ jobs:
             -DCMAKE_DISABLE_FIND_PACKAGE_Shiboken6=ON -DCMAKE_DISABLE_FIND_PACKAGE_PySide6=ON \
             -DBUILD_PART=ON -DBUILD_PART_DESIGN=ON -DBUILD_SKETCHER=ON \
             -DBUILD_MESH=ON -DBUILD_MESH_PART=ON -DBUILD_SMESH=ON \
-            -DBUILD_MATERIAL=ON -DBUILD_SPREADSHEET=ON -DBUILD_POINTS=ON \
+            -DBUILD_MATERIAL=ON -DBUILD_POINTS=ON -DBUILD_SPREADSHEET=OFF  `# Spreadsheet requires Draft, Draft requires pivy` \
             -DBUILD_IMPORT=ON -DBUILD_MEASURE=ON \
             -DBUILD_ADDONMGR=OFF -DBUILD_BIM=OFF -DBUILD_DRAFT=OFF -DBUILD_FEM=OFF \
             -DBUILD_CAM=OFF -DBUILD_ASSEMBLY=OFF -DBUILD_TECHDRAW=OFF -DBUILD_HELP=OFF \
@@ -303,6 +324,10 @@ jobs:
             -DCOIN3D_INCLUDE_DIRS="$DW/include" \
             -DCOIN3D_LIBRARIES="$DW/lib/libCoin.a" \
             -DCOIN3D_FOUND=ON \
+            -DICU_INCLUDE_DIR="${{ steps.icu.outputs.sysroot }}/include" \
+            -DICU_UC_LIBRARY="${{ steps.icu.outputs.sysroot }}/lib/wasm32-emscripten/libicuuc.a" \
+            -DICU_I18N_LIBRARY="${{ steps.icu.outputs.sysroot }}/lib/wasm32-emscripten/libicui18n.a" \
+            -DICU_DATA_LIBRARY="${{ steps.icu.outputs.sysroot }}/lib/wasm32-emscripten/libicudata.a" \
             -DBoost_USE_STATIC_LIBS=ON -DBoost_USE_STATIC_RUNTIME=ON \
             -DCMAKE_PREFIX_PATH="$DW;$QT" \
             -DCMAKE_FIND_ROOT_PATH="$DW;$QT" \
@@ -313,8 +338,8 @@ jobs:
             -DPython3_INCLUDE_DIR="$DW/include/python3.13" \
             -DPython3_LIBRARY="$DW/lib/libpython3.13.a" \
             -DPYTHON_VERSION_STRING=3.13 \
-            -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O1 -DBOOST_ALL_NO_LIB --use-port=zlib -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
-            -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread -O1 --use-port=zlib -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
+            -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O1 -DBOOST_ALL_NO_LIB --use-port=zlib --use-port=icu -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
+            -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread -O1 --use-port=zlib --use-port=icu -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
             2>&1 | tee /tmp/fclogs/configure.txt
           rc=$?
           if [ "$rc" != 0 ]; then
