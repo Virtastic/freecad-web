@@ -217,6 +217,16 @@ jobs:
           fi
           ls deps/src/freecad/CMakeLists.txt
 
+      # Before patch(1) gets a chance to be lenient about it. GNU patch and the msys
+      # patch(1) the port is generated with disagree on line endings, so "it applied on the
+      # authoring machine" says nothing about here. This compares every context line to the
+      # tree byte for byte and names the first mismatch, which is a far better failure than
+      # 188 rejected hunks.
+      - name: The patch matches this tree byte for byte
+        run: |
+          set -e
+          python3 tools/check-patch-applies.py patches/freecad.patch deps/src/freecad
+
       # This is itself a test: apply.sh gates on patches/freecad.version and applies at zero
       # fuzz, so "the patch still applies to a pristine 1.1.3 tree" is proven on Linux here
       # and not only on the machine that generated it.

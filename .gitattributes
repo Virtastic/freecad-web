@@ -1,5 +1,12 @@
-# Patch files must arrive with LF endings in every checkout. patch(1) matches its
-# context lines byte for byte, so a CRLF-converted patch fails wholesale against an
-# LF source tree -- and on Windows (core.autocrlf=true) that is the default outcome.
-# Marking them explicitly keeps the stored form authoritative regardless of platform.
-*.patch text eol=lf
+# Patch files are BYTES, not text. Do not normalise them in either direction.
+#
+# A unified diff's context lines must match the target file byte for byte, and FreeCAD
+# 1.1.3 ships a mix: 33 of the 80 files this port touches are CRLF upstream, 47 are LF.
+# So patches/freecad.patch legitimately contains both, and any normalisation corrupts it.
+#
+# This was `text eol=lf` for exactly one commit, which is the tidy-looking choice and the
+# wrong one: it would have rewritten those 1,844 CRLF context lines to LF and reproduced
+# the failure it was meant to prevent -- GNU patch 2.8 rejects a mismatched hunk outright
+# with "different line endings", while the msys patch(1) used to generate the file
+# tolerates it silently.
+*.patch -text
