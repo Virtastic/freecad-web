@@ -78,6 +78,43 @@ What it does establish: `patches/freecad.patch` applies at zero fuzz to a pristi
 tree and every one of its hunks compiles, on a machine that is not the build machine, from
 a clean checkout.
 
+## The Python extension libraries now build in CI (run 32280917492)
+
+Nine archives, all verified by name rather than by exit status:
+
+| | |
+|---|---|
+| numpy 2.1.3 | 19 archives; `_multiarray_umath`, `_pocketfft_umath`, `_umath_linalg`, `lapack_lite` |
+| matplotlib 3.9.2 | 13 archives (8 extensions + freetype, qhull, agg, ttconv) |
+| kiwisolver 1.4.7 | `libkiwi__cext.a` |
+| Pillow 10.4.0 | `libpil__imaging.a` |
+| libffi + `_ctypes` | `libffi.a`, `lib_ctypes.a` |
+
+Those versions are now **pinned in `build-python-deps.yml`**, which is five fewer entries
+on the list of dependencies whose version is "whatever is on the build machine's disk".
+
+Getting there took eight defects, none of which a passing script would have revealed:
+
+1. `configure-numpy.sh` **did not exist** — referenced by name in two tracked scripts and
+   never committed. Reconstructed from its consumers.
+2. `configure-matplotlib-weh.sh` globbed `*.cpython-313-darwin.so.p`, so anywhere but
+   macOS it harvested **nothing** and produced an empty `mpl-mod`.
+3. numpy declares Cython as a *compiler* in its `meson.build`.
+4. numpy needs the **meson fork it vendors**; `import('features')` exists nowhere else.
+5. `sysconfig` reported host values — fixed with `_PYTHON_SYSCONFIGDATA_NAME`.
+6. That fixed reporting but not include ORDER: meson puts the host CPython build tree
+   ahead of the wasm one, so the 64-bit `pyconfig.h` won. Both meson builds (numpy,
+   matplotlib) hit it; the three hand-compiled lanes never could.
+7. matplotlib's freetype subproject 502s from savannah; seeded from a mirror, hash checked
+   against the `.wrap`.
+8. libffi's `LT_SYS_SYMBOL_USCORE` is **not shipped by this libtool at all** — three
+   rounds went into the macro search path before a diagnostic showed the macro simply does
+   not exist here. Supplied directly: wasm32-emscripten has no underscore prefix.
+
+The lesson worth keeping is #8's shape: the error named a symptom (`possibly undefined
+macro`) and every fix aimed at the wrong cause until something printed what was actually
+installed.
+
 ## FreeCAD 1.1.3 needs four things 1.0 did not
 
 Established by getting `build-freecad.yml` to configure, one error at a time. Anyone doing
