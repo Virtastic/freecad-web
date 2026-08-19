@@ -351,6 +351,11 @@ jobs:
             -DBUILD_FLAT_MESH=OFF \
             -DFREECAD_USE_FREETYPE=OFF \
             -DFREECAD_USE_PYBIND11=ON -Dpybind11_DIR="${{ steps.pybind.outputs.dir }}" \
+            `# SetupCoin3D.cmake imports pivy in the HOST python to compare its Coin` \
+            `# version against ours. FreeCAD guards that behind FREECAD_CHECK_PIVY,` \
+            `# commented in-source as 'do not make pivy a host dependency for cross` \
+            `# compiling' -- which is exactly this build.` \
+            -DFREECAD_CHECK_PIVY=OFF \
             -DFREECAD_USE_EXTERNAL_PIVY=OFF -DFREECAD_USE_PCH=OFF \
             -DFREECAD_QT_VERSION=6 \
             -DVTK_DIR="$DW/lib/cmake/vtk-9.3" \

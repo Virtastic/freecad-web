@@ -106,6 +106,11 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DBUILD_TEST=ON -DBUILD_MEASURE=ON -DBUILD_TECHDRAW=ON -DBUILD_TUX=ON \
   -DBUILD_WEB=ON -DBUILD_SURFACE=ON -DBUILD_PART=ON \
   -DBUILD_DYNAMIC_LINK_PYTHON=OFF \
+  # SetupCoin3D.cmake otherwise imports pivy in the HOST python to compare its Coin
+  # version against the one being built. That makes the cross-build depend on an
+  # ambient host package -- exactly the uncaptured-state problem this repo keeps
+  # getting bitten by. FreeCAD guards it for this reason; take the guard.
+  -DFREECAD_CHECK_PIVY=OFF \
   -DFREECAD_USE_EXTERNAL_PIVY=OFF -DFREECAD_USE_PCH=OFF \
   `# FreeType ON: without it Part.makeWireString() raises "FreeCAD compiled without FreeType` \
   `# support!", which kills Draft ShapeString (text/engraving) entirely. Point it at the` \
