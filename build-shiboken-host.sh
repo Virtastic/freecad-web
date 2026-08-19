@@ -43,7 +43,10 @@ done
 # and finally emsdk's own LLVM, which ships a complete clang.
 echo "=== looking for libclang ==="
 CAND=""
-report() { printf '  %-46s %s\n' "$1" "$2"; }
+# stderr, not stdout: find_libclang's result is captured with $(...), so anything printed
+# on stdout becomes part of the path. That produced
+#   using libclang from:   /usr/lib/llvm-21   no libclang
+report() { printf '  %-46s %s\n' "$1" "$2" >&2; }
 
 if [ -n "${LLVM_INSTALL_DIR:-}" ] && [ -d "$LLVM_INSTALL_DIR" ]; then
     report "LLVM_INSTALL_DIR=$LLVM_INSTALL_DIR" "set"
@@ -161,10 +164,35 @@ export CLANG_INSTALL_DIR="$CAND"
 
 # --- configure and build -----------------------------------------------------------------
 rm -rf "$BUILD"
+# shiboken does find_package(Clang), which wants ClangConfig.cmake from the LLVM
+# DEVELOPMENT package -- having libclang.so is not enough:
+#   Could not find a package configuration file provided by "Clang"
+CLANG_CMAKE=""
+LLVM_CMAKE=""
+for d in "$CAND" /usr/lib/llvm-*; do
+    [ -d "$d" ] || continue
+    if [ -z "$CLANG_CMAKE" ] && [ -f "$d/lib/cmake/clang/ClangConfig.cmake" ]; then
+        CLANG_CMAKE="$d/lib/cmake/clang"
+    fi
+    if [ -z "$LLVM_CMAKE" ] && [ -f "$d/lib/cmake/llvm/LLVMConfig.cmake" ]; then
+        LLVM_CMAKE="$d/lib/cmake/llvm"
+    fi
+done
+if [ -z "$CLANG_CMAKE" ]; then
+    echo "!! no ClangConfig.cmake anywhere. libclang.so alone is not enough -- shiboken" >&2
+    echo "   calls find_package(Clang). Install the dev package (libclang-<n>-dev)." >&2
+    ls -d /usr/lib/llvm-*/lib/cmake/* 2>/dev/null | sed 's/^/     /' | head >&2
+    exit 1
+fi
+echo "clang cmake:  $CLANG_CMAKE"
+[ -n "$LLVM_CMAKE" ] && echo "llvm cmake:   $LLVM_CMAKE"
+
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="$QT_HOST" \
+  -DClang_DIR="$CLANG_CMAKE" \
+  ${LLVM_CMAKE:+-DLLVM_DIR="$LLVM_CMAKE"} \
+  -DCMAKE_PREFIX_PATH="$QT_HOST;$CAND" \
   -DQt6_DIR="$QT_HOST/lib/cmake/Qt6" \
   -DPython_EXECUTABLE="$HOSTPY3" \
   -DCMAKE_INSTALL_PREFIX="$PREFIX"
