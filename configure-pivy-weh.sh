@@ -37,6 +37,7 @@ emcmake cmake -S "$SRC" -B build-pivy-wasm -G Ninja \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_FLAGS="$PIVYFLAGS" \
+    -DCMAKE_MODULE_PATH="$ROOT/toolchain/cmake" \
     -DCMAKE_PREFIX_PATH="$DW" \
     -DCMAKE_FIND_ROOT_PATH="$DW" \
     -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
