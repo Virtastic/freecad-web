@@ -71,7 +71,15 @@ foreach(_comp IN LISTS Boost_FIND_COMPONENTS)
         )
     endif()
     if(Boost_${_COMP}_LIBRARY)
+        # BOTH spellings. find_package_handle_standard_args(HANDLE_COMPONENTS) looks up
+        # Boost_<component>_FOUND with the component name EXACTLY as the caller wrote it --
+        # Boost_program_options_FOUND -- while the rest of FindBoost's interface, and every
+        # consumer, uses the upper-case Boost_PROGRAM_OPTIONS_FOUND. Setting only the latter
+        # produced the perfectly contradictory "Could NOT find Boost (missing:
+        # program_options regex thread date_time) (found suitable version 1.86.0)" with all
+        # four archives located and no diagnostic printed.
         set(Boost_${_COMP}_FOUND TRUE)
+        set(Boost_${_comp}_FOUND TRUE)
         list(APPEND Boost_LIBRARIES "${Boost_${_COMP}_LIBRARY}")
         if(NOT TARGET Boost::${_comp})
             add_library(Boost::${_comp} UNKNOWN IMPORTED)
@@ -82,6 +90,7 @@ foreach(_comp IN LISTS Boost_FIND_COMPONENTS)
         endif()
     else()
         set(Boost_${_COMP}_FOUND FALSE)
+        set(Boost_${_comp}_FOUND FALSE)
         list(APPEND _boost_missing "${_comp}")
     endif()
 endforeach()
