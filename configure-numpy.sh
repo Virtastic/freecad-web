@@ -55,8 +55,30 @@ if [ ! -e "$HOSTPY" ]; then
     exit 1
 fi
 
+# numpy does not build with upstream meson. Its meson_cpu/ CPU-dispatch machinery does
+# import('features'), a module that exists only in the meson FORK numpy vendors and ships
+# inside its sdist, so a stock meson stops at:
+#
+#     meson_cpu/x86/meson.build:2:15: ERROR: Module "features" does not exist.
+#
+# Prefer the vendored copy, and say plainly when it is absent rather than leaving the next
+# person to decode that message.
+MESON="meson"
+for cand in "$NPY/vendored-meson/meson/meson.py" "$NPY/vendored-meson/meson/meson"; do
+    if [ -e "$cand" ]; then
+        MESON="$(command -v python3) $cand"
+        echo "using numpy's vendored meson: $cand"
+        break
+    fi
+done
+if [ "$MESON" = "meson" ]; then
+    echo "!! no vendored-meson under $NPY -- configuring with the system meson, which will"
+    echo "   almost certainly fail on the 'features' module. Use the numpy SDIST"
+    echo "   (numpy-<version>.tar.gz from the release page); a git archive omits it."
+fi
+
 rm -rf build-numpy
-meson setup build-numpy "$NPY" --cross-file emscripten-crossfile.meson \
+$MESON setup build-numpy "$NPY" --cross-file emscripten-crossfile.meson \
     -Dbuildtype=release -Db_lto=false -Dallow-noblas=true
 
 ninja -C build-numpy
