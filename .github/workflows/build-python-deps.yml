@@ -44,6 +44,9 @@ on:
       - 'matplotlib-crossfile.meson.in'
       - 'configure-pivy-weh.sh'
       - 'configure-ifcopenshell-weh.sh'
+      - 'build-shiboken-host.sh'
+      - 'rebuild-pyside-weh.sh'
+      - 'force-static.cmake'
       - 'build-cpython.sh'
       - 'build-cpython-mt.sh'
       - 'patches/apply.sh'
@@ -80,10 +83,13 @@ jobs:
             deps/src/numpy
             deps/src/pivy
             deps/src/ifcopenshell
+            deps/src/pyside-setup
             deps/src/eigen
             build-numpy
             build-pivy-wasm
             build-ifcopenshell
+            deps/host/shiboken6
+            deps/wasm/pyside-pkg
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
@@ -221,6 +227,7 @@ jobs:
           # because a moving head is exactly the unreproducibility BUILD-WEH.md opens with.
           # 481676e5 is 0.8.0 as of 2025-11-21.
           get ifcopenshell https://github.com/IfcOpenShell/IfcOpenShell/archive/481676e51b65cb93e520b9f073123f22a06b212b.tar.gz 1 cmake/CMakeLists.txt
+          get pyside-setup https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.9.0-src/pyside-setup-everywhere-src-6.9.0.tar.xz 1 sources/shiboken6/CMakeLists.txt
           # src/svgfill is a SUBMODULE, and GitHub tarballs carry no submodules -- the same
           # fact that keeps Assembly and AddonManager out of the FreeCAD build. The Python
           # wrapper needs it unconditionally: IfcPython.i includes svgfill.h outside the
@@ -285,6 +292,27 @@ jobs:
         with:
           path: deps/src/cpython
           key: fcweb-cpython-3.13.3-emsdk3.1.70-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
+
+      # PySide needs BOTH Qts: the wasm one this repo builds, and a host one for the
+      # tools (moc, rcc, qmake) that run during the cross-build. build-qt-wasm.yml caches
+      # the first and installs the second with aqt; do the same rather than rebuild Qt.
+      - name: Restore Qt (wasm)
+        id: qtcache
+        uses: actions/cache/restore@v4
+        with:
+          path: qt/6.9.0/wasm_mt_weh
+          key: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
+
+      - name: Host Qt 6.9.0 (tools only)
+        continue-on-error: true
+        run: |
+          set -e
+          if [ -x qt-host/6.9.0/gcc_64/bin/moc ]; then echo "  host Qt present"; exit 0; fi
+          . .qtvenv/bin/activate
+          python -m pip install --quiet aqtinstall
+          python -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 -m qtshadertools -O "$PWD/qt-host"
+          ls qt-host/6.9.0/gcc_64/bin/moc && echo "  host Qt installed"
+
 
       - name: numpy
         id: lane_numpy
@@ -407,6 +435,37 @@ jobs:
           fi
           bash configure-ifcopenshell-weh.sh
 
+      # shiboken's GENERATOR runs on the host and parses Qt's headers with libclang. It
+      # has never been built anywhere but the build machine, where deps/host/shiboken6
+      # already existed. build-shiboken-host.sh reports every place it looks for libclang,
+      # so a failure here says which, rather than dying inside cmake.
+      - name: shiboken generator (host)
+        id: lane_shiboken_host
+        continue-on-error: true
+        run: |
+          set -e
+          if [ -x deps/host/shiboken6/bin/shiboken6 ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+            echo "  host shiboken: already built"; exit 0
+          fi
+          bash build-shiboken-host.sh
+
+      # PySide/shiboken for wasm -> deps/wasm/pyside-pkg, which the link preloads.
+      - name: PySide + shiboken (wasm)
+        id: lane_pyside
+        continue-on-error: true
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          if [ -d deps/wasm/pyside-pkg ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+            echo "  pyside: already built"; exit 0
+          fi
+          if [ ! -x deps/host/shiboken6/bin/shiboken6 ]; then
+            echo "::warning::no host shiboken -- skipping the wasm PySide build"
+            exit 0
+          fi
+          bash rebuild-pyside-weh.sh
+
+
       # One gate at the end, so a single broken lane does not hide the state of the
       # others. Every archive named here is one MainGui.cpp registers in its inittab; a
       # missing one is a trapping PyInit_* in the browser, not a link error.
@@ -492,8 +551,11 @@ jobs:
             deps/src/numpy
             deps/src/pivy
             deps/src/ifcopenshell
+            deps/src/pyside-setup
             deps/src/eigen
             build-numpy
             build-pivy-wasm
             build-ifcopenshell
+            deps/host/shiboken6
+            deps/wasm/pyside-pkg
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
