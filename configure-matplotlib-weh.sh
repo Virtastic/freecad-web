@@ -74,10 +74,18 @@ ninja -C build-matplotlib
 EMAR="$ROOT/emsdk/upstream/emscripten/emar"
 mkdir -p "$DW/lib/mpl-mod"
 rm -f "$DW"/lib/mpl-mod/*.a
-for d in build-matplotlib/src/*.cpython-313-darwin.so.p; do
-  name=$(basename "$d" .cpython-313-darwin.so.p)
-  "$EMAR" rcs "$DW/lib/mpl-mod/libmpl_$name.a" "$d"/*.o
-done
+# Match on .so.p, not on a triple: meson names these directories after the HOST triple,
+# which is cpython-313-darwin on the build machine and cpython-313-x86_64-linux-gnu in CI.
+# Hardcoding darwin meant this loop silently harvested NOTHING anywhere else, leaving an
+# empty mpl-mod and a link that drops every matplotlib builtin.
+found=0
+while IFS= read -r d; do
+  [ -d "$d" ] || continue
+  name="$(basename "$d")"; name="${name%%.*}"
+  find "$d" -name '*.o' -print0 | xargs -0 "$EMAR" rcs "$DW/lib/mpl-mod/libmpl_$name.a"
+  found=$((found + 1))
+done < <(find build-matplotlib/src -maxdepth 1 -type d -name '*.so.p')
+[ "$found" -gt 0 ] || { echo "!! no *.so.p directories under build-matplotlib/src"; exit 1; }
 cp build-matplotlib/subprojects/freetype-2.6.1/libfreetype.a "$DW/lib/mpl-mod/"
 cp build-matplotlib/subprojects/qhull-8.0.2/libqhull_r.a "$DW/lib/mpl-mod/"
 cp build-matplotlib/extern/agg24-svn/libagg.a "$DW/lib/mpl-mod/"
