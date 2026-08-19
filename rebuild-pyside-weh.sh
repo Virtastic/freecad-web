@@ -14,6 +14,40 @@ TC="$ROOT/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
 NODE="$FCWEB_NODE"
 CPY="$ROOT/deps/src/cpython"
 
+# Everything below used to be written for one machine: a macOS host Qt, a macOS-only
+# python.exe, and /usr/bin/python3. Resolve each instead, and fail naming what is missing
+# rather than handing cmake a path that does not exist.
+
+# Host Qt: the wasm build needs the host tools (moc, rcc, qmake). build-qt-wasm.yml
+# installs them to qt-host/6.9.0/gcc_64 on Linux; the build machine has qt/6.9.0/macos.
+QT_HOST=""
+for d in "$ROOT/qt-host/6.9.0/gcc_64" "$ROOT/qt/6.9.0/macos" "$ROOT/qt/6.9.0/gcc_64" \
+         "$ROOT/qt-host/6.9.0/macos"; do
+    if [ -x "$d/bin/qmake" ] || [ -x "$d/bin/moc" ]; then QT_HOST="$d"; break; fi
+done
+[ -n "$QT_HOST" ] || { echo "ERROR: no host Qt found (looked for bin/qmake under qt-host/6.9.0/gcc_64, qt/6.9.0/macos, ...)" >&2; exit 1; }
+echo "host Qt:      $QT_HOST"
+
+# Host interpreter that RUNS during the build (shiboken's generator, cmake probes). Not
+# the wasm CPython.
+HOSTPY3="$(command -v python3 || command -v python)"
+[ -n "$HOSTPY3" ] || { echo "ERROR: no python3 on PATH" >&2; exit 1; }
+echo "host python:  $HOSTPY3"
+
+# CPython's own host build: python.exe on macOS, python or python3-native elsewhere.
+WASMPY_HOST=""
+for c in "$CPY/builddir/build/python.exe" "$CPY/builddir/build/python" \
+         "$CPY/builddir/build/python3-native"; do
+    [ -x "$c" ] && { WASMPY_HOST="$c"; break; }
+done
+[ -n "$WASMPY_HOST" ] || { echo "ERROR: no CPython host build under $CPY/builddir/build" >&2; exit 1; }
+echo "cpython host: $WASMPY_HOST"
+
+[ -d "$ROOT/deps/host/shiboken6" ] || {
+    echo "ERROR: no host shiboken at $ROOT/deps/host/shiboken6." >&2
+    echo "       The wasm shiboken needs the HOST generator, which is built against" >&2
+    echo "       libclang. Build it first (see build-shiboken-host.sh)." >&2
+    exit 1; }
 echo "=== SHIBOKEN (lib) ==="
 rm -rf build-shiboken-wasm
 cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja \
@@ -23,10 +57,10 @@ cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja
   -DCMAKE_PREFIX_PATH="$QNEW;$ROOT/deps/host/shiboken6" \
   -DCMAKE_FIND_ROOT_PATH="$QNEW;$ROOT/deps/host/shiboken6" \
   -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-  -DQt6_DIR="$QNEW/lib/cmake/Qt6" -DQT_HOST_PATH="$ROOT/qt/6.9.0/macos" \
-  -DQFP_PYTHON_HOST_PATH=/usr/bin/python3 -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
+  -DQt6_DIR="$QNEW/lib/cmake/Qt6" -DQT_HOST_PATH="$QT_HOST" \
+  -DQFP_PYTHON_HOST_PATH="$HOSTPY3" -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
   -DShiboken_SKIP_GENERATOR_BUILD=ON \
-  -DPython_EXECUTABLE="$CPY/builddir/build/python.exe" -DPython_INCLUDE_DIR="$CPY/Include" \
+  -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$CPY/Include" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
   -DCMAKE_INSTALL_PREFIX="$ROOT/deps/wasm/shiboken6" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
@@ -41,19 +75,18 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   -DCMAKE_PREFIX_PATH="$QNEW;$ROOT/deps/wasm/shiboken6;$ROOT/deps/host/shiboken6" \
   -DCMAKE_FIND_ROOT_PATH="$QNEW;$ROOT/deps/wasm/shiboken6;$ROOT/deps/host/shiboken6" \
   -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-  -DQt6_DIR="$QNEW/lib/cmake/Qt6" -DQT_HOST_PATH="$ROOT/qt/6.9.0/macos" \
-  -DQFP_PYTHON_HOST_PATH=/usr/bin/python3 -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
+  -DQt6_DIR="$QNEW/lib/cmake/Qt6" -DQT_HOST_PATH="$QT_HOST" \
+  -DQFP_PYTHON_HOST_PATH="$HOSTPY3" -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
   -DShiboken6_DIR="$ROOT/deps/wasm/shiboken6/lib/cmake/Shiboken6" \
   -DMODULES="Core;Gui;Widgets" -DFORCE_LIMITED_API=no \
-  -DPython_EXECUTABLE="$CPY/builddir/build/python.exe" -DPython_INCLUDE_DIR="$CPY/Include" \
+  -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$CPY/Include" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
   -DCMAKE_INSTALL_PREFIX="$ROOT/emsdk/upstream/emscripten/cache/sysroot" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
 ninja -C build-pyside-wasm
 
-echo "=== PIVY ==="
-PIVYFLAGS="-pthread -fwasm-exceptions -O2 -include $DW/include/gl_compat.h"
-cmake -B build-pivy-wasm -DCMAKE_CXX_FLAGS="$PIVYFLAGS" .  > /dev/null 2>&1 || true
-cmake -S deps/src/pivy -B build-pivy-wasm -DCMAKE_CXX_FLAGS="$PIVYFLAGS"
-ninja -C build-pivy-wasm
+# pivy used to be built here. It is not related to PySide -- it needs Coin3D, SWIG and
+# CPython, none of which this script touches -- and chaining them meant pivy could not be
+# built or fixed without a working PySide toolchain, which is the harder half by a wide
+# margin. It now lives in configure-pivy-weh.sh, where it builds on its own.
 echo "PYSIDE-LANE-ALL-DONE"
