@@ -127,6 +127,31 @@ jobs:
             exit 1
           fi
 
+      # gl_compat.h is force-included into every C and C++ unit, and Coin3D's sources
+      # include <GL/gl.h> -- emscripten's own legacy header, which declares part of the
+      # same API. If the two disagree on any signature, every Coin translation unit fails,
+      # and that would only ever have surfaced deep in the FreeCAD build. Check it here
+      # against both GL headers and in both languages, since the force-include applies to
+      # C and C++ alike.
+      - name: gl_compat.h coexists with the emscripten GL headers
+        run: |
+          set +e
+          . emsdk/emsdk_env.sh
+          fail=0
+          for lang in c c++; do
+            for hdr in GL/gl.h GLES2/gl2.h GLES3/gl3.h; do
+              { echo "#include <$hdr>"; echo "int main(void){return 0;}"; } > /tmp/t.$lang
+              if emcc -fsyntax-only -x $lang -pthread                       -include toolchain/include/gl_compat.h /tmp/t.$lang 2>/tmp/e.txt; then
+                echo "  ok       $lang + <$hdr>"
+              else
+                echo "::error::gl_compat.h conflicts with <$hdr> in $lang"
+                sed 's/^/      /' /tmp/e.txt | head -20
+                fail=1
+              fi
+            done
+          done
+          exit $fail
+
       # qprocess_stub.h needs Qt headers, which this job does not have, so the most that can
       # be checked here is that it is self-consistent C++ and that the design contract still
       # holds: no Q_OBJECT (it cannot be moc'd), and therefore no signals for anything to
