@@ -42,7 +42,10 @@ on:
       - 'configure-pillow.sh'
       - 'emscripten-crossfile.meson.in'
       - 'matplotlib-crossfile.meson.in'
+      - 'configure-pivy-weh.sh'
       - 'tools/gen-crossfiles.sh'
+      # the cmake shims decide whether Coin, ICU and OpenGL are found at all
+      - 'toolchain/**'
 
 permissions:
   contents: read
