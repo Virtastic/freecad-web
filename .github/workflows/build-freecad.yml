@@ -218,7 +218,15 @@ jobs:
       - name: Stage the force-included compat headers
         run: |
           set -e
-          bash toolchain/stage-headers.sh
+          # FCWEB_FORCE_STAGE_HEADERS: stage-headers.sh normally refuses to overwrite a
+          # header already in $DW/include, because on the build machine that copy is the
+          # ORIGINAL and the tracked one is a reconstruction. In CI it is neither -- it is
+          # whatever this workflow staged last run and then cached. Run 32230261006 lost a
+          # whole Coin3D build to that: the cache restored the previous, enum-less
+          # gl_compat.h, the stager dutifully kept it, and Coin failed on GL_ACCUM again
+          # with the fix sitting unused in toolchain/include. Here the tracked copy IS the
+          # authority.
+          FCWEB_FORCE_STAGE_HEADERS=1 bash toolchain/stage-headers.sh
 
       - name: Configure
         id: configure

@@ -355,11 +355,19 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
+          # FCWEB_FORCE_STAGE_HEADERS: stage-headers.sh normally refuses to overwrite a
+          # header already present in $DW/include, because on the build machine that copy is
+          # the ORIGINAL and the tracked one is a reconstruction. In CI it is neither -- it
+          # is whatever this workflow staged last run and then cached. Run 32230261006 lost
+          # an entire Coin3D build to exactly that: the cache restored the previous,
+          # enum-less gl_compat.h, the stager dutifully kept it, and Coin failed on GL_ACCUM
+          # again with the fix sitting unused in toolchain/include. Here the tracked copy IS
+          # the authority.
           if [ -e toolchain/include/gl_compat.h ]; then
-            bash toolchain/stage-headers.sh 2>&1 | tee /tmp/deplogs/03-headers.txt
+            FCWEB_FORCE_STAGE_HEADERS=1 bash toolchain/stage-headers.sh 2>&1               | tee /tmp/deplogs/03-headers.txt
           else
             echo "::warning::gl_compat.h is not tracked -- Coin3D builds in DIAGNOSTIC mode. Capture it with tools/capture-build-machine-headers.sh on the build machine."
-            FCWEB_ALLOW_MISSING_GL_COMPAT=1 bash toolchain/stage-headers.sh 2>&1 | tee /tmp/deplogs/03-headers.txt
+            FCWEB_ALLOW_MISSING_GL_COMPAT=1 bash toolchain/stage-headers.sh 2>&1               | tee /tmp/deplogs/03-headers.txt
           fi
 
       - name: Coin3D
