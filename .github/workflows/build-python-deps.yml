@@ -75,8 +75,10 @@ jobs:
             deps/src/cpython
             deps/src/numpy
             deps/src/pivy
+            deps/src/ifcopenshell
             build-numpy
             build-pivy-wasm
+            build-ifcopenshell
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
@@ -184,6 +186,7 @@ jobs:
           get Pillow     https://github.com/python-pillow/Pillow/archive/refs/tags/10.4.0.tar.gz 1 src/_imaging.c
           get matplotlib https://github.com/matplotlib/matplotlib/archive/refs/tags/v3.9.2.tar.gz 1 meson.build
           get pivy       https://github.com/coin3d/pivy/archive/refs/tags/0.6.9.tar.gz 1 CMakeLists.txt
+          get ifcopenshell https://github.com/IfcOpenShell/IfcOpenShell/archive/refs/tags/v0.8.6.tar.gz 1 cmake/CMakeLists.txt
 
       - name: Apply the source patches
         run: |
@@ -332,6 +335,19 @@ jobs:
           # to have produced an empty directory and a silently crippled link.
           [ "$n" -ge 8 ] || { echo "::error::mpl-mod has $n archives, expected at least 8"; exit 1; }
 
+      # IfcOpenShell: real IFC for the BIM workbench, built against OUR wasm OCCT 7.8.1 --
+      # the version match matters, since it links OCCT's geometry kernel directly.
+      - name: IfcOpenShell (_ifcopenshell_wrapper)
+        id: lane_ifc
+        continue-on-error: true
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          if [ -s deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+            echo "  IfcOpenShell: already built"; exit 0
+          fi
+          bash configure-ifcopenshell-weh.sh
+
       # One gate at the end, so a single broken lane does not hide the state of the
       # others. Every archive named here is one MainGui.cpp registers in its inittab; a
       # missing one is a trapping PyInit_* in the browser, not a link error.
@@ -367,6 +383,7 @@ jobs:
           need deps/wasm/lib/libffi.a                             "libffi"
           need deps/wasm/lib/pil-mod/libpil__imaging.a            "PIL _imaging"
           need deps/wasm/lib/pivy-mod/lib_coin.a                  "pivy _coin"
+          need deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a   "IfcOpenShell wrapper"
           need build-pivy-wasm/interfaces/_coin.a                  "pivy _coin"
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
           if [ "$n" -ge 8 ]; then echo "  ok       matplotlib ($n archives)"
@@ -416,6 +433,8 @@ jobs:
             deps/src/cpython
             deps/src/numpy
             deps/src/pivy
+            deps/src/ifcopenshell
             build-numpy
             build-pivy-wasm
+            build-ifcopenshell
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
