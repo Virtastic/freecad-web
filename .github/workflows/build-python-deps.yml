@@ -266,6 +266,36 @@ jobs:
           [ -s deps/wasm/lib/pil-mod/libpil__imaging.a ]             || { echo "::error::pil-mod/libpil__imaging.a not produced"; exit 1; }
 
       # Last, because it reaches into build-numpy for numpy's generated headers.
+      # matplotlib builds freetype and qhull as meson subprojects, and meson fetches
+      # freetype 2.6.1 from savannah's "freetype-old" path, which is currently answering
+      # 502 on every retry. meson checks the packagecache first and verifies the hash from
+      # the .wrap, so seeding it from a mirror that serves the identical tarball is safe --
+      # a wrong file fails the hash rather than building something unexpected.
+      - name: Pre-seed the meson subproject downloads
+        continue-on-error: true
+        run: |
+          set -e
+          cache=deps/src/matplotlib/subprojects/packagecache
+          mkdir -p "$cache"
+          want=$(ls deps/src/matplotlib/subprojects/*.wrap 2>/dev/null | head -20)
+          echo "  wraps: $(echo "$want" | wc -l | tr -d ' ')"
+          if [ ! -s "$cache/freetype-2.6.1.tar.gz" ]; then
+            for u in               "https://downloads.sourceforge.net/project/freetype/freetype2/2.6.1/freetype-2.6.1.tar.gz"               "https://download.savannah.gnu.org/releases/freetype/freetype-2.6.1.tar.gz"               "https://mirrors.dotsrc.org/nongnu/freetype/freetype-2.6.1.tar.gz"; do
+              echo "  trying $u"
+              if curl -fsSL --max-time 120 -o "$cache/freetype-2.6.1.tar.gz" "$u"; then
+                echo "  got freetype-2.6.1.tar.gz ($(stat -c%s "$cache/freetype-2.6.1.tar.gz") bytes)"
+                break
+              fi
+              rm -f "$cache/freetype-2.6.1.tar.gz"
+            done
+          else
+            echo "  freetype tarball already cached"
+          fi
+          # Report the expected hash next to what we fetched, so a mismatch is obvious in
+          # the log rather than surfacing later as a confusing meson error.
+          grep -h -A1 'source_filename *= *freetype' deps/src/matplotlib/subprojects/*.wrap 2>/dev/null | sed 's/^/    /' || true
+          [ -s "$cache/freetype-2.6.1.tar.gz" ] && sha256sum "$cache/freetype-2.6.1.tar.gz" | sed 's/^/    got  /' || true
+
       - name: matplotlib
         id: lane_matplotlib
         continue-on-error: true

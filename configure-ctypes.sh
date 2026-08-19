@@ -13,7 +13,17 @@ if [ ! -d deps/src/libffi ]; then
   git clone --depth 1 https://github.com/hoodmane/libffi-emscripten.git deps/src/libffi
 fi
 cd deps/src/libffi
-[ -f configure ] || ./autogen.sh
+# libtoolize BEFORE autogen. libffi's configure.ac uses LT_SYS_SYMBOL_USCORE, which lives
+# in libtool.m4, and aclocal only sees it once libtoolize has copied the libtool macros
+# into m4/. Having the libtool package installed is not enough -- autoreconf stops with
+#   configure.ac:219: error: possibly undefined macro: LT_SYS_SYMBOL_USCORE
+# which reads like a missing package when it is really a missing step.
+if [ ! -f configure ]; then
+  if command -v libtoolize >/dev/null 2>&1; then
+    libtoolize --copy --install --force >/dev/null 2>&1 || libtoolize --copy --force || true
+  fi
+  ./autogen.sh
+fi
 emconfigure ./configure --host=wasm32-unknown-emscripten --enable-static --disable-shared \
   --disable-dependency-tracking CFLAGS="-fPIC -O2 -fexceptions -pthread"
 emmake make -j4 libffi.la   # 'make' fails on docs (texinfo); build just the lib
