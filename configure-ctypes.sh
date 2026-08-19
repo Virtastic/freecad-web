@@ -46,6 +46,25 @@ if [ ! -f configure ]; then
       fi
     done
   fi
+  # Still absent after libtoolize copied m4/libtool.m4: this libtool release simply does
+  # not ship LT_SYS_SYMBOL_USCORE. Supply it. The macro exists to discover whether the
+  # toolchain prefixes C symbols with an underscore, and for wasm32-emscripten the answer
+  # is a fact rather than something to probe: it does not. libffi only reads
+  # $sys_symbol_underscore afterwards, so a minimal definition is faithful, not a fudge.
+  if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
+    mkdir -p m4
+    cat > m4/lt_sys_symbol_uscore.m4 <<'M4EOF'
+# Supplied by freecad-web: this libtool does not ship LT_SYS_SYMBOL_USCORE.
+# wasm32-emscripten does not prefix C symbols with an underscore.
+AC_DEFUN([LT_SYS_SYMBOL_USCORE],
+[AC_CACHE_CHECK([for _ prefix in compiled symbols],
+   [lt_cv_sys_symbol_underscore],
+   [lt_cv_sys_symbol_underscore=no])
+ sys_symbol_underscore=$lt_cv_sys_symbol_underscore
+])
+M4EOF
+    echo "supplied m4/lt_sys_symbol_uscore.m4 (no underscore prefix on wasm32-emscripten)"
+  fi
   if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
     echo "!! LT_SYS_SYMBOL_USCORE is defined nowhere reachable:"
     echo "   libtoolize: $(command -v libtoolize || echo absent)"
