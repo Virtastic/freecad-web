@@ -29,8 +29,29 @@ if [ ! -f configure ]; then
   done
   export ACLOCAL_PATH
   echo "ACLOCAL_PATH=$ACLOCAL_PATH"
+  # The fork ships its own m4/, and `aclocal -I m4` searches that FIRST. If those copies
+  # predate LT_SYS_SYMBOL_USCORE, the system libtool.m4 never gets a look in and autoreconf
+  # fails no matter what ACLOCAL_PATH says. So refresh them, then CHECK -- and if the macro
+  # is still missing, copy the system libtool.m4 in directly rather than failing with a
+  # message that blames a package which is installed.
   if command -v libtoolize >/dev/null 2>&1; then
-    libtoolize --copy --install --force >/dev/null 2>&1 || libtoolize --copy --force || true
+    libtoolize --copy --install --force || libtoolize --copy --force || true
+  fi
+  if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
+    for d in /usr/share/aclocal /usr/local/share/aclocal; do
+      if grep -qs 'AC_DEFUN(\[LT_SYS_SYMBOL_USCORE\]' "$d/libtool.m4" 2>/dev/null; then
+        mkdir -p m4 && cp "$d/libtool.m4" m4/
+        echo "copied $d/libtool.m4 into m4/ (defines LT_SYS_SYMBOL_USCORE)"
+        break
+      fi
+    done
+  fi
+  if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
+    echo "!! LT_SYS_SYMBOL_USCORE is defined nowhere reachable:"
+    echo "   libtoolize: $(command -v libtoolize || echo absent)"
+    echo "   libtool:    $(libtool --version 2>/dev/null | head -1 || echo absent)"
+    grep -rls 'LT_SYS_SYMBOL_USCORE' /usr/share/aclocal /usr/local/share/aclocal 2>/dev/null       | sed 's/^/   defines it: /' | head
+    ls m4/ 2>/dev/null | sed 's/^/   m4\/: /' | head
   fi
   ./autogen.sh
 fi
