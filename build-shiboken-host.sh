@@ -78,17 +78,34 @@ llvm_prefixes() {
     echo "$ROOT/emsdk/upstream"
 }
 
+# Require BOTH the library and ClangConfig.cmake from the SAME prefix.
+#
+# Two reasons. Shiboken needs the cmake package anyway -- find_package(Clang) -- so a
+# prefix with only the .so is no use. And more importantly the generator resolves clang's
+# builtin headers AT RUNTIME from whatever clang it finds: a generator linked against
+# libclang 17 while picking up llvm-21's builtins parses nothing and reports
+#
+#   qt.shiboken: (shiboken) No C++ classes found!
+#
+# which looks like a typesystem problem and is really a version mismatch. Insisting on one
+# self-consistent prefix rules that out.
+#
+# Ubuntu also names the library libclang-21.so.21.1 rather than libclang.so.21, so match
+# libclang*.so* -- an earlier libclang.so* glob missed apt's install entirely.
 find_libclang() {
     local d
     while IFS= read -r d; do
         [ -d "$d" ] || continue
-        if ls "$d"/lib/libclang.so* "$d"/lib/libclang.dylib \
-              "$d"/lib/x86_64-linux-gnu/libclang.so* >/dev/null 2>&1; then
-            report "$d" "has libclang"
+        local haslib="" hascmake=""
+        ls "$d"/lib/libclang*.so* "$d"/lib/libclang.dylib \
+           "$d"/lib/x86_64-linux-gnu/libclang*.so* >/dev/null 2>&1 && haslib=1
+        [ -f "$d/lib/cmake/clang/ClangConfig.cmake" ] && hascmake=1
+        if [ -n "$haslib" ] && [ -n "$hascmake" ]; then
+            report "$d" "libclang + ClangConfig.cmake"
             printf '%s\n' "$d"
             return 0
         fi
-        report "$d" "no libclang"
+        report "$d" "lib=${haslib:-no} cmake=${hascmake:-no}"
     done < <(llvm_prefixes)
     return 1
 }
