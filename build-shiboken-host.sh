@@ -75,6 +75,46 @@ if [ -z "$CAND" ]; then
     done
 fi
 
+# Nothing installed. Try the distro first (cheapest, and correct if it works), then fall
+# back to an LLVM release tarball. Qt publishes prebuilt libclang for exactly this purpose
+# but only as .7z, which needs p7zip; LLVM's own releases are plain .tar.xz and contain the
+# same thing.
+if [ -z "$CAND" ] && [ "${FCWEB_NO_LIBCLANG_FETCH:-0}" != "1" ]; then
+    if sudo -n true 2>/dev/null; then
+        echo "  trying: sudo apt-get install libclang-dev llvm-dev"
+        if sudo -n apt-get update -qq && sudo -n apt-get install -y -qq libclang-dev llvm-dev; then
+            for d in /usr/lib/llvm-18 /usr/lib/llvm-17 /usr/lib/llvm-16 /usr/lib/llvm-15 \
+                     /usr/lib/llvm-14 /usr; do
+                if ls "$d"/lib/libclang.so* >/dev/null 2>&1; then CAND="$d"; break; fi
+            done
+            [ -n "$CAND" ] && report "apt" "installed -> $CAND"
+        fi
+    else
+        echo "  no passwordless sudo; skipping apt"
+    fi
+fi
+
+if [ -z "$CAND" ] && [ "${FCWEB_NO_LIBCLANG_FETCH:-0}" != "1" ]; then
+    LLVM_VER="${FCWEB_LLVM_VERSION:-18.1.8}"
+    LLVM_TARBALL="clang+llvm-${LLVM_VER}-x86_64-linux-gnu-ubuntu-18.04.tar.xz"
+    LLVM_DIR="$ROOT/deps/host/llvm-${LLVM_VER}"
+    if [ ! -e "$LLVM_DIR/lib/libclang.so" ] && ! ls "$LLVM_DIR"/lib/libclang.so* >/dev/null 2>&1; then
+        echo "  fetching LLVM ${LLVM_VER} (for libclang only; ~700 MB, cached afterwards)"
+        mkdir -p "$LLVM_DIR"
+        if curl -fL --retry 3 -o /tmp/llvm.tar.xz \
+             "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VER}/${LLVM_TARBALL}"; then
+            tar xf /tmp/llvm.tar.xz -C "$LLVM_DIR" --strip-components=1
+            rm -f /tmp/llvm.tar.xz
+        else
+            echo "  !! LLVM ${LLVM_VER} download failed" >&2
+        fi
+    fi
+    if ls "$LLVM_DIR"/lib/libclang.so* >/dev/null 2>&1; then
+        report "$LLVM_DIR" "has libclang"
+        CAND="$LLVM_DIR"
+    fi
+fi
+
 if [ -z "$CAND" ]; then
     cat >&2 <<'EOF'
 

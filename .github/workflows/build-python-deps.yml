@@ -89,6 +89,7 @@ jobs:
             build-pivy-wasm
             build-ifcopenshell
             deps/host/shiboken6
+            deps/host/llvm-18.1.8
             deps/wasm/pyside-pkg
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
           restore-keys: |
@@ -557,5 +558,6 @@ jobs:
             build-pivy-wasm
             build-ifcopenshell
             deps/host/shiboken6
+            deps/host/llvm-18.1.8
             deps/wasm/pyside-pkg
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
