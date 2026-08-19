@@ -20,7 +20,31 @@ SRC="$ROOT/deps/src/ifcopenshell"
 BUILD="$ROOT/build-ifcopenshell"
 CPY="$ROOT/deps/src/cpython"
 PYMT="$CPY/builddir/emscripten-mt"
-HOSTPY="$CPY/builddir/build/python.exe"
+# CPython's host build is python.exe on macOS and python (or python3-native) on Linux, so
+# a single hardcoded name is a script that runs on one machine. Take the first that exists.
+HOSTPY=""
+for c in "$CPY/builddir/build/python.exe" "$CPY/builddir/build/python" \
+         "$CPY/builddir/build/python3-native"; do
+    [ -x "$c" ] && { HOSTPY="$c"; break; }
+done
+[ -n "$HOSTPY" ] || { echo "!! no host python under $CPY/builddir/build -- run build-cpython.sh"; exit 1; }
+echo "host python: $HOSTPY"
+
+# Same trap pivy hit: CMake reads pyconfig.h out of the include dir to learn the ABI, and
+# CPython generates it into the build tree rather than shipping it in Include/. It has to
+# be ONE directory holding both, so assemble one -- with the WASM pyconfig.h, never the
+# host's, which would report the wrong word size.
+PYINC="$ROOT/build-pyinc-wasm"
+if [ ! -f "$PYINC/pyconfig.h" ] || [ ! -f "$PYINC/Python.h" ]; then
+    if [ -f "$PYMT/pyconfig.h" ]; then
+        rm -rf "$PYINC" && mkdir -p "$PYINC"
+        cp -r "$CPY/Include/." "$PYINC/"
+        cp "$PYMT/pyconfig.h" "$PYINC/pyconfig.h"
+    else
+        echo "!! no wasm pyconfig.h under $PYMT -- run build-cpython-mt.sh"; exit 1
+    fi
+fi
+echo "python include dir: $PYINC"
 
 # IfcOpenShell's cmake root is src/cmake/../cmake (the top cmake/ dir points at src via WASM logic);
 # the actual CMakeLists is deps/src/ifcopenshell/cmake/CMakeLists.txt.
@@ -48,7 +72,7 @@ emcmake cmake -S "$SRC/cmake" -B "$BUILD" -G Ninja \
   -DEIGEN_DIR="$DW/include" \
   -DSWIG_EXECUTABLE="$(command -v swig)" \
   -DPYTHON_EXECUTABLE="$HOSTPY" \
-  -DPYTHON_INCLUDE_DIR="$CPY/Include" \
+  -DPYTHON_INCLUDE_DIR="$PYINC" \
   -DPYTHON_LIBRARY="$PYMT/libpython3.13.a" \
   -DCMAKE_PREFIX_PATH="$DW" \
   -DCMAKE_FIND_ROOT_PATH="$DW" \
@@ -59,4 +83,29 @@ emcmake cmake -S "$SRC/cmake" -B "$BUILD" -G Ninja \
 echo "=== IfcOpenShell configure done; building ==="
 ninja -C "$BUILD"
 echo "=== build done ==="
-find "$BUILD" -name "*.a" | sed 's#.*/##'
+
+# MainGui.cpp registers _ifcopenshell_wrapper in its inittab, so the archive defining
+# PyInit__ifcopenshell_wrapper is the one that matters. Find it by symbol rather than by
+# filename, and stage it under a stable name: with -sERROR_ON_UNDEFINED_SYMBOLS=0 a missing
+# archive is not a link error, it is a trapping PyInit_* the first time BIM imports IFC.
+NM="$ROOT/emsdk/upstream/bin/llvm-nm"
+WRAP=""
+while IFS= read -r a; do
+    if "$NM" "$a" 2>/dev/null | grep -q ' T PyInit__ifcopenshell_wrapper$'; then WRAP="$a"; break; fi
+done < <(find "$BUILD" -name '*.a')
+
+if [ -z "$WRAP" ]; then
+    echo "!! no archive defines PyInit__ifcopenshell_wrapper. What was built:"
+    find "$BUILD" -name '*.a' | sed 's#.*/#     #' | sort | head -20
+    exit 1
+fi
+
+mkdir -p "$DW/lib/ifc-mod"
+cp "$WRAP" "$DW/lib/ifc-mod/lib_ifcopenshell_wrapper.a"
+# The geometry and parser archives are linked alongside the wrapper.
+for a in $(find "$BUILD" -name 'libIfcParse.a' -o -name 'libIfcGeom*.a'                 -o -name 'libgeometry_*.a' -o -name 'libSerializers.a'); do
+    cp "$a" "$DW/lib/ifc-mod/"
+done
+echo "IfcOpenShell staged to $DW/lib/ifc-mod:"
+ls -la "$DW/lib/ifc-mod" | sed 's/^/    /'
+"$NM" "$WRAP" 2>/dev/null | grep ' T PyInit' | sed 's/^/  /' || true
