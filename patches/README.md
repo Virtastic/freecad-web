@@ -28,6 +28,20 @@ git -C deps/src/cpython       apply /path/to/patches/cpython-ctypes-wasm.patch
 git -C deps/src/numpy         apply /path/to/patches/numpy.patch
 ```
 
+## Which FreeCAD does `freecad.patch` target?
+
+**FreeCAD 1.1.3**, recorded in `patches/freecad.version`. `apply.sh` reads that file and
+refuses to patch a `deps/src/freecad` reporting a different `PACKAGE_VERSION` -- because
+`deps/` is gitignored, nothing else in this repository records which upstream tree the port
+was written against, and a patch applied to the wrong source does not fail loudly. It places
+hunks in plausible but wrong scopes.
+
+`apply.sh` also applies at **zero fuzz** (`-F0`). The 1.0.0 -> 1.1.3 rebase found four hunks
+that patch(1) had placed wrongly at the default fuzz of 2: an `if(EMSCRIPTEN)` block inside a
+`SET(...)` source list (CMake would not parse it), the same block nested inside `if (MSVC)` in
+two other CMakeLists (parses, but dead code on the only target that needs it), and a Python
+statement moved into the wrong method. Only the first of those four failed loudly.
+
 `freecad.patch` bundles the full wasm C++ port including the crash-fix set (OCC serial
 thread-pool in `Mod/Part/App/AppPart.cpp`, TechDraw lazy static-init in `Rez.cpp`/
 `QGIViewPart.cpp`, MEFISTO f2c signature fixes) and the native browser File-dialog

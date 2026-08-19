@@ -2,7 +2,8 @@
 # Measure what upgrading FreeCAD costs, by trying the patch instead of estimating it.
 #
 # patches/freecad.patch is 31,718 lines across 83 files and is the single largest piece of
-# this port. Moving from 1.0.0 to a newer release means rebasing it, and the only honest way
+# this port. The port now targets 1.1.3 (see patches/freecad.version); moving to a newer
+# release means rebasing it again, and the only honest way
 # to size that is to fetch the new tree and see which hunks land.
 #
 # WHAT IT REPORTS

@@ -1,0 +1,5 @@
+# Patch files must arrive with LF endings in every checkout. patch(1) matches its
+# context lines byte for byte, so a CRLF-converted patch fails wholesale against an
+# LF source tree -- and on Windows (core.autocrlf=true) that is the default outcome.
+# Marking them explicitly keeps the stored form authoritative regardless of platform.
+*.patch text eol=lf

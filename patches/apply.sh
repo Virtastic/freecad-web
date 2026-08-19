@@ -42,14 +42,34 @@ apply_one() {
   # Tarball extract. patch(1) rather than `git apply`, deliberately: inside this repository's
   # own work tree git would resolve the enclosing .git and bring index semantics to a
   # directory that has nothing to do with it. -R --dry-run first, so re-running is a no-op.
-  if patch -d "$tree" -p1 -R --dry-run --force --silent < "$patch" >/dev/null 2>&1; then
+  if patch -d "$tree" -p1 -F0 -R --dry-run --force --silent < "$patch" >/dev/null 2>&1; then
     echo "  == $1: already applied (skip, tarball)"
-  elif patch -d "$tree" -p1 --dry-run --force --silent < "$patch" >/dev/null 2>&1; then
-    patch -d "$tree" -p1 --silent < "$patch"; echo "  ++ $1: applied ${2} (tarball)"
+  elif patch -d "$tree" -p1 -F0 --dry-run --force --silent < "$patch" >/dev/null 2>&1; then
+    patch -d "$tree" -p1 -F0 --silent < "$patch"; echo "  ++ $1: applied ${2} (tarball)"
   else
     echo "  !! $1: $2 does NOT apply cleanly — tree may be at the wrong version"; return 1
   fi
 }
+
+# The FreeCAD port is version-specific: patches/freecad.version records the release it was
+# rebased onto. Applying it to a different tree is how you get hunks landing in plausible but
+# wrong places, so check before touching anything.
+check_freecad_version() {
+  local tree="deps/src/freecad" want cmake got
+  [ -d "$tree" ] || return 0
+  want="$(grep -v '^#' "$PATCHES/freecad.version" | tr -d '[:space:]')"
+  [ -n "$want" ] || return 0
+  cmake="$tree/CMakeLists.txt"
+  [ -f "$cmake" ] || { echo "  !! freecad: no CMakeLists.txt in $tree"; return 1; }
+  got="$(grep -oE '^set[(]PACKAGE_VERSION_(MAJOR|MINOR|PATCH) "[0-9]+"' "$cmake" | grep -oE '[0-9]+' | paste -sd. -)"
+  if [ "$got" != "$want" ]; then
+    echo "  !! freecad: tree is $got, but freecad.patch is rebased onto $want."
+    echo "     Check out FreeCAD $want, or rebase the patch (tools/freecad-upgrade-scope.sh)."
+    return 1
+  fi
+  echo "  .. freecad: tree is $got, matching freecad.version"
+}
+check_freecad_version
 
 echo "Applying source patches:"
 apply_one freecad       freecad.patch
