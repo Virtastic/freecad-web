@@ -60,12 +60,16 @@ env:
 jobs:
   freecad:
     timeout-minutes: 360
-    runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
+    # Default to the VPS, and phrase it so a push event -- where `inputs` is empty --
+    # still lands there. The other way round, run 32231308018 was handed
+    # labels=[ubuntu-latest], never got a runner, and failed in four seconds with no
+    # steps and no message.
+    runs-on: ${{ inputs.runner == 'hosted' && 'ubuntu-latest' || fromJSON('["self-hosted","ovh","virtastic"]') }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Free disk (hosted runners are tight)
-        if: ${{ inputs.runner != 'vps' }}
+        if: ${{ inputs.runner == 'hosted' }}
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
           df -h / | tail -1
