@@ -141,7 +141,12 @@ jobs:
           # because qtdeclarative depends on qtshadertools and its qsb shader compiler has to
           # run ON THE HOST during the wasm build. The bare linux_gcc_64 package does not
           # include it. Mirror the target submodule list here.
-          { python3 -m pip install --quiet aqtinstall &&
+          # --break-system-packages: this workflow used to run on a GitHub-hosted
+          # runner, where pip installs freely. On the VPS the system Python is
+          # PEP 668 externally-managed and the bare install dies with
+          # "error: externally-managed-environment" -- which is what killed run
+          # 32236578889 three minutes in, before Qt was configured at all.
+          { { python3 -m pip install --quiet --break-system-packages aqtinstall 2>/dev/null || python3 -m pip install --quiet aqtinstall; } &&
             # ONLY qtshadertools. Run 32040636843 established that qtdeclarative, qtsvg and
             # qttools are not separate aqtinstall modules for 6.9.0 -- they ship inside the
             # base linux_gcc_64 package, and naming them makes aqt fail outright:
