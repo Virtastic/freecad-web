@@ -78,6 +78,9 @@ emconfigure ./configure --host=wasm32-unknown-emscripten --enable-static --disab
   --disable-dependency-tracking CFLAGS="-fPIC -O2 -fexceptions -pthread"
 emmake make -j4 libffi.la   # 'make' fails on docs (texinfo); build just the lib
 FFI="$PWD/wasm32-unknown-emscripten"
+# These directories exist on the build machine because the whole stack was built
+# there; in a job that only builds the Python extensions they may not.
+mkdir -p "$DW/lib" "$DW/include"
 cp "$FFI/.libs/libffi.a" "$DW/lib/libffi.a"
 cp "$FFI/include/ffi.h" "$FFI/include/ffitarget.h" "$DW/include/"
 cd "$ROOT"
@@ -89,8 +92,23 @@ FLAGS=(-c -O2 -fexceptions -pthread -fPIC
   -DHAVE_FFI_PREP_CIF_VAR -DHAVE_FFI_PREP_CLOSURE_LOC -DHAVE_FFI_CLOSURE_ALLOC -DPy_BUILD_CORE_MODULE
   -I"$DW/include" -I"$ROOT/deps/src/cpython/Include" -I"$ROOT/deps/src/cpython/builddir/emscripten-mt"
   -I"$ROOT/deps/src/cpython/Include/internal" -I"$CT")
-for src in _ctypes callbacks callproc stgdict cfield malloc_closure; do
-  emcc "${FLAGS[@]}" "$CT/$src.c" -o "$OUT/$src.o"
+# Compile whatever _ctypes actually ships rather than a fixed list: CPython moves these
+# between releases (3.13 has no stgdict.c), and a name that no longer exists makes emcc
+# fail with "no input files" -- a message that says nothing about which file is missing.
+# _ctypes_test.c is the test extension and must not be linked into the module.
+shopt -s nullglob
+CT_SRCS=()
+for f in "$CT"/*.c; do
+  case "$(basename "$f")" in
+    _ctypes_test.c) continue ;;
+  esac
+  CT_SRCS+=("$f")
+done
+shopt -u nullglob
+[ "${#CT_SRCS[@]}" -gt 0 ] || { echo "!! no .c sources under $CT"; exit 1; }
+echo "_ctypes sources: $(printf '%s ' "${CT_SRCS[@]##*/}")"
+for f in "${CT_SRCS[@]}"; do
+  emcc "${FLAGS[@]}" "$f" -o "$OUT/$(basename "$f" .c).o"
 done
 mkdir -p "$DW/lib/ctypes-mod"
 "$ROOT/emsdk/upstream/emscripten/emar" rcs "$DW/lib/ctypes-mod/lib_ctypes.a" "$OUT"/*.o
