@@ -117,12 +117,19 @@ jobs:
         with:
           path: deps/wasm
           key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
-          # ONLY the source-hash prefix. A bare `fcweb-deps-<KEY>` fallback used to be listed
-          # too, and run 32099719534 duly matched the stale fixed-key entry (41 MiB,
-          # boost+xerces+VTK) instead of the 76 MiB one with OCCT in it -- so OCCT rebuilt for
-          # 77 minutes again. That entry is deleted; no fallback re-creates the trap.
+          # Two levels. The exact source-hash prefix first; then a bare `fcweb-deps-<KEY>-`
+          # fallback, which restore-keys resolves to the NEWEST matching entry.
+          #
+          # That bare fallback was removed once, after run 32099719534 matched a stale
+          # fixed-key entry (41 MiB, boost+xerces+VTK) instead of the 76 MiB one with OCCT
+          # in it. Two things have changed since: that entry is deleted, and -- the actual
+          # fix -- every build step now checks for its own artifact and rebuilds if it is
+          # absent. A partial restore therefore costs exactly the missing pieces, which is
+          # the point. Without the fallback, touching toolchain/** rebuilds all of boost,
+          # xerces, OCCT and VTK to recompile the one library that depends on it.
           restore-keys: |
             fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-
+            fcweb-deps-${{ env.DEPS_KEY }}-
 
       # A hosted runner ships cmake, ninja and gcc. The OVH box does not: run 32155916113
       # died eight times in a row with "[Errno 13] Permission denied: 'cmake'" and
