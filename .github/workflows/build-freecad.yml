@@ -56,6 +56,8 @@ permissions:
 
 env:
   DEPS_KEY: v1-emsdk3.1.70-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
+  # -mt-v2: the threaded rebuild. The v1 cache was single-threaded and had no
+  # QtConcurrent in it at all -- see build-qt-wasm.yml.
   QT_KEY: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
   FREECAD_TAG: "1.1.3"
 
