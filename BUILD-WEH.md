@@ -42,6 +42,23 @@ that a clean rebuild has a target to hit and any drift is a diff rather than a m
 Until that file exists, treat every "reproduce the build" instruction below as
 best-effort rather than exact.
 
+## FreeCAD 1.1.3 needs four things 1.0 did not
+
+Established by getting `build-freecad.yml` to configure, one error at a time. Anyone doing
+the full link needs all of these, not just the compile job.
+
+| | |
+|---|---|
+| **ICU** | `find_package(ICU REQUIRED COMPONENTS uc i18n)` is now at the top of FreeCAD's `CMakeLists.txt`, and ICU is linked into `Base`. 1.0 had no ICU dependency at all. emscripten ships a port (`embuilder build icu`, `--use-port=icu`), so no cross-compile is needed -- but it names the libraries after ICU's source directories (`libicu_common`, `libicu_i18n`, `libicu_stubdata`) rather than the usual `libicuuc`/`libicui18n`/`libicudata`, so CMake's own `FindICU` finds the headers and then reports the components missing. `toolchain/cmake/FindICU.cmake` replaces it. Note the port is **stubdata** -- no locale data, which is right for a browser but rules out real collation. |
+| **Eigen ≥ 3.4** | Header-only, and the dependency stack never built it: `deps/wasm/include` contains no Eigen, which is why `FindEigen3` reported an empty version and refused. |
+| **SWIG** | `SetupSwig.cmake` FATAL_ERRORs whenever `BUILD_SKETCHER` is on, then runs `swig -python -external-runtime` to check its runtime version against pivy's. Host tool; `pip install swig` avoids needing root. |
+| **A threaded Qt** | Not new in 1.1, but 1.1 is what exposed it. FreeCAD lists `Concurrent` among its four base Qt components, and QtConcurrent requires the thread feature. Qt for WebAssembly defaults to **single-threaded**, and `build-qt-wasm.yml` never passed `-feature-thread` -- so the Qt cached under `qt/6.9.0/wasm_mt_weh` was, despite the name, a single-threaded build with no QtConcurrent in it. Everything else here is compiled `-pthread`, so that artifact was wrong regardless. |
+
+Already handled by `patches/freecad.patch`, and worth knowing before someone re-derives it:
+the bundled SMESH path does `find_package(MEDFile REQUIRED)`, which the port replaces with
+an `if(EMSCRIPTEN)` branch wiring `deps/wasm`'s static HDF5 in directly -- the wasm build
+compiles no DriverMED sources, only headers.
+
 ## Toolchains
 
 | Path | Version | Used for |
