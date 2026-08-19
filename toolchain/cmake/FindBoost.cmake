@@ -47,16 +47,29 @@ if(Boost_INCLUDE_DIR AND EXISTS "${Boost_INCLUDE_DIR}/boost/version.hpp")
     endif()
 endif()
 
+message(STATUS "FindBoost: BOOST_ROOT=${BOOST_ROOT}")
+
 set(Boost_LIBRARIES "")
 set(_boost_missing "")
 
 foreach(_comp IN LISTS Boost_FIND_COMPONENTS)
     string(TOUPPER "${_comp}" _COMP)
-    find_library(Boost_${_COMP}_LIBRARY
-        NAMES boost_${_comp}
-        HINTS "${BOOST_ROOT}/lib"
-        NO_CMAKE_FIND_ROOT_PATH
-    )
+    # Direct existence check rather than find_library. The emscripten toolchain sets
+    # CMAKE_FIND_ROOT_PATH_MODE_LIBRARY to ONLY, and even with NO_CMAKE_FIND_ROOT_PATH the
+    # search came back empty for archives that are demonstrably there and named exactly
+    # what was searched for (libboost_program_options.a and friends, staged by
+    # build-boost-weh.sh). There is nothing to search for in a cross-build with a known
+    # layout, so do not search.
+    set(_boost_candidate "${BOOST_ROOT}/lib/libboost_${_comp}.a")
+    if(EXISTS "${_boost_candidate}")
+        set(Boost_${_COMP}_LIBRARY "${_boost_candidate}" CACHE FILEPATH "boost_${_comp}")
+    else()
+        find_library(Boost_${_COMP}_LIBRARY
+            NAMES boost_${_comp}
+            HINTS "${BOOST_ROOT}/lib"
+            NO_CMAKE_FIND_ROOT_PATH
+        )
+    endif()
     if(Boost_${_COMP}_LIBRARY)
         set(Boost_${_COMP}_FOUND TRUE)
         list(APPEND Boost_LIBRARIES "${Boost_${_COMP}_LIBRARY}")
@@ -88,7 +101,7 @@ set(Boost_LIBRARY_DIRS "${BOOST_ROOT}/lib")
 if(_boost_missing)
     message(STATUS "FindBoost: looked under ${BOOST_ROOT}")
     foreach(_m IN LISTS _boost_missing)
-        message(STATUS "FindBoost: no libboost_${_m}.a")
+        message(STATUS "FindBoost: no ${BOOST_ROOT}/lib/libboost_${_m}.a")
     endforeach()
 endif()
 
