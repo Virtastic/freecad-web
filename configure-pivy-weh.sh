@@ -73,14 +73,24 @@ echo "Python include dir: $PYINC (Python.h + wasm pyconfig.h)"
 # A module is the wrong shape here regardless of what CMake permits. This build links one
 # static monolith and registers _coin through MainGui.cpp's inittab, so what is needed is
 # an archive. Rewrite the declaration and verify it took, rather than assuming.
+# Note swig_add_library DEFAULTS to TYPE MODULE, so the string "TYPE MODULE" need not
+# appear anywhere -- handle both the explicit and the implicit form.
 SWIG_CM="$SRC/interfaces/CMakeLists.txt"
-if [ -f "$SWIG_CM" ] && grep -q 'TYPE MODULE' "$SWIG_CM"; then
-    sed -i.orig 's/TYPE MODULE/TYPE STATIC/g' "$SWIG_CM"
-    echo "pivy: swig_add_library TYPE MODULE -> STATIC ($(grep -c 'TYPE STATIC' "$SWIG_CM") site(s))"
+[ -f "$SWIG_CM" ] || { echo "!! $SWIG_CM missing"; exit 1; }
+echo "pivy swig_add_library before:"
+grep -n 'swig_add_library' -A3 "$SWIG_CM" | sed 's/^/    /'
+
+if grep -q 'TYPE[[:space:]]\+MODULE' "$SWIG_CM"; then
+    sed -i.orig 's/TYPE[[:space:]]\+MODULE/TYPE STATIC/g' "$SWIG_CM"
+elif ! grep -q 'TYPE[[:space:]]\+STATIC' "$SWIG_CM"; then
+    # No TYPE at all: UseSWIG then defaults to MODULE. Name it explicitly.
+    sed -i.orig 's/\(swig_add_library([A-Za-z_][A-Za-z0-9_]*\)/\1 TYPE STATIC/' "$SWIG_CM"
 fi
-if [ -f "$SWIG_CM" ] && grep -q 'TYPE MODULE' "$SWIG_CM"; then
-    echo "!! still declares TYPE MODULE -- the rewrite did not take"; exit 1
-fi
+
+echo "pivy swig_add_library after:"
+grep -n 'swig_add_library' -A3 "$SWIG_CM" | sed 's/^/    /'
+grep -q 'TYPE STATIC' "$SWIG_CM" || {
+    echo "!! could not make the SWIG target STATIC -- see the declaration above"; exit 1; }
 
 rm -rf build-pivy-wasm
 emcmake cmake -S "$SRC" -B build-pivy-wasm -G Ninja \
