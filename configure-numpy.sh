@@ -45,6 +45,33 @@ source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
 # The cross-file needs absolute paths, so it is generated rather than committed.
 bash tools/gen-crossfiles.sh
 
+# Make the HOST interpreter describe the WASM build.
+#
+# meson resolves numpy's python dependency by asking the interpreter named in the
+# cross-file where its headers are. That interpreter is CPython's own host build, so it
+# answers with the host include directory, meson puts it FIRST on every command line, and
+# the host pyconfig.h wins:
+#
+#     Include/pyport.h:399: error: "LONG_BIT definition appears wrong for platform
+#                                   (bad gcc/glibc config?)."
+#
+# because the host is 64-bit and wasm32 is not. _PYTHON_SYSCONFIGDATA_NAME is CPython's
+# own mechanism for exactly this -- it makes sysconfig read the cross build's data instead
+# of the interpreter's own, so the paths and sizes reported are the target's. This is the
+# same route pyodide takes. configure-matplotlib-weh.sh works around the identical problem
+# by hand for pybind11; this fixes it at the source for anything that asks.
+MT="$ROOT/deps/src/cpython/builddir/emscripten-mt"
+SYSCFG="$(find "$MT" -maxdepth 2 -name '_sysconfigdata_*emscripten*.py' 2>/dev/null | head -1)"
+if [ -n "$SYSCFG" ]; then
+    export _PYTHON_SYSCONFIGDATA_NAME="$(basename "$SYSCFG" .py)"
+    export PYTHONPATH="$(dirname "$SYSCFG")${PYTHONPATH:+:$PYTHONPATH}"
+    echo "cross sysconfig: $_PYTHON_SYSCONFIGDATA_NAME (from $(dirname "$SYSCFG"))"
+else
+    echo "!! no _sysconfigdata_*emscripten*.py under $MT."
+    echo "   Without it the host interpreter reports HOST include paths, meson puts them"
+    echo "   first, and every translation unit fails on LONG_BIT. Check build-cpython-mt.sh."
+fi
+
 # meson's python= entry points at the non-.exe symlink deliberately (see the cross-file);
 # fail here with a sentence rather than inside meson's compiler probe.
 HOSTPY="$ROOT/deps/src/cpython/builddir/build/python3-native"
