@@ -366,6 +366,7 @@ jobs:
           need deps/wasm/lib/ctypes-mod/lib_ctypes.a              "_ctypes"
           need deps/wasm/lib/libffi.a                             "libffi"
           need deps/wasm/lib/pil-mod/libpil__imaging.a            "PIL _imaging"
+          need deps/wasm/lib/pivy-mod/lib_coin.a                  "pivy _coin"
           need build-pivy-wasm/interfaces/_coin.a                  "pivy _coin"
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
           if [ "$n" -ge 8 ]; then echo "  ok       matplotlib ($n archives)"
