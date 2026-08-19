@@ -445,7 +445,9 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          if [ -x deps/host/shiboken6/bin/shiboken6 ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+          # also require the .llvm-prefix marker: a generator built before it existed will
+          # search for clang builtins on its own and silently emit nothing.
+          if [ -x deps/host/shiboken6/bin/shiboken6 ] && [ -s deps/host/shiboken6/.llvm-prefix ] \n             && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  host shiboken: already built"; exit 0
           fi
           bash build-shiboken-host.sh

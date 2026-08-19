@@ -228,5 +228,14 @@ if [ -z "$GEN" ]; then
     find "$PREFIX" -maxdepth 3 -type f | sed 's/^/     /' | head -20 >&2
     exit 1
 fi
+# Record which LLVM this generator was built against. It resolves clang's builtin headers
+# at RUN time, and it runs from rebuild-pyside-weh.sh, where LLVM_INSTALL_DIR is not set --
+# so it fell back to a default search, found a different LLVM, and parsed nothing:
+#   CLANG v0.64, builtins includes directory: /usr/lib/llvm-21/lib/clang/21/include
+#   No C++ classes found!
+# Writing it here means the consumer cannot guess wrong.
+printf '%s\n' "$CAND" > "$PREFIX/.llvm-prefix"
+echo "llvm prefix recorded: $PREFIX/.llvm-prefix -> $CAND"
+
 echo "host shiboken: $GEN"
 "$GEN" --version 2>&1 | sed 's/^/  /' || true

@@ -67,6 +67,29 @@ echo "python inc:   $PYINC"
     echo "       The wasm shiboken needs the HOST generator, which is built against" >&2
     echo "       libclang. Build it first (see build-shiboken-host.sh)." >&2
     exit 1; }
+# The generator resolves clang's builtin headers at RUN time, not link time. Without this
+# it searches on its own, finds whichever LLVM the distro has, and mismatched builtins make
+# every Qt header fail to parse -- reported as:
+#   qt.shiboken: CLANG v0.64, builtins includes directory: /usr/lib/llvm-21/lib/clang/21/include
+#   qt.shiboken: No C++ classes found!
+# which looks like a typesystem fault and is not. build-shiboken-host.sh records the prefix
+# it built against; use exactly that one.
+if [ -f "$ROOT/deps/host/shiboken6/.llvm-prefix" ]; then
+    LLVM_PREFIX="$(cat "$ROOT/deps/host/shiboken6/.llvm-prefix")"
+    if [ -d "$LLVM_PREFIX" ]; then
+        export LLVM_INSTALL_DIR="$LLVM_PREFIX"
+        export CLANG_INSTALL_DIR="$LLVM_PREFIX"
+        echo "llvm prefix:  $LLVM_PREFIX (matching the host generator)"
+    else
+        echo "!! recorded LLVM prefix $LLVM_PREFIX no longer exists -- rebuild the host" >&2
+        echo "   generator, or the bindings will come out empty." >&2
+    fi
+else
+    echo "!! no .llvm-prefix beside the host shiboken. It will search for clang builtins on" >&2
+    echo "   its own; if it picks a different LLVM than it was linked against, every header" >&2
+    echo "   fails to parse and the generator reports 'No C++ classes found'." >&2
+fi
+
 echo "=== SHIBOKEN (lib) ==="
 rm -rf build-shiboken-wasm
 cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja \
