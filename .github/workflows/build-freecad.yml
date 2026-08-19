@@ -324,10 +324,11 @@ jobs:
             -DCOIN3D_INCLUDE_DIRS="$DW/include" \
             -DCOIN3D_LIBRARIES="$DW/lib/libCoin.a" \
             -DCOIN3D_FOUND=ON \
-            -DICU_INCLUDE_DIR="${{ steps.icu.outputs.sysroot }}/include" \
-            -DICU_UC_LIBRARY="${{ steps.icu.outputs.sysroot }}/lib/wasm32-emscripten/libicuuc.a" \
-            -DICU_I18N_LIBRARY="${{ steps.icu.outputs.sysroot }}/lib/wasm32-emscripten/libicui18n.a" \
-            -DICU_DATA_LIBRARY="${{ steps.icu.outputs.sysroot }}/lib/wasm32-emscripten/libicudata.a" \
+            `# CMake own FindICU searches for libicuuc/libicui18n; the emscripten port` \
+            `# builds libicu_common/libicu_i18n, so toolchain/cmake/FindICU.cmake takes` \
+            `# over. FreeCAD only APPENDS to CMAKE_MODULE_PATH, so ours stays first.` \
+            -DCMAKE_MODULE_PATH="$ROOT/toolchain/cmake" \
+            -DICU_EM_SYSROOT="${{ steps.icu.outputs.sysroot }}" \
             -DBoost_USE_STATIC_LIBS=ON -DBoost_USE_STATIC_RUNTIME=ON \
             -DCMAKE_PREFIX_PATH="$DW;$QT" \
             -DCMAKE_FIND_ROOT_PATH="$DW;$QT" \
