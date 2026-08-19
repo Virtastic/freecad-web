@@ -88,7 +88,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: qt/6.9.0/wasm_mt_weh
-          key: fcweb-qt-6.9.0-wasm-eh-jspi-emsdk3.1.70-v1
+          key: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
 
       - name: Install emsdk 3.1.70
         run: |
@@ -185,6 +185,14 @@ jobs:
             -prefix "$GITHUB_WORKSPACE/qt/6.9.0/wasm_mt_weh" \
             -feature-wasm-exceptions \
             -feature-wasm-jspi \
+            `# THREADS. Qt for WebAssembly defaults to single-threaded, and this` \
+            `# configure never asked for them -- so despite the wasm_mt prefix the` \
+            `# result was a single-threaded Qt, and QtConcurrent (which requires` \
+            `# thread) was silently not built at all. FreeCAD lists Concurrent among` \
+            `# its four base Qt components, so its configure died on` \
+            `# 'Could NOT find Qt6Concurrent'. Everything else in this stack is` \
+            `# compiled -pthread, so a single-threaded Qt was wrong regardless.` \
+            -feature-thread \
             -release -no-warnings-are-errors \
             -submodules qtbase,qtsvg,qtdeclarative,qttools \
             -skip qtwebengine \
