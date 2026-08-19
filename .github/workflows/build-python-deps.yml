@@ -213,6 +213,27 @@ jobs:
           # because a moving head is exactly the unreproducibility BUILD-WEH.md opens with.
           # 481676e5 is 0.8.0 as of 2025-11-21.
           get ifcopenshell https://github.com/IfcOpenShell/IfcOpenShell/archive/481676e51b65cb93e520b9f073123f22a06b212b.tar.gz 1 cmake/CMakeLists.txt
+          # src/svgfill is a SUBMODULE, and GitHub tarballs carry no submodules -- the same
+          # fact that keeps Assembly and AddonManager out of the FreeCAD build. The Python
+          # wrapper needs it unconditionally: IfcPython.i includes svgfill.h outside the
+          # IFOPSH_WITH_CGAL guard, and IfcGeomWrapper.i declares %template over svgfill::
+          # types, so WITH_CGAL=OFF does not avoid it. ba09c29b is the commit IfcOpenShell
+          # pins at 481676e5.
+          if [ ! -e deps/src/ifcopenshell/src/svgfill/src/svgfill.h ]; then
+            echo "  svgfill: fetching (submodule of ifcopenshell)"
+            mkdir -p deps/src/ifcopenshell/src/svgfill
+            if curl -fsSL -o /tmp/svgfill.tar.gz \
+                 https://github.com/IfcOpenShell/svgfill/archive/ba09c29b81325c27d77cd41be84d7e84c9c06f5b.tar.gz; then
+              tar xzf /tmp/svgfill.tar.gz -C deps/src/ifcopenshell/src/svgfill --strip-components=1
+              [ -e deps/src/ifcopenshell/src/svgfill/src/svgfill.h ] \
+                || echo "::warning::svgfill extracted but src/svgfill.h is missing"
+            else
+              echo "::warning::svgfill: fetch failed"
+              fetch_failed="$fetch_failed svgfill"
+            fi
+          else
+            echo "  svgfill: present"
+          fi
           # IfcGeom includes <Eigen/Dense>; header-only, never staged into deps/wasm.
           get eigen https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz 1 Eigen/Dense
 
