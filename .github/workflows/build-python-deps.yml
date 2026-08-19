@@ -110,7 +110,10 @@ jobs:
           '${{ steps.hostpy.outputs.python-path }}' -m venv .qtvenv
           . .qtvenv/bin/activate
           python -m pip install --quiet --upgrade pip
-          python -m pip install --quiet meson ninja pybind11 setuptools wheel cppy
+          # cython: numpy's meson.build declares it as a compiler, so meson refuses to configure
+          # without it -- "Unknown compiler(s): [['cython'], ['cython3']]". cppy is
+          # kiwisolver's build dependency.
+          python -m pip install --quiet meson ninja pybind11 setuptools wheel cppy cython
           echo "  python $(python -V), meson $(meson --version), ninja $(ninja --version)"
 
       - name: Fetch sources
