@@ -115,11 +115,11 @@ NM="$ROOT/emsdk/upstream/bin/llvm-nm"
 WRAP=""
 while IFS= read -r a; do
     if "$NM" "$a" 2>/dev/null | grep -q ' T PyInit__ifcopenshell_wrapper$'; then WRAP="$a"; break; fi
-done < <(find "$BUILD" -name '*.a')
+done < <(find "$BUILD" \( -name '*.a' -o -name '*.so' \))
 
 if [ -z "$WRAP" ]; then
     echo "!! no archive defines PyInit__ifcopenshell_wrapper. What was built:"
-    find "$BUILD" -name '*.a' | sed 's#.*/#     #' | sort | head -20
+    find "$BUILD" \( -name '*.a' -o -name '*.so' \) | sed 's#.*/#     #' | sort | head -30
     exit 1
 fi
 
