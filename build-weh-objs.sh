@@ -55,6 +55,14 @@ echo "  qt include:     $QT/include${QTVER:+ (+ private $QTVER)}"
 # name the link resolves against; if the object comes out empty the build says so here
 # instead of the browser saying it later.
 #
+# wasm_event_dispatch.cpp goes with -sEXPORTED_FUNCTIONS+=_fcweb_dispatch_event and
+# -sASYNCIFY_EXPORTS=fcweb_run_python,fcweb_dispatch_event, both of which the recorded
+# link command scratchpad/linkcmds/fc-linkcmd-weh.sh already carries. NOTE that
+# configure-gui-weh.sh's own linker flags do NOT -- it lists neither the object nor the
+# two flags -- so a link driven from the cmake target alone leaves Qt DOM events on a
+# non-promising stack and every nested event loop entered from a real mouse or key event
+# traps with "SuspendError: trying to suspend without WebAssembly.promising".
+#
 # dialog_exec_wrap.cpp is deliberately absent: it goes with
 # -Wl,--wrap=_ZN7QDialog4execEv, which the current configure-gui-weh.sh link line does not
 # use (an older link command in scratchpad/linkcmds does). Adding the object without the
@@ -67,6 +75,7 @@ spe_sanitize.cpp|em++|QT|__wrap__ZN23QCoreApplicationPrivate13notify_helperEP7QO
 fcweb_dlg_module.cpp|em++|PY|PyInit__fcwebdlg
 fcweb_gmsh_module.cpp|em++|PY|PyInit__fcwebgmsh
 fcweb_ccx_module.cpp|em++|PY|PyInit__fcwebccx
+wasm_event_dispatch.cpp|em++|QT|fcweb_dispatch_event
 "
 
 NM="$ROOT/emsdk/upstream/bin/llvm-nm"
