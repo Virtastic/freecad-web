@@ -50,6 +50,20 @@ set(_icu_lib_i18n    icu_i18n)
 set(_icu_lib_data    icu_stubdata)
 set(_icu_lib_io      icu_io)
 
+# THREADING. emscripten builds a separate variant of every port for -pthread and marks it
+# with an "-mt" suffix: libicu_common-mt.a beside libicu_common.a. Both sit in the sysroot,
+# and picking the wrong one is not a link-order warning -- wasm-ld refuses outright:
+#
+#     --shared-memory is disallowed by umutex.cpp.o because it was not compiled with
+#     'atomics' or 'bulk-memory' features
+#
+# This whole port is -pthread, so prefer the -mt library whenever the flags say threads.
+# The plain name stays as a fallback for a single-threaded consumer.
+set(_icu_mt "")
+if("${CMAKE_CXX_FLAGS} ${CMAKE_C_FLAGS} ${CMAKE_EXE_LINKER_FLAGS}" MATCHES "-pthread")
+    set(_icu_mt "-mt")
+endif()
+
 set(ICU_LIBRARIES "")
 set(_icu_missing "")
 
@@ -59,11 +73,16 @@ foreach(_comp IN LISTS ICU_FIND_COMPONENTS)
         continue()
     endif()
     string(TOUPPER "${_comp}" _COMP)
-    find_library(ICU_${_COMP}_LIBRARY
-        NAMES ${_icu_lib_${_comp}}
+    # The cache variable name carries the variant, so a CMakeCache.txt written by an earlier
+    # configure cannot pin the wrong one. find_library caches by NAME, and re-running with a
+    # different NAMES list would otherwise keep returning the previously found path.
+    find_library(FCWEB_ICU_${_COMP}_LIB${_icu_mt}
+        NAMES ${_icu_lib_${_comp}}${_icu_mt} ${_icu_lib_${_comp}}
         HINTS "${_icu_sysroot}/lib/wasm32-emscripten"
         NO_CMAKE_FIND_ROOT_PATH
     )
+    set(ICU_${_COMP}_LIBRARY "${FCWEB_ICU_${_COMP}_LIB${_icu_mt}}")
+    mark_as_advanced(FCWEB_ICU_${_COMP}_LIB${_icu_mt})
     if(ICU_${_COMP}_LIBRARY)
         list(APPEND ICU_LIBRARIES "${ICU_${_COMP}_LIBRARY}")
         if(NOT TARGET ICU::${_comp})
@@ -80,11 +99,13 @@ endforeach()
 
 # The stub data library is not a component anyone asks for, but every ICU link needs it or
 # u_init_* comes out undefined. Append it whenever it exists.
-find_library(ICU_DATA_LIBRARY
-    NAMES ${_icu_lib_data}
+find_library(FCWEB_ICU_DATA_LIB${_icu_mt}
+    NAMES ${_icu_lib_data}${_icu_mt} ${_icu_lib_data}
     HINTS "${_icu_sysroot}/lib/wasm32-emscripten"
     NO_CMAKE_FIND_ROOT_PATH
 )
+set(ICU_DATA_LIBRARY "${FCWEB_ICU_DATA_LIB${_icu_mt}}")
+mark_as_advanced(FCWEB_ICU_DATA_LIB${_icu_mt})
 if(ICU_DATA_LIBRARY)
     list(APPEND ICU_LIBRARIES "${ICU_DATA_LIBRARY}")
 endif()
@@ -101,6 +122,11 @@ set(ICU_INCLUDE_DIRS "${ICU_INCLUDE_DIR}")
 # missing-component list is a CMake list, and interpolating it into that argument makes its
 # semicolons split the string into extra arguments -- which surfaces as the thoroughly
 # unhelpful "Unknown keywords given to find_package_handle_standard_args()".
+message(STATUS "FindICU: ${_icu_sysroot} (threads: ${_icu_mt})")
+foreach(_l IN LISTS ICU_LIBRARIES)
+    message(STATUS "FindICU: using ${_l}")
+endforeach()
+
 if(_icu_missing)
     message(STATUS "FindICU: emscripten sysroot ${_icu_sysroot}")
     foreach(_m IN LISTS _icu_missing)

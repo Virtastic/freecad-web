@@ -158,11 +158,24 @@ NPYLIBS=""
 if [ -d "$DW/lib/numpy-mod" ]; then
   # Single space-separated line (newlines would become ninja line-continuations
   # WITHOUT spaces, concatenating the paths). Module libs first, then support libs.
-  # The per-dispatch archives (*.dispatch.h_baseline.a) are ALSO aggregated into
-  # the *_mtargets.a archives; linking both duplicates the CPU-dispatch static
-  # initializers -> numpy aborts with "CPU dispatcher tracer already initlized".
-  # Link only the mtargets (which cover all 18 dispatch objects), not the individuals.
-  NPYLIBS="$( { ls "$DW"/lib/numpy-mod/libnpy__multiarray_umath.a "$DW"/lib/numpy-mod/libnpy__pocketfft_umath.a "$DW"/lib/numpy-mod/libnpy__umath_linalg.a "$DW"/lib/numpy-mod/libnpy_lapack_lite.a; ls "$DW"/lib/numpy-mod/*.a | grep -vE 'libnpy_(_multiarray|_pocketfft|_umath_linalg|lapack_lite)\.a|dispatch\.h_baseline\.a'; } 2>/dev/null | tr '\n' ' ')"
+  # CPU dispatch: link the AGGREGATES if this numpy built any, otherwise the per-dispatch
+  # BASELINE archives. Linking both duplicates the dispatch static initializers and numpy
+  # aborts at import with "CPU dispatcher tracer already initlized", which is why baseline
+  # used to be excluded unconditionally. But numpy 2.1.3 for wasm builds NO *_mtargets.a at
+  # all -- there are no SIMD targets to aggregate -- so excluding baseline removed the only
+  # copy and the FreeCAD link ended in
+  #     libnpy__multiarray_umath.a(meson-generated_arraytypes.c.o):
+  #         undefined symbol: BOOL_argmax        (and BYTE_/INT_/LONG_/... argmax + argmin)
+  # Decide from what is on disk, not from what an x86 numpy build happens to produce.
+  if ls "$DW"/lib/numpy-mod/*_mtargets.a >/dev/null 2>&1; then
+    _npy_skip='libnpy_(_multiarray|_pocketfft|_umath_linalg|lapack_lite)\.a|dispatch\.h_baseline\.a'
+    echo "numpy:        dispatch aggregates present -- excluding the baseline archives"
+  else
+    _npy_skip='libnpy_(_multiarray|_pocketfft|_umath_linalg|lapack_lite)\.a'
+    echo "numpy:        no *_mtargets.a -- linking the per-dispatch baseline archives"
+  fi
+  NPYLIBS="$( { ls "$DW"/lib/numpy-mod/libnpy__multiarray_umath.a "$DW"/lib/numpy-mod/libnpy__pocketfft_umath.a "$DW"/lib/numpy-mod/libnpy__umath_linalg.a "$DW"/lib/numpy-mod/libnpy_lapack_lite.a; ls "$DW"/lib/numpy-mod/*.a | grep -vE "$_npy_skip"; } 2>/dev/null | tr '\n' ' ')"
+  echo "numpy:        $(printf '%s' "$NPYLIBS" | wc -w | tr -d ' ') archive(s) on the link line"
 fi
 
 # matplotlib C-extension static libs (built by configure-matplotlib.sh into
