@@ -71,6 +71,17 @@ if [ ! -f "$CPY/Include/pyconfig.h" ]; then
 fi
 echo "python inc:   $PYINC"
 
+# Eigen is header-only, and where it lives differs by machine: the build machine has it
+# under deps/wasm/include, CI fetches the release tarball to deps/src/eigen. FindEigen3
+# reports "version .. found" with an EMPTY version and then refuses when the directory has
+# no Eigen in it, which reads as a version problem and is not.
+EIGEN_INC=""
+for d in "$DW/include" "$ROOT/deps/src/eigen" "$DW/include/eigen3"; do
+    [ -f "$d/Eigen/Core" ] && { EIGEN_INC="$d"; break; }
+done
+[ -n "$EIGEN_INC" ] || { echo "ERROR: no Eigen (looked for Eigen/Core under $DW/include, deps/src/eigen)" >&2; exit 1; }
+echo "eigen:        $EIGEN_INC"
+
 # ---- Heap size -------------------------------------------------------------------------
 # Default stays 2 GB. Raising it is a real option now, but it is NOT free, and the failure
 # mode is nasty enough to be worth stating before anyone changes the number.
@@ -199,7 +210,7 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DQt6_DIR="$ROOT/qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6" \
   -DQT_HOST_PATH="$QT_HOST" \
   -DOpenCASCADE_DIR="$DW/lib/cmake/opencascade" \
-  -DEIGEN3_INCLUDE_DIR="$DW/include" \
+  -DEIGEN3_INCLUDE_DIR="$EIGEN_INC" \
   -DCOIN3D_INCLUDE_DIRS="$DW/include" \
   -DCOIN3D_LIBRARIES="$DW/lib/libCoin.a" \
   -DCOIN3D_FOUND=ON \

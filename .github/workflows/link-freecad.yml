@@ -1,0 +1,437 @@
+name: link FreeCAD (wasm)
+
+# THE ACTUAL ARTIFACT.
+#
+# build-freecad.yml compiles, and deliberately does not link: it configures with PySide,
+# Assembly and Test OFF, because compiling is what tests the patch and the headers. That is
+# a useful gate and it is NOT the build that ships.
+#
+# This one runs the production path end to end -- the same four commands BUILD-WEH.md
+# documents for the build machine:
+#
+#     bash build-weh-objs.sh                         # the 8 objects cmake does not build
+#     bash configure-gui-weh.sh                      # -> build-freecad-gui-weh
+#     ninja && ninja install                         # -> freecad-gui-install
+#     bash scratchpad/linkcmds/fc-linkcmd-weh.sh     # -> bin/FreeCAD.{js,wasm,data}
+#     bash scratchpad/stage-jspi.sh                  # GL post-patches + validate
+#
+# and produces FreeCAD.js / FreeCAD.wasm / FreeCAD.data as a downloadable artifact.
+#
+# It is expensive (the compile is ~1h cold, the link another ~45-60 min, wasm-opt being the
+# slow tail), so the build tree and install tree are cached and every later run is
+# incremental. The cache saves on always(), not success(), for the same reason the pydeps
+# one does: a partial build tree is exactly what is worth keeping.
+
+on:
+  # Same reasoning as build-freecad.yml: GitHub only offers workflow_dispatch once the file
+  # is on the DEFAULT branch, and this lives on the port branch. Drop the push trigger when
+  # the branch merges.
+  push:
+    branches: [freecad-1.1.3]
+    paths:
+      - '.github/workflows/link-freecad.yml'
+      - 'build-weh-objs.sh'
+      - 'configure-gui-weh.sh'
+      - 'scratchpad/linkcmds/fc-linkcmd-weh.sh'
+      - 'scratchpad/stage-jspi.sh'
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "ignore the cached build tree and start clean"
+        type: boolean
+        default: false
+      jobs:
+        description: "parallel compile jobs (blank = nproc)"
+        type: string
+        default: ""
+      stop_after:
+        description: "stop after this stage"
+        type: choice
+        options: [link, configure, compile, install]
+        default: link
+
+permissions:
+  contents: read
+
+env:
+  DEPS_KEY: v1-emsdk3.1.70-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
+  QT_KEY: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
+  PYDEPS_KEY: v1-emsdk3.1.70-cpython3.13.3-numpy2.1.3-mpl3.9.2
+
+jobs:
+  link:
+    timeout-minutes: 720
+    runs-on: ["self-hosted", "ovh", "virtastic"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which FreeCAD are we building?
+        id: ver
+        run: |
+          set -e
+          want="$(grep -v '^#' patches/freecad.version | tr -d '[:space:]')"
+          [ -n "$want" ] || { echo "::error::patches/freecad.version is empty"; exit 1; }
+          echo "tag=$want" >> "$GITHUB_OUTPUT"
+          echo "  building FreeCAD $want (from patches/freecad.version)"
+
+      # Three caches, restored in this order deliberately: the C++ stack owns deps/wasm,
+      # and the Python one adds subdirectories (lib/*-mod, shiboken6, pyside-pkg) inside it.
+      - name: Restore the C++ dependency stack
+        id: depcache
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/wasm
+          key: fcweb-deps-${{ env.DEPS_KEY }}-freecad-build
+          restore-keys: |
+            fcweb-deps-${{ env.DEPS_KEY }}-
+
+      - name: Restore Qt 6.9.0 for wasm
+        id: qtcache
+        uses: actions/cache/restore@v4
+        with:
+          path: qt/6.9.0/wasm_mt_weh
+          key: ${{ env.QT_KEY }}
+
+      - name: Restore the Python extension libraries
+        id: pydepscache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            deps/wasm/lib/numpy-mod
+            deps/wasm/lib/mpl-mod
+            deps/wasm/lib/kiwi-mod
+            deps/wasm/lib/ctypes-mod
+            deps/wasm/lib/pil-mod
+            deps/wasm/lib/ifc-mod
+            deps/wasm/lib/pivy-mod
+            deps/wasm/lib/libffi.a
+            deps/src/cpython
+            deps/src/numpy
+            deps/src/pivy
+            deps/src/ifcopenshell
+            deps/src/pyside-setup
+            deps/src/eigen
+            build-numpy
+            build-pivy-wasm
+            build-ifcopenshell
+            deps/host/shiboken6
+            deps/host/llvm-*
+            deps/wasm/pyside-pkg
+            deps/wasm/shiboken6
+            build-shiboken-wasm
+            build-pyside-wasm
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-
+          restore-keys: |
+            fcweb-pydeps-${{ env.PYDEPS_KEY }}-
+
+      - name: Restore the FreeCAD build and install trees
+        id: fccache
+        if: ${{ inputs.rebuild != true }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build-freecad-gui-weh
+            freecad-gui-install
+            weh-objs
+          key: fcweb-fclink-${{ hashFiles('patches/freecad.patch', 'configure-gui-weh.sh') }}
+          restore-keys: |
+            fcweb-fclink-
+
+      # Every input the link names comes from another workflow. Say which one is missing and
+      # which workflow makes it, rather than failing an hour later inside cmake or wasm-ld.
+      - name: Is everything the link needs actually here?
+        run: |
+          set -e
+          fail=0
+          need() {  # need <path> <what> <workflow>
+            if [ -e "$1" ]; then echo "  ok       $2"
+            else echo "::error::missing $2 ($1) -- run $3 first"; fail=1; fi
+          }
+          need deps/wasm/lib/libTKernel.a                          "OCCT"                build-deps.yml
+          need deps/wasm/lib/libCoin.a                             "Coin3D"              build-deps.yml
+          need deps/wasm/lib/libxerces-c.a                         "Xerces"              build-deps.yml
+          need deps/wasm/lib/libvtkCommonCore-9.3.a                "VTK"                 build-deps.yml
+          need qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6                  "Qt 6.9.0 for wasm"   build-qt-wasm.yml
+          need deps/src/cpython/builddir/emscripten-mt/libpython3.13.a "CPython (wasm/mt)" build-python-deps.yml
+          need deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a  "numpy"               build-python-deps.yml
+          need deps/wasm/lib/mpl-mod/libfreetype.a                 "freetype (via mpl)"  build-python-deps.yml
+          need deps/wasm/lib/kiwi-mod/libkiwi__cext.a              "kiwisolver"          build-python-deps.yml
+          need deps/wasm/lib/ctypes-mod/lib_ctypes.a               "_ctypes"             build-python-deps.yml
+          need deps/wasm/lib/pil-mod/libpil__imaging.a             "PIL"                 build-python-deps.yml
+          need deps/wasm/lib/pivy-mod/lib_coin.a                   "pivy _coin"          build-python-deps.yml
+          need build-ifcopenshell/ifcwrap/lib_ifcopenshell_wrapper.a "IfcOpenShell"      build-python-deps.yml
+          need build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a "PySide6 QtWidgets"  build-python-deps.yml
+          need deps/wasm/shiboken6/lib/libshiboken6.abi3.a         "libshiboken6"        build-python-deps.yml
+          need deps/wasm/pyside-pkg/PySide6/__init__.py            "pyside-pkg glue"     build-python-deps.yml
+          exit $fail
+
+      # The PySide archives are the one input that can be PRESENT and USELESS: emstrip drops
+      # the symbol table, and the link runs with ERROR_ON_UNDEFINED_SYMBOLS=0, so a stripped
+      # archive becomes a trapping `import PySide6.QtWidgets` in the browser rather than a
+      # build failure. Check the symbol, not the file.
+      - name: The PySide archives carry their PyInit
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh 2>/dev/null || true
+          nm=emsdk/upstream/bin/llvm-nm
+          fail=0
+          for m in QtCore QtGui QtWidgets; do
+            a="build-pyside-wasm/PySide6/$m/$m.abi3.a"
+            if "$nm" "$a" 2>/dev/null | grep -q "PyInit_$m"; then echo "  ok       $m ($a)"
+            else echo "::error::$a has no PyInit_$m -- rerun build-python-deps.yml"; fail=1; fi
+          done
+          exit $fail
+
+      - name: Cache emsdk
+        id: emsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: emsdk
+          key: emsdk-3.1.70-shims-v1
+
+      - name: Install emsdk 3.1.70
+        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+
+      - name: Host Python 3.13 (must match the wasm CPython)
+        id: hostpy
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Host Qt 6.9.0 (native tools only)
+        id: hostqt
+        run: |
+          set -e
+          if [ -d qt-host/6.9.0/gcc_64/bin ]; then
+            echo "  host Qt already present"
+          else
+            python3 -m pip install --quiet --break-system-packages aqtinstall 2>/dev/null \
+              || python3 -m pip install --quiet aqtinstall
+            python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 \
+              -m qtshadertools -O "$PWD/qt-host"
+          fi
+          host="$PWD/qt-host/6.9.0/gcc_64"
+          [ -x "$host/libexec/moc" ] || [ -x "$host/bin/moc" ] || {
+            echo "::error::no moc under $host"; find qt-host -name moc | head; exit 1; }
+          echo "  QT_HOST_PATH=$host"
+
+      - name: Build tools (pybind11, swig) and the ICU port
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          python3 -m pip install --quiet --break-system-packages pybind11 swig 2>/dev/null \
+            || python3 -m pip install --quiet pybind11 swig
+          python3 -c 'import pybind11; print("  pybind11:", pybind11.get_cmake_dir())'
+          swig -version | grep -i version | head -1 | sed 's/^/  swig: /'
+          embuilder build icu
+          echo "  icu sysroot: $(em-config CACHE)/sysroot"
+
+      - name: Fetch FreeCAD ${{ steps.ver.outputs.tag }}
+        run: |
+          set -e
+          if [ -e deps/src/freecad/CMakeLists.txt ]; then
+            echo "  freecad: present"
+          else
+            mkdir -p deps/src/freecad
+            curl -fsSL -o /tmp/freecad.tar.gz \
+              "https://github.com/FreeCAD/FreeCAD/archive/refs/tags/${{ steps.ver.outputs.tag }}.tar.gz"
+            tar xzf /tmp/freecad.tar.gz -C deps/src/freecad --strip-components=1
+          fi
+          ls deps/src/freecad/CMakeLists.txt
+
+      # GitHub source tarballs carry no submodules. build-freecad.yml needs only GSL because
+      # it builds with BUILD_ASSEMBLY=OFF; the production configure has it ON, and Assembly
+      # is a real workbench, so OndselSolver has to come too. AddonManager stays off (see
+      # ROADMAP 15) and googletest is only for ENABLE_DEVELOPER_TESTS, which is off.
+      - name: Submodules the tarball does not carry (GSL, OndselSolver)
+        run: |
+          set -e
+          gsl=deps/src/freecad/src/3rdParty/GSL
+          if [ ! -e "$gsl/include/gsl/gsl" ]; then
+            mkdir -p "$gsl"
+            curl -fsSL -o /tmp/gsl.tar.gz https://github.com/microsoft/GSL/archive/refs/tags/v4.0.0.tar.gz
+            tar xzf /tmp/gsl.tar.gz -C "$gsl" --strip-components=1
+          fi
+          echo "  GSL:          $(ls "$gsl/include/gsl" | wc -l) headers"
+          ond=deps/src/freecad/src/3rdParty/OndselSolver
+          if [ ! -e "$ond/CMakeLists.txt" ]; then
+            mkdir -p "$ond"
+            curl -fsSL -o /tmp/ondsel.tar.gz \
+              https://github.com/Ondsel-Development/OndselSolver/archive/refs/heads/main.tar.gz
+            tar xzf /tmp/ondsel.tar.gz -C "$ond" --strip-components=1
+          fi
+          [ -e "$ond/CMakeLists.txt" ] || { echo "::error::OndselSolver missing -- BUILD_ASSEMBLY needs it"; exit 1; }
+          echo "  OndselSolver: present"
+
+      - name: The patch matches this tree byte for byte
+        run: python3 tools/check-patch-applies.py patches/freecad.patch deps/src/freecad
+
+      - name: Apply the source patches
+        run: |
+          set -e
+          FCWEB_PATCH_OPTIONAL=1 bash patches/apply.sh
+          for f in src/Main/MainGui.cpp src/Gui/CMakeLists.txt; do
+            n=$(grep -c 'EMSCRIPTEN' "deps/src/freecad/$f" || true)
+            echo "  $f: $n EMSCRIPTEN references"
+            [ "$n" -gt 0 ] || { echo "::error::$f carries no wasm port"; exit 1; }
+          done
+
+      - name: Stage the force-included compat headers
+        run: FCWEB_FORCE_STAGE_HEADERS=1 bash toolchain/stage-headers.sh
+
+      # The eight objects cmake does not build. Verified by symbol inside the script -- an
+      # object that compiles to nothing is the failure this repo has already shipped once.
+      - name: weh-objs
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          bash build-weh-objs.sh
+
+      - name: Configure (the production configure, not a compile check)
+        id: configure
+        run: |
+          set -e
+          mkdir -p /tmp/fclogs
+          . emsdk/emsdk_env.sh
+          bash configure-gui-weh.sh 2>&1 | tee /tmp/fclogs/configure.txt
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != 0 ]; then
+            echo "::error::configure failed"
+            tail -60 /tmp/fclogs/configure.txt
+            tail -60 build-freecad-gui-weh/CMakeFiles/CMakeError.log 2>/dev/null || true
+          fi
+          exit $rc
+
+      - name: Compile
+        id: compile
+        if: ${{ inputs.stop_after != 'configure' }}
+        run: |
+          set +e
+          set -o pipefail
+          . emsdk/emsdk_env.sh
+          n="${{ inputs.jobs }}"; [ -n "$n" ] || n="$(nproc)"
+          # -k 0 so one failure does not hide the other 40. The FreeCADMain link target is
+          # excluded here on purpose: fc-linkcmd-weh.sh is the link, and it carries flags
+          # (fcweb_dispatch_event in ASYNCIFY_EXPORTS, wasm_event_dispatch.o) that the cmake
+          # target does not.
+          ninja -C build-freecad-gui-weh -j "$n" -k 0 2>&1 | tee /tmp/fclogs/compile.txt
+          rc=${PIPESTATUS[0]}
+          echo "  reached: $(grep -oE '\[[0-9]+/[0-9]+\]' /tmp/fclogs/compile.txt | tail -1)"
+          echo "  failed targets: $(grep -c '^FAILED:' /tmp/fclogs/compile.txt || true)"
+          if [ "$rc" != 0 ]; then
+            echo "--- distinct errors, most frequent first ---"
+            grep -oE "error: .*" /tmp/fclogs/compile.txt | sed 's/[0-9]\+/N/g' \
+              | sort | uniq -c | sort -rn | head -30
+          fi
+          exit $rc
+
+      - name: Install
+        id: install
+        if: ${{ inputs.stop_after != 'configure' && inputs.stop_after != 'compile' }}
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          ninja -C build-freecad-gui-weh install 2>&1 | tail -20
+          echo "  Mod:   $(find freecad-gui-install/Mod -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l) workbench dirs"
+          echo "  Ext:   $(find freecad-gui-install/Ext -type f 2>/dev/null | wc -l) files"
+          echo "  share: $(find freecad-gui-install/share -type f 2>/dev/null | wc -l) files"
+          [ -d freecad-gui-install/Mod ] || { echo "::error::install produced no Mod tree"; exit 1; }
+
+      - name: Link
+        id: link
+        if: ${{ inputs.stop_after == 'link' }}
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh
+          cd build-freecad-gui-weh
+          bash ../scratchpad/linkcmds/fc-linkcmd-weh.sh 2>&1 | tee /tmp/fclogs/link.txt | tail -40
+          ls -la bin/FreeCAD.js bin/FreeCAD.wasm bin/FreeCAD.data 2>&1 | sed 's/^/  /'
+
+      # NOT scratchpad/stage-jspi.sh. That script is build-machine-shaped: it copies into
+      # play-gui/ from spikes/01-qt-widgets/build/qtloader.js (untracked) and validates with
+      # scratchpad/wasmvalidate.js (does not exist). The part that MATTERS is
+      # tools/patch-freecad-js.py -- six behavioural GL fixes that live only in the linked
+      # JS, are silently lost by every relink, and whose absence is a boot-time storm of
+      # "Cannot read properties of null (reading '0')" with newDocument() never returning.
+      - name: GL post-patches, and validate the wasm
+        if: ${{ inputs.stop_after == 'link' }}
+        run: |
+          set -e
+          js=build-freecad-gui-weh/bin/FreeCAD.js
+          python3 tools/patch-freecad-js.py "$js"
+          echo "--- verifying they are in ---"
+          python3 tools/patch-freecad-js.py "$js" --check
+          node -e '
+            const fs=require("fs");
+            const b=fs.readFileSync("build-freecad-gui-weh/bin/FreeCAD.wasm");
+            if(!WebAssembly.validate(b)){console.error("::error::FreeCAD.wasm does not validate");process.exit(1);}
+            console.log("  FreeCAD.wasm VALID, "+(b.length/1048576).toFixed(1)+" MB");
+          '
+          # A correct link lands near 152 MB. ~234 MB means wasm-opt did not run (or was
+          # killed mid-link, leaving the un-optimized intermediate looking finished), which
+          # is a large silent performance regression -- the same check
+          # tools/sync-play-artifacts.sh makes before it will stage anything.
+          sz=$(stat -c %s build-freecad-gui-weh/bin/FreeCAD.wasm)
+          if [ "$sz" -gt 200000000 ]; then
+            echo "::error::FreeCAD.wasm is $sz bytes -- that is the pre-wasm-opt size"
+            exit 1
+          fi
+
+      - name: What came out
+        if: always()
+        run: |
+          echo "### FreeCAD ${{ steps.ver.outputs.tag }} for wasm -- link" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo
+            echo "| stage | result |"
+            echo "|---|---|"
+            echo "| configure | ${{ steps.configure.outcome }} |"
+            echo "| compile | ${{ steps.compile.outcome }} |"
+            echo "| install | ${{ steps.install.outcome }} |"
+            echo "| link | ${{ steps.link.outcome }} |"
+            echo
+            for f in build-freecad-gui-weh/bin/FreeCAD.js build-freecad-gui-weh/bin/FreeCAD.wasm \
+                     build-freecad-gui-weh/bin/FreeCAD.data; do
+              [ -e "$f" ] && echo "- \`$(basename $f)\` $(du -h "$f" | cut -f1)"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "--- module archives built ---"
+          find build-freecad-gui-weh -name '*.a' 2>/dev/null | wc -l
+
+      - name: Upload the artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freecad-wasm
+          path: |
+            build-freecad-gui-weh/bin/FreeCAD.js
+            build-freecad-gui-weh/bin/FreeCAD.wasm
+            build-freecad-gui-weh/bin/FreeCAD.data
+            play-gui/FreeCAD.*
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freecad-link-logs
+          path: /tmp/fclogs
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # always(), not success(): a partial build tree is the most valuable thing this job
+      # produces on a failing run, because the next round then starts from it.
+      - name: Save the FreeCAD build and install trees
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build-freecad-gui-weh
+            freecad-gui-install
+            weh-objs
+          key: fcweb-fclink-${{ hashFiles('patches/freecad.patch', 'configure-gui-weh.sh') }}-${{ github.run_id }}
