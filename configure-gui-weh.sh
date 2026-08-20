@@ -6,9 +6,70 @@ cd "$(dirname "$0")"
 . toolchain/env.sh
 CPY="$ROOT/deps/src/cpython"
 PYMT="$CPY/builddir/emscripten-mt"
-HOSTPY="$CPY/builddir/build/python.exe"
 SYSROOT="$(em-config CACHE)/sysroot"
 : "${FC_LINK_MODE_FLAGS:=-sNODERAWFS=1}"
+
+# ---- Host-machine paths --------------------------------------------------------------
+# Everything below used to name ONE machine: python.exe (a macOS-only name for CPython's
+# host build), qt/6.9.0/macos, and a pybind11 under .qtvenv/lib/python3.14. That is the
+# same defect the numpy, pivy, IfcOpenShell and PySide lanes each hit separately -- a
+# configure that only runs where it was written. Resolve each, and fail naming what is
+# missing rather than handing cmake a path that does not exist.
+
+# CPython's host build: python.exe on macOS, python or python3-native elsewhere.
+HOSTPY=""
+for c in "$CPY/builddir/build/python.exe" "$CPY/builddir/build/python" \
+         "$CPY/builddir/build/python3-native"; do
+    [ -x "$c" ] && { HOSTPY="$c"; break; }
+done
+[ -n "$HOSTPY" ] || { echo "ERROR: no CPython host build under $CPY/builddir/build" >&2; exit 1; }
+echo "cpython host: $HOSTPY"
+
+# Host Qt: the wasm build needs the native tools (moc, rcc, qmake). build-qt-wasm.yml
+# installs them to qt-host/6.9.0/gcc_64 on Linux; the build machine has qt/6.9.0/macos.
+QT_HOST=""
+for d in "$ROOT/qt-host/6.9.0/gcc_64" "$ROOT/qt/6.9.0/macos" "$ROOT/qt/6.9.0/gcc_64" \
+         "$ROOT/qt-host/6.9.0/macos"; do
+    if [ -x "$d/bin/qmake" ] || [ -x "$d/bin/moc" ]; then QT_HOST="$d"; break; fi
+done
+[ -n "$QT_HOST" ] || { echo "ERROR: no host Qt found (looked for bin/qmake under qt-host/6.9.0/gcc_64, qt/6.9.0/macos, ...)" >&2; exit 1; }
+echo "host Qt:      $QT_HOST"
+
+# pybind11's cmake package. Ask whichever interpreter has it rather than naming a
+# site-packages path with a Python version baked into it.
+PYBIND11_DIR="${FCWEB_PYBIND11_DIR:-}"
+if [ -z "$PYBIND11_DIR" ]; then
+    for py in "$ROOT/.qtvenv/bin/python3" python3 python; do
+        command -v "$py" >/dev/null 2>&1 || [ -x "$py" ] || continue
+        PYBIND11_DIR="$("$py" -m pybind11 --cmakedir 2>/dev/null || true)"
+        [ -n "$PYBIND11_DIR" ] && [ -d "$PYBIND11_DIR" ] && break
+        PYBIND11_DIR=""
+    done
+fi
+if [ -z "$PYBIND11_DIR" ]; then
+    PYBIND11_DIR="$(ls -d "$ROOT"/.qtvenv/lib/python3.*/site-packages/pybind11/share/cmake/pybind11 2>/dev/null | head -1)"
+fi
+[ -n "$PYBIND11_DIR" ] && [ -d "$PYBIND11_DIR" ] || {
+    echo "ERROR: pybind11 cmake dir not found. FreeCAD 1.1 needs it (FREECAD_USE_PYBIND11=ON)." >&2
+    echo "       Install it (pip install pybind11) or set FCWEB_PYBIND11_DIR." >&2
+    exit 1; }
+echo "pybind11:     $PYBIND11_DIR"
+
+# CMake's FindPython reads pyconfig.h out of Python3_INCLUDE_DIR, and CPython does not ship
+# it in Include/ -- configure generates it into the build tree. Assemble one directory
+# holding both, exactly as the numpy, matplotlib, pivy, IfcOpenShell and PySide lanes each
+# had to. The WASM pyconfig.h, never the host's, or every target unit fails on LONG_BIT.
+PYINC="$CPY/Include"
+if [ ! -f "$CPY/Include/pyconfig.h" ]; then
+    PYINC="$ROOT/build-pyinc-wasm"
+    if [ ! -f "$PYINC/Python.h" ] || [ ! -f "$PYINC/pyconfig.h" ]; then
+        [ -f "$PYMT/pyconfig.h" ] || { echo "ERROR: no wasm pyconfig.h under $PYMT" >&2; exit 1; }
+        rm -rf "$PYINC" && mkdir -p "$PYINC"
+        cp -r "$CPY/Include/." "$PYINC/"
+        cp "$PYMT/pyconfig.h" "$PYINC/pyconfig.h"
+    fi
+fi
+echo "python inc:   $PYINC"
 
 # ---- Heap size -------------------------------------------------------------------------
 # Default stays 2 GB. Raising it is a real option now, but it is NOT free, and the failure
@@ -99,7 +160,7 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DBUILD_MATERIAL=ON -DBUILD_MESH=ON -DBUILD_MESH_PART=ON -DBUILD_FLAT_MESH=OFF \
   -DENABLE_DEVELOPER_TESTS=OFF \
   -DBUILD_OPENSCAD=ON -DBUILD_SMESH=ON -DBUILD_PART_DESIGN=ON -DBUILD_CAM=ON -DBUILD_ASSEMBLY=ON \
-  -DFREECAD_USE_PYBIND11=ON -Dpybind11_DIR="$ROOT/.qtvenv/lib/python3.14/site-packages/pybind11/share/cmake/pybind11" \
+  -DFREECAD_USE_PYBIND11=ON -Dpybind11_DIR="$PYBIND11_DIR" \
   # FreeCAD 1.1 needs ICU, and CMake 4 removed FindBoost. toolchain/cmake supplies both
   # (FindICU maps the emscripten port library names; FindBoost handles the b2-staged
   # layout, which ships no BoostConfig.cmake). FreeCAD only APPENDS to
@@ -136,14 +197,14 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DFREECAD_QT_VERSION=6 \
   -DBoost_USE_STATIC_LIBS=ON -DBoost_USE_STATIC_RUNTIME=ON \
   -DQt6_DIR="$ROOT/qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6" \
-  -DQT_HOST_PATH="$ROOT/qt/6.9.0/macos" \
+  -DQT_HOST_PATH="$QT_HOST" \
   -DOpenCASCADE_DIR="$DW/lib/cmake/opencascade" \
   -DEIGEN3_INCLUDE_DIR="$DW/include" \
   -DCOIN3D_INCLUDE_DIRS="$DW/include" \
   -DCOIN3D_LIBRARIES="$DW/lib/libCoin.a" \
   -DCOIN3D_FOUND=ON \
   -DPython3_EXECUTABLE="$HOSTPY" \
-  -DPython3_INCLUDE_DIR="$CPY/Include" \
+  -DPython3_INCLUDE_DIR="$PYINC" \
   -DPython3_LIBRARY="$PYMT/libpython3.13.a" \
   -DPYTHON_VERSION_STRING=3.13 \
   -DZLIB_INCLUDE_DIR="$SYSROOT/include" \
