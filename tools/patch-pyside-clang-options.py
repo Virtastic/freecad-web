@@ -64,15 +64,29 @@ LIBCXX_BLOCK = """
     # ahead of the compiler-discovered ones, so without this the C stddef.h wins and every
     # header after it fails with 'unknown type name nullptr_t'.
     if(EMSCRIPTEN)
-        execute_process(COMMAND ${CMAKE_CXX_COMPILER} -print-sysroot
-                        OUTPUT_VARIABLE _fcweb_sysroot
-                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-        if(_fcweb_sysroot AND EXISTS "${_fcweb_sysroot}/include/c++/v1")
+        # em++ -print-sysroot prints nothing (verified: the warning below fired), so take
+        # the sysroot from what the toolchain file actually sets, then fall back to
+        # deriving it from the compiler's own location.
+        set(_fcweb_sysroot "")
+        foreach(_cand "${CMAKE_SYSROOT}" "${EMSCRIPTEN_SYSROOT}" "$ENV{EMSDK}/upstream/emscripten/cache/sysroot")
+            if(_fcweb_sysroot STREQUAL "" AND EXISTS "${_cand}/include/c++/v1")
+                set(_fcweb_sysroot "${_cand}")
+            endif()
+        endforeach()
+        if(_fcweb_sysroot STREQUAL "")
+            get_filename_component(_fcweb_emdir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            if(EXISTS "${_fcweb_emdir}/cache/sysroot/include/c++/v1")
+                set(_fcweb_sysroot "${_fcweb_emdir}/cache/sysroot")
+            endif()
+        endif()
+        if(NOT _fcweb_sysroot STREQUAL "")
             message(STATUS "shiboken: libc++ first -> ${_fcweb_sysroot}/include/c++/v1")
             list(INSERT @LISTVAR@ 0 "${_fcweb_sysroot}/include/c++/v1")
         else()
-            message(WARNING "shiboken: no sysroot include/c++/v1 from -print-sysroot; "
-                            "libc++ may not precede the injected clang builtins")
+            message(WARNING "shiboken: no include/c++/v1 found via CMAKE_SYSROOT, "
+                            "EMSCRIPTEN_SYSROOT, EMSDK or the compiler path -- libc++ will "
+                            "not precede the injected clang builtins and every header after "
+                            "<cstddef> will fail")
         endif()
     endif()
     # FCWEB-LIBCXX-FIRST-END
