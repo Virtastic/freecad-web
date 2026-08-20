@@ -119,6 +119,18 @@ python3 "$ROOT/tools/show-shiboken-includes.py" "$ROOT/deps/src/pyside-setup" ||
 python3 "$ROOT/tools/patch-shiboken-builtin-includes.py" "$ROOT/deps/src/pyside-setup"
 export FCWEB_SHIBOKEN_NO_BUILTIN_INCLUDES=1
 
+# Whether to BUILD. The verification and the pyside-pkg tree below always run, even on a
+# restored cache -- a check that is skipped whenever the thing it checks was cached is a
+# check that only ever runs when it cannot tell you anything. The workflow used to make this
+# decision itself and skip the whole script, which had exactly that effect.
+SKIP_BUILD=""
+if [ -s "$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a" ]    && [ "$FCWEB_PYSIDE_REBUILD" != "1" ]; then
+    echo "=== PYSIDE: archives already present -- skipping the build"
+    echo "    (set FCWEB_PYSIDE_REBUILD=1 to force a rebuild)"
+    SKIP_BUILD=1
+fi
+
+if [ -z "$SKIP_BUILD" ]; then
 echo "=== SHIBOKEN (lib) ==="
 rm -rf build-shiboken-wasm
 cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja \
@@ -166,6 +178,7 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   -DCMAKE_INSTALL_PREFIX="$ROOT/emsdk/upstream/emscripten/cache/sysroot" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
 ninja -C build-pyside-wasm
+fi   # SKIP_BUILD
 
 # The link takes these four archives straight out of the build trees, so verify them HERE,
 # by symbol -- ninja exiting 0 says the targets built, not that the Python modules came out

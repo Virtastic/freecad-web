@@ -475,12 +475,12 @@ jobs:
         run: |
           set -e
           . emsdk/emsdk_env.sh
-          # Was `-d deps/wasm/pyside-pkg`, which proved nothing: that directory holds
-          # hand-written Python glue, not build output. Key the skip on an archive the
-          # link actually consumes instead.
-          if [ -s build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a ]              && [ "${{ inputs.rebuild }}" != "true" ]; then
-            echo "  pyside: already built"; exit 0
-          fi
+          # The skip now lives INSIDE rebuild-pyside-weh.sh, keyed on an archive the link
+          # actually consumes (it used to be `-d deps/wasm/pyside-pkg`, a directory of
+          # hand-written Python that proved nothing about the build). Skipping the whole
+          # script here also skipped the symbol verification and the pyside-pkg tree, so a
+          # restored cache reported nothing at all.
+          if [ "${{ inputs.rebuild }}" = "true" ]; then export FCWEB_PYSIDE_REBUILD=1; fi
           if [ ! -x deps/host/shiboken6/bin/shiboken6 ]; then
             echo "::warning::no host shiboken -- skipping the wasm PySide build"
             exit 0
