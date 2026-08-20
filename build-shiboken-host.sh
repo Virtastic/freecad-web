@@ -217,6 +217,10 @@ echo "clang cmake:  $CLANG_CMAKE"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_BUILD_TYPE=Release \
+  `# BUILD_TESTS=OFF because removing the builtins injection breaks shiboken's OWN test` \
+  `# bindings: samplebinding parses HOST headers, which really do need clang's builtins.` \
+  `# Only the generator binary is wanted here, and the tests were 230 of the 508 targets.` \
+  -DBUILD_TESTS=OFF \
   -DClang_DIR="$CLANG_CMAKE" \
   ${LLVM_CMAKE:+-DLLVM_DIR="$LLVM_CMAKE"} \
   -DCMAKE_PREFIX_PATH="$QT_HOST;$CAND" \
