@@ -339,7 +339,7 @@ jobs:
           set -e
           . emsdk/emsdk_env.sh
           . .qtvenv/bin/activate
-          if [ -s deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+          if [ -s deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a ] && grep -qx 2 deps/wasm/lib/numpy-mod/.staged 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  numpy: already built (cache hit)"
             exit 0
           fi
@@ -467,7 +467,7 @@ jobs:
         run: |
           set -e
           . emsdk/emsdk_env.sh
-          if [ -s deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+          if [ -s deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a ] && grep -qx 2 deps/wasm/lib/ifc-mod/.staged 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  IfcOpenShell: already built"; exit 0
           fi
           bash configure-ifcopenshell-weh.sh

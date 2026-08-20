@@ -180,6 +180,10 @@ while IFS= read -r d; do
     libs=$((libs + 1))
 done < <(find build-numpy -type d -name '*.a.p')
 echo "numpy: $found extension archive(s) + $libs internal static library(ies)"
+# Staging version, so a lane that skips on "the archive exists" can tell an OLD staged set
+# from a current one. v1 harvested only the extension modules; v2 adds numpy's internal
+# static libraries, without which the FreeCAD link ends in 16 undefined symbols.
+echo 2 > "$DW/lib/numpy-mod/.staged"
 
 # The four the link names explicitly must exist, or the FreeCAD link silently loses the
 # numpy builtins and every `import numpy` fails at run time instead of at build time.

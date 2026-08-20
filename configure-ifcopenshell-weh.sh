@@ -137,6 +137,8 @@ for a in $(find "$BUILD" -name '*.a' | sort); do
     esac
     cp "$a" "$DW/lib/ifc-mod/"
 done
+# v1 staged an enumerated subset; v2 stages every archive the build produced.
+echo 2 > "$DW/lib/ifc-mod/.staged"
 echo "IfcOpenShell staged to $DW/lib/ifc-mod:"
 ls -la "$DW/lib/ifc-mod" | sed 's/^/    /'
 "$NM" "$WRAP" 2>/dev/null | grep ' T PyInit' | sed 's/^/  /' || true
