@@ -77,9 +77,23 @@ echo "python inc:   $PYINC"
 if [ -f "$ROOT/deps/host/shiboken6/.llvm-prefix" ]; then
     LLVM_PREFIX="$(cat "$ROOT/deps/host/shiboken6/.llvm-prefix")"
     if [ -d "$LLVM_PREFIX" ]; then
-        export LLVM_INSTALL_DIR="$LLVM_PREFIX"
-        export CLANG_INSTALL_DIR="$LLVM_PREFIX"
-        echo "llvm prefix:  $LLVM_PREFIX (matching the host generator)"
+        # DO NOT export CLANG_INSTALL_DIR here. shiboken turns it into an -I of
+        # <prefix>/lib/clang/<ver>/include and places it BEFORE the compiler-discovered
+        # paths. clang -v showed the result:
+        #
+        #   deps/host/llvm-20.1.8/lib/clang/20/include   <- injected, ahead of libc++
+        #   .../sysroot/include/c++/v1
+        #
+        # libc++'s <cstddef> does #include <stddef.h> and REQUIRES it to resolve to
+        # libc++'s own copy; with a C stddef.h ahead of it, it stops with "didn't find
+        # libc++'s <stddef.h>" and nullptr_t is undefined everywhere after.
+        #
+        # It was exported to stop the generator finding a DIFFERENT llvm's builtins at
+        # run time ("No C++ classes found"), which mattered when libclang was 17 and the
+        # distro had 21. With a self-contained libclang matching emsdk's clang, the
+        # generator finds its own, and em++ supplies the sysroot in the right order.
+        export FCWEB_LLVM_PREFIX="$LLVM_PREFIX"   # recorded for diagnostics only
+        echo "llvm prefix:  $LLVM_PREFIX (NOT exported to shiboken -- see comment)"
     else
         echo "!! recorded LLVM prefix $LLVM_PREFIX no longer exists -- rebuild the host" >&2
         echo "   generator, or the bindings will come out empty." >&2
