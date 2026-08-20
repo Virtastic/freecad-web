@@ -107,13 +107,21 @@ apply_one cpython       cpython-ctypes-wasm.patch
 apply_one numpy         numpy.patch
 apply_one coin3d        coin3d.patch
 
+# The preloaded Python tree (--preload-file deps/wasm/pyside-pkg@/pyside-pkg). None of it
+# comes out of a build -- it is hand-written glue that aliases the inittab modules to their
+# dotted names -- so create the destinations rather than requiring some earlier step to have
+# done it. rebuild-pyside-weh.sh makes PySide6/ and shiboken6/; nothing made pivy/, and the
+# copy failed the whole job with
+#   cp: cannot create regular file '.../pyside-pkg/pivy/__init__.py': No such file or directory
 echo "Copying PySide package glue (deps/wasm must already exist):"
-if [ -d deps/wasm/pyside-pkg ]; then
+if [ -d deps/wasm ]; then
+  mkdir -p deps/wasm/pyside-pkg/PySide6 deps/wasm/pyside-pkg/shiboken6 \
+           deps/wasm/pyside-pkg/pivy deps/wasm/include/shiboken
   cp -v patches/pyside-pkg-glue/PySide6/__init__.py           deps/wasm/pyside-pkg/PySide6/__init__.py
   cp -v patches/pyside-pkg-glue/shiboken6/__init__.py         deps/wasm/pyside-pkg/shiboken6/__init__.py
   cp -v patches/pyside-pkg-glue/pivy/__init__.py              deps/wasm/pyside-pkg/pivy/__init__.py
   cp -v patches/pyside-pkg-glue/include-shiboken/sbkversion.h deps/wasm/include/shiboken/sbkversion.h
 else
-  echo "  (deps/wasm/pyside-pkg not present yet — copy glue after the pyside/pivy build; see README.md)"
+  echo "  (deps/wasm not present yet — build the dependency stack first; see README.md)"
 fi
 echo "done."
