@@ -41,6 +41,7 @@ off also blinds you, which is exactly what happened.
 """
 import io
 import os
+import re
 import sys
 
 REL = 'sources/pyside6/cmake/Macros/PySideModules.cmake'
@@ -89,9 +90,24 @@ LIBCXX_BLOCK = """
                             "<cstddef> will fail")
         endif()
     endif()
-    endif()
     # FCWEB-LIBCXX-FIRST-END
 """
+
+
+def assert_balanced(block, what):
+    """cmake reports an unbalanced block as a nesting error at a line far from the cause:
+        CMake Error at PySideModules.cmake:192 (endif):
+          Flow control statements are not properly nested.
+    A surgical edit to this file once left one extra endif(), so count before emitting."""
+    opens = closes = 0
+    for line in block.split(chr(10)):
+        t = line.strip()
+        if re.match(r'^(if|foreach|while|macro|function)\s*\(', t):
+            opens += 1
+        if re.match(r'^end(if|foreach|while|macro|function)\s*\(', t):
+            closes += 1
+    if opens != closes:
+        sys.exit('%s is unbalanced: %d open, %d close' % (what, opens, closes))
 
 
 def strip_named(src, begin, end):
@@ -202,6 +218,7 @@ def main():
     # clang builtins directory shiboken injects, and that injected directory is what makes
     # a C stddef.h win over libc++'s. Requested with FCWEB_SHIBOKEN_LIBCXX_FIRST=1.
     if want_libcxx:
+        assert_balanced(LIBCXX_BLOCK, 'LIBCXX_BLOCK')
         # Patch the --include-paths OPTION, not the list variable that feeds it. Inserting
         # into shiboken_include_dir_list ran (cmake printed the STATUS line) and changed
         # nothing in the resulting search list, so whatever the option is built from, it is
