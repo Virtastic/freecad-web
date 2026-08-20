@@ -38,7 +38,11 @@ REL = 'sources/pyside6/cmake/Macros/PySideModules.cmake'
 
 ANCHOR = 'list(APPEND shiboken_command "--clang-option=--target=wasm32-unknown-emscripten")'
 
+BEGIN = '        # FCWEB-RESOURCE-DIR-BEGIN'
+END = '        # FCWEB-RESOURCE-DIR-END'
+
 ADDITION = '''
+        # FCWEB-RESOURCE-DIR-BEGIN
         # libclang resolves the FREESTANDING headers (stddef.h, stdarg.h) from its own
         # resource directory, which belongs to whatever libclang the generator was linked
         # against -- not to em++, whose libc++ is being parsed. emscripten's libc++ detects
@@ -63,7 +67,8 @@ ADDITION = '''
             message(WARNING "shiboken: em++ -print-resource-dir gave nothing; the parser "
                             "will use libclang's own builtins and emscripten's libc++ will "
                             "refuse to include <stddef.h>")
-        endif()'''
+        endif()
+        # FCWEB-RESOURCE-DIR-END'''
 
 
 def main():
@@ -78,7 +83,21 @@ def main():
     # Keyed on the CURRENT form. An earlier version of this tool also injected an
     # -isystem, which broke libc++'s #include_next chain; a tree patched by that
     # version must be re-patched, not skipped.
-    if '-resource-dir=${_fcweb_em_resource}' in src and '-isystem${_fcweb_em_resource}' not in src:
+    if '_fcweb_em_resource' in src and os.environ.get('FCWEB_SHIBOKEN_RESOURCE_DIR') != '1':
+        print('  %s: removing the resource-dir override (not needed with a matching libclang)' % REL)
+        keep, drop = [], False
+        for line in src.split(chr(10)):
+            if line.strip() == BEGIN.strip():
+                drop = True
+                continue
+            if line.strip() == END.strip():
+                drop = False
+                continue
+            if not drop:
+                keep.append(line)
+        io.open(path, 'w', encoding='utf-8', newline='').write(chr(10).join(keep))
+        return
+    if '-resource-dir=${_fcweb_em_resource}' in src:
         print('  already patched: %s' % REL)
         return
     if '-isystem${_fcweb_em_resource}' in src:
@@ -104,6 +123,13 @@ def main():
                 print('     %d: %s' % (i, line.strip()))
         sys.exit(1)
 
+    if os.environ.get('FCWEB_SHIBOKEN_RESOURCE_DIR') != '1':
+        # Default: add nothing. With libclang matching emsdk's clang (both 20) the
+        # parser's own resource directory is already the right one, and overriding it
+        # was only ever a workaround for a mismatched libclang. Set
+        # FCWEB_SHIBOKEN_RESOURCE_DIR=1 to re-enable the override.
+        print('  %s: no resource-dir override needed (libclang matches emsdk clang)' % REL)
+        return
     src = src.replace(ANCHOR, ANCHOR + ADDITION, 1)
     io.open(path, 'w', encoding='utf-8', newline='').write(src)
     print('  added em++ resource-dir options to %s' % REL)
