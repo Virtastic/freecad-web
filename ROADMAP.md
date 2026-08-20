@@ -24,6 +24,34 @@
 
 > | 18 | **PySide/shiboken lane** | **the last archive lane, and the one written most tightly to one machine.** `rebuild-pyside-weh.sh` passes `-DQT_HOST_PATH=$ROOT/qt/6.9.0/macos` (macOS-only), `-DPython_EXECUTABLE=.../build/python.exe` (macOS-only name), `-DQFP_PYTHON_HOST_PATH=/usr/bin/python3` (hardcoded), and needs `deps/host/shiboken6` -- a HOST shiboken built against libclang, which nothing in CI produces. Every one of these is the same defect the numpy/pivy/IfcOpenShell lanes each hit; they are just all in one script. Needed for `deps/wasm/pyside-pkg`, which the link preloads. |
 >
+> **Item 18 update, 2026-08-20.** Everything the link needs is built EXCEPT PySide. Eleven
+> archives are green and verified by symbol -- numpy (4), matplotlib (13), kiwisolver,
+> `_ctypes`, libffi, PIL, pivy `_coin`, IfcOpenShell `_ifcopenshell_wrapper` (358/358
+> targets) -- alongside a clean 2676/2676 C++ compile across 29 modules.
+>
+> The PySide lane is genuinely blocked, and the shape of the block is worth recording so the
+> next attempt starts from measurements rather than from scratch:
+>
+> | configuration | result |
+> |---|---|
+> | libclang 17, no resource-dir override | `<cstddef> tried including <stddef.h> but didn't find libc++'s <stddef.h>` |
+> | libclang 17, emsdk resource-dir + `-isystem` | same (the `-isystem` breaks libc++'s `#include_next` chain) |
+> | libclang 17 linked, llvm-21 builtins found at runtime | `qt.shiboken: No C++ classes found!` |
+> | **libclang 20, emsdk resource-dir, no `-isystem`** | **best so far** -- `<cstddef>` clean, QtCore/QtGui/QtWidgets all invoke the generator, fails at `unique_ptr.h:238: unknown type name 'nullptr_t'` |
+> | libclang 20, no override | regresses to 126 stddef/nullptr_t errors |
+>
+> What is now solved and should not be revisited: the host generator builds (it had never
+> been built off the build machine), `build-shiboken-host.sh` finds or fetches libclang and
+> records which one beside the binary, and `rebuild-pyside-weh.sh` no longer hardcodes a
+> macOS host Qt, `python.exe` or `/usr/bin/python3`.
+>
+> What remains is one narrow question: why emscripten's libc++ does not get `std::nullptr_t`
+> from `<cstddef>` under a clang-20 libclang. Likely avenues, cheapest first: try libclang
+> 19 (`FCWEB_LLVM_VERSION=19.1.7`, the only other linkable Linux-X64 asset); check whether
+> shiboken needs an explicit `-std=` matching Qt's; compare against a working PySide-wasm
+> build's actual clang invocation. PySide-for-wasm is not upstream-supported, so there is no
+> reference configuration to copy -- which is why this is being reconstructed by experiment.
+
 > **Status 2026-08-16** (the original table; items 1-8 below are unchanged unless noted).
 >
 > | # | item | state |
