@@ -206,28 +206,35 @@ def main():
         # into shiboken_include_dir_list ran (cmake printed the STATUS line) and changed
         # nothing in the resulting search list, so whatever the option is built from, it is
         # not that variable at that point. The option is what shiboken actually reads.
-        all_hits = [l for l in src.split(chr(10)) if '"--include-paths=' in l]
-        # Be explicit about which line is being patched. Taking the first match blindly
-        # inserted the cmake block into a context where it corrupted the generator command:
-        #   /bin/sh: 1: Syntax error: "(" unexpected
-        hits = [l for l in all_hits if 'list(APPEND shiboken_command' in l]
-        if not hits:
-            print('!! no `list(APPEND shiboken_command "--include-paths=..."` line in %s' % REL)
-            print('   --include-paths lines present:')
-            for l in all_hits:
-                print('     %s' % l.strip())
+        lines = src.split(chr(10))
+        idx = [i for i, l in enumerate(lines) if '"--include-paths=' in l]
+        if len(idx) != 1:
+            print('!! expected exactly one --include-paths line, found %d:' % len(idx))
+            for i in idx:
+                print('     %d: %s' % (i + 1, lines[i].strip()))
             sys.exit(1)
-        if len(hits) > 1:
-            print('!! %d candidate --include-paths lines; refusing to guess:' % len(hits))
-            for l in hits:
-                print('     %s' % l.strip())
+        i = idx[0]
+
+        # The option string sits on its OWN line inside a multi-line
+        #     list(APPEND shiboken_command
+        #          "--include-paths=${shiboken_include_dirs}")
+        # so the cmake block must go BEFORE that list(APPEND, not next to the string --
+        # putting it between them produced a malformed command and
+        #     /bin/sh: 1: Syntax error: "(" unexpected
+        j = i
+        while j >= 0 and 'list(APPEND' not in lines[j]:
+            j -= 1
+        if j < 0:
+            print('!! no enclosing list(APPEND ...) above the --include-paths string')
             sys.exit(1)
-        target = hits[0]
-        inner = target.split('"--include-paths=')[1].rsplit('"', 1)[0]
-        patched = target.replace('"--include-paths=' + inner + '"',
-                                 '"--include-paths=${_fcweb_libcxx_first}:' + inner + '"')
-        src = src.replace(target, LIBCXX_BLOCK.lstrip(chr(10)) + patched, 1)
-        print('  %s: patched -> %s' % (REL, patched.strip()))
+
+        inner = lines[i].split('"--include-paths=')[1].rsplit('"', 1)[0]
+        lines[i] = lines[i].replace('"--include-paths=' + inner + '"',
+                                    '"--include-paths=${_fcweb_libcxx_first}:' + inner + '"')
+        lines[j:j] = LIBCXX_BLOCK.lstrip(chr(10)).rstrip(chr(10)).split(chr(10))
+        src = chr(10).join(lines)
+        print('  %s: block before line %d, option -> %s'
+              % (REL, j + 1, lines[i + len(LIBCXX_BLOCK.strip().split(chr(10)))].strip()))
 
     src = src.replace(ANCHOR, ANCHOR + block, 1)
     io.open(path, 'w', encoding='utf-8', newline='').write(src)
