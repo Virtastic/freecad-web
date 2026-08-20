@@ -165,6 +165,16 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   `# On the build machine DraftUtils.a was left over from an earlier build, so the checks` \
   `# linked and passed -- the same uncaptured-state defect as the truncated command above.` \
   -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+  `# ...and because that makes any LINK-based probe unreliable, answer the one probe that` \
+  `# is REQUIRED outright instead of letting it guess. VTK's config does` \
+  `# find_package(Threads REQUIRED) and FindThreads decides via CHECK_SYMBOL_EXISTS, whose` \
+  `# result is cached as CMAKE_HAVE_LIBC_PTHREAD -- so once a configure has failed, the` \
+  `# NEGATIVE sits in CMakeCache.txt and every later configure against that build tree` \
+  `# repeats it. Emscripten has pthreads and this build passes -pthread everywhere, so the` \
+  `# answer is known; state it. FindThreads sets Threads_FOUND from these three.` \
+  -DCMAKE_HAVE_LIBC_PTHREAD=1 \
+  -DTHREADS_PREFER_PTHREAD_FLAG=ON \
+  -DCMAKE_THREAD_LIBS_INIT=-pthread \
   -DCMAKE_PROJECT_INCLUDE_BEFORE="$ROOT/force-static.cmake" \
   -DCMAKE_INSTALL_PREFIX="$ROOT/freecad-gui-install" \
   -DFCWEB_DW="$DW" \

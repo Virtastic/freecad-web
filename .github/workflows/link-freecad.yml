@@ -310,6 +310,15 @@ jobs:
           set -e
           mkdir -p /tmp/fclogs
           . emsdk/emsdk_env.sh
+          # A configure that FAILED still writes CMakeCache.txt, complete with the negative
+          # results of whatever probes it got through -- and the cache saves on always(), so
+          # the next run restores those negatives and repeats them. build.ninja is the signal
+          # that a configure actually finished; without it the tree is a liability.
+          if [ -f build-freecad-gui-weh/CMakeCache.txt ] && [ ! -f build-freecad-gui-weh/build.ninja ]; then
+            echo "  restored build tree has CMakeCache.txt but no build.ninja -- a failed"
+            echo "  configure. Discarding it rather than inheriting its cached probe results."
+            rm -rf build-freecad-gui-weh
+          fi
           bash configure-gui-weh.sh 2>&1 | tee /tmp/fclogs/configure.txt
           rc=${PIPESTATUS[0]}
           if [ "$rc" != 0 ]; then
