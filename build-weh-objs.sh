@@ -55,6 +55,10 @@ echo "  qt include:     $QT/include${QTVER:+ (+ private $QTVER)}"
 # name the link resolves against; if the object comes out empty the build says so here
 # instead of the browser saying it later.
 #
+# Pick a symbol the file DEFINES, not one you expect it to. gl_legacy_stubs.c was listed as
+# glBegin, which it deliberately does not define -- emscripten's LEGACY_GL_EMULATION already
+# supplies that one, and this file exists only for the entry points the emulation LACKS.
+#
 # wasm_event_dispatch.cpp goes with -sEXPORTED_FUNCTIONS+=_fcweb_dispatch_event and
 # -sASYNCIFY_EXPORTS=fcweb_run_python,fcweb_dispatch_event, both of which the recorded
 # link command scratchpad/linkcmds/fc-linkcmd-weh.sh already carries. NOTE that
@@ -70,7 +74,7 @@ echo "  qt include:     $QT/include${QTVER:+ (+ private $QTVER)}"
 UNITS="
 postevent_wrap.c|emcc||__wrap__ZN16QCoreApplication9postEventEP7QObjectP6QEventi
 fcweb_export_stub.c|emcc||fcweb_run_python
-gl_legacy_stubs.c|emcc||glBegin
+gl_legacy_stubs.c|emcc||glAccum
 spe_sanitize.cpp|em++|QT|__wrap__ZN23QCoreApplicationPrivate13notify_helperEP7QObjectP6QEvent
 fcweb_dlg_module.cpp|em++|PY|PyInit__fcwebdlg
 fcweb_gmsh_module.cpp|em++|PY|PyInit__fcwebgmsh
