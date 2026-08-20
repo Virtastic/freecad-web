@@ -29,16 +29,26 @@
 > `_ctypes`, libffi, PIL, pivy `_coin`, IfcOpenShell `_ifcopenshell_wrapper` (358/358
 > targets) -- alongside a clean 2676/2676 C++ compile across 29 modules.
 >
-> The PySide lane is genuinely blocked, and the shape of the block is worth recording so the
-> next attempt starts from measurements rather than from scratch:
+> The PySide lane is genuinely blocked. An earlier version of this entry claimed one
+> configuration was "best" -- that was a MEASUREMENT ERROR on my part: two runs were compared
+> with different grep patterns. Counted identically, every configuration below produces the
+> SAME 126 stddef/nullptr_t errors:
 >
-> | configuration | result |
+> | configuration | nullptr_t/stddef errors |
 > |---|---|
-> | libclang 17, no resource-dir override | `<cstddef> tried including <stddef.h> but didn't find libc++'s <stddef.h>` |
-> | libclang 17, emsdk resource-dir + `-isystem` | same (the `-isystem` breaks libc++'s `#include_next` chain) |
-> | libclang 17 linked, llvm-21 builtins found at runtime | `qt.shiboken: No C++ classes found!` |
-> | **libclang 20, emsdk resource-dir, no `-isystem`** | **best so far** -- `<cstddef>` clean, QtCore/QtGui/QtWidgets all invoke the generator, fails at `unique_ptr.h:238: unknown type name 'nullptr_t'` |
-> | libclang 20, no override | regresses to 126 stddef/nullptr_t errors |
+> | libclang 17, no resource-dir override | 126 |
+> | libclang 17, emsdk resource-dir + `-isystem` | 126 |
+> | libclang 19, emsdk resource-dir | 126 |
+> | libclang 20, emsdk resource-dir | 126 |
+> | libclang 20, emsdk resource-dir + `-std=c++17` | 126 |
+> | libclang 20, no override | 126 |
+>
+> So libclang version, resource directory and language standard are all ruled OUT as the
+> cause. The failure is invariant under every knob tried, which points somewhere else
+> entirely -- most likely that shiboken's clang invocation never receives emscripten's
+> sysroot include paths at all. Its `--include-paths` carries only Qt directories, and it
+> relies on `--compiler-path=em++` to discover the rest; that discovery is the next thing to
+> verify, by running the generator by hand with `-v` and reading the include search list.
 >
 > What is now solved and should not be revisited: the host generator builds (it had never
 > been built off the build machine), `build-shiboken-host.sh` finds or fetches libclang and
