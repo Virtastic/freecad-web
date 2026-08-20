@@ -173,6 +173,13 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   `#   /usr/include/c++/15/cstddef: fatal error: 'stddef.h' file not found` \
   `# Same reason shiboken's own samplebinding is off. Only Core/Gui/Widgets are wanted.` \
   -DBUILD_TESTS=OFF \
+  `# QFP_NO_OVERRIDE_OPTIMIZATION_FLAGS: append_size_optimization_flags() in` \
+  `# cmake/Macros/PySideModules.cmake puts -ffunction-sections -fdata-sections` \
+  `# -fno-exceptions on EVERY module target, after CMAKE_CXX_FLAGS -- so PySide's` \
+  `# translation units would be built -fno-exceptions while the rest of this port` \
+  `# (Qt, OCCT, FreeCAD) is built -fwasm-exceptions. Mixing exception models across` \
+  `# one link is a defect this repository has already shipped once (OCCT, ROADMAP 12).` \
+  -DQFP_NO_OVERRIDE_OPTIMIZATION_FLAGS=ON \
   -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
   -DCMAKE_INSTALL_PREFIX="$ROOT/emsdk/upstream/emscripten/cache/sysroot" \
@@ -210,6 +217,9 @@ if [ ! -x "$NM" ]; then
     NM="$(command -v llvm-nm || command -v nm || true)"
 fi
 echo "  nm: ${NM:-<none found>}"
+AR="$ROOT/emsdk/upstream/bin/llvm-ar"
+[ -x "$AR" ] || AR="$(command -v llvm-ar || command -v ar || true)"
+echo "  ar: ${AR:-<none found>}"
 pyside_missing=0
 check_mod() {   # <archive> <expected PyInit symbol>
     a="$1"; want="$2"
@@ -217,8 +227,18 @@ check_mod() {   # <archive> <expected PyInit symbol>
     if [ -z "$NM" ]; then echo "  ${a#$ROOT/}: present, unverified (no nm)"; return; fi
     out="$("$NM" "$a" 2>&1 | grep -E "PyInit" || true)"
     if [ -z "$out" ]; then
-        echo "  ${a#$ROOT/}: NO PyInit symbol of any kind. First lines nm produced:"
-        "$NM" "$a" 2>&1 | head -5 | sed 's/^/        /'
+        # Everything needed to tell WHICH of the three it is, in one run: is the module
+        # wrapper object in the archive at all, does the archive carry any symbols at all,
+        # and if so what do they look like. nm reporting "no symbols" for member after
+        # member is not something to theorise about a second time.
+        echo "  ${a#$ROOT/}: NO PyInit symbol of any kind."
+        echo "        members:            $("$AR" t "$a" 2>/dev/null | wc -l | tr -d ' ')"
+        echo "        module wrapper:     $("$AR" t "$a" 2>/dev/null | grep module_wrapper || echo '<<ABSENT>>')"
+        echo "        defined symbols:    $("$NM" --defined-only "$a" 2>/dev/null | grep -cE '^[0-9a-fA-F]+ ' || true)"
+        echo "        first defined syms:"
+        "$NM" --defined-only "$a" 2>/dev/null | grep -E '^[0-9a-fA-F]+ ' | head -8 | sed 's/^/            /'
+        echo "        nm, first 3 members:"
+        "$NM" "$a" 2>&1 | head -3 | sed 's/^/            /'
         pyside_missing=1
         return
     fi
