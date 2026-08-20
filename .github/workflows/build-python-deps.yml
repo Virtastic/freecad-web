@@ -69,6 +69,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The key MUST change when any lane's recipe changes. It hashed five configure
+      # scripts and numpy.patch only, so fixing rebuild-pyside-weh.sh left the key
+      # identical -- and actions/cache will not overwrite an existing key:
+      #   Failed to save: Unable to reserve cache with key fcweb-pydeps-...
+      # The run that finally produced good PySide archives therefore threw them away, and
+      # every later job restored the stripped ones and failed on a defect already fixed.
+      # restore-keys still falls back to the newest entry, so widening this does not cost
+      # a rebuild of the lanes that did not change.
       - name: Restore the Python extension libraries
         id: pycache
         if: ${{ !inputs.rebuild }}
@@ -98,7 +106,7 @@ jobs:
             deps/wasm/shiboken6
             build-shiboken-wasm
             build-pyside-wasm
-          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in') }}
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
 
@@ -615,4 +623,4 @@ jobs:
             deps/wasm/shiboken6
             build-shiboken-wasm
             build-pyside-wasm
-          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in') }}
