@@ -112,6 +112,13 @@ python3 "$ROOT/tools/patch-pyside-clang-options.py" "$ROOT/deps/src/pyside-setup
 # command-line option has been able to outrank. Costs nothing and settles the shape.
 python3 "$ROOT/tools/show-shiboken-includes.py" "$ROOT/deps/src/pyside-setup" || true
 
+# Let the wasm shiboken skip injecting clang's builtin include directory. Nothing
+# passed through --clang-option can precede what shiboken adds itself, so this is the
+# only place the include order can be corrected. See the tool for the five failed
+# command-line approaches.
+python3 "$ROOT/tools/patch-shiboken-builtin-includes.py" "$ROOT/deps/src/pyside-setup"
+export FCWEB_SHIBOKEN_NO_BUILTIN_INCLUDES=1
+
 echo "=== SHIBOKEN (lib) ==="
 rm -rf build-shiboken-wasm
 cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja \
