@@ -172,11 +172,7 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DENABLE_DEVELOPER_TESTS=OFF \
   -DBUILD_OPENSCAD=ON -DBUILD_SMESH=ON -DBUILD_PART_DESIGN=ON -DBUILD_CAM=ON -DBUILD_ASSEMBLY=ON \
   -DFREECAD_USE_PYBIND11=ON -Dpybind11_DIR="$PYBIND11_DIR" \
-  # FreeCAD 1.1 needs ICU, and CMake 4 removed FindBoost. toolchain/cmake supplies both
-  # (FindICU maps the emscripten port library names; FindBoost handles the b2-staged
-  # layout, which ships no BoostConfig.cmake). FreeCAD only APPENDS to
-  # CMAKE_MODULE_PATH, so this stays ahead of CMake own Modules directory.
-  -DCMAKE_MODULE_PATH="$ROOT/toolchain/cmake" \
+  `# FreeCAD 1.1 needs ICU, and CMake 4 removed FindBoost. toolchain/cmake supplies both`   `# (FindICU maps the emscripten port library names; FindBoost handles the b2-staged`   `# layout, which ships no BoostConfig.cmake). FreeCAD only APPENDS to`   `# CMAKE_MODULE_PATH, so this stays ahead of CMake own Modules directory.`   -DCMAKE_MODULE_PATH="$ROOT/toolchain/cmake" \
   -DICU_EM_SYSROOT="$SYSROOT" \
   -DVTK_DIR="$DW/lib/cmake/vtk-9.3" \
   -DBUILD_PLOT=ON -DBUILD_POINTS=ON -DBUILD_REVERSEENGINEERING=ON -DBUILD_ROBOT=ON \
@@ -184,11 +180,7 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DBUILD_TEST=ON -DBUILD_MEASURE=ON -DBUILD_TECHDRAW=ON -DBUILD_TUX=ON \
   -DBUILD_WEB=ON -DBUILD_SURFACE=ON -DBUILD_PART=ON \
   -DBUILD_DYNAMIC_LINK_PYTHON=OFF \
-  # SetupCoin3D.cmake otherwise imports pivy in the HOST python to compare its Coin
-  # version against the one being built. That makes the cross-build depend on an
-  # ambient host package -- exactly the uncaptured-state problem this repo keeps
-  # getting bitten by. FreeCAD guards it for this reason; take the guard.
-  -DFREECAD_CHECK_PIVY=OFF \
+  `# SetupCoin3D.cmake otherwise imports pivy in the HOST python to compare its Coin`   `# version against the one being built. That makes the cross-build depend on an`   `# ambient host package -- exactly the uncaptured-state problem this repo keeps`   `# getting bitten by. FreeCAD guards it for this reason; take the guard.`   -DFREECAD_CHECK_PIVY=OFF \
   -DFREECAD_USE_EXTERNAL_PIVY=OFF -DFREECAD_USE_PCH=OFF \
   `# FreeType ON: without it Part.makeWireString() raises "FreeCAD compiled without FreeType` \
   `# support!", which kills Draft ShapeString (text/engraving) entirely. Point it at the` \
