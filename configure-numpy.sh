@@ -162,6 +162,25 @@ if [ "$found" = 0 ]; then
     exit 1
 fi
 
+# numpy's INTERNAL static libraries, which the *.so.p loop above does not see: npymath, the
+# per-CPU-target mtargets aggregates, highway. The extension modules reference them, so
+# without these the FreeCAD link ends in
+#     libnpy__multiarray_umath.a(meson-generated_lowlevel_strided_loops.c.o): undefined symbol
+# sixteen times over. meson emits them as THIN archives (references to <name>.a.p/*.o, not
+# code), so rebuild each from its own objects rather than copying -- a copied thin archive
+# stages as something that looks like a library and is not.
+libs=0
+while IFS= read -r d; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"; name="${name%.p}"      # libnpymath.a.p -> libnpymath.a
+    objs=$(find "$d" -name '*.o' | wc -l | tr -d ' ')
+    [ "$objs" -gt 0 ] || continue
+    rm -f "$DW/lib/numpy-mod/$name"
+    find "$d" -name '*.o' -print0 | xargs -0 "$EMAR" rcs "$DW/lib/numpy-mod/$name"
+    libs=$((libs + 1))
+done < <(find build-numpy -type d -name '*.a.p')
+echo "numpy: $found extension archive(s) + $libs internal static library(ies)"
+
 # The four the link names explicitly must exist, or the FreeCAD link silently loses the
 # numpy builtins and every `import numpy` fails at run time instead of at build time.
 missing=0

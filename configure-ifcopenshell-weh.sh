@@ -125,8 +125,16 @@ fi
 
 mkdir -p "$DW/lib/ifc-mod"
 cp "$WRAP" "$DW/lib/ifc-mod/lib_ifcopenshell_wrapper.a"
-# The geometry and parser archives are linked alongside the wrapper.
-for a in $(find "$BUILD" -name 'libIfcParse.a' -o -name 'libIfcGeom*.a'                 -o -name 'libgeometry_*.a' -o -name 'libSerializers.a'); do
+# EVERY archive the build produced, not an enumerated subset. The list this replaces --
+# libIfcParse, libIfcGeom*, libgeometry_*, libSerializers -- missed whatever defines the
+# per-schema XML serializer entry points, and the FreeCAD link ended in
+#     libSerializers.a(XmlSerializer.cpp.o): undefined symbol: init_XmlSerializer_Ifc4x3_add2
+# Enumerating another project's internal library names goes stale silently; take them all
+# and let --start-group sort out the order.
+for a in $(find "$BUILD" -name '*.a' | sort); do
+    case "$(basename "$a")" in
+        lib_ifcopenshell_wrapper.a) continue ;;   # already staged, under its canonical name
+    esac
     cp "$a" "$DW/lib/ifc-mod/"
 done
 echo "IfcOpenShell staged to $DW/lib/ifc-mod:"
