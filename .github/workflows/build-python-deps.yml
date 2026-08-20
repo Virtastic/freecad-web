@@ -469,6 +469,11 @@ jobs:
             echo "::warning::no host shiboken -- skipping the wasm PySide build"
             exit 0
           fi
+          # Measured, not guessed. With libclang 20 and -resource-dir pointing at emsdk's
+          # clang 20, the <cstddef> failure disappears and the parse reaches deep into
+          # libc++ (unique_ptr.h). WITHOUT it the same run produces 126 stddef/nullptr_t
+          # errors. So the override helps; it is simply not sufficient on its own.
+          export FCWEB_SHIBOKEN_RESOURCE_DIR=1
           bash rebuild-pyside-weh.sh
 
 
