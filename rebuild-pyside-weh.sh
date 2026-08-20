@@ -172,31 +172,6 @@ ninja -C build-pyside-wasm
 # usable. Each PyInit_ below is a PyImport_AppendInittab entry in MainGui.cpp, and a missing
 # one is a trapping `import PySide6.QtWidgets` in the browser, not a link error, which is
 # exactly the kind of failure this repository has already been bitten by four times.
-echo "=== ARCHIVES ==="
-NM="$ROOT/emsdk/upstream/bin/llvm-nm"
-pyside_missing=0
-check_mod() {   # <archive> <PyInit symbol>
-    if [ ! -s "$1" ]; then echo "  MISSING  ${1#$ROOT/}"; pyside_missing=1; return; fi
-    if "$NM" "$1" 2>/dev/null | grep -q " T $2$"; then
-        echo "  ok       ${1#$ROOT/}  ($2)"
-    else
-        echo "  NO $2   ${1#$ROOT/}"; pyside_missing=1
-    fi
-}
-check_mod "$ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a"       PyInit_QtCore
-check_mod "$ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a"         PyInit_QtGui
-check_mod "$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a" PyInit_QtWidgets
-# libpyside6 and libshiboken6 carry no PyInit_ of their own -- Shiboken's module init comes
-# from shibokenmodule's object file, which the link names directly -- so existence is all
-# there is to check for these two.
-for a in "$ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a" \
-         "$ROOT/deps/wasm/shiboken6/lib/libshiboken6.abi3.a"; do
-    if [ -s "$a" ]; then echo "  ok       ${a#$ROOT/}"
-    else echo "  MISSING  ${a#$ROOT/}"; pyside_missing=1; fi
-done
-[ "$pyside_missing" = 0 ] || {
-    echo "ERROR: the PySide build finished but the modules above are not usable" >&2; exit 1; }
-
 # deps/wasm/pyside-pkg is the PRELOADED PYTHON TREE (--preload-file ...@/pyside-pkg in
 # build-browser-gui.sh), not a copy of the archives: the binding modules are compiled into
 # the executable and registered in the inittab under _fcweb names, and pyside-pkg's
@@ -209,6 +184,59 @@ mkdir -p "$PKG/PySide6" "$PKG/shiboken6"
 cp -v "$ROOT/patches/pyside-pkg-glue/PySide6/__init__.py"   "$PKG/PySide6/__init__.py"
 cp -v "$ROOT/patches/pyside-pkg-glue/shiboken6/__init__.py" "$PKG/shiboken6/__init__.py"
 echo "pyside-pkg: $(find "$PKG" -type f | wc -l | tr -d ' ') file(s)"
+
+echo "=== ARCHIVES ==="
+# Report what is actually in each archive, do not just test for one name. The first version
+# of this check printed "NO PyInit_QtCore" for all three modules of a build that had just
+# linked 694/694 targets cleanly, and could not distinguish "the symbol is absent" from "nm
+# never ran" or "the symbol is spelled differently" -- the same class of blind check that has
+# already cost this repository four rounds elsewhere.
+NM="$ROOT/emsdk/upstream/bin/llvm-nm"
+if [ ! -x "$NM" ]; then
+    echo "  llvm-nm not at $NM -- falling back to PATH"
+    NM="$(command -v llvm-nm || command -v nm || true)"
+fi
+echo "  nm: ${NM:-<none found>}"
+pyside_missing=0
+check_mod() {   # <archive> <expected PyInit symbol>
+    a="$1"; want="$2"
+    if [ ! -s "$a" ]; then echo "  MISSING  ${a#$ROOT/}"; pyside_missing=1; return; fi
+    if [ -z "$NM" ]; then echo "  ${a#$ROOT/}: present, unverified (no nm)"; return; fi
+    out="$("$NM" "$a" 2>&1 | grep -E "PyInit" || true)"
+    if [ -z "$out" ]; then
+        echo "  ${a#$ROOT/}: NO PyInit symbol of any kind. First lines nm produced:"
+        "$NM" "$a" 2>&1 | head -5 | sed 's/^/        /'
+        pyside_missing=1
+        return
+    fi
+    echo "  ${a#$ROOT/}: $(printf '%s\n' "$out" | wc -l | tr -d ' ') PyInit symbol(s)"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    printf '%s\n' "$out" | grep -q "$want" \
+        || { echo "        ^^ expected $want and it is not among them"; pyside_missing=1; }
+}
+check_mod "$ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a"       PyInit_QtCore
+check_mod "$ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a"         PyInit_QtGui
+check_mod "$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a" PyInit_QtWidgets
+# libpyside6 and libshiboken6 carry no PyInit_ of their own -- Shiboken's module init comes
+# from shibokenmodule's object file, which the link names directly -- so existence is all
+# there is to check for these two.
+for a in "$ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a" \
+         "$ROOT/deps/wasm/shiboken6/lib/libshiboken6.abi3.a"; do
+    if [ -s "$a" ]; then echo "  ok       ${a#$ROOT/}"
+    else echo "  MISSING  ${a#$ROOT/}"; pyside_missing=1; fi
+done
+# Shiboken's own module init, which MainGui.cpp registers as PyInit_Shiboken. The link names
+# this object file directly rather than an archive, so check it the same way.
+SBKOBJ="$ROOT/build-shiboken-wasm/shibokenmodule/CMakeFiles/shibokenmodule.dir/Shiboken/shiboken_module_wrapper.cpp.o"
+if [ -s "$SBKOBJ" ]; then
+    echo "  ok       ${SBKOBJ#$ROOT/}"
+    [ -n "$NM" ] && "$NM" "$SBKOBJ" 2>&1 | grep -E "PyInit" | sed 's/^/        /'
+else
+    echo "  MISSING  ${SBKOBJ#$ROOT/}"; pyside_missing=1
+fi
+[ "$pyside_missing" = 0 ] || {
+    echo "ERROR: the PySide build finished but the modules above are not usable" >&2; exit 1; }
+
 
 # pivy used to be built here. It is not related to PySide -- it needs Coin3D, SWIG and
 # CPython, none of which this script touches -- and chaining them meant pivy could not be
