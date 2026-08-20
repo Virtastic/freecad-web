@@ -69,6 +69,13 @@ ADDITION = '''
             #   unknown type name 'nullptr_t'
             # even once the headers are found.
             list(APPEND shiboken_command "--clang-option=-std=c++17")
+            # FCWEB_SHIBOKEN_VERBOSE=1 -> ask clang to print its include search list. Every
+            # version/resource-dir/std permutation produced an identical 126 errors, which
+            # rules those out and means the search PATHS are the thing to look at. -v is
+            # the only way to see what the parser actually resolved.
+            if(NOT "$ENV{FCWEB_SHIBOKEN_VERBOSE}" STREQUAL "")
+                list(APPEND shiboken_command "--clang-option=-v")
+            endif()
         else()
             message(WARNING "shiboken: em++ -print-resource-dir gave nothing; the parser "
                             "will use libclang's own builtins and emscripten's libc++ will "
