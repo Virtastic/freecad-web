@@ -145,6 +145,8 @@ cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja
   -DShiboken_SKIP_GENERATOR_BUILD=ON \
   -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
+  `# See the QFP_NO_STRIP comment on the PySide configure below. Same reason here.` \
+  -DQFP_NO_STRIP=ON -DCMAKE_STRIP=/usr/bin/true \
   -DCMAKE_INSTALL_PREFIX="$ROOT/deps/wasm/shiboken6" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
 ninja -C build-shiboken-wasm install
@@ -182,6 +184,17 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   -DQFP_NO_OVERRIDE_OPTIMIZATION_FLAGS=ON \
   -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
+  `# QFP_NO_STRIP: create_pyside_module() ends with qfp_strip_library(), which adds a` \
+  `# POST_BUILD "${CMAKE_STRIP} $<TARGET_FILE:...>" whenever` \
+  `#     CMAKE_STRIP AND UNIX AND NOT APPLE AND NOT QFP_NO_STRIP AND NOT Debug` \
+  `# (ShibokenHelpers.cmake:89). On this Linux runner CMAKE_STRIP is emstrip, which drops` \
+  `# the symbol table outright: every archive member came back from llvm-nm as` \
+  `#     QtCore.abi3.a:qabstractanimation_wrapper.cpp.o: no symbols` \
+  `# and PyInit_QtCore -- which MainGui.cpp puts in the inittab -- was simply gone from a` \
+  `# build that had otherwise linked 694/694 cleanly. The guard is NOT APPLE, so this` \
+  `# never fired on the macOS build machine the port was written on. BUILD-WEH.md already` \
+  `# warns "emstrip drops the symbol table"; nothing had applied it to this lane.` \
+  -DQFP_NO_STRIP=ON -DCMAKE_STRIP=/usr/bin/true \
   -DCMAKE_INSTALL_PREFIX="$ROOT/emsdk/upstream/emscripten/cache/sysroot" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
 ninja -C build-pyside-wasm

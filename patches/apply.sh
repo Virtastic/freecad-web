@@ -14,7 +14,22 @@ PATCHES="$PWD/patches"
 # without which there is no point building FreeCAD at all. Both layouts are handled now:
 # git apply where there is an index to be careful about, plain patch(1) where there is not.
 apply_one() {
-  local tree="deps/src/$1" patch="$PATCHES/$2"
+  local tree="deps/src/$1" patch="$PATCHES/$2" marker="${3:-}"
+  # Optional third argument: "<path-in-tree>::<string>". If that string is present, the
+  # patch is treated as applied and left alone.
+  #
+  # Needed because a patch is not always reversible after the fact. pyside-setup.patch adds
+  # the EMSCRIPTEN branch in cmake/Macros/PySideModules.cmake, and then
+  # tools/patch-pyside-clang-options.py inserts blocks INSIDE that branch, using a line the
+  # patch added as its anchor. Once a build has run, the region matches neither the patched
+  # nor the unpatched text, so both `patch --dry-run` and `patch -R --dry-run` fail and a
+  # restored source cache aborts the whole job with "tree may be at the wrong version".
+  if [ -n "$marker" ]; then
+    local mfile="$tree/${marker%%::*}" mtext="${marker#*::}"
+    if [ -f "$mfile" ] && grep -qF -- "$mtext" "$mfile"; then
+      echo "  == $1: already applied (marker)"; return 0
+    fi
+  fi
   if [ ! -d "$tree" ]; then
     # CI builds a subset of the stack, so "tree absent" is normal there and fatal here.
     # Default stays strict: on the build machine a missing tree means the build you are
@@ -83,7 +98,10 @@ check_freecad_version
 
 echo "Applying source patches:"
 apply_one freecad       freecad.patch
-apply_one pyside-setup  pyside-setup.patch
+# Marker rather than a reverse-apply check: tools/patch-pyside-clang-options.py edits inside
+# the branch this patch adds, so after one build the file matches neither direction.
+apply_one pyside-setup  pyside-setup.patch \
+  'sources/pyside6/cmake/Macros/PySideModules.cmake::--clang-option=--target=wasm32-unknown-emscripten'
 apply_one occt          occt.patch
 apply_one cpython       cpython-ctypes-wasm.patch
 apply_one numpy         numpy.patch
