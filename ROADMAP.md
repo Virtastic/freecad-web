@@ -67,6 +67,37 @@
 > preload would have been empty; and the lane's "already built" check keyed on that same
 > directory of hand-written Python, which proved nothing about the build. Both now key on
 > `QtWidgets.abi3.a`, and the gate checks all five archives the link names.
+>
+> **The last defect was emstrip.** With everything above fixed the build completed in full --
+> `[694/694] Linking CXX static library PySide6/QtWidgets/QtWidgets.abi3.a` -- and every
+> module archive still came back from `llvm-nm` as
+>
+> ```
+> QtCore.abi3.a:qabstractanimation_wrapper.cpp.o: no symbols
+> ```
+>
+> with no `PyInit_QtCore` anywhere, while shibokenmodule's object file showed a clean
+> `00000001 T PyInit_Shiboken`. `create_pyside_module()` ends with `qfp_strip_library()`,
+> which adds a POST_BUILD `${CMAKE_STRIP} $<TARGET_FILE:...>` under
+> `CMAKE_STRIP AND UNIX AND NOT APPLE AND NOT QFP_NO_STRIP AND NOT Debug`
+> (`ShibokenHelpers.cmake:89`). `CMAKE_STRIP` here is **emstrip**, which drops the symbol
+> table outright. shibokenmodule survived because it is not a `create_pyside_module` target.
+>
+> Note the guard: **`NOT APPLE`**. The port was authored on a macOS build machine where that
+> branch never fires. This is the third host-shaped decision inside a cross build found in
+> two days -- after `check_os()` reading `CMAKE_HOST_WIN32`, and `pysidetest` parsing host
+> headers -- and `BUILD-WEH.md` had carried the warning "emstrip drops the symbol table" the
+> whole time without anything applying it to this lane. Fixed with `QFP_NO_STRIP=ON` and
+> `CMAKE_STRIP=/usr/bin/true` on both configures.
+>
+> Two further things this uncovered, both fixed: `append_size_optimization_flags()` was
+> compiling every binding module `-fno-exceptions` while the rest of the port is
+> `-fwasm-exceptions` (mixing exception models in one link is ROADMAP 12's OCCT defect
+> again) -- disabled via `QFP_NO_OVERRIDE_OPTIMIZATION_FLAGS`; and `patches/apply.sh` aborted
+> the whole job on a restored source cache, because `tools/patch-pyside-clang-options.py`
+> edits *inside* the branch `pyside-setup.patch` adds, so neither the forward nor the reverse
+> dry-run matches. `apply_one()` now takes an optional `<file>::<string>` marker for patches
+> that later tooling makes irreversible.
 
 > **Status 2026-08-16** (the original table; items 1-8 below are unchanged unless noted).
 >
