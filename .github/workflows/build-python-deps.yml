@@ -10,6 +10,8 @@ name: build the Python extension libraries (wasm)
 #   kiwisolver._cext                                       -> deps/wasm/lib/kiwi-mod
 #   _ctypes                                                -> deps/wasm/lib/ctypes-mod
 #   PIL._imaging                                           -> deps/wasm/lib/pil-mod
+#   ifcopenshell._ifcopenshell_wrapper                     -> deps/wasm/lib/ifc-mod
+#   pivy._coin                                             -> deps/wasm/lib/pivy-mod
 #
 # The link is run with -sERROR_ON_UNDEFINED_SYMBOLS=0, so a missing archive does NOT fail
 # the build -- it produces a binary whose PyInit_* is a trapping stub and whose `import
@@ -78,6 +80,8 @@ jobs:
             deps/wasm/lib/kiwi-mod
             deps/wasm/lib/ctypes-mod
             deps/wasm/lib/pil-mod
+            deps/wasm/lib/ifc-mod
+            deps/wasm/lib/pivy-mod
             deps/wasm/lib/libffi.a
             deps/src/cpython
             deps/src/numpy
@@ -593,6 +597,8 @@ jobs:
             deps/wasm/lib/kiwi-mod
             deps/wasm/lib/ctypes-mod
             deps/wasm/lib/pil-mod
+            deps/wasm/lib/ifc-mod
+            deps/wasm/lib/pivy-mod
             deps/wasm/lib/libffi.a
             deps/src/cpython
             deps/src/numpy
