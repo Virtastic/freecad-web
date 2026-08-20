@@ -133,11 +133,15 @@ if [ -z "$CAND" ] && [ "${FCWEB_NO_LIBCLANG_FETCH:-0}" != "1" ]; then
 fi
 
 if [ -z "$CAND" ] && [ "${FCWEB_NO_LIBCLANG_FETCH:-0}" != "1" ]; then
-    LLVM_VER="${FCWEB_LLVM_VERSION:-17.0.6}"
-    # ubuntu-22.04, NOT 18.04. The 18.04 build links against libtinfo.so.5 (ncurses 5),
-    # which nothing modern has, and fails with
+    LLVM_VER="${FCWEB_LLVM_VERSION:-20.1.8}"
+    # LLVM-<ver>-Linux-X64 rather than a clang+llvm-*-ubuntu-* asset: the ubuntu-18.04
+    # builds want libtinfo.so.5 and fail with
     #   undefined reference to setupterm@NCURSES_TINFO_5.0.19991023
-    LLVM_TARBALL="clang+llvm-${LLVM_VER}-x86_64-linux-gnu-ubuntu-22.04.tar.xz"
+    # The version MATTERS: libclang must be able to parse emsdk's sysroot, which is
+    # clang 20. libclang 17 against a clang-20 libc++ gives
+    #   <cstddef> tried including <stddef.h> but did not find libc++'s <stddef.h>
+    # no matter which resource dir it is handed.
+    LLVM_TARBALL="LLVM-${LLVM_VER}-Linux-X64.tar.xz"
     LLVM_DIR="$ROOT/deps/host/llvm-${LLVM_VER}"
     if [ ! -e "$LLVM_DIR/lib/libclang.so" ] && ! ls "$LLVM_DIR"/lib/libclang.so* >/dev/null 2>&1; then
         echo "  fetching LLVM ${LLVM_VER} (for libclang only; ~700 MB, cached afterwards)"

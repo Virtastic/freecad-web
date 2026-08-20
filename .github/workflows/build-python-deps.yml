@@ -447,7 +447,10 @@ jobs:
           set -e
           # also require the .llvm-prefix marker: a generator built before it existed will
           # search for clang builtins on its own and silently emit nothing.
-          if [ -x deps/host/shiboken6/bin/shiboken6 ] && [ -s deps/host/shiboken6/.llvm-prefix ] \n             && [ "${{ inputs.rebuild }}" != "true" ]; then
+          # The generator must have been built against LLVM 20: emsdk 3.1.70 ships clang 20,
+          # and an older libclang cannot parse its sysroot however it is configured. A
+          # cached 17.0.6 generator would skip this step and fail identically later.
+          if [ -x deps/host/shiboken6/bin/shiboken6 ] \n             && grep -q "llvm-20" deps/host/shiboken6/.llvm-prefix 2>/dev/null \n             && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  host shiboken: already built"; exit 0
           fi
           bash build-shiboken-host.sh
