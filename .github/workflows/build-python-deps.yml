@@ -487,7 +487,13 @@ jobs:
           #
           # shiboken's OWN --include-paths entries come first of all, so putting
           # libc++ there beats the injected directory.
+          # LIBCXX_FIRST sets the variable (and is still needed for it); ISYSTEM is what
+          # actually places libc++ ahead of the injected builtins. --include-paths alone
+          # does not: clang drops a normal include dir that duplicates a system dir and
+          # keeps the system position, so libc++ was searched 8th despite being 1st on
+          # the command line.
           export FCWEB_SHIBOKEN_LIBCXX_FIRST=1
+          export FCWEB_SHIBOKEN_LIBCXX_ISYSTEM=1
           export FCWEB_SHIBOKEN_VERBOSE=1   # keep -v: it is how this was found
           bash rebuild-pyside-weh.sh
 

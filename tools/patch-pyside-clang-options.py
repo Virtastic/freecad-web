@@ -144,6 +144,19 @@ def build_block():
     std = os.environ.get('FCWEB_SHIBOKEN_STD')
     if std:
         lines.append('        list(APPEND shiboken_command "--clang-option=-std=%s")' % std)
+    if os.environ.get('FCWEB_SHIBOKEN_LIBCXX_ISYSTEM') == '1':
+        # -isystem, not --include-paths. Passing libc++ through --include-paths put it
+        # FIRST on the command line and clang still searched it EIGHTH: a normal include
+        # directory that duplicates a system directory is dropped in favour of the system
+        # copy, keeping the system position. -isystem entries are system directories and
+        # are searched in the order given, so an earlier one wins and the later duplicate
+        # is the one dropped.
+        lines += [
+            '        if(NOT _fcweb_libcxx_first STREQUAL "")',
+            '            list(APPEND shiboken_command',
+            '                 "--clang-option=-isystem${_fcweb_libcxx_first}")',
+            '        endif()',
+        ]
     if os.environ.get('FCWEB_SHIBOKEN_VERBOSE') == '1':
         # independent of everything above: the point is to SEE what the others did
         lines.append('        list(APPEND shiboken_command "--clang-option=-v")')
