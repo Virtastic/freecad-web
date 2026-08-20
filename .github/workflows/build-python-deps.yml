@@ -429,7 +429,17 @@ jobs:
           set -e
           . emsdk/emsdk_env.sh
           . .qtvenv/bin/activate
-          if [ ! -s deps/wasm/lib/mpl-mod/libmpl__backend_agg.a ] || [ "${{ inputs.rebuild }}" = "true" ]; then
+          # A THIN libagg.a means the staged set predates the fix that rebuilds meson's
+          # archives from their objects. Thin archives hold references, not code
+          # ("!<thin>" magic), so they stage as something that looks like a library and is
+          # not -- and the failure lands an hour later in wasm-ld during the FreeCAD link.
+          # Detect it here so the lane heals itself instead of skipping forever.
+          thin=0
+          if head -c 7 deps/wasm/lib/mpl-mod/libagg.a 2>/dev/null | grep -q '!<thin'; then
+            echo "  matplotlib: staged libagg.a is a THIN archive -- restaging"
+            thin=1
+          fi
+          if [ ! -s deps/wasm/lib/mpl-mod/libmpl__backend_agg.a ] || [ "$thin" = 1 ] || [ "${{ inputs.rebuild }}" = "true" ]; then
             bash configure-matplotlib-weh.sh
           else
             echo "  matplotlib: already built"

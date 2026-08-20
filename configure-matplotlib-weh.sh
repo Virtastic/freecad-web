@@ -107,10 +107,28 @@ while IFS= read -r d; do
   found=$((found + 1))
 done < <(find build-matplotlib/src -maxdepth 1 -type d -name '*.so.p')
 [ "$found" -gt 0 ] || { echo "!! no *.so.p directories under build-matplotlib/src"; exit 1; }
-cp build-matplotlib/subprojects/freetype-2.6.1/libfreetype.a "$DW/lib/mpl-mod/"
-cp build-matplotlib/subprojects/qhull-8.0.2/libqhull_r.a "$DW/lib/mpl-mod/"
-cp build-matplotlib/extern/agg24-svn/libagg.a "$DW/lib/mpl-mod/"
-cp build-matplotlib/extern/ttconv/libttconv.a "$DW/lib/mpl-mod/"
+# meson writes these four as THIN archives: libagg.a contains no objects, only references
+# to libagg.a.p/*.o resolved relative to the archive. Copying the .a alone therefore stages
+# something that looks like a library and is not, and the failure lands an hour later in
+# wasm-ld, on the FreeCAD link, in a message that does not mention meson:
+#     libagg.a: could not get the buffer for a child of the archive:
+#               'libagg.a.p/src_agg_bezier_arc.c.o'
+# Rebuild each from its own objects so what is staged is self-contained.
+stage_meson_lib() {   # <path to the meson-built .a>
+    src="$1"; name="$(basename "$src")"
+    if [ -d "$src.p" ]; then
+        rm -f "$DW/lib/mpl-mod/$name"
+        find "$src.p" -name '*.o' -print0 | xargs -0 "$EMAR" rcs "$DW/lib/mpl-mod/$name"
+        echo "  rebuilt $name from $(find "$src.p" -name '*.o' | wc -l | tr -d ' ') object(s)"
+    else
+        cp "$src" "$DW/lib/mpl-mod/"
+        echo "  copied  $name (no .p directory -- not a thin archive)"
+    fi
+}
+stage_meson_lib build-matplotlib/subprojects/freetype-2.6.1/libfreetype.a
+stage_meson_lib build-matplotlib/subprojects/qhull-8.0.2/libqhull_r.a
+stage_meson_lib build-matplotlib/extern/agg24-svn/libagg.a
+stage_meson_lib build-matplotlib/extern/ttconv/libttconv.a
 
 # Stage freetype's HEADERS beside its archive. FreeCAD builds with FREECAD_USE_FREETYPE=ON
 # -- without it Part.makeWireString() raises "FreeCAD compiled without FreeType support!"
