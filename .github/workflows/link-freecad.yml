@@ -159,7 +159,8 @@ jobs:
           need deps/wasm/lib/ctypes-mod/lib_ctypes.a               "_ctypes"             build-python-deps.yml
           need deps/wasm/lib/pil-mod/libpil__imaging.a             "PIL"                 build-python-deps.yml
           need deps/wasm/lib/pivy-mod/lib_coin.a                   "pivy _coin"          build-python-deps.yml
-          need build-ifcopenshell/ifcwrap/lib_ifcopenshell_wrapper.a "IfcOpenShell"      build-python-deps.yml
+          need deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a    "IfcOpenShell wrapper" build-python-deps.yml
+          need deps/wasm/lib/ifc-mod/libIfcParse.a                 "IfcOpenShell IfcParse" build-python-deps.yml
           need build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a "PySide6 QtWidgets"  build-python-deps.yml
           need deps/wasm/shiboken6/lib/libshiboken6.abi3.a         "libshiboken6"        build-python-deps.yml
           need deps/wasm/pyside-pkg/PySide6/__init__.py            "pyside-pkg glue"     build-python-deps.yml
