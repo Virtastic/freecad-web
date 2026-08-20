@@ -82,6 +82,24 @@ done
 [ -n "$EIGEN_INC" ] || { echo "ERROR: no Eigen (looked for Eigen/Core under $DW/include, deps/src/eigen)" >&2; exit 1; }
 echo "eigen:        $EIGEN_INC"
 
+# FreeType, same problem as Eigen. FREECAD_USE_FREETYPE=ON is not optional -- without it
+# Part.makeWireString() raises "FreeCAD compiled without FreeType support!" and Draft
+# ShapeString stops working -- and the only freetype here is the one matplotlib builds as a
+# meson subproject. This used to point at deps/src/matplotlib/subprojects/.../include, a
+# SOURCE tree nothing caches, which cost 4478 compiled targets before
+#     src/Mod/Part/App/FT2FC.cpp:65:11: fatal error: 'ft2build.h' file not found
+# configure-matplotlib-weh.sh now stages the headers to deps/wasm/include/freetype2; prefer
+# those, fall back to the source tree.
+FT_INC=""
+for d in "$DW/include/freetype2" "$ROOT/deps/src/matplotlib/subprojects/freetype-2.6.1/include"          "$DW/include"; do
+    [ -f "$d/ft2build.h" ] && { FT_INC="$d"; break; }
+done
+[ -n "$FT_INC" ] || {
+    echo "ERROR: no ft2build.h (looked in $DW/include/freetype2 and matplotlib's subproject)." >&2
+    echo "       Run configure-matplotlib-weh.sh first -- it builds and stages freetype." >&2
+    exit 1; }
+echo "freetype:     $FT_INC"
+
 # ---- Heap size -------------------------------------------------------------------------
 # Default stays 2 GB. Raising it is a real option now, but it is NOT free, and the failure
 # mode is nasty enough to be worth stating before anyone changes the number.
@@ -209,9 +227,9 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   `# ft_module_get_service signature mismatches between the two copies -- pre-existing, and` \
   `# benign in practice (Qt text and ShapeString both render), but see patches/README.` \
   -DFREECAD_USE_FREETYPE=ON \
-  -DFREETYPE_INCLUDE_DIRS="$ROOT/deps/src/matplotlib/subprojects/freetype-2.6.1/include" \
-  -DFREETYPE_INCLUDE_DIR_ft2build="$ROOT/deps/src/matplotlib/subprojects/freetype-2.6.1/include" \
-  -DFREETYPE_INCLUDE_DIR_freetype2="$ROOT/deps/src/matplotlib/subprojects/freetype-2.6.1/include" \
+  -DFREETYPE_INCLUDE_DIRS="$FT_INC" \
+  -DFREETYPE_INCLUDE_DIR_ft2build="$FT_INC" \
+  -DFREETYPE_INCLUDE_DIR_freetype2="$FT_INC" \
   -DFREETYPE_LIBRARY="$ROOT/deps/wasm/lib/mpl-mod/libfreetype.a" \
   -DFREETYPE_LIBRARIES="$ROOT/deps/wasm/lib/mpl-mod/libfreetype.a" \
   -DCMAKE_PREFIX_PATH="$DW;$ROOT/qt/6.9.0/wasm_mt_weh" \

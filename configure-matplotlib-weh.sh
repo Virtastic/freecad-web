@@ -111,5 +111,23 @@ cp build-matplotlib/subprojects/freetype-2.6.1/libfreetype.a "$DW/lib/mpl-mod/"
 cp build-matplotlib/subprojects/qhull-8.0.2/libqhull_r.a "$DW/lib/mpl-mod/"
 cp build-matplotlib/extern/agg24-svn/libagg.a "$DW/lib/mpl-mod/"
 cp build-matplotlib/extern/ttconv/libttconv.a "$DW/lib/mpl-mod/"
+
+# Stage freetype's HEADERS beside its archive. FreeCAD builds with FREECAD_USE_FREETYPE=ON
+# -- without it Part.makeWireString() raises "FreeCAD compiled without FreeType support!"
+# and Draft ShapeString stops working entirely -- and the only freetype in this stack is
+# the one matplotlib builds as a meson subproject. configure-gui-weh.sh used to point
+# FREETYPE_INCLUDE_* straight at deps/src/matplotlib/subprojects/freetype-2.6.1/include,
+# a SOURCE tree that nothing caches, so a machine without matplotlib's sources checked out
+# got 4478 targets in and then:
+#     src/Mod/Part/App/FT2FC.cpp:65:11: fatal error: 'ft2build.h' file not found
+# Staging them makes the headers an output of this lane, like the archive.
+FT_SRC="$MPL/subprojects/freetype-2.6.1/include"
+if [ -f "$FT_SRC/ft2build.h" ]; then
+    mkdir -p "$DW/include/freetype2"
+    cp -r "$FT_SRC/." "$DW/include/freetype2/"
+    echo "freetype headers staged to $DW/include/freetype2 (ft2build.h + freetype/)"
+else
+    echo "!! no ft2build.h under $FT_SRC -- FreeCAD's FREECAD_USE_FREETYPE build will fail" >&2
+fi
 echo "matplotlib C-extensions harvested to $DW/lib/mpl-mod:"
 ls "$DW/lib/mpl-mod/"

@@ -93,6 +93,8 @@ jobs:
             deps/wasm/lib/libffi.a
             deps/src/cpython
             deps/src/numpy
+            deps/src/matplotlib
+            deps/wasm/include/freetype2
             deps/src/pivy
             deps/src/ifcopenshell
             deps/src/pyside-setup
@@ -432,6 +434,15 @@ jobs:
           else
             echo "  matplotlib: already built"
           fi
+          # Stage freetype's headers whether or not the build ran. FreeCAD compiles with
+          # FREECAD_USE_FREETYPE=ON against this freetype -- the only one in the stack -- and
+          # a lane that skips its build would otherwise leave the headers unstaged forever.
+          ft=deps/src/matplotlib/subprojects/freetype-2.6.1/include
+          if [ -f "$ft/ft2build.h" ] && [ ! -f deps/wasm/include/freetype2/ft2build.h ]; then
+            mkdir -p deps/wasm/include/freetype2
+            cp -r "$ft/." deps/wasm/include/freetype2/
+            echo "  freetype headers staged to deps/wasm/include/freetype2"
+          fi
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
           echo "  mpl-mod: $n archives"
           # 8 extensions + freetype/qhull/agg/ttconv. The darwin-only glob this script used
@@ -610,6 +621,8 @@ jobs:
             deps/wasm/lib/libffi.a
             deps/src/cpython
             deps/src/numpy
+            deps/src/matplotlib
+            deps/wasm/include/freetype2
             deps/src/pivy
             deps/src/ifcopenshell
             deps/src/pyside-setup
