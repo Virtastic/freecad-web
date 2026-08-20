@@ -81,13 +81,14 @@ LIBCXX_BLOCK = """
         endif()
         if(NOT _fcweb_sysroot STREQUAL "")
             message(STATUS "shiboken: libc++ first -> ${_fcweb_sysroot}/include/c++/v1")
-            list(INSERT @LISTVAR@ 0 "${_fcweb_sysroot}/include/c++/v1")
+            set(_fcweb_libcxx_first "${_fcweb_sysroot}/include/c++/v1")
         else()
             message(WARNING "shiboken: no include/c++/v1 found via CMAKE_SYSROOT, "
                             "EMSCRIPTEN_SYSROOT, EMSDK or the compiler path -- libc++ will "
                             "not precede the injected clang builtins and every header after "
                             "<cstddef> will fail")
         endif()
+    endif()
     endif()
     # FCWEB-LIBCXX-FIRST-END
 """
@@ -178,6 +179,9 @@ def main():
     # Strip the libc++ block here too, BEFORE any early return -- otherwise asking for
     # nothing leaves a previous run's block in place and the "normalised" file is not.
     src = strip_named(src, LIBCXX_BEGIN, LIBCXX_END)
+    # ...and undo the option-line edit, which the sentinel strip does not cover.
+    # Normalisation has to restore EVERY change or a cached tree keeps a stale one.
+    src = src.replace('"--include-paths=${_fcweb_libcxx_first}:', '"--include-paths=')
 
     block = build_block()
     opts = [l.split('--clang-option=')[1].rstrip('")') for l in block.split('\n')
@@ -198,26 +202,20 @@ def main():
     # clang builtins directory shiboken injects, and that injected directory is what makes
     # a C stddef.h win over libc++'s. Requested with FCWEB_SHIBOKEN_LIBCXX_FIRST=1.
     if want_libcxx:
-        hits = [l for l in src.split(chr(10)) if 'make_path(shiboken_include_dirs' in l]
+        # Patch the --include-paths OPTION, not the list variable that feeds it. Inserting
+        # into shiboken_include_dir_list ran (cmake printed the STATUS line) and changed
+        # nothing in the resulting search list, so whatever the option is built from, it is
+        # not that variable at that point. The option is what shiboken actually reads.
+        hits = [l for l in src.split(chr(10)) if '"--include-paths=' in l]
         if not hits:
-            print('!! cannot find make_path(shiboken_include_dirs ...) in %s' % REL)
-            print('   The include-path list is built differently than expected; lines seen:')
-            for i, line in enumerate(src.split(chr(10)), 1):
-                if 'include_dir' in line or 'include-paths' in line:
-                    print('     %d: %s' % (i, line.strip()))
+            print('!! no --include-paths line in %s' % REL)
             sys.exit(1)
         target = hits[0]
-        listvar = target.split('make_path(shiboken_include_dirs')[1].strip().rstrip(')').strip()
-        if not listvar.startswith('${'):
-            print('!! unexpected make_path form: %s' % target.strip())
-            sys.exit(1)
-        listvar = listvar[2:].rstrip('}')
-        # lstrip the leading newline: the strip removes only the sentinel lines, so a
-        # leading blank would accumulate and the round trip would not be exact.
-        src = src.replace(
-            target,
-            LIBCXX_BLOCK.replace('@LISTVAR@', listvar).lstrip(chr(10)) + target, 1)
-        print('  %s: libc++ inserted at the front of %s' % (REL, listvar))
+        inner = target.split('"--include-paths=')[1].rsplit('"', 1)[0]
+        patched = target.replace('"--include-paths=' + inner + '"',
+                                 '"--include-paths=${_fcweb_libcxx_first}:' + inner + '"')
+        src = src.replace(target, LIBCXX_BLOCK.lstrip(chr(10)) + patched, 1)
+        print('  %s: libc++ prepended to --include-paths' % REL)
 
     src = src.replace(ANCHOR, ANCHOR + block, 1)
     io.open(path, 'w', encoding='utf-8', newline='').write(src)
