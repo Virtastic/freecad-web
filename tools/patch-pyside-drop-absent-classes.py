@@ -1,4 +1,4 @@
-"""Stop PySide expecting QProcess::UnixProcessParameters, which Qt-for-wasm has not got.
+"""Stop PySide's QtCore expecting wrappers for classes Qt-for-wasm has not got.
 
     python tools/patch-pyside-drop-absent-classes.py deps/src/pyside-setup
 
@@ -6,46 +6,44 @@ Without this the QtCore module stops at AUTOMOC, long after the generator has ru
 
     AutoGen error
     Info error in info file ".../QtCore_autogen.dir/AutogenInfo.json":
-    The source file "BIN:/PySide6/QtCore/PySide6/QtCore/qprocess_unixprocessparameters_wrapper.cpp"
-    does not exist.
+    The source file "BIN:/PySide6/QtCore/PySide6/QtCore/qprocess_wrapper.cpp" does not exist.
 
 WHY
 
-PySide picks the platform-specific wrapper in PySide6/QtCore/CMakeLists.txt:
+PySide6/QtCore/CMakeLists.txt lists every wrapper .cpp the generator is expected to write.
+shiboken writes one per class it FINDS, so a class absent from the target's headers leaves a
+listed-but-missing file. It says so plainly first -- these are its own words from the run
+that produced this list:
 
-    if(ENABLE_WIN)
-        set(SPECIFIC_OS_FILES ${QtCore_GEN_DIR}/qwineventnotifier_wrapper.cpp)
-    else()
-        set(SPECIFIC_OS_FILES ${QtCore_GEN_DIR}/qprocess_unixprocessparameters_wrapper.cpp)
-    endif()
+    type 'QProcess' is specified in typesystem, but not defined (disabled by configuration?)
+    type 'QSystemSemaphore' ...
+    type 'QTimeZone::OffsetData' ...
 
-and ENABLE_WIN comes from check_os() in cmake/PySideHelpers.cmake, which reads
-CMAKE_HOST_APPLE / CMAKE_HOST_WIN32 -- the HOST, not the target. Cross-compiling from
-Linux to wasm therefore takes the Unix branch and asks for a class the target does not
-have. The generator is right and cmake is wrong.
+and a `<configuration condition="QT_CONFIG(...)"/>` on the entry does NOT save it: that
+guards the generated body, and nothing is generated at all when the class is missing.
+(An earlier version of this file assumed otherwise and fixed only one of the three.)
 
-The whole of QProcess is absent from Qt for WebAssembly -- there are no subprocesses in a
-browser, which is why toolchain/include/qprocess_stub.h exists and why patches/freecad.patch
-#ifs out every connect() to a QProcess signal. shiboken says so plainly:
+Upstream already does exactly this for two other classes in the same file -- "permissions"
+and "sharedmemory" -- so the shape below is the file's own idiom, applied to the cases it
+does not cover. QSystemSemaphore is the conspicuous one: it is the sibling of QSharedMemory
+and is missing the same treatment.
 
-    typesystem_core_common.xml:2650: type 'QProcess' ...        (and 2652-2660, its enums)
-    typesystem_core_common.xml:2661: type 'UnixProcessParameters' ...
+QProcess::UnixProcessParameters is asked for at all only because check_os() in
+cmake/PySideHelpers.cmake decides ENABLE_WIN from CMAKE_HOST_WIN32 -- the HOST, not the
+target -- so a Linux-to-wasm cross build takes the Unix branch.
 
-Only this ONE wrapper goes missing, though, because QProcess and QProcessEnvironment carry
+WHAT IS NOT DROPPED
 
-    <configuration condition="QT_CONFIG(process)"/>
+  QProcessEnvironment      found: "processenvironment" is a separate Qt feature and is
+                           still enabled, which is also why App/Application.cpp compiles.
+  QTimeZone                found; only its QT_CONFIG(timezone) OffsetData struct is absent.
+  QNativeInterface::QX11Application, QNativeInterface::QWindowsScreen
+                           warned about, but QtGui/CMakeLists.txt already gates them on the
+                           "xcb" feature and WIN32, so no file is expected either way.
 
-so shiboken still writes their files with the body #if'd out, and cmake finds them. The
-nested <value-type name="UnixProcessParameters"> has no such condition, so nothing is
-written at all. Hence a one-file fix, not a QProcess-wide one.
-
-The replacement follows the idiom already in that file for "permissions" and
-"sharedmemory": drop the type entry, drop the source. EMSCRIPTEN is checked as well as the
-Qt feature so the guard does not hinge on "process" appearing in QT_DISABLED_PUBLIC_FEATURES.
-
-The dropped entry is spelled with a DOT. shiboken's shouldDropTypeEntry() qualifies nested
-names by prepending the enclosing entry and a '.', so "QProcess::UnixProcessParameters"
-would silently match nothing.
+Dropped entries are spelled with a DOT for nesting. shiboken's shouldDropTypeEntry()
+qualifies nested names by prepending the enclosing entry and a '.', so
+"QProcess::UnixProcessParameters" would silently match nothing.
 
 Idempotent -- safe to re-run over a cached source tree.
 """
@@ -54,29 +52,46 @@ import os
 import sys
 
 REL = 'sources/pyside6/PySide6/QtCore/CMakeLists.txt'
-MARK = 'FCWEB: QProcess::UnixProcessParameters'
+MARK = 'FCWEB-DROP-ABSENT'
 ANCHOR = 'if("permissions" IN_LIST QtCore_disabled_features)'
 
-BLOCK = '''# FCWEB: QProcess::UnixProcessParameters is not in Qt for WebAssembly -- a browser has
-# no subprocesses, and shiboken reports the whole of QProcess missing. QProcess and
-# QProcessEnvironment survive it because their typesystem entries carry
-# <configuration condition="QT_CONFIG(process)"/>, so a guarded (empty) wrapper is still
-# written; this nested value-type has no such condition, so no file appears and AUTOMOC
-# stops with "The source file ...qprocess_unixprocessparameters_wrapper.cpp does not exist".
+# (Qt feature, [type entries], [wrapper sources], why)
 #
-# It is asked for at all only because check_os() in cmake/PySideHelpers.cmake decides
-# ENABLE_WIN from CMAKE_HOST_WIN32 -- the host, not the target -- so a Linux-to-wasm cross
-# build takes the Unix branch.
-#
-# Same shape as the "permissions" and "sharedmemory" cases below. The entry is spelled with
-# a DOT because shiboken qualifies nested names with '.', not '::'.
-if(EMSCRIPTEN OR "process" IN_LIST QtCore_disabled_features)
-    list(APPEND QtCore_DROPPED_ENTRIES QProcess.UnixProcessParameters)
-    list(REMOVE_ITEM QtCore_SRC ${QtCore_GEN_DIR}/qprocess_unixprocessparameters_wrapper.cpp)
-    message(STATUS "Qt${QT_MAJOR_VERSION}Core: Dropping QProcess::UnixProcessParameters (absent on this target)")
-endif()
+# Measured, not guessed: every entry here was reported absent by shiboken against the
+# 6.9.0 Qt-for-wasm build. EMSCRIPTEN is checked alongside the feature so the guard does
+# not hinge on the feature name appearing in QT_DISABLED_PUBLIC_FEATURES.
+DROPS = [
+    ('process',
+     ['QProcess', 'QProcess.UnixProcessParameters'],
+     ['qprocess_wrapper.cpp', 'qprocess_unixprocessparameters_wrapper.cpp'],
+     'a browser has no subprocesses. Same absence as toolchain/include/qprocess_stub.h,\n'
+     '# which exists to keep FreeCAD itself compiling against the missing class.'),
+    ('systemsemaphore',
+     ['QSystemSemaphore'],
+     ['qsystemsemaphore_wrapper.cpp'],
+     'no SysV/POSIX semaphores under emscripten. Upstream gates its sibling QSharedMemory\n'
+     '# on "sharedmemory" a few lines below and simply does not cover this one.'),
+    ('timezone',
+     ['QTimeZone.OffsetData'],
+     ['qtimezone_offsetdata_wrapper.cpp'],
+     'QTimeZone itself IS found and keeps its wrapper; only the nested OffsetData struct,\n'
+     '# which sits inside QT_CONFIG(timezone), is absent.'),
+]
 
-'''
+
+def block(feature, entries, sources, why):
+    lines = ['# %s: %s' % (MARK, why)]
+    lines.append('if(EMSCRIPTEN OR "%s" IN_LIST QtCore_disabled_features)' % feature)
+    lines.append('    list(APPEND QtCore_DROPPED_ENTRIES %s)' % ' '.join(entries))
+    lines.append('    list(REMOVE_ITEM QtCore_SRC')
+    for s in sources:
+        lines.append('         ${QtCore_GEN_DIR}/%s' % s)
+    lines.append('    )')
+    lines.append('    message(STATUS "Qt${QT_MAJOR_VERSION}Core: Dropping %s '
+                 '(absent on this target)")' % ', '.join(entries))
+    lines.append('endif()')
+    lines.append('')
+    return chr(10).join(lines)
 
 
 def main():
@@ -92,20 +107,36 @@ def main():
         print('  already patched: %s' % REL)
         return
 
+    # A cached tree may carry the earlier version of this patch, which covered QProcess's
+    # nested value-type only. Start from the pristine file rather than stacking a second
+    # block on top of it.
+    old_mark = 'FCWEB: QProcess::UnixProcessParameters'
+    if old_mark in src:
+        keep, dropping = [], False
+        for line in src.split(chr(10)):
+            if old_mark in line:
+                dropping = True
+            if dropping:
+                if line.strip() == 'endif()':
+                    dropping = False
+                continue
+            keep.append(line)
+        src = chr(10).join(keep)
+        print('  %s: superseded the earlier UnixProcessParameters-only block' % REL)
+
     if ANCHOR not in src:
         print('!! anchor not found in %s' % REL)
         print('   expected: %s' % ANCHOR)
-        print('   lines mentioning QtCore_disabled_features:')
         for i, line in enumerate(src.split(chr(10)), 1):
             if 'QtCore_disabled_features' in line or 'SPECIFIC_OS_FILES' in line:
                 print('     %d: %s' % (i, line.strip()))
         sys.exit(1)
 
-    # Must land AFTER get_property(QtCore_disabled_features ...) and after QtCore_SRC is
-    # set; the anchor is the first use of the feature list, which satisfies both.
-    src = src.replace(ANCHOR, BLOCK + ANCHOR, 1)
+    # Must land AFTER get_property(QtCore_disabled_features ...) and after set(QtCore_SRC);
+    # the anchor is the first use of the feature list, which satisfies both.
+    src = src.replace(ANCHOR, ''.join(block(*d) for d in DROPS) + ANCHOR, 1)
     io.open(path, 'w', encoding='utf-8', newline='').write(src)
-    print('  %s: QProcess::UnixProcessParameters dropped on wasm' % REL)
+    print('  %s: dropped %d absent class group(s)' % (REL, len(DROPS)))
 
 
 if __name__ == '__main__':

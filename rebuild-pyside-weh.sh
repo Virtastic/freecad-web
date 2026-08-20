@@ -137,10 +137,10 @@ cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
 ninja -C build-shiboken-wasm install
 
-# Qt for WebAssembly has no QProcess, and PySide's platform choice is made from the HOST,
-# so QtCore asks for a wrapper the generator never writes and AUTOMOC stops on it. Must run
-# before the PySide configure: the source list is fixed then, and the failure only surfaces
-# at build time, after the generator has already run.
+# QtCore lists wrappers for three classes Qt-for-wasm has not got -- QProcess (a browser has
+# no subprocesses), QSystemSemaphore, and QTimeZone::OffsetData -- so the generator writes
+# nothing for them and AUTOMOC stops. Must run before the PySide configure: the source list
+# is fixed then, and the failure only surfaces at build time, after generation.
 python3 "$ROOT/tools/patch-pyside-drop-absent-classes.py" "$ROOT/deps/src/pyside-setup"
 
 echo "=== PYSIDE ==="
@@ -166,6 +166,49 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   -DCMAKE_INSTALL_PREFIX="$ROOT/emsdk/upstream/emscripten/cache/sysroot" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
 ninja -C build-pyside-wasm
+
+# The link takes these four archives straight out of the build trees, so verify them HERE,
+# by symbol -- ninja exiting 0 says the targets built, not that the Python modules came out
+# usable. Each PyInit_ below is a PyImport_AppendInittab entry in MainGui.cpp, and a missing
+# one is a trapping `import PySide6.QtWidgets` in the browser, not a link error, which is
+# exactly the kind of failure this repository has already been bitten by four times.
+echo "=== ARCHIVES ==="
+NM="$ROOT/emsdk/upstream/bin/llvm-nm"
+pyside_missing=0
+check_mod() {   # <archive> <PyInit symbol>
+    if [ ! -s "$1" ]; then echo "  MISSING  ${1#$ROOT/}"; pyside_missing=1; return; fi
+    if "$NM" "$1" 2>/dev/null | grep -q " T $2$"; then
+        echo "  ok       ${1#$ROOT/}  ($2)"
+    else
+        echo "  NO $2   ${1#$ROOT/}"; pyside_missing=1
+    fi
+}
+check_mod "$ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a"       PyInit_QtCore
+check_mod "$ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a"         PyInit_QtGui
+check_mod "$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a" PyInit_QtWidgets
+# libpyside6 and libshiboken6 carry no PyInit_ of their own -- Shiboken's module init comes
+# from shibokenmodule's object file, which the link names directly -- so existence is all
+# there is to check for these two.
+for a in "$ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a" \
+         "$ROOT/deps/wasm/shiboken6/lib/libshiboken6.abi3.a"; do
+    if [ -s "$a" ]; then echo "  ok       ${a#$ROOT/}"
+    else echo "  MISSING  ${a#$ROOT/}"; pyside_missing=1; fi
+done
+[ "$pyside_missing" = 0 ] || {
+    echo "ERROR: the PySide build finished but the modules above are not usable" >&2; exit 1; }
+
+# deps/wasm/pyside-pkg is the PRELOADED PYTHON TREE (--preload-file ...@/pyside-pkg in
+# build-browser-gui.sh), not a copy of the archives: the binding modules are compiled into
+# the executable and registered in the inittab under _fcweb names, and pyside-pkg's
+# hand-written PySide6/__init__.py aliases those to the dotted names so
+# `import PySide6.QtCore` resolves. So nothing in it comes out of this build -- but
+# patches/apply.sh only populates the directory `if [ -d ... ]`, and until now nothing
+# created it, so the glue was never copied and the preload would have been empty.
+PKG="$ROOT/deps/wasm/pyside-pkg"
+mkdir -p "$PKG/PySide6" "$PKG/shiboken6"
+cp -v "$ROOT/patches/pyside-pkg-glue/PySide6/__init__.py"   "$PKG/PySide6/__init__.py"
+cp -v "$ROOT/patches/pyside-pkg-glue/shiboken6/__init__.py" "$PKG/shiboken6/__init__.py"
+echo "pyside-pkg: $(find "$PKG" -type f | wc -l | tr -d ' ') file(s)"
 
 # pivy used to be built here. It is not related to PySide -- it needs Coin3D, SWIG and
 # CPython, none of which this script touches -- and chaining them meant pivy could not be

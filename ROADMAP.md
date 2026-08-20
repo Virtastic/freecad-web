@@ -17,50 +17,56 @@
 > | # | item | state |
 > |---|---|---|
 > | 13 | **Outbound HTTP** | **works in principle, constrained in practice.** QtNetwork is part of qtbase and IS built (`-submodules qtbase,qtsvg,qtdeclarative,qttools`), and Qt-for-wasm implements `QNetworkAccessManager` over the browser's fetch. `DownloadItem`/`DownloadManager` use it. BUT `infra/nginx.conf` sets `Cross-Origin-Embedder-Policy: require-corp`, which SharedArrayBuffer (and therefore threads) requires -- and under it every cross-origin response must carry CORP/CORS headers or the browser refuses it. Most third-party hosts do not. So requests to arbitrary sites will mostly fail, and anything that needs to reach the wider web needs a same-origin proxy. Not yet built. |
-> | 14 | **`NetworkRetriever` is inert** | FreeCAD's own "fetch from the web" helper shells out to **wget through QProcess**, and Qt-for-wasm has no QProcess -- `toolchain/include/qprocess_stub.h` makes it compile by making it do nothing. Anything routed through it silently does nothing. Should be rewritten onto QNetworkAccessManager, or removed so it fails honestly. |
+> | 14 | **What the QProcess stub disables** | **audited 2026-08-20; the original entry here was wrong.** It said `NetworkRetriever` was FreeCAD's "fetch from the web" helper and that "anything routed through it silently does nothing". Read against the 1.1.3 tree, **nothing is routed through it**: it is referenced by its own two files, `src/Gui/CMakeLists.txt` and the translation catalogues, and by no other code. The live download path is `DownloadManager`/`DownloadItem` on `QNetworkAccessManager`, which works. The real inventory is `docs-qprocess-stubbed-features.md`: of 24 files mentioning QProcess, 2 use only `QProcessEnvironment` (a separate Qt feature, still enabled -- these work), 6 are include-only, 2 are dead upstream, 4 fail honestly because they check a return value, 3 are self-restart which a page cannot do, and **exactly 2 fail silently** -- gmsh remeshing (`RemeshGmsh.cpp`) and run-external (`DlgRunExternal.cpp`). gmsh is already a wanted archive, so that one turns into a feature rather than a repair. |
 > | 15 | **Addon Manager / plugins** | **off entirely.** `BUILD_ADDONMGR=OFF`, because AddonManager is a git *submodule* and GitHub tarballs carry none. Beyond fetching it, installing an addon at runtime assumes `git` and a writable install tree, both via QProcess -- so it needs a wasm-native install path (fetch a zip over HTTP, unpack into IDBFS) before it means anything. This is the single biggest gap against "usable by anyone". |
 > | 16 | **Compiled Python addons** | **not possible by construction, and that is worth stating.** This is one static monolith: every C extension is registered in `MainGui.cpp`'s inittab at link time. There is no `pip`, no dynamic loading. Pure-Python addons can be dropped into the virtual filesystem and will work; an addon shipping a compiled extension cannot be installed without relinking the whole binary. |
 > | 17 | **Web workbench** | `BUILD_WEB=ON` compiles, but Qt is built `-skip qtwebengine`, so the embedded browser view has no engine behind it. Needs checking against what the workbench actually does at runtime before it can be called working. |
 
 > | 18 | **PySide/shiboken lane** | **the last archive lane, and the one written most tightly to one machine.** `rebuild-pyside-weh.sh` passes `-DQT_HOST_PATH=$ROOT/qt/6.9.0/macos` (macOS-only), `-DPython_EXECUTABLE=.../build/python.exe` (macOS-only name), `-DQFP_PYTHON_HOST_PATH=/usr/bin/python3` (hardcoded), and needs `deps/host/shiboken6` -- a HOST shiboken built against libclang, which nothing in CI produces. Every one of these is the same defect the numpy/pivy/IfcOpenShell lanes each hit; they are just all in one script. Needed for `deps/wasm/pyside-pkg`, which the link preloads. |
 >
-> **Item 18 update, 2026-08-20.** Everything the link needs is built EXCEPT PySide. Eleven
-> archives are green and verified by symbol -- numpy (4), matplotlib (13), kiwisolver,
-> `_ctypes`, libffi, PIL, pivy `_coin`, IfcOpenShell `_ifcopenshell_wrapper` (358/358
-> targets) -- alongside a clean 2676/2676 C++ compile across 29 modules.
+> **Item 18 update, 2026-08-20. The blocker is found and fixed; the lane is now finishing.**
+> Eleven archives were already green and verified by symbol -- numpy (4), matplotlib (13),
+> kiwisolver, `_ctypes`, libffi, PIL, pivy `_coin`, IfcOpenShell `_ifcopenshell_wrapper`
+> (358/358 targets) -- alongside a clean 2676/2676 C++ compile across 29 modules. PySide was
+> the twelfth and the only one still failing.
 >
-> The PySide lane is genuinely blocked. An earlier version of this entry claimed one
-> configuration was "best" -- that was a MEASUREMENT ERROR on my part: two runs were compared
-> with different grep patterns. Counted identically, every configuration below produces the
-> SAME 126 stddef/nullptr_t errors:
+> **The cause.** shiboken injects a clang builtins directory ahead of *everything the
+> compiler reports*, from `appendClangBuiltinIncludes()` in
+> `ApiExtractor/clangparser/compilersupport.cpp`. Its `<stddef.h>` is then found before
+> libc++'s own, and libc++ refuses -- `<cstddef> ... didn't find libc++'s <stddef.h>` -- so
+> `nullptr_t` is undefined in all 126 errors downstream. em++ already orders its own search
+> correctly (libc++, sysroot, builtins LAST), so the injection was the whole problem.
 >
-> | configuration | nullptr_t/stddef errors |
-> |---|---|
-> | libclang 17, no resource-dir override | 126 |
-> | libclang 17, emsdk resource-dir + `-isystem` | 126 |
-> | libclang 19, emsdk resource-dir | 126 |
-> | libclang 20, emsdk resource-dir | 126 |
-> | libclang 20, emsdk resource-dir + `-std=c++17` | 126 |
-> | libclang 20, no override | 126 |
+> Six command-line approaches were tried first and all six were *structurally* incapable of
+> fixing it, because shiboken assembles its own arguments before the `--clang-option` ones
+> are appended. Counted identically -- an earlier version of this entry compared two runs
+> with different grep patterns and reported false progress -- every one produced the same
+> 126 errors: libclang 17/19/20, `-resource-dir`, `-nobuiltininc`, `-std=c++17`,
+> `--include-paths=<libc++>` (passed first, searched *eighth*: clang drops a normal include
+> dir that duplicates a system dir and keeps the system position), and `-isystem<libc++>`.
+> `tools/patch-shiboken-builtin-includes.py` changes the injection where it is made instead.
+> One `clang -v` run settled in minutes what six blind CI rounds could not.
 >
-> So libclang version, resource directory and language standard are all ruled OUT as the
-> cause. The failure is invariant under every knob tried, which points somewhere else
-> entirely -- most likely that shiboken's clang invocation never receives emscripten's
-> sysroot include paths at all. Its `--include-paths` carries only Qt directories, and it
-> relies on `--compiler-path=em++` to discover the rest; that discovery is the next thing to
-> verify, by running the generator by hand with `-v` and reading the include search list.
+> **The generator now works**: 5 invocations, 0 parse errors, all three modules generated
+> (`Ran Source generator` / `Ran Header generator` for each). Two consequential failures
+> followed, both expected once the shape was understood:
 >
-> What is now solved and should not be revisited: the host generator builds (it had never
-> been built off the build machine), `build-shiboken-host.sh` finds or fetches libclang and
-> records which one beside the binary, and `rebuild-pyside-weh.sh` no longer hardcodes a
-> macOS host Qt, `python.exe` or `/usr/bin/python3`.
+> | failure | cause | fix |
+> |---|---|---|
+> | `pysidetest` -- `/usr/include/c++/15/cstddef: 'stddef.h' file not found` | that module parses **host** headers, which genuinely need the injection this build removes | `-DBUILD_TESTS=OFF` -- the same reason shiboken's own `samplebinding` is off, and only Core/Gui/Widgets are wanted |
+> | AUTOMOC: `qprocess_unixprocessparameters_wrapper.cpp does not exist` | `check_os()` reads `CMAKE_HOST_WIN32`, so a Linux-to-wasm cross build takes the Unix branch and asks QtCore for a class Qt-for-wasm has not got | `tools/patch-pyside-drop-absent-classes.py`, following the file's own `permissions`/`sharedmemory` idiom |
 >
-> What remains is one narrow question: why emscripten's libc++ does not get `std::nullptr_t`
-> from `<cstddef>` under a clang-20 libclang. Likely avenues, cheapest first: try libclang
-> 19 (`FCWEB_LLVM_VERSION=19.1.7`, the only other linkable Linux-X64 asset); check whether
-> shiboken needs an explicit `-std=` matching Qt's; compare against a working PySide-wasm
-> build's actual clang invocation. PySide-for-wasm is not upstream-supported, so there is no
-> reference configuration to copy -- which is why this is being reconstructed by experiment.
+> `QProcess` and `QProcessEnvironment` survive that second one only because their typesystem
+> entries carry `<configuration condition="QT_CONFIG(process)"/>` and still get a guarded,
+> empty wrapper; the nested `UnixProcessParameters` value-type has no such condition, so
+> nothing is written at all. It is the same absence as items 14 and 15 above -- no
+> subprocesses in a browser -- surfacing in a third place.
+>
+> Two related defects were fixed alongside: nothing ever created `deps/wasm/pyside-pkg`, so
+> `patches/apply.sh` (which populates it only `if [ -d ]`) had never copied the glue and the
+> preload would have been empty; and the lane's "already built" check keyed on that same
+> directory of hand-written Python, which proved nothing about the build. Both now key on
+> `QtWidgets.abi3.a`, and the gate checks all five archives the link names.
 
 > **Status 2026-08-16** (the original table; items 1-8 below are unchanged unless noted).
 >

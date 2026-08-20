@@ -89,8 +89,11 @@ jobs:
             build-pivy-wasm
             build-ifcopenshell
             deps/host/shiboken6
-            deps/host/llvm-18.1.8
+            deps/host/llvm-*
             deps/wasm/pyside-pkg
+            deps/wasm/shiboken6
+            build-shiboken-wasm
+            build-pyside-wasm
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
@@ -468,7 +471,10 @@ jobs:
         run: |
           set -e
           . emsdk/emsdk_env.sh
-          if [ -d deps/wasm/pyside-pkg ] && [ "${{ inputs.rebuild }}" != "true" ]; then
+          # Was `-d deps/wasm/pyside-pkg`, which proved nothing: that directory holds
+          # hand-written Python glue, not build output. Key the skip on an archive the
+          # link actually consumes instead.
+          if [ -s build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a ]              && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  pyside: already built"; exit 0
           fi
           if [ ! -x deps/host/shiboken6/bin/shiboken6 ]; then
@@ -534,6 +540,15 @@ jobs:
           need deps/wasm/lib/pil-mod/libpil__imaging.a            "PIL _imaging"
           need deps/wasm/lib/pivy-mod/lib_coin.a                  "pivy _coin"
           need deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a   "IfcOpenShell wrapper"
+          # The link names these five straight out of the build trees -- they are not
+          # installed anywhere -- so the gate has to look there too. QtCore/QtGui/QtWidgets
+          # each carry a PyInit_ that MainGui.cpp puts in the inittab; rebuild-pyside-weh.sh
+          # checks those symbols, this only confirms the files survived to the end of the job.
+          need build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a       "PySide6 QtCore"
+          need build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a         "PySide6 QtGui"
+          need build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a "PySide6 QtWidgets"
+          need build-pyside-wasm/libpyside/libpyside6.abi3.a        "libpyside6"
+          need deps/wasm/shiboken6/lib/libshiboken6.abi3.a          "libshiboken6"
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
           if [ "$n" -ge 8 ]; then echo "  ok       matplotlib ($n archives)"
           else echo "::error::matplotlib has $n archives, expected at least 8"; fail=1; fi
@@ -589,6 +604,9 @@ jobs:
             build-pivy-wasm
             build-ifcopenshell
             deps/host/shiboken6
-            deps/host/llvm-18.1.8
+            deps/host/llvm-*
             deps/wasm/pyside-pkg
+            deps/wasm/shiboken6
+            build-shiboken-wasm
+            build-pyside-wasm
           key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-numpy.sh', 'configure-kiwisolver-weh.sh', 'configure-matplotlib-weh.sh', 'configure-ctypes.sh', 'configure-pillow.sh', 'patches/numpy.patch', '*.meson.in') }}
