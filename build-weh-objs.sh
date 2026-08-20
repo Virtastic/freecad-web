@@ -45,9 +45,14 @@ PYFLAGS="-I$PYINC -I$CPY/Include/internal"
 QTVER="$(ls -d "$QT"/include/QtCore/6.* 2>/dev/null | head -1)"
 QTFLAGS="-I$QT/include -I$QT/include/QtCore"
 [ -n "$QTVER" ] && QTFLAGS="$QTFLAGS -I$QTVER -I$QTVER/QtCore"
+# qthread_p.h opens with #include "qplatformdefs.h", which is not in include/ at all -- it
+# lives in the MKSPEC directory (mkspecs/wasm-emscripten for this build). Qt's own build
+# passes that as an include path; a hand-run em++ has to as well.
+QTMKSPEC="$(dirname "$(ls "$QT"/mkspecs/*/qplatformdefs.h 2>/dev/null | head -1)" 2>/dev/null)"
+[ -n "$QTMKSPEC" ] && [ -d "$QTMKSPEC" ] && QTFLAGS="$QTFLAGS -I$QTMKSPEC"
 
 echo "  python include: $PYINC"
-echo "  qt include:     $QT/include${QTVER:+ (+ private $QTVER)}"
+echo "  qt include:     $QT/include${QTVER:+ (+ private $QTVER)}${QTMKSPEC:+ (+ mkspec $QTMKSPEC)}"
 
 # file : compiler : extra flags : a symbol the object MUST define
 #
