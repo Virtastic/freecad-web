@@ -99,7 +99,39 @@
 > dry-run matches. `apply_one()` now takes an optional `<file>::<string>` marker for patches
 > that later tooling makes irreversible.
 
-> **Item 19, new 2026-08-20: `BUILD_FLAT_MESH` is off and nothing recorded it.** Audited
+> **Item 18 CLOSED, 2026-08-20.** All twelve archive lanes are green and the gate passes in
+> full: numpy (4), matplotlib (13), kiwisolver, `_ctypes`, libffi, PIL, pivy `_coin`,
+> IfcOpenShell, and **PySide6 QtCore / QtGui / QtWidgets + libpyside6 + libshiboken6**, each
+> verified by symbol rather than by filename --
+>
+> ```
+> build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a:       000014f8 T PyInit_QtCore
+> build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a:         00002579 T PyInit_QtGui
+> build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a: 0000071a T PyInit_QtWidgets
+> ```
+>
+> One more defect surfaced immediately after, and it is worth recording because it made a
+> FIXED build look broken: the pydeps cache key hashed five configure scripts and
+> `numpy.patch`, none of which the PySide work touched. So the key was byte-identical to an
+> entry saved before the fix, `actions/cache` refused to overwrite it --
+> *"Failed to save: Unable to reserve cache with key ..."* -- and the very next job restored
+> the STRIPPED archives and failed the PyInit check on a defect that had already been fixed
+> and verified in the run before it. The key now hashes every lane recipe.
+>
+> **Item 20, new 2026-08-20: the link now runs in CI.** `link-freecad.yml` runs the
+> production path end to end -- `build-weh-objs.sh`, `configure-gui-weh.sh`, `ninja`,
+> `ninja install`, `fc-linkcmd-weh.sh`, GL post-patches, `WebAssembly.validate` -- and
+> uploads `FreeCAD.js` / `FreeCAD.wasm` / `FreeCAD.data`. Nothing in this repository had ever
+> produced those anywhere except one machine. Four build-machine assumptions had to go first:
+>
+> | what | why it only worked there |
+> |---|---|
+> | `configure-gui-weh.sh` | named `python.exe`, `qt/6.9.0/macos`, and a pybind11 under `python3.14` |
+> | `weh-objs/*.o` | eight objects cmake does not build, existing only as `em++` lines in comments -- now `build-weh-objs.sh`, each verified by symbol |
+> | `fc-linkcmd-weh.sh` preload | named `build-freecad-gui`, the NON-weh build directory, which only `configure-gui.sh` produces |
+> | `fc-linkcmd-weh.sh` archives | named `build-pivy-wasm/` and `build-ifcopenshell/` build trees; the staged `deps/wasm/lib/{pivy-mod,ifc-mod}` copies are what is gated and cached |
+>
+> > **Item 19, new 2026-08-20: `BUILD_FLAT_MESH` is off and nothing recorded it.** Audited
 > every one of FreeCAD 1.1.3's 45 `BUILD_*` options against `configure-gui-weh.sh`. Every
 > module upstream defaults ON is ON here except three, and only one of those is a real gap:
 >
