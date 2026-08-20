@@ -2,8 +2,9 @@
 
     python tools/patch-shiboken-builtin-includes.py deps/src/pyside-setup
 
-Adds an early return to appendClangBuiltinIncludes(), taken only when
-FCWEB_SHIBOKEN_NO_BUILTIN_INCLUDES is set, so the behaviour is unchanged for everyone else.
+Makes appendClangBuiltinIncludes() return immediately. Unconditional, because the
+generator runs through a generated wrapper script that does not pass the environment
+through -- an env-gated check was added first and never fired.
 
 WHY
 
@@ -42,17 +43,19 @@ import sys
 
 REL = 'sources/shiboken6/ApiExtractor/clangparser/compilersupport.cpp'
 SIG = 'static void appendClangBuiltinIncludes(HeaderPaths *p)'
-MARK = 'FCWEB_SHIBOKEN_NO_BUILTIN_INCLUDES'
+MARK = 'FCWEB: return unconditionally'
 
 GUARD = '''{
-    // FCWEB: skip the injection entirely when asked. shiboken places this directory ahead
-    // of everything the compiler reports, so its <stddef.h> beats libc++'s and every
-    // header after <cstddef> fails to parse. em++ already orders its own search correctly
-    // (libc++, sysroot, builtins last), which is what libc++ requires. Nothing passed via
-    // --clang-option can precede what shiboken adds itself, so this is the only place the
-    // order can be fixed.
-    if (!qEnvironmentVariableIsEmpty("FCWEB_SHIBOKEN_NO_BUILTIN_INCLUDES"))
-        return;
+    // FCWEB: return unconditionally. shiboken places this directory ahead of everything
+    // the compiler reports, so its <stddef.h> beats libc++'s and every header after
+    // <cstddef> fails to parse. em++ already orders its own search correctly -- libc++,
+    // sysroot, builtins LAST -- which is exactly what libc++ requires.
+    //
+    // Unconditional, not env-gated: the generator is invoked through the generated
+    // shiboken_wrapper.sh, which does not pass this environment through, so a run-time
+    // check never fired. This pyside-setup tree is built solely for the wasm target, so
+    // there is nothing else here to preserve the behaviour for.
+    return;
 '''
 
 
@@ -67,6 +70,17 @@ def main():
 
     if MARK in src:
         print('  already patched: %s' % REL)
+        return
+
+    # A cached tree may carry the earlier ENV-GATED form, which never fired because the
+    # generator runs through a wrapper that drops the environment. Upgrade it in place
+    # rather than adding a second guard.
+    old_form = ('if (!qEnvironmentVariableIsEmpty("FCWEB_SHIBOKEN_NO_BUILTIN_INCLUDES"))'
+                + chr(10) + '        return;')
+    if old_form in src:
+        src = src.replace(old_form, 'return;   // FCWEB: return unconditionally', 1)
+        io.open(path, 'w', encoding='utf-8', newline='').write(src)
+        print('  %s: env-gated guard upgraded to unconditional' % REL)
         return
 
     if SIG not in src:
