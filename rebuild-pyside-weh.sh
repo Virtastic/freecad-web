@@ -108,6 +108,10 @@ fi
 # full account; without it every Qt header fails to parse and the wrappers come out empty.
 python3 "$ROOT/tools/patch-pyside-clang-options.py" "$ROOT/deps/src/pyside-setup"
 
+# Diagnostic: print where shiboken injects the clang builtins include, which no
+# command-line option has been able to outrank. Costs nothing and settles the shape.
+python3 "$ROOT/tools/show-shiboken-includes.py" "$ROOT/deps/src/pyside-setup" || true
+
 echo "=== SHIBOKEN (lib) ==="
 rm -rf build-shiboken-wasm
 cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja \
