@@ -63,6 +63,12 @@ ADDITION = '''
             # this is include ORDER, not a missing file or a version mismatch.
             list(APPEND shiboken_command
                  "--clang-option=-resource-dir=${_fcweb_em_resource}")
+            # Qt 6.9 requires C++17, and libc++ gates parts of <cstddef> on the language
+            # mode -- std::nullptr_t among them. Without an explicit -std the parser uses
+            # its own default, which is why unique_ptr.h fails with
+            #   unknown type name 'nullptr_t'
+            # even once the headers are found.
+            list(APPEND shiboken_command "--clang-option=-std=c++17")
         else()
             message(WARNING "shiboken: em++ -print-resource-dir gave nothing; the parser "
                             "will use libclang's own builtins and emscripten's libc++ will "

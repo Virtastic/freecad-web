@@ -450,15 +450,15 @@ jobs:
           # The generator must have been built against LLVM 20: emsdk 3.1.70 ships clang 20,
           # and an older libclang cannot parse its sysroot however it is configured. A
           # cached 17.0.6 generator would skip this step and fail identically later.
-          if [ -x deps/host/shiboken6/bin/shiboken6 ] \n             && grep -q "llvm-19" deps/host/shiboken6/.llvm-prefix 2>/dev/null \n             && [ "${{ inputs.rebuild }}" != "true" ]; then
+          if [ -x deps/host/shiboken6/bin/shiboken6 ] \n             && grep -q "llvm-20" deps/host/shiboken6/.llvm-prefix 2>/dev/null \n             && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  host shiboken: already built"; exit 0
           fi
-          # patches/pyside-setup.patch records that libclang-18 parsed emscripten's
-          # sysroot successfully on the build machine. 18 has no linkable Linux-X64
-          # asset (only ubuntu-18.04, which wants libtinfo.so.5), so 19.1.7 is the
-          # closest available. 20.1.8 got further than 17 but still failed inside
-          # libc++'s unique_ptr.h.
-          export FCWEB_LLVM_VERSION=19.1.7
+          # MEASURED: libclang must match the resource dir it is given, which is emsdk's
+          # clang 20. libclang 19 against clang-20 headers gives 126 stddef/nullptr_t
+          # errors -- the same as no override at all -- while libclang 20 against them
+          # parses <cstddef> cleanly and reaches deep into libc++. Version MATCHING is
+          # the rule, not a particular older release.
+          export FCWEB_LLVM_VERSION=20.1.8
           bash build-shiboken-host.sh
 
       # PySide/shiboken for wasm -> deps/wasm/pyside-pkg, which the link preloads.
