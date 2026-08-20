@@ -232,18 +232,27 @@ def main():
             sys.exit(1)
         i = idx[0]
 
-        # The option string sits on its OWN line inside a multi-line
-        #     list(APPEND shiboken_command
-        #          "--include-paths=${shiboken_include_dirs}")
-        # so the cmake block must go BEFORE that list(APPEND, not next to the string --
-        # putting it between them produced a malformed command and
-        #     /bin/sh: 1: Syntax error: "(" unexpected
+        # Insert at the TOP of the enclosing macro/function, not next to the option.
+        # Placing it just above the list(APPEND at line 156 produced NO output at all --
+        # no STATUS, no warning -- because that line sits in a branch that is not taken on
+        # this configuration. The macro header always runs, so the variable is always set
+        # before anything that uses it.
         j = i
-        while j >= 0 and 'list(APPEND' not in lines[j]:
+        while j >= 0 and not (lines[j].lstrip().startswith('macro(')
+                              or lines[j].lstrip().startswith('function(')):
             j -= 1
         if j < 0:
-            print('!! no enclosing list(APPEND ...) above the --include-paths string')
+            print('!! no enclosing macro()/function() above the --include-paths line')
+            for n in range(max(0, i - 12), i + 2):
+                print('     %d: %s' % (n + 1, lines[n]))
             sys.exit(1)
+        j += 1
+        print('  %s: enclosing scope is %s (line %d)'
+              % (REL, lines[j - 1].strip()[:60], j))
+        # context, so a wrong guess is visible in the log rather than silent
+        print('  option line %d in context:' % (i + 1))
+        for n in range(max(0, i - 3), min(len(lines), i + 2)):
+            print('     %s%d: %s' % ('>' if n == i else ' ', n + 1, lines[n].rstrip()[:88]))
 
         inner = lines[i].split('"--include-paths=')[1].rsplit('"', 1)[0]
         lines[i] = lines[i].replace('"--include-paths=' + inner + '"',
