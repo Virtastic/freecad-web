@@ -155,6 +155,16 @@ fi
 
 emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  `# Configure-time checks must COMPILE, not LINK. CMAKE_EXE_LINKER_FLAGS below carries the` \
+  `# whole production link line -- every archive, --pre-js, the preload list -- and one of` \
+  `# its entries is build-freecad-gui-weh/src/Mod/Draft/App/DraftUtils.a, which does not` \
+  `# exist until this build has produced it. So every try_compile that links fails, and the` \
+  `# first casualty is VTK's find_package(Threads):` \
+  `#     Could NOT find Threads (missing: Threads_FOUND)` \
+  `#     VTK-vtk-module-find-packages.cmake:162 -> SetupSalomeSMESH.cmake:34` \
+  `# On the build machine DraftUtils.a was left over from an earlier build, so the checks` \
+  `# linked and passed -- the same uncaptured-state defect as the truncated command above.` \
+  -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
   -DCMAKE_PROJECT_INCLUDE_BEFORE="$ROOT/force-static.cmake" \
   -DCMAKE_INSTALL_PREFIX="$ROOT/freecad-gui-install" \
   -DFCWEB_DW="$DW" \
