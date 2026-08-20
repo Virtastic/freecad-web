@@ -137,6 +137,12 @@ cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
 ninja -C build-shiboken-wasm install
 
+# Qt for WebAssembly has no QProcess, and PySide's platform choice is made from the HOST,
+# so QtCore asks for a wrapper the generator never writes and AUTOMOC stops on it. Must run
+# before the PySide configure: the source list is fixed then, and the failure only surfaces
+# at build time, after the generator has already run.
+python3 "$ROOT/tools/patch-pyside-drop-absent-classes.py" "$ROOT/deps/src/pyside-setup"
+
 echo "=== PYSIDE ==="
 rm -rf build-pyside-wasm
 cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
