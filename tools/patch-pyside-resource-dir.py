@@ -51,10 +51,14 @@ ADDITION = '''
                         ERROR_QUIET)
         if(_fcweb_em_resource AND EXISTS "${_fcweb_em_resource}/include")
             message(STATUS "shiboken: emscripten clang resource dir ${_fcweb_em_resource}")
+            # -resource-dir ONLY. An -isystem<resource>/include alongside it puts the
+            # builtin headers ahead of libc++'s own directory, and libc++'s <cstddef> uses
+            # #include_next -- so the very header it is looking for stops being "next":
+            #   <cstddef> tried including <stddef.h> but didn't find libc++'s <stddef.h>
+            # The message says libc++'s stddef.h, not the compiler's, which is the clue:
+            # this is include ORDER, not a missing file or a version mismatch.
             list(APPEND shiboken_command
                  "--clang-option=-resource-dir=${_fcweb_em_resource}")
-            list(APPEND shiboken_command
-                 "--clang-option=-isystem${_fcweb_em_resource}/include")
         else()
             message(WARNING "shiboken: em++ -print-resource-dir gave nothing; the parser "
                             "will use libclang's own builtins and emscripten's libc++ will "
@@ -71,8 +75,23 @@ def main():
 
     src = io.open(path, encoding='utf-8', errors='replace').read()
 
-    if '_fcweb_em_resource' in src:
+    # Keyed on the CURRENT form. An earlier version of this tool also injected an
+    # -isystem, which broke libc++'s #include_next chain; a tree patched by that
+    # version must be re-patched, not skipped.
+    if '-resource-dir=${_fcweb_em_resource}' in src and '-isystem${_fcweb_em_resource}' not in src:
         print('  already patched: %s' % REL)
+        return
+    if '-isystem${_fcweb_em_resource}' in src:
+        print('  re-patching %s: dropping the -isystem that broke #include_next' % REL)
+        out, skip_next = [], False
+        for line in src.split('\n'):
+            if '-isystem${_fcweb_em_resource}' in line:
+                # the option sits on its own line, preceded by a bare list(APPEND ...)
+                while out and out[-1].strip() == 'list(APPEND shiboken_command':
+                    out.pop()
+                continue
+            out.append(line)
+        io.open(path, 'w', encoding='utf-8', newline='').write('\n'.join(out))
         return
 
     if ANCHOR not in src:
