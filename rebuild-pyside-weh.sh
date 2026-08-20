@@ -119,15 +119,33 @@ python3 "$ROOT/tools/show-shiboken-includes.py" "$ROOT/deps/src/pyside-setup" ||
 python3 "$ROOT/tools/patch-shiboken-builtin-includes.py" "$ROOT/deps/src/pyside-setup"
 export FCWEB_SHIBOKEN_NO_BUILTIN_INCLUDES=1
 
+# The binutils used below, resolved once: the skip decision needs nm too.
+NM="$ROOT/emsdk/upstream/bin/llvm-nm"
+if [ ! -x "$NM" ]; then
+    echo "  llvm-nm not at $NM -- falling back to PATH"
+    NM="$(command -v llvm-nm || command -v nm || true)"
+fi
+AR="$ROOT/emsdk/upstream/bin/llvm-ar"
+[ -x "$AR" ] || AR="$(command -v llvm-ar || command -v ar || true)"
+
 # Whether to BUILD. The verification and the pyside-pkg tree below always run, even on a
 # restored cache -- a check that is skipped whenever the thing it checks was cached is a
 # check that only ever runs when it cannot tell you anything. The workflow used to make this
 # decision itself and skip the whole script, which had exactly that effect.
+#
+# The condition is the SYMBOL, not the file. A cached archive that emstrip had already
+# emptied is exactly the artifact this lane must not accept, and keying the skip on the
+# file's existence would have let that archive skip the very rebuild that fixes it.
 SKIP_BUILD=""
-if [ -s "$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a" ]    && [ "$FCWEB_PYSIDE_REBUILD" != "1" ]; then
-    echo "=== PYSIDE: archives already present -- skipping the build"
+QTW_A="$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a"
+if [ -s "$QTW_A" ] && [ -n "$NM" ] \
+   && "$NM" "$QTW_A" 2>/dev/null | grep -q "PyInit_QtWidgets" \
+   && [ "$FCWEB_PYSIDE_REBUILD" != "1" ]; then
+    echo "=== PYSIDE: archives already present and carry their PyInit -- skipping the build"
     echo "    (set FCWEB_PYSIDE_REBUILD=1 to force a rebuild)"
     SKIP_BUILD=1
+elif [ -s "$QTW_A" ]; then
+    echo "=== PYSIDE: QtWidgets.abi3.a exists but has no PyInit_QtWidgets -- rebuilding"
 fi
 
 if [ -z "$SKIP_BUILD" ]; then
@@ -224,14 +242,7 @@ echo "=== ARCHIVES ==="
 # linked 694/694 targets cleanly, and could not distinguish "the symbol is absent" from "nm
 # never ran" or "the symbol is spelled differently" -- the same class of blind check that has
 # already cost this repository four rounds elsewhere.
-NM="$ROOT/emsdk/upstream/bin/llvm-nm"
-if [ ! -x "$NM" ]; then
-    echo "  llvm-nm not at $NM -- falling back to PATH"
-    NM="$(command -v llvm-nm || command -v nm || true)"
-fi
 echo "  nm: ${NM:-<none found>}"
-AR="$ROOT/emsdk/upstream/bin/llvm-ar"
-[ -x "$AR" ] || AR="$(command -v llvm-ar || command -v ar || true)"
 echo "  ar: ${AR:-<none found>}"
 pyside_missing=0
 check_mod() {   # <archive> <expected PyInit symbol>
