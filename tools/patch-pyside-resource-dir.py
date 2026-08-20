@@ -68,6 +68,24 @@ ADDITION = '''
             # its own default, which is why unique_ptr.h fails with
             #   unknown type name 'nullptr_t'
             # even once the headers are found.
+            # -nobuiltininc is THE fix, established by reading clang -v rather than by
+            # guessing. libclang injects its OWN resource include ahead of everything,
+            # regardless of -resource-dir:
+            #
+            #   deps/host/llvm-20.1.8/lib/clang/20/include   <- libclang's, FIRST
+            #   .../sysroot/include/c++/v1                   <- libc++
+            #   .../sysroot/include
+            #   emsdk/upstream/lib/clang/20/include          <- emsdk's, correctly LAST
+            #
+            # libc++'s <cstddef> uses #include_next and requires the C++ headers to come
+            # before any C library headers; with a C stddef.h found first it stops with
+            #   <cstddef> tried including <stddef.h> but didn't find libc++'s <stddef.h>
+            #   ... you are probably using compiler flags that make that not be the case
+            # and then nullptr_t is undefined everywhere downstream.
+            #
+            # emscripten's own chain already ends with its builtins in the right place, so
+            # suppressing libclang's restores exactly the order em++ intends.
+            list(APPEND shiboken_command "--clang-option=-nobuiltininc")
             list(APPEND shiboken_command "--clang-option=-std=c++17")
             # FCWEB_SHIBOKEN_VERBOSE=1 -> ask clang to print its include search list. Every
             # version/resource-dir/std permutation produced an identical 126 errors, which
