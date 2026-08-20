@@ -206,16 +206,28 @@ def main():
         # into shiboken_include_dir_list ran (cmake printed the STATUS line) and changed
         # nothing in the resulting search list, so whatever the option is built from, it is
         # not that variable at that point. The option is what shiboken actually reads.
-        hits = [l for l in src.split(chr(10)) if '"--include-paths=' in l]
+        all_hits = [l for l in src.split(chr(10)) if '"--include-paths=' in l]
+        # Be explicit about which line is being patched. Taking the first match blindly
+        # inserted the cmake block into a context where it corrupted the generator command:
+        #   /bin/sh: 1: Syntax error: "(" unexpected
+        hits = [l for l in all_hits if 'list(APPEND shiboken_command' in l]
         if not hits:
-            print('!! no --include-paths line in %s' % REL)
+            print('!! no `list(APPEND shiboken_command "--include-paths=..."` line in %s' % REL)
+            print('   --include-paths lines present:')
+            for l in all_hits:
+                print('     %s' % l.strip())
+            sys.exit(1)
+        if len(hits) > 1:
+            print('!! %d candidate --include-paths lines; refusing to guess:' % len(hits))
+            for l in hits:
+                print('     %s' % l.strip())
             sys.exit(1)
         target = hits[0]
         inner = target.split('"--include-paths=')[1].rsplit('"', 1)[0]
         patched = target.replace('"--include-paths=' + inner + '"',
                                  '"--include-paths=${_fcweb_libcxx_first}:' + inner + '"')
         src = src.replace(target, LIBCXX_BLOCK.lstrip(chr(10)) + patched, 1)
-        print('  %s: libc++ prepended to --include-paths' % REL)
+        print('  %s: patched -> %s' % (REL, patched.strip()))
 
     src = src.replace(ANCHOR, ANCHOR + block, 1)
     io.open(path, 'w', encoding='utf-8', newline='').write(src)
