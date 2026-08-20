@@ -166,23 +166,6 @@ jobs:
           need deps/wasm/pyside-pkg/PySide6/__init__.py            "pyside-pkg glue"     build-python-deps.yml
           exit $fail
 
-      # The PySide archives are the one input that can be PRESENT and USELESS: emstrip drops
-      # the symbol table, and the link runs with ERROR_ON_UNDEFINED_SYMBOLS=0, so a stripped
-      # archive becomes a trapping `import PySide6.QtWidgets` in the browser rather than a
-      # build failure. Check the symbol, not the file.
-      - name: The PySide archives carry their PyInit
-        run: |
-          set -e
-          . emsdk/emsdk_env.sh 2>/dev/null || true
-          nm=emsdk/upstream/bin/llvm-nm
-          fail=0
-          for m in QtCore QtGui QtWidgets; do
-            a="build-pyside-wasm/PySide6/$m/$m.abi3.a"
-            if "$nm" "$a" 2>/dev/null | grep -q "PyInit_$m"; then echo "  ok       $m ($a)"
-            else echo "::error::$a has no PyInit_$m -- rerun build-python-deps.yml"; fail=1; fi
-          done
-          exit $fail
-
       - name: Cache emsdk
         id: emsdk-cache
         uses: actions/cache@v4
@@ -286,6 +269,35 @@ jobs:
 
       # The eight objects cmake does not build. Verified by symbol inside the script -- an
       # object that compiles to nothing is the failure this repo has already shipped once.
+      # The PySide archives are the one input that can be PRESENT and USELESS: emstrip drops
+      # the symbol table, and the link runs with ERROR_ON_UNDEFINED_SYMBOLS=0, so a stripped
+      # archive becomes a trapping `import PySide6.QtWidgets` in the browser rather than a
+      # build failure. Check the symbol, not the file.
+      #
+      # AFTER the emsdk steps, deliberately. This ran before them once and reported all three
+      # archives symbol-less because llvm-nm did not exist yet -- a check that cannot tell
+      # "the symbol is absent" from "the checker did not run" is not a check, which is the
+      # same trap this repository has now hit in four different places. Hence the explicit
+      # test for nm below.
+      - name: The PySide archives carry their PyInit
+        run: |
+          set -e
+          nm=emsdk/upstream/bin/llvm-nm
+          [ -x "$nm" ] || { echo "::error::$nm is missing -- cannot verify the archives"; exit 1; }
+          fail=0
+          for m in QtCore QtGui QtWidgets; do
+            a="build-pyside-wasm/PySide6/$m/$m.abi3.a"
+            if "$nm" "$a" 2>/dev/null | grep -q "T PyInit_$m"; then
+              echo "  ok       $m ($a)"
+            else
+              echo "::error::$a has no PyInit_$m -- rerun build-python-deps.yml"
+              echo "    first lines nm produced:"
+              "$nm" "$a" 2>&1 | head -3 | sed 's/^/      /'
+              fail=1
+            fi
+          done
+          exit $fail
+
       - name: weh-objs
         run: |
           set -e
