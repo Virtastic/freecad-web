@@ -150,6 +150,11 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   -DQFP_PYTHON_HOST_PATH="$HOSTPY3" -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
   -DShiboken6_DIR="$ROOT/deps/wasm/shiboken6/lib/cmake/Shiboken6" \
   -DMODULES="Core;Gui;Widgets" -DFORCE_LIMITED_API=no \
+  `# BUILD_TESTS=OFF: pysidetest parses HOST headers, and this build removes the clang` \
+  `# builtins injection that host parsing genuinely needs, so it failed with` \
+  `#   /usr/include/c++/15/cstddef: fatal error: 'stddef.h' file not found` \
+  `# Same reason shiboken's own samplebinding is off. Only Core/Gui/Widgets are wanted.` \
+  -DBUILD_TESTS=OFF \
   -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
   -DCMAKE_INSTALL_PREFIX="$ROOT/emsdk/upstream/emscripten/cache/sysroot" \
