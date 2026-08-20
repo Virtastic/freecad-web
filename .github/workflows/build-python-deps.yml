@@ -479,7 +479,7 @@ jobs:
           # clang 20, the <cstddef> failure disappears and the parse reaches deep into
           # libc++ (unique_ptr.h). WITHOUT it the same run produces 126 stddef/nullptr_t
           # errors. So the override helps; it is simply not sufficient on its own.
-          export FCWEB_SHIBOKEN_VERBOSE=1
+          export FCWEB_SHIBOKEN_VERBOSE=1   # diagnostic only; no option overrides
           bash rebuild-pyside-weh.sh
 
 

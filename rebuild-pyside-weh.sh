@@ -106,7 +106,7 @@ fi
 
 # The parser needs em++'s freestanding headers, not libclang's own. See the tool for the
 # full account; without it every Qt header fails to parse and the wrappers come out empty.
-python3 "$ROOT/tools/patch-pyside-resource-dir.py" "$ROOT/deps/src/pyside-setup"
+python3 "$ROOT/tools/patch-pyside-clang-options.py" "$ROOT/deps/src/pyside-setup"
 
 echo "=== SHIBOKEN (lib) ==="
 rm -rf build-shiboken-wasm
