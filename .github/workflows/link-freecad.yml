@@ -92,6 +92,13 @@ jobs:
           path: qt/6.9.0/wasm_mt_weh
           key: ${{ env.QT_KEY }}
 
+      # This list must stay BYTE-IDENTICAL to the save list in build-python-deps.yml.
+      # actions/cache derives a cache VERSION from the path list, and a restore only matches
+      # caches with the same version -- so a list that has drifted silently matches an older
+      # entry instead of the newest one, with no warning. That is exactly what happened: this
+      # copy predated deps/src/matplotlib and deps/wasm/include/freetype2 being added, so it
+      # kept restoring the cache from before the freetype headers were staged and the job
+      # failed on ft2build.h against a cache that had contained it for hours.
       - name: Restore the Python extension libraries
         id: pydepscache
         uses: actions/cache/restore@v4
@@ -107,6 +114,8 @@ jobs:
             deps/wasm/lib/libffi.a
             deps/src/cpython
             deps/src/numpy
+            deps/src/matplotlib
+            deps/wasm/include/freetype2
             deps/src/pivy
             deps/src/ifcopenshell
             deps/src/pyside-setup
