@@ -183,6 +183,12 @@ echo "using libclang from: $CAND"
 export LLVM_INSTALL_DIR="$CAND"
 export CLANG_INSTALL_DIR="$CAND"
 
+# The GENERATOR is what injects clang's builtin include directory ahead of libc++, and it
+# is built HERE. Patching pyside-setup from rebuild-pyside-weh.sh came too late: that lane
+# runs after this binary exists, so the running generator still had the injection compiled
+# in. Patch before building it.
+python3 "$ROOT/tools/patch-shiboken-builtin-includes.py" "$ROOT/deps/src/pyside-setup"
+
 # --- configure and build -----------------------------------------------------------------
 rm -rf "$BUILD"
 # shiboken does find_package(Clang), which wants ClangConfig.cmake from the LLVM
@@ -240,6 +246,13 @@ fi
 # Writing it here means the consumer cannot guess wrong.
 printf '%s\n' "$CAND" > "$PREFIX/.llvm-prefix"
 echo "llvm prefix recorded: $PREFIX/.llvm-prefix -> $CAND"
+
+# Marker: this generator was built from a source tree with the builtins injection removed.
+# The lane's cache-skip requires it, so a binary built before that patch is rebuilt rather
+# than silently reused -- a skip that cannot tell WHICH build it is skipping has cost four
+# wasted runs in this lane already.
+printf '2\n' > "$PREFIX/.builtin-includes-skippable"
+echo "builtin-includes marker: 2"
 
 echo "host shiboken: $GEN"
 "$GEN" --version 2>&1 | sed 's/^/  /' || true
