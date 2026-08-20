@@ -99,6 +99,30 @@
 > dry-run matches. `apply_one()` now takes an optional `<file>::<string>` marker for patches
 > that later tooling makes irreversible.
 
+> **Item 19, new 2026-08-20: `BUILD_FLAT_MESH` is off and nothing recorded it.** Audited
+> every one of FreeCAD 1.1.3's 45 `BUILD_*` options against `configure-gui-weh.sh`. Every
+> module upstream defaults ON is ON here except three, and only one of those is a real gap:
+>
+> | option | upstream | ours | verdict |
+> |---|---|---|---|
+> | `BUILD_ADDONMGR` | ON | OFF | known -- ROADMAP 15 |
+> | `BUILD_DYNAMIC_LINK_PYTHON` | ON | OFF | correct: this is one static monolith |
+> | `BUILD_FEM_NETGEN` | ON *(MSVC only)* | unset | correct -- the non-MSVC default is OFF, so unset matches every Linux/macOS build |
+> | **`BUILD_FLAT_MESH`** | **ON** | **OFF** | **a real missing feature** |
+>
+> `flatmesh` is MeshPart's surface unwrapper (`FaceUnwrapper`, LSCM relaxation -- flattening
+> a curved face into a 2D pattern). It needs Eigen >= 3.4.0 and pybind11, both of which this
+> build already has, so nothing forced it off. `src/Mod/Mesh/InitGui.py:47` does
+> `try: import flatmesh ... except ImportError: PrintLog`, so the Mesh workbench still loads
+> and the flattening commands are simply **absent, silently, to the log only**.
+>
+> Enabling it is three changes, not one: `BUILD_FLAT_MESH=ON`; `flatmesh.a` on the link line;
+> and a `PyImport_AppendInittab("flatmesh", PyInit_flatmesh)` in `MainGui.cpp`, since
+> `MeshPart/App/CMakeLists.txt` builds it as a SHARED library and `force-static.cmake`
+> turns it into an archive that nothing would otherwise pull in. The inittab currently holds
+> 70 entries and this is not one of them. Deferred until the first link succeeds, so an
+> untested module is not added to a link that has never run.
+
 > **Status 2026-08-16** (the original table; items 1-8 below are unchanged unless noted).
 >
 > | # | item | state |
