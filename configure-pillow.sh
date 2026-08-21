@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 ROOT="$PWD"; DW="$ROOT/deps/wasm"; P="$ROOT/deps/src/Pillow"
 source emsdk/emsdk_env.sh >/dev/null 2>&1
 OUT=/tmp/pilbuild; mkdir -p "$OUT"; rm -f "$OUT"/*.o
-FLAGS=(-c -O2 -fexceptions -pthread -fPIC -DHAVE_LIBZ -DPILLOW_VERSION='"10.4.0"' --use-port=zlib
+FLAGS=(-c -O2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread -fPIC -DHAVE_LIBZ -DPILLOW_VERSION='"10.4.0"' --use-port=zlib
   -I"$P/src/libImaging" -I"$ROOT/deps/src/cpython/Include" -I"$ROOT/deps/src/cpython/builddir/emscripten-mt")
 SRCS=("$P"/src/_imaging.c "$P"/src/decode.c "$P"/src/encode.c "$P"/src/map.c
       "$P"/src/display.c "$P"/src/outline.c "$P"/src/path.c "$P"/src/libImaging/*.c)
@@ -16,3 +16,11 @@ mkdir -p "$DW/lib/pil-mod"
 "$ROOT/emsdk/upstream/emscripten/emar" rcs "$DW/lib/pil-mod/libpil__imaging.a" "$OUT"/*.o
 echo "Pillow _imaging built (PyInit__imaging):"
 "$ROOT/emsdk/upstream/emscripten/emnm" "$DW/lib/pil-mod/libpil__imaging.a" | grep 'T PyInit'
+
+# Staging version. v1 was built -fexceptions (JS exception handling) while every
+# other object in the FreeCAD link is -fwasm-exceptions, so the link ended in
+#     undefined symbol: __cxa_find_matching_catch_2 / __resumeException /
+#     llvm_eh_typeid_for
+# v2 is -fwasm-exceptions -sSUPPORT_LONGJMP=wasm. The lane skips on the archive
+# existing, which cannot tell the two apart -- hence the marker.
+echo 2 > "$DW/lib/pil-mod/.staged"

@@ -75,7 +75,7 @@ M4EOF
   ./autogen.sh
 fi
 emconfigure ./configure --host=wasm32-unknown-emscripten --enable-static --disable-shared \
-  --disable-dependency-tracking CFLAGS="-fPIC -O2 -fexceptions -pthread"
+  --disable-dependency-tracking CFLAGS="-fPIC -O2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread"
 emmake make -j4 libffi.la   # 'make' fails on docs (texinfo); build just the lib
 FFI="$PWD/wasm32-unknown-emscripten"
 # These directories exist on the build machine because the whole stack was built
@@ -88,7 +88,7 @@ cd "$ROOT"
 # 2. CPython _ctypes module against libffi
 CT="$ROOT/deps/src/cpython/Modules/_ctypes"
 OUT=/tmp/ctbuild; mkdir -p "$OUT"; rm -f "$OUT"/*.o
-FLAGS=(-c -O2 -fexceptions -pthread -fPIC
+FLAGS=(-c -O2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread -fPIC
   -DHAVE_FFI_PREP_CIF_VAR -DHAVE_FFI_PREP_CLOSURE_LOC -DHAVE_FFI_CLOSURE_ALLOC -DPy_BUILD_CORE_MODULE
   -I"$DW/include" -I"$ROOT/deps/src/cpython/Include" -I"$ROOT/deps/src/cpython/builddir/emscripten-mt"
   -I"$ROOT/deps/src/cpython/Include/internal" -I"$CT")
@@ -114,3 +114,11 @@ mkdir -p "$DW/lib/ctypes-mod"
 "$ROOT/emsdk/upstream/emscripten/emar" rcs "$DW/lib/ctypes-mod/lib_ctypes.a" "$OUT"/*.o
 echo "_ctypes built (PyInit__ctypes):"
 "$ROOT/emsdk/upstream/emscripten/emnm" "$DW/lib/ctypes-mod/lib_ctypes.a" | grep 'T PyInit'
+
+# Staging version. v1 was built -fexceptions (JS exception handling) while every
+# other object in the FreeCAD link is -fwasm-exceptions, so the link ended in
+#     undefined symbol: __cxa_find_matching_catch_2 / __resumeException /
+#     llvm_eh_typeid_for
+# v2 is -fwasm-exceptions -sSUPPORT_LONGJMP=wasm. The lane skips on the archive
+# existing, which cannot tell the two apart -- hence the marker.
+echo 2 > "$DW/lib/ctypes-mod/.staged"

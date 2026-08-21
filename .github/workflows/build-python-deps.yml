@@ -369,12 +369,15 @@ jobs:
           set -e
           . emsdk/emsdk_env.sh
           . .qtvenv/bin/activate
-          if [ ! -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ] || [ "${{ inputs.rebuild }}" = "true" ]; then
+          # Rebuild when the marker is absent or old: v1 was built -fexceptions, which
+          # cannot link against a -fwasm-exceptions FreeCAD, and the archive name alone
+          # cannot tell the two apart.
+          if [ ! -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ] \n             || ! grep -qx 2 deps/wasm/lib/ctypes-mod/.staged 2>/dev/null \n             || [ "${{ inputs.rebuild }}" = "true" ]; then
             bash configure-ctypes.sh
           else
             echo "  _ctypes: already built"
           fi
-          [ -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ]             || { echo "::error::ctypes-mod/lib_ctypes.a not produced"; exit 1; }
+          [ -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ] && grep -qx 2 deps/wasm/lib/ctypes-mod/.staged 2>/dev/null             || { echo "::error::ctypes-mod/lib_ctypes.a not produced"; exit 1; }
           [ -s deps/wasm/lib/libffi.a ] || { echo "::error::libffi.a not produced"; exit 1; }
 
       - name: Pillow _imaging
@@ -384,12 +387,14 @@ jobs:
           set -e
           . emsdk/emsdk_env.sh
           . .qtvenv/bin/activate
-          if [ ! -s deps/wasm/lib/pil-mod/libpil__imaging.a ] || [ "${{ inputs.rebuild }}" = "true" ]; then
+          # Same as _ctypes: v1 was -fexceptions and cannot link against a
+          # -fwasm-exceptions FreeCAD; the archive name cannot tell the two apart.
+          if [ ! -s deps/wasm/lib/pil-mod/libpil__imaging.a ] \n             || ! grep -qx 2 deps/wasm/lib/pil-mod/.staged 2>/dev/null \n             || [ "${{ inputs.rebuild }}" = "true" ]; then
             bash configure-pillow.sh
           else
             echo "  Pillow: already built"
           fi
-          [ -s deps/wasm/lib/pil-mod/libpil__imaging.a ]             || { echo "::error::pil-mod/libpil__imaging.a not produced"; exit 1; }
+          [ -s deps/wasm/lib/pil-mod/libpil__imaging.a ] && grep -qx 2 deps/wasm/lib/pil-mod/.staged 2>/dev/null             || { echo "::error::pil-mod/libpil__imaging.a not produced"; exit 1; }
 
       # Last, because it reaches into build-numpy for numpy's generated headers.
       # matplotlib builds freetype and qhull as meson subprojects, and meson fetches
