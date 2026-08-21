@@ -3619,6 +3619,41 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
  #if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
      setlocale(LC_ALL, "");       // use native environment settings
      setlocale(LC_NUMERIC, "C");  // except for numbers to not break XML import
+@@ -358,15 +544,34 @@
+     std::clog.rdbuf(oldclog);
+     std::cerr.rdbuf(oldcerr);
+ 
++#if defined(__EMSCRIPTEN__)
++    // Qt for WebAssembly drives its event loop from the BROWSER, so
++    // Gui::Application::runApplication() returns as soon as the window is up -- not
++    // when the user quits, which is what every other platform means by reaching this
++    // point. Running the destruction phase here tears FreeCAD down while it is still
++    // on screen, and the next parameter read from a browser callback throws
++    //
++    //   Base::ValueError: Application::GetParameterGroupByPath() unknown parameter
++    //                     set "User parameter" in "User parameter:BaseApp/..."
++    //
++    // because Application::destruct() has already done mpcPramManager.clear() and
++    // deleted the singleton. Nothing catches it -- main() has returned by then -- so
++    // it surfaces as an opaque WebAssembly.Exception and the app never appears.
++    //
++    // Leave the runtime alive instead. Closing the tab ends the process here, and the
++    // parameter files live in IDBFS and are saved as they change, not at exit.
++    return 0;
++#else
+     // Destruction phase ===========================================================
+     Base::Console().log("%s terminating...\n", App::Application::Config()["ExeName"].c_str());
+ 
+     // cleans up
+     App::Application::destruct();
+ 
+     Base::Console().log("%s completely terminated\n", App::Application::Config()["ExeName"].c_str());
+ 
++#endif
+     return 0;
+ }
+ 
+ #if defined(_MSC_VER)
 diff -ruNp a/src/Mod/Draft/draftobjects/shapestring.py b/src/Mod/Draft/draftobjects/shapestring.py
 --- a/src/Mod/Draft/draftobjects/shapestring.py
 +++ b/src/Mod/Draft/draftobjects/shapestring.py
