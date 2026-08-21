@@ -403,6 +403,28 @@ def main():
     if missing:
         print('ERROR: %d patch site(s) not found -- emscripten output changed, '
               'the fixes need re-deriving' % len(missing), file=sys.stderr)
+        # Print what the file ACTUALLY says near each missing site. "not found" on its own
+        # is a message that costs an hour: the fix is always a small shape change in
+        # emscripten's generated glue (>>2 vs >>>2>>>0, HEAPF32 vs GROWABLE_HEAP_F32()),
+        # and it cannot be re-derived without seeing the real text.
+        for name in missing:
+            old_str = next(e[1] for e in PATCHES if e[0] == name)
+            # Anchor on the longest identifier in the pattern; those survive minification.
+            words = sorted(re.findall(r'[A-Za-z_][A-Za-z0-9_.]{6,}', old_str), key=len)
+            print('  --- %s ---' % name, file=sys.stderr)
+            shown = False
+            for w in reversed(words):
+                at = src.find(w)
+                if at >= 0:
+                    print('  anchor %r at %d; actual source around it:' % (w, at),
+                          file=sys.stderr)
+                    print('  ' + src[max(0, at - 200):at + 400].replace(chr(10), ' '),
+                          file=sys.stderr)
+                    shown = True
+                    break
+            if not shown:
+                print('  no anchor from that pattern appears in the file at all',
+                      file=sys.stderr)
         return 1
     violations = check_postconditions(out)
     for pat, why, n in violations:

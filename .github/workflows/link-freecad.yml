@@ -414,6 +414,10 @@ jobs:
         run: |
           set -e
           js=build-freecad-gui-weh/bin/FreeCAD.js
+          # Keep a copy with the logs. It is 489 KB, it rides along with an artifact that is
+          # uploaded on always(), and when a patch site moves it is the only way to see what
+          # emscripten actually emitted without re-running an hour-long link.
+          mkdir -p /tmp/fclogs && cp "$js" /tmp/fclogs/FreeCAD.js
           python3 tools/patch-freecad-js.py "$js"
           echo "--- verifying they are in ---"
           python3 tools/patch-freecad-js.py "$js" --check
