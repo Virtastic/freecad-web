@@ -324,6 +324,16 @@ jobs:
           . emsdk/emsdk_env.sh
           bash build-weh-objs.sh
 
+      # Before the hour-long compile, not after: an object built -fexceptions cannot link
+      # against this -fwasm-exceptions build, and wasm-ld's message names no file at all
+      # ("referenced by root reference (e.g. compiled C/C++ code)"). Two rounds were spent
+      # guessing which lane it was.
+      - name: Which objects were built with the wrong exception model?
+        run: |
+          set -e
+          . emsdk/emsdk_env.sh 2>/dev/null || true
+          bash tools/check-eh-model.sh
+
       - name: Configure (the production configure, not a compile check)
         id: configure
         run: |
