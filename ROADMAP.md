@@ -131,7 +131,48 @@
 > | `fc-linkcmd-weh.sh` preload | named `build-freecad-gui`, the NON-weh build directory, which only `configure-gui.sh` produces |
 > | `fc-linkcmd-weh.sh` archives | named `build-pivy-wasm/` and `build-ifcopenshell/` build trees; the staged `deps/wasm/lib/{pivy-mod,ifc-mod}` copies are what is gated and cached |
 >
-> > **Item 19, new 2026-08-20: `BUILD_FLAT_MESH` is off and nothing recorded it.** Audited
+> > **Item 20 CLOSED, 2026-08-21. The browser build runs end to end in CI.**
+>
+> ```
+> Which objects were built with the wrong exception model?
+>   scanned 3891 object(s)/archive(s); 0 reference JS-EH
+> Compile   reached: [2701/2701]   failed targets: 0
+> Install   Mod: 29 workbench dirs   Ext: 23 files   share: 1169 files
+> Link      (no errors)
+>           bin/FreeCAD.data   144,971,188
+>           bin/FreeCAD.js         845,051
+>           bin/FreeCAD.wasm   157,006,860
+> GL        patched build-freecad-gui-weh/bin/FreeCAD.js   (33 patches + 7 counters, --check clean)
+>           FreeCAD.wasm VALID, 149.7 MB
+> ```
+>
+> `link-freecad.yml` is green. Every defect between the first attempt and this was the same
+> shape -- something that only worked on the machine that had run it before:
+>
+> | defect | why it only worked there |
+> |---|---|
+> | `configure-gui-weh.sh` truncated at `-Dpybind11_DIR` | two bare `#` comments inside a `\`-continuation ended the command; the build dir already held the rest in `CMakeCache.txt` |
+> | `weh-objs/*.o` | eight objects cmake does not build, existing only as `em++` lines in comments |
+> | `find_package(Threads)` | its try_compile LINKS, and `CMAKE_EXE_LINKER_FLAGS` named `DraftUtils.a`, which does not exist until the build produces it |
+> | freetype headers | pointed at a matplotlib *source* subproject nothing cached |
+> | thin archives | meson emits `libagg.a`/`libfreetype.a` as references, not code; copying the `.a` staged something that looks like a library and is not |
+> | numpy staged 19 of 40 archives | only the `*.so.p` extension modules were harvested, never npymath/mtargets/highway |
+> | exception model | the meson cross-file said `-fexceptions` while everything else is `-fwasm-exceptions`; found by scanning 3891 objects, not by guessing |
+> | ICU single-threaded | `embuilder build icu` uses DEFAULT settings; and our own `FindICU.cmake` did not know about emscripten's `-mt` suffix |
+> | Qt's bundled zlib | Qt is built with `Z_PREFIX`, so `libQt6BundledLibpng.a` wants `z_inflateReset2`, which `--use-port=zlib` cannot provide |
+> | ICU absent from the link line | the recorded command predates FreeCAD 1.1 adding ICU |
+> | **the browser link failing silently** | the recorded command ended `&& :`, discarding wasm-ld's exit code. Three runs reported "success Link" with 21 errors each |
+>
+> Two stale-cache traps were closed for good along the way: staging scripts now write a
+> `.staged` version marker that the lanes require, and `actions/cache`'s path list is kept
+> byte-identical between the producing and consuming workflows -- the cache VERSION is
+> derived from that list, so a drifted copy silently restores an older entry and reports
+> success.
+>
+> **Not yet verified: that it BOOTS.** The wasm validates and every archive is present and
+> symbol-checked, which is not the same as running. That is the next thing.
+>
+> **Item 19, new 2026-08-20: `BUILD_FLAT_MESH` is off and nothing recorded it.** Audited
 > every one of FreeCAD 1.1.3's 45 `BUILD_*` options against `configure-gui-weh.sh`. Every
 > module upstream defaults ON is ON here except three, and only one of those is a real gap:
 >
