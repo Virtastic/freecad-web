@@ -34,6 +34,13 @@ on:
       - 'configure-gui-weh.sh'
       - 'scratchpad/linkcmds/fc-linkcmd-weh.sh'
       - 'scratchpad/stage-jspi.sh'
+      # The port itself. A change here changes the source that gets linked, so not
+      # watching it meant a patch fix triggered only the COMPILE check and never a relink
+      # -- the artifact would stay stale while CI went green.
+      - 'patches/freecad.patch'
+      - 'patches/apply.sh'
+      - 'toolchain/**'
+      - 'tools/patch-freecad-js.py'
   workflow_dispatch:
     inputs:
       rebuild:
