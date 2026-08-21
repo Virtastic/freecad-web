@@ -450,6 +450,32 @@ diff -ruNp a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/sa
 diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
 --- a/src/App/Application.cpp
 +++ b/src/App/Application.cpp
+@@ -1293,16 +1293,23 @@
+ 
+     // is there a path separator ?
+     if (pos == std::string::npos) {
+-        throw Base::ValueError("Application::GetParameterGroupByPath() no parameter set name specified");
++        // FCWEB: name the offending path. The bare message costs a whole debugging
++        // cycle in the browser, where there is no debugger and an uncaught
++        // Base::ValueError surfaces only as "[object WebAssembly.Exception]".
++        throw Base::ValueError(std::string("Application::GetParameterGroupByPath()"
++                                           " no parameter set name in \"") + sName + "\"");
+     }
+     // assigning the parameter set name
+     cTemp.assign(cName,0,pos);
+     cName.erase(0,pos+1);
+ 
+     // test if name is valid
+     const auto It = mpcPramManager.find(cTemp);
+     if (It == mpcPramManager.end())
+-        throw Base::ValueError("Application::GetParameterGroupByPath() unknown parameter set name specified");
++        // FCWEB: say WHICH set was not found, and what the full path was.
++        throw Base::ValueError(std::string("Application::GetParameterGroupByPath()"
++                                           " unknown parameter set \"") + cTemp
++                               + "\" in \"" + sName + "\"");
+ 
+     return It->second->GetGroup(cName.c_str());
+ }
 @@ -1757,7 +1757,7 @@ static void freecadNewHandler ()
  }
  #endif
