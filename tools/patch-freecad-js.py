@@ -172,7 +172,7 @@ PATCHES = [
     ),
     (
         'glMaterialfv: EMISSION and AMBIENT_AND_DIFFUSE',
-        'GLEmulation.materialShininess[0]=HEAPF32[param>>2]}else{0}};var _emscripten_glMaterialfv=',
+        'GLEmulation.materialShininess[0]=HEAPF32[param>>2]}else{throw"glMaterialfv: TODO: "+pname}};var _emscripten_glMaterialfv=',
         'GLEmulation.materialShininess[0]=HEAPF32[param>>2]}else if(pname==5632){GLEmulation.materialEmission[0]=HEAPF32[param>>2];GLEmulation.materialEmission[1]=HEAPF32[param+4>>2];GLEmulation.materialEmission[2]=HEAPF32[param+8>>2];GLEmulation.materialEmission[3]=HEAPF32[param+12>>2]}else if(pname==5634){var _r=HEAPF32[param>>2],_g=HEAPF32[param+4>>2],_b=HEAPF32[param+8>>2],_a=HEAPF32[param+12>>2];GLEmulation.materialAmbient[0]=_r;GLEmulation.materialAmbient[1]=_g;GLEmulation.materialAmbient[2]=_b;GLEmulation.materialAmbient[3]=_a;GLEmulation.materialDiffuse[0]=_r;GLEmulation.materialDiffuse[1]=_g;GLEmulation.materialDiffuse[2]=_b;GLEmulation.materialDiffuse[3]=_a}else{0}};var _emscripten_glMaterialfv=',
     ),
     (
@@ -410,21 +410,28 @@ def main():
         for name in missing:
             old_str = next(e[1] for e in PATCHES if e[0] == name)
             # Anchor on the longest identifier in the pattern; those survive minification.
-            words = sorted(re.findall(r'[A-Za-z_][A-Za-z0-9_.]{6,}', old_str), key=len)
             print('  --- %s ---' % name, file=sys.stderr)
-            shown = False
-            for w in reversed(words):
-                at = src.find(w)
-                if at >= 0:
-                    print('  anchor %r at %d; actual source around it:' % (w, at),
-                          file=sys.stderr)
-                    print('  ' + src[max(0, at - 200):at + 400].replace(chr(10), ' '),
-                          file=sys.stderr)
-                    shown = True
-                    break
-            if not shown:
-                print('  no anchor from that pattern appears in the file at all',
+            # Longest prefix of the pattern that IS in the file. That is the exact point of
+            # divergence, which a loose identifier anchor is not: anchoring on
+            # "GLEmulation.materialShininess" found its Float32Array initialiser hundreds of
+            # kilobytes away from the glMaterialfv body the patch is about.
+            lo, hi = 0, len(old_str)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if src.find(old_str[:mid]) >= 0:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            if lo == 0:
+                print('  not one character of that pattern appears in the file',
                       file=sys.stderr)
+            else:
+                at = src.find(old_str[:lo])
+                print('  matches the first %d of %d chars, at offset %d'
+                      % (lo, len(old_str), at), file=sys.stderr)
+                print('  pattern then wants: %r' % old_str[lo:lo + 120], file=sys.stderr)
+                print('  file actually has:  %r'
+                      % src[at + lo:at + lo + 120].replace(chr(10), ' '), file=sys.stderr)
         return 1
     violations = check_postconditions(out)
     for pat, why, n in violations:
