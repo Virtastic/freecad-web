@@ -395,7 +395,7 @@ jobs:
 
       - name: Link
         id: link
-        if: ${{ inputs.stop_after == 'link' }}
+        if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
         run: |
           set -e
           . emsdk/emsdk_env.sh
@@ -410,7 +410,7 @@ jobs:
       # JS, are silently lost by every relink, and whose absence is a boot-time storm of
       # "Cannot read properties of null (reading '0')" with newDocument() never returning.
       - name: GL post-patches, and validate the wasm
-        if: ${{ inputs.stop_after == 'link' }}
+        if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
         run: |
           set -e
           js=build-freecad-gui-weh/bin/FreeCAD.js
