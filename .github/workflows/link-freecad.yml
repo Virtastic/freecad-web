@@ -413,6 +413,10 @@ jobs:
         if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
         run: |
           set -e
+          # node comes from emsdk, not from the runner. Without this the validate below
+          # fails with "node: command not found" AFTER the patches have been applied --
+          # a green link reported as a failure.
+          . emsdk/emsdk_env.sh
           js=build-freecad-gui-weh/bin/FreeCAD.js
           # Keep a copy with the logs. It is 489 KB, it rides along with an artifact that is
           # uploaded on always(), and when a patch site moves it is the only way to see what
