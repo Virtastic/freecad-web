@@ -339,7 +339,7 @@ jobs:
           set -e
           . emsdk/emsdk_env.sh
           . .qtvenv/bin/activate
-          if [ -s deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a ] && grep -qx 2 deps/wasm/lib/numpy-mod/.staged 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then
+          if [ -s deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a ] && grep -qx 3 deps/wasm/lib/numpy-mod/.staged 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  numpy: already built (cache hit)"
             exit 0
           fi

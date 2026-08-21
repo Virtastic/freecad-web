@@ -21,11 +21,19 @@ cpu_family = 'wasm32'
 cpu = 'wasm32'
 endian = 'little'
 
+# EXCEPTIONS. -fwasm-exceptions, not -fexceptions, because every other object in the
+# FreeCAD link -- Qt, OCCT, Coin, CPython, FreeCAD itself, and now _ctypes and PIL -- uses
+# wasm EH, and the two models cannot be mixed in one link. With -fexceptions here, numpy's
+# two C++ archives referenced emscripten's JS-EH runtime and the link ended in
+#     undefined symbol: __cxa_find_matching_catch_2 / __resumeException / llvm_eh_typeid_for
+# named to no file at all. tools/check-eh-model.sh scanned 3891 objects and found exactly
+# these two: libnpy__pocketfft_umath.a (pocketfft) and libhighway.a (Google Highway).
+# SUPPORT_LONGJMP=wasm goes with it: wasm EH needs it for setjmp/longjmp.
 [built-in options]
-c_args = ['-fexceptions', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
-cpp_args = ['-fexceptions', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
-c_link_args = ['-fexceptions', '-pthread']
-cpp_link_args = ['-fexceptions', '-pthread']
+c_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
+cpp_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
+c_link_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread']
+cpp_link_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread']
 
 [properties]
 needs_exe_wrapper = true
