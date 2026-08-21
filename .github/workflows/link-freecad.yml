@@ -377,6 +377,13 @@ jobs:
           # excluded here on purpose: fc-linkcmd-weh.sh is the link, and it carries flags
           # (fcweb_dispatch_event in ASYNCIFY_EXPORTS, wasm_event_dispatch.o) that the cmake
           # target does not.
+          # Four archives are named as raw TEXT in CMAKE_EXE_LINKER_FLAGS, so ninja has no
+          # dependency edge from the executables to them and may link before they exist:
+          #     em++: error: .../src/Mod/Draft/App/DraftUtils.a: No such file or directory
+          #     [2688/2701] Linking CXX static library src/Mod/Draft/App/DraftUtils.a
+          # -- the exe linked at 2687, the archive appeared at 2688. Earlier runs simply got
+          # a luckier order. Build them first; the main pass then finds them.
+          ninja -C build-freecad-gui-weh -j "$n"             src/Mod/Draft/App/DraftUtils.a             src/Mod/CAM/libarea/area.a             src/Mod/CAM/libarea/libarea-native.a             src/Mod/Test/Gui/QtUnitGui.a 2>&1 | tail -5
           ninja -C build-freecad-gui-weh -j "$n" -k 0 2>&1 | tee /tmp/fclogs/compile.txt
           rc=${PIPESTATUS[0]}
           echo "  reached: $(grep -oE '\[[0-9]+/[0-9]+\]' /tmp/fclogs/compile.txt | tail -1)"
