@@ -450,14 +450,28 @@ diff -ruNp a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/sa
 diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
 --- a/src/App/Application.cpp
 +++ b/src/App/Application.cpp
-@@ -1293,16 +1293,35 @@
+@@ -259,9 +259,14 @@
+ 
+ Application::Application(std::map<std::string,std::string> &mConfig)
+   : _mConfig(mConfig)
+ {
++    // FCWEB: boot-failure forensics. The startup exception pointed at an Application
++    // whose parameter map iterated as garbage -- these three prints (ctor, destruct,
++    // failed lookup) say in one run whether the object queried later is the one built
++    // here, a freed one, or null. stderr reaches the page directly.
++    fprintf(stderr, "[fcweb] App::Application ctor this=%p\n", static_cast<void*>(this));
+     mpcPramManager["System parameter"] = _pcSysParamMngr;
+     mpcPramManager["User parameter"] = _pcUserParamMngr;
+ 
+     setupPythonTypes();
+ }
+@@ -1293,16 +1293,30 @@
  
      // is there a path separator ?
      if (pos == std::string::npos) {
 -        throw Base::ValueError("Application::GetParameterGroupByPath() no parameter set name specified");
-+        // FCWEB: name the offending path. The bare message costs a whole debugging
-+        // cycle in the browser, where there is no debugger and an uncaught
-+        // Base::ValueError surfaces only as "[object WebAssembly.Exception]".
++        // FCWEB: name the offending path; the bare message costs a debugging cycle
++        // in the browser.
 +        throw Base::ValueError(std::string("Application::GetParameterGroupByPath()"
 +                                           " no parameter set name in \"") + sName + "\"");
      }
@@ -468,27 +482,36 @@ diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
      // test if name is valid
      const auto It = mpcPramManager.find(cTemp);
 -    if (It == mpcPramManager.end())
--        throw Base::ValueError("Application::GetParameterGroupByPath() unknown parameter set name specified");
 +    if (It == mpcPramManager.end()) {
-+        // FCWEB: the set name alone was not enough -- "User parameter" IS inserted
-+        // by the Application constructor and IS found by initApplication()'s very
-+        // next lookup, so a later miss means the map was emptied, or this is not
-+        // the object init() built. Report enough to tell those apart in one run.
-+        std::string fcwebSets;
-+        for (const auto& fcwebIt : mpcPramManager) {
-+            fcwebSets += "\"" + fcwebIt.first + "\" ";
-+        }
+-        throw Base::ValueError("Application::GetParameterGroupByPath() unknown parameter set name specified");
++        // FCWEB: print identity BEFORE touching the map further. "User parameter" is
++        // inserted unconditionally by the ctor, so a miss means this object is not a
++        // live Application. (An earlier diagnostic iterated the map into the message:
++        // on the corrupt object it appended empty-quoted keys until the 2 GB heap
++        // died. Nothing that walks the map belongs here.)
++        fprintf(stderr, "[fcweb] GetParameterGroupByPath MISS set=%s path=%s"
++                        " this=%p singleton=%p mapsize=%zu\n",
++                cTemp.c_str(), sName, static_cast<void*>(this),
++                static_cast<void*>(_pcSingleton), mpcPramManager.size());
 +        throw Base::ValueError(std::string("Application::GetParameterGroupByPath()"
-+                               " unknown parameter set \"") + cTemp + "\" in \"" + sName
-+                               + "\"; sets=" + std::to_string(mpcPramManager.size())
-+                               + " [" + fcwebSets + "] this="
-+                               + std::to_string(reinterpret_cast<size_t>(this))
-+                               + " singleton="
-+                               + std::to_string(reinterpret_cast<size_t>(_pcSingleton)));
++                               " unknown parameter set \"") + cTemp + "\" in \"" + sName + "\"");
 +    }
  
      return It->second->GetGroup(cName.c_str());
  }
+@@ -1665,8 +1665,12 @@
+     }
+ }
+ 
+ void Application::destruct()
+ {
++    // FCWEB: see the ctor print. If this ever appears before the failed lookup, the
++    // teardown-during-startup theory is back on.
++    fprintf(stderr, "[fcweb] App::Application::destruct() singleton=%p\n",
++            static_cast<void*>(_pcSingleton));
+     // saving system parameter
+     if (_pcSysParamMngr->IgnoreSave()) {
+         Base::Console().warning("Discard system parameter\n");
 @@ -1757,7 +1757,7 @@ static void freecadNewHandler ()
  }
  #endif
@@ -731,6 +754,17 @@ diff -ruNp a/src/Gui/Application.cpp b/src/Gui/Application.cpp
  #include <QDir>
  #include <QFileInfo>
  #include <QLocale>
+@@ -695,8 +695,10 @@
+ }
+ // clang-format on
+ 
+ Application::~Application()
+ {
+     Base::Console().log("Destruct Gui::Application\n");
++    // FCWEB: boot-failure forensics, pair of the prints in App/Application.cpp.
++    fprintf(stderr, "[fcweb] Gui::Application DTOR\n");
+ #ifdef USE_3DCONNEXION_NAVLIB
+     delete pNavlibInterface;
 @@ -1918,11 +1919,18 @@ bool Application::activateWorkbench(cons
  
          if (!d->startingUp) {
