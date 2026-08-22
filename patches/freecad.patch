@@ -450,22 +450,19 @@ diff -ruNp a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/sa
 diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
 --- a/src/App/Application.cpp
 +++ b/src/App/Application.cpp
-@@ -259,9 +259,14 @@
- 
+@@ -260,6 +260,11 @@
  Application::Application(std::map<std::string,std::string> &mConfig)
    : _mConfig(mConfig)
  {
 +    // FCWEB: boot-failure forensics. The startup exception pointed at an Application
-+    // whose parameter map iterated as garbage -- these three prints (ctor, destruct,
-+    // failed lookup) say in one run whether the object queried later is the one built
-+    // here, a freed one, or null. stderr reaches the page directly.
++    // whose parameter map iterated as garbage -- these prints (ctor, destruct, failed
++    // lookup) say in one run whether the object queried later is the one built here,
++    // a freed one, or null. stderr reaches the page directly.
 +    fprintf(stderr, "[fcweb] App::Application ctor this=%p\n", static_cast<void*>(this));
      mpcPramManager["System parameter"] = _pcSysParamMngr;
      mpcPramManager["User parameter"] = _pcUserParamMngr;
  
-     setupPythonTypes();
- }
-@@ -1293,16 +1293,30 @@
+@@ -1293,7 +1298,10 @@
  
      // is there a path separator ?
      if (pos == std::string::npos) {
@@ -477,13 +474,13 @@ diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
      }
      // assigning the parameter set name
      cTemp.assign(cName,0,pos);
-     cName.erase(0,pos+1);
+@@ -1301,8 +1309,19 @@
  
      // test if name is valid
      const auto It = mpcPramManager.find(cTemp);
 -    if (It == mpcPramManager.end())
-+    if (It == mpcPramManager.end()) {
 -        throw Base::ValueError("Application::GetParameterGroupByPath() unknown parameter set name specified");
++    if (It == mpcPramManager.end()) {
 +        // FCWEB: print identity BEFORE touching the map further. "User parameter" is
 +        // inserted unconditionally by the ctor, so a miss means this object is not a
 +        // live Application. (An earlier diagnostic iterated the map into the message:
@@ -499,9 +496,7 @@ diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
  
      return It->second->GetGroup(cName.c_str());
  }
-@@ -1665,8 +1665,12 @@
-     }
- }
+@@ -1667,6 +1686,10 @@
  
  void Application::destruct()
  {
@@ -754,10 +749,7 @@ diff -ruNp a/src/Gui/Application.cpp b/src/Gui/Application.cpp
  #include <QDir>
  #include <QFileInfo>
  #include <QLocale>
-@@ -695,8 +695,10 @@
- }
- // clang-format on
- 
+@@ -698,6 +698,8 @@
  Application::~Application()
  {
      Base::Console().log("Destruct Gui::Application\n");
@@ -765,6 +757,7 @@ diff -ruNp a/src/Gui/Application.cpp b/src/Gui/Application.cpp
 +    fprintf(stderr, "[fcweb] Gui::Application DTOR\n");
  #ifdef USE_3DCONNEXION_NAVLIB
      delete pNavlibInterface;
+ #endif
 @@ -1918,11 +1919,18 @@ bool Application::activateWorkbench(cons
  
          if (!d->startingUp) {
