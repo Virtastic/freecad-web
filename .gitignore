@@ -91,3 +91,6 @@ desktop.ini
 *.tfstate.*
 .terraform/
 /f2c-local/
+
+# CI infra config (hosts, tokens) — never committed
+ci/jenkins/config.env

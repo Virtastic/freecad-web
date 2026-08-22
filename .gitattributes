@@ -10,3 +10,6 @@
 # with "different line endings", while the msys patch(1) used to generate the file
 # tolerates it silently.
 *.patch -text
+
+# Shell scripts run on the Linux build/test servers — force LF and keep them executable.
+*.sh text eol=lf
