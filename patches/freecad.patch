@@ -450,7 +450,7 @@ diff -ruNp a/src/3rdParty/salomesmesh/src/SMESH/SMESH_Mesh.cpp b/src/3rdParty/sa
 diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
 --- a/src/App/Application.cpp
 +++ b/src/App/Application.cpp
-@@ -1293,16 +1293,23 @@
+@@ -1293,16 +1293,35 @@
  
      // is there a path separator ?
      if (pos == std::string::npos) {
@@ -467,12 +467,25 @@ diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
  
      // test if name is valid
      const auto It = mpcPramManager.find(cTemp);
-     if (It == mpcPramManager.end())
+-    if (It == mpcPramManager.end())
 -        throw Base::ValueError("Application::GetParameterGroupByPath() unknown parameter set name specified");
-+        // FCWEB: say WHICH set was not found, and what the full path was.
++    if (It == mpcPramManager.end()) {
++        // FCWEB: the set name alone was not enough -- "User parameter" IS inserted
++        // by the Application constructor and IS found by initApplication()'s very
++        // next lookup, so a later miss means the map was emptied, or this is not
++        // the object init() built. Report enough to tell those apart in one run.
++        std::string fcwebSets;
++        for (const auto& fcwebIt : mpcPramManager) {
++            fcwebSets += "\"" + fcwebIt.first + "\" ";
++        }
 +        throw Base::ValueError(std::string("Application::GetParameterGroupByPath()"
-+                                           " unknown parameter set \"") + cTemp
-+                               + "\" in \"" + sName + "\"");
++                               " unknown parameter set \"") + cTemp + "\" in \"" + sName
++                               + "\"; sets=" + std::to_string(mpcPramManager.size())
++                               + " [" + fcwebSets + "] this="
++                               + std::to_string(reinterpret_cast<size_t>(this))
++                               + " singleton="
++                               + std::to_string(reinterpret_cast<size_t>(_pcSingleton)));
++    }
  
      return It->second->GetGroup(cName.c_str());
  }
