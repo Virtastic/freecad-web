@@ -671,18 +671,6 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
      }
  
      // If FreeCAD was run from within a Python virtual environment, ensure that the site-packages
-@@ -639,6 +644,11 @@
-            << "/site-packages";
-         PyObject* venvLocation = PyUnicode_FromWideChar(ss.str().c_str(), ss.str().size());
-         PyObject* path = PySys_GetObject("path");
-+    // FCWEB: see tools/regen-forensic-hunks.py -- never let the error-reporting
-+    // path raise. PyList_Size(NULL) after a failed init took the app down.
-+    if (!path || !PyList_Check(path)) {
-+        return "(sys.path unavailable)";
-+    }
-         PyList_Append(path, venvLocation);
-     }
- 
 diff -ruNp a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
 --- a/src/Base/Parameter.cpp
 +++ b/src/Base/Parameter.cpp

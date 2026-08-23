@@ -178,9 +178,13 @@ def edit_interp(lines, CR):
     def A(t):
         return t.encode() + CR
     out = []
+    done = False
     for line in lines:
         out.append(line)
-        if b'PyObject* path = PySys_GetObject("path");' in line:
+        # FIRST occurrence only: line 641 is the same statement inside void
+        # initInterpreter(), where a `return "...";` is a compile error.
+        if not done and b'PyObject* path = PySys_GetObject("path");' in line:
+            done = True
             out += [A('    // FCWEB: see tools/regen-forensic-hunks.py -- never let the error-reporting'),
                     A('    // path raise. PyList_Size(NULL) after a failed init took the app down.'),
                     A('    if (!path || !PyList_Check(path)) {'),
