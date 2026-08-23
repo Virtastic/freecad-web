@@ -649,7 +649,7 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
      status = PyConfig_SetBytesArgv(&config, argc, argv);
      if (PyStatus_Exception(status)) {
          throw Base::RuntimeError("Failed to set config");
-@@ -626,7 +641,33 @@
+@@ -626,7 +641,42 @@
  
      status = Py_InitializeFromConfig(&config);
      if (PyStatus_Exception(status)) {
@@ -668,9 +668,18 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
 +            fprintf(stderr, "[FCWEB] pending: %s :: %s\n",
 +                    (fcTs && PyUnicode_Check(fcTs)) ? PyUnicode_AsUTF8(fcTs) : "(?)",
 +                    (fcVs && PyUnicode_Check(fcVs)) ? PyUnicode_AsUTF8(fcVs) : "(?)");
-+            if (fcTb) {
-+                PyErr_Restore(fcT, fcV, fcTb);
-+                PyErr_Print();
++            // walk the traceback in C: PyErr_Print needs sys/io, which do not exist
++            // this early, so it renders a bare header with no frames.
++            for (PyObject* fcCur = fcTb; fcCur && fcCur != Py_None;) {
++                PyTracebackObject* fcTbo = reinterpret_cast<PyTracebackObject*>(fcCur);
++                PyFrameObject* fcFr = fcTbo->tb_frame;
++                PyCodeObject* fcCo = fcFr ? PyFrame_GetCode(fcFr) : nullptr;
++                if (fcCo) {
++                    fprintf(stderr, "[FCWEB]   at %s (%s:%d)\n",
++                            PyUnicode_AsUTF8(fcCo->co_name),
++                            PyUnicode_AsUTF8(fcCo->co_filename), fcTbo->tb_lineno);
++                }
++                fcCur = reinterpret_cast<PyObject*>(fcTbo->tb_next);
 +            }
 +        } else {
 +            fprintf(stderr, "[FCWEB] init failed, NO pending exception (Py_IsInitialized=%d)\n",
