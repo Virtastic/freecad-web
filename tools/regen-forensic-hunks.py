@@ -134,12 +134,43 @@ def edit_sketcher(lines, CR):
     return out
 
 
+def edit_maingui(lines, CR):
+    """Prove the Python error machinery works BEFORE any Gui/PySide code runs. The
+    post-boot crash is an infinite _PyErr_SetObject/_PyErr_Format mutual recursion --
+    raising ANY exception loops until the stack dies, which requires even
+    PyExceptionClass_Check(PyExc_SystemError) to fail. If this selftest already loops or
+    prints exc_check=0, core interpreter state is broken from init (a duplicate CPython
+    static winning under --allow-multiple-definition); if it prints ok=1 exc_check=1, the
+    machinery is intact here and a LATER import (PySide, most likely) breaks it."""
+    def A(t):
+        return t.encode() + CR
+    out = []
+    for line in lines:
+        if line.rstrip(bytes([13])).strip() == b'// to set window icon on wayland, the desktop file has to be available to the compositor':
+            out += [A('#if defined(__EMSCRIPTEN__)'),
+                    A('        {'),
+                    A('            // FCWEB: selftest of the Python error machinery, pre-Gui. See the'),
+                    A('            // regen tool for the full account of the PyErr recursion this probes.'),
+                    A('            Base::PyGILStateLocker fcwebLock;'),
+                    A('            fprintf(stderr, "[fcweb] pyerr selftest: raising...' + NL + '");'),
+                    A('            PyErr_SetString(PyExc_ValueError, "fcweb selftest");'),
+                    A('            const int fcwebOk = PyErr_ExceptionMatches(PyExc_ValueError);'),
+                    A('            PyErr_Clear();'),
+                    A('            fprintf(stderr, "[fcweb] pyerr selftest: ok=%d exc_check=%d' + NL + '",'),
+                    A('                    fcwebOk, PyExceptionClass_Check(PyExc_SystemError));'),
+                    A('        }'),
+                    A('#endif')]
+        out.append(line)
+    return out
+
+
 def main():
     tree = sys.argv[1]
     tmp = os.path.join(tree, '..', 'dgen')
     os.makedirs(tmp, exist_ok=True)
     specs = [('src/App/Application.cpp', edit_app), ('src/Gui/Application.cpp', edit_gui),
-             ('src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp', edit_sketcher)]
+             ('src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp', edit_sketcher),
+             ('src/Main/MainGui.cpp', edit_maingui)]
     blocks = {}
     for rel, fn in specs:
         raw = io.open(os.path.join(tree, rel), 'rb').read()
@@ -174,7 +205,8 @@ def main():
 
     kills = {'src/App/Application.cpp': (b'@@ -260,', b'@@ -1293,', b'@@ -1301,', b'@@ -1667,'),
              'src/Gui/Application.cpp': (b'@@ -698,',),
-             'src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp': ()}
+             'src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp': (b'@@ -56,', b'@@ -57,', b'@@ -58,'),
+             'src/Main/MainGui.cpp': ()}
     for rel, kill in kills.items():
         try:
             i, j = block_range(rel.encode())

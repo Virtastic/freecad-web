@@ -3659,6 +3659,26 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
  #if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
      setlocale(LC_ALL, "");       // use native environment settings
      setlocale(LC_NUMERIC, "C");  // except for numbers to not break XML import
+@@ -222,6 +222,19 @@
+ #else
+         App::Application::init(argc, argv);
+ #endif
++#if defined(__EMSCRIPTEN__)
++        {
++            // FCWEB: selftest of the Python error machinery, pre-Gui. See the
++            // regen tool for the full account of the PyErr recursion this probes.
++            Base::PyGILStateLocker fcwebLock;
++            fprintf(stderr, "[fcweb] pyerr selftest: raising...\n");
++            PyErr_SetString(PyExc_ValueError, "fcweb selftest");
++            const int fcwebOk = PyErr_ExceptionMatches(PyExc_ValueError);
++            PyErr_Clear();
++            fprintf(stderr, "[fcweb] pyerr selftest: ok=%d exc_check=%d\n",
++                    fcwebOk, PyExceptionClass_Check(PyExc_SystemError));
++        }
++#endif
+         // to set window icon on wayland, the desktop file has to be available to the compositor
+         QGuiApplication::setDesktopFileName(
+             QString::fromStdString(App::Application::Config()["DesktopFileName"])
 @@ -358,15 +544,34 @@
      std::clog.rdbuf(oldclog);
      std::cerr.rdbuf(oldcerr);
