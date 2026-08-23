@@ -649,18 +649,31 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
      status = PyConfig_SetBytesArgv(&config, argc, argv);
      if (PyStatus_Exception(status)) {
          throw Base::RuntimeError("Failed to set config");
-@@ -626,7 +641,20 @@ void initInterpreter(int argc, char* arg
+@@ -626,7 +641,33 @@
  
      status = Py_InitializeFromConfig(&config);
      if (PyStatus_Exception(status)) {
 -        throw Base::RuntimeError("Failed to init from config");
 +        fprintf(stderr, "[FCWEB] Py_InitializeFromConfig failed: func=%s err=%s\n",
 +                status.func ? status.func : "?", status.err_msg ? status.err_msg : "?");
-+        if (Py_IsInitialized() && PyErr_Occurred()) {
-+            fprintf(stderr, "[FCWEB] pending Python exception:\n");
-+            PyErr_Print();
++        // Py_IsInitialized() is 0 during a FAILED init, but a thread state exists and
++        // the real error is pending -- fetch and print it unconditionally.
++        if (PyErr_Occurred()) {
++            PyObject* fcT = nullptr;
++            PyObject* fcV = nullptr;
++            PyObject* fcTb = nullptr;
++            PyErr_Fetch(&fcT, &fcV, &fcTb);
++            PyObject* fcTs = fcT ? PyObject_Str(fcT) : nullptr;
++            PyObject* fcVs = fcV ? PyObject_Str(fcV) : nullptr;
++            fprintf(stderr, "[FCWEB] pending: %s :: %s\n",
++                    (fcTs && PyUnicode_Check(fcTs)) ? PyUnicode_AsUTF8(fcTs) : "(?)",
++                    (fcVs && PyUnicode_Check(fcVs)) ? PyUnicode_AsUTF8(fcVs) : "(?)");
++            if (fcTb) {
++                PyErr_Restore(fcT, fcV, fcTb);
++                PyErr_Print();
++            }
 +        } else {
-+            fprintf(stderr, "[FCWEB] no pending Python exception (Py_IsInitialized=%d)\n",
++            fprintf(stderr, "[FCWEB] init failed, NO pending exception (Py_IsInitialized=%d)\n",
 +                    Py_IsInitialized());
 +        }
 +        std::string msg = std::string("Failed to init from config [func=")
