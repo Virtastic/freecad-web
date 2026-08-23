@@ -135,35 +135,57 @@ def edit_sketcher(lines, CR):
 
 
 def edit_maingui(lines, CR):
-    """Prove the Python error machinery works BEFORE any Gui/PySide code runs. The
-    post-boot crash is an infinite _PyErr_SetObject/_PyErr_Format mutual recursion --
-    raising ANY exception loops until the stack dies, which requires even
-    PyExceptionClass_Check(PyExc_SystemError) to fail. If this selftest already loops or
-    prints exc_check=0, core interpreter state is broken from init (a duplicate CPython
-    static winning under --allow-multiple-definition); if it prints ok=1 exc_check=1, the
-    machinery is intact here and a LATER import (PySide, most likely) breaks it."""
+    """Console mirror + startup-catch logging. Base::Console output (including
+    e.reportException() in the startup catch blocks) never reaches the page, which made
+    every boot failure a multi-hour forensic exercise; emscripten_log always arrives.
+    Also logs the caught Base::Exception in main's catch before the reporting path runs --
+    the reporting path itself crashed once (getPythonPath on a dead interpreter) and took
+    the real error message down with it."""
     def A(t):
         return t.encode() + CR
     out = []
     for line in lines:
-        if line.rstrip(bytes([13])).strip() == b'// to set window icon on wayland, the desktop file has to be available to the compositor':
-            out += [A('#if defined(__EMSCRIPTEN__)'),
-                    A('        {'),
-                    A('            // FCWEB: selftest of the Python error machinery, pre-Gui. See the'),
-                    A('            // regen tool for the full account of the PyErr recursion this probes.'),
-                    A('            // emscripten_log, not fprintf: stderr writes from the main phase'),
-                    A('            // never reached the page (the pre-main MISS print did), while the'),
-                    A('            // PyEM prints via emscripten_log always arrive.'),
-                    A('            Base::PyGILStateLocker fcwebLock;'),
-                    A('            emscripten_log(EM_LOG_ERROR, "[fcweb] pyerr selftest: raising...");'),
-                    A('            PyErr_SetString(PyExc_ValueError, "fcweb selftest");'),
-                    A('            const int fcwebOk = PyErr_ExceptionMatches(PyExc_ValueError);'),
-                    A('            PyErr_Clear();'),
-                    A('            emscripten_log(EM_LOG_ERROR, "[fcweb] pyerr selftest: ok=%d exc_check=%d",'),
-                    A('                           fcwebOk, PyExceptionClass_Check(PyExc_SystemError));'),
-                    A('        }'),
-                    A('#endif')]
         out.append(line)
+        if b'App::Application::Config()["DesktopFileName"] = "org.freecad.FreeCAD";' in line:
+            out += [A(''),
+                    A('#if defined(__EMSCRIPTEN__)'),
+                    A('    // FCWEB: mirror every Base::Console message to the browser console.'),
+                    A('    struct FcwebConsoleMirror: Base::ILogger'),
+                    A('    {'),
+                    A('        void sendLog(const std::string&, const std::string& m, Base::LogStyle l,'),
+                    A('                     Base::IntendedRecipient, Base::ContentType) override'),
+                    A('        {'),
+                    A('            emscripten_log(l == Base::LogStyle::Error ? EM_LOG_ERROR : EM_LOG_CONSOLE,'),
+                    A('                           "[fc] %s", m.c_str());'),
+                    A('        }'),
+                    A('    };'),
+                    A('    Base::Console().attachObserver(new FcwebConsoleMirror);'),
+                    A('#endif')]
+        elif line.rstrip(bytes([13])) == b'    catch (const Base::Exception& e) {':
+            out += [A('#if defined(__EMSCRIPTEN__)'),
+                    A('        // FCWEB: log the REAL failure before the reporting path runs; that path'),
+                    A('        // once crashed (getPythonPath on a dead interpreter) and ate the message.'),
+                    A('        emscripten_log(EM_LOG_ERROR, "[fcweb] App init failed: %s", e.what());'),
+                    A('#endif')]
+    return out
+
+
+def edit_interp(lines, CR):
+    """Harden getPythonPath: after a FAILED interpreter init it runs from main's catch
+    handler with sys.path unavailable, and PyList_Size(NULL) raised SystemError inside the
+    error REPORTING path -- which then looped _PyErr_SetObject/_PyErr_Format to stack death
+    and replaced the real error with an opaque crash."""
+    def A(t):
+        return t.encode() + CR
+    out = []
+    for line in lines:
+        out.append(line)
+        if b'PyObject* path = PySys_GetObject("path");' in line:
+            out += [A('    // FCWEB: see tools/regen-forensic-hunks.py -- never let the error-reporting'),
+                    A('    // path raise. PyList_Size(NULL) after a failed init took the app down.'),
+                    A('    if (!path || !PyList_Check(path)) {'),
+                    A('        return "(sys.path unavailable)";'),
+                    A('    }')]
     return out
 
 
@@ -173,7 +195,8 @@ def main():
     os.makedirs(tmp, exist_ok=True)
     specs = [('src/App/Application.cpp', edit_app), ('src/Gui/Application.cpp', edit_gui),
              ('src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp', edit_sketcher),
-             ('src/Main/MainGui.cpp', edit_maingui)]
+             ('src/Main/MainGui.cpp', edit_maingui),
+             ('src/Base/Interpreter.cpp', edit_interp)]
     blocks = {}
     for rel, fn in specs:
         raw = io.open(os.path.join(tree, rel), 'rb').read()
@@ -209,7 +232,8 @@ def main():
     kills = {'src/App/Application.cpp': (b'@@ -260,', b'@@ -1293,', b'@@ -1301,', b'@@ -1667,'),
              'src/Gui/Application.cpp': (b'@@ -698,',),
              'src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp': (b'@@ -56,', b'@@ -57,', b'@@ -58,'),
-             'src/Main/MainGui.cpp': ()}
+             'src/Main/MainGui.cpp': (b'@@ -222,',),
+             'src/Base/Interpreter.cpp': ()}
     for rel, kill in kills.items():
         try:
             i, j = block_range(rel.encode())

@@ -615,6 +615,18 @@ diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
 diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
 --- a/src/Base/Interpreter.cpp
 +++ b/src/Base/Interpreter.cpp
+@@ -544,6 +544,11 @@
+     // Construct something that looks like the output of the now-deprecated Py_GetPath
+     PyGILStateLocker lock;
+     PyObject* path = PySys_GetObject("path");
++    // FCWEB: see tools/regen-forensic-hunks.py -- never let the error-reporting
++    // path raise. PyList_Size(NULL) after a failed init took the app down.
++    if (!path || !PyList_Check(path)) {
++        return "(sys.path unavailable)";
++    }
+     std::string result;
+     const char* separator = ":";  // Use ":" on Unix-like systems, ";" on Windows
+ #ifdef FC_OS_WIN32
 @@ -619,6 +619,21 @@ void initInterpreter(int argc, char* arg
      config.isolated = 0;
      config.user_site_directory = 1;
@@ -659,6 +671,18 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
      }
  
      // If FreeCAD was run from within a Python virtual environment, ensure that the site-packages
+@@ -639,6 +644,11 @@
+            << "/site-packages";
+         PyObject* venvLocation = PyUnicode_FromWideChar(ss.str().c_str(), ss.str().size());
+         PyObject* path = PySys_GetObject("path");
++    // FCWEB: see tools/regen-forensic-hunks.py -- never let the error-reporting
++    // path raise. PyList_Size(NULL) after a failed init took the app down.
++    if (!path || !PyList_Check(path)) {
++        return "(sys.path unavailable)";
++    }
+         PyList_Append(path, venvLocation);
+     }
+ 
 diff -ruNp a/src/Base/Parameter.cpp b/src/Base/Parameter.cpp
 --- a/src/Base/Parameter.cpp
 +++ b/src/Base/Parameter.cpp
@@ -3667,6 +3691,51 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
  #if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
      setlocale(LC_ALL, "");       // use native environment settings
      setlocale(LC_NUMERIC, "C");  // except for numbers to not break XML import
+@@ -209,6 +209,20 @@
+     App::Application::Config()["SplashInfoPosition"] = "6,75";
+     App::Application::Config()["DesktopFileName"] = "org.freecad.FreeCAD";
+ 
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: mirror every Base::Console message to the browser console.
++    struct FcwebConsoleMirror: Base::ILogger
++    {
++        void sendLog(const std::string&, const std::string& m, Base::LogStyle l,
++                     Base::IntendedRecipient, Base::ContentType) override
++        {
++            emscripten_log(l == Base::LogStyle::Error ? EM_LOG_ERROR : EM_LOG_CONSOLE,
++                           "[fc] %s", m.c_str());
++        }
++    };
++    Base::Console().attachObserver(new FcwebConsoleMirror);
++#endif
++
+     try {
+         // Init phase ===========================================================
+         // sets the default run mode for FC, starts with gui if not overridden in InitConfig...
+@@ -276,6 +290,11 @@
+         exit(0);
+     }
+     catch (const Base::Exception& e) {
++#if defined(__EMSCRIPTEN__)
++        // FCWEB: log the REAL failure before the reporting path runs; that path
++        // once crashed (getPythonPath on a dead interpreter) and ate the message.
++        emscripten_log(EM_LOG_ERROR, "[fcweb] App init failed: %s", e.what());
++#endif
+         // Popup an own dialog box instead of that one of Windows
+         QApplication app(argc, argv);
+         QString appName = QString::fromStdString(App::Application::Config()["ExeName"]);
+@@ -342,6 +361,11 @@
+         exit(e.getExitCode());
+     }
+     catch (const Base::Exception& e) {
++#if defined(__EMSCRIPTEN__)
++        // FCWEB: log the REAL failure before the reporting path runs; that path
++        // once crashed (getPythonPath on a dead interpreter) and ate the message.
++        emscripten_log(EM_LOG_ERROR, "[fcweb] App init failed: %s", e.what());
++#endif
+         e.reportException();
+         exit(1);
+     }
 @@ -358,15 +544,34 @@
      std::clog.rdbuf(oldclog);
      std::cerr.rdbuf(oldcerr);
