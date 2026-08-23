@@ -649,7 +649,7 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
      status = PyConfig_SetBytesArgv(&config, argc, argv);
      if (PyStatus_Exception(status)) {
          throw Base::RuntimeError("Failed to set config");
-@@ -626,7 +641,42 @@
+@@ -626,7 +641,71 @@
  
      status = Py_InitializeFromConfig(&config);
      if (PyStatus_Exception(status)) {
@@ -684,6 +684,35 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
 +        } else {
 +            fprintf(stderr, "[FCWEB] init failed, NO pending exception (Py_IsInitialized=%d)\n",
 +                    Py_IsInitialized());
++        }
++        // The raise is inside frozen _setup, whose direct C calls consume collections
++        // built from the inittab (sys.builtin_module_names). Dump both: a garbage or
++        // NULL entry here convicts the table machinery in one run.
++        {
++            int fcN = 0;
++            for (struct _inittab* fcP = PyImport_Inittab; fcP && fcP->name; ++fcP, ++fcN) {
++                if (fcN < 6 || !fcP->initfunc) {
++                    fprintf(stderr, "[FCWEB]   inittab[%d] name=%s init=%p\n",
++                            fcN, fcP->name, reinterpret_cast<void*>(fcP->initfunc));
++                }
++            }
++            fprintf(stderr, "[FCWEB] inittab total=%d\n", fcN);
++            PyObject* fcBn = PySys_GetObject("builtin_module_names");
++            if (fcBn && PyTuple_Check(fcBn)) {
++                const Py_ssize_t fcL = PyTuple_GET_SIZE(fcBn);
++                fprintf(stderr, "[FCWEB] builtin_module_names len=%zd:\n", fcL);
++                for (Py_ssize_t fcI = 0; fcI < fcL; ++fcI) {
++                    PyObject* fcIt = PyTuple_GET_ITEM(fcBn, fcI);
++                    const char* fcNm = "<NULL>";
++                    if (fcIt) {
++                        fcNm = PyUnicode_Check(fcIt) ? PyUnicode_AsUTF8(fcIt) : "<non-str>";
++                    }
++                    fprintf(stderr, "[FCWEB]   bn[%zd]=%s\n", fcI, fcNm);
++                }
++            } else {
++                fprintf(stderr, "[FCWEB] builtin_module_names: %s\n",
++                        fcBn ? "<non-tuple>" : "<absent>");
++            }
 +        }
 +        std::string msg = std::string("Failed to init from config [func=")
 +            + (status.func ? status.func : "?") + " err="
