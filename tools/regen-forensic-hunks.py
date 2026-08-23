@@ -193,6 +193,47 @@ def edit_interp(lines, CR):
     return out
 
 
+def edit_appdirs(lines, CR):
+    """The true root cause of the 1.1.3 boot failure, finally printed in plain text by the
+    console mirror:
+
+        [fcweb] App init failed: Cannot determine the absolute path of the executable
+
+    FreeCAD 1.1 moved Application::FindHomePath into the new ApplicationDirectories.cpp.
+    The port patched the OLD location (Application.cpp @@ -3378/-3424: wasm has no
+    /proc/self/exe, use a fixed env-overridable prefix) and never this relocated copy, so
+    findHomePath() hit the readlink branch and threw out of App::Application::init.
+    Same fix, same shape, applied to every findHomePath variant in this file (only the
+    FC_OS_LINUX one compiles for wasm; the guard leaves the others untouched natively)."""
+    def A(t):
+        return t.encode() + CR
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if (line.rstrip(bytes([13])) == b'    if (Py_IsInitialized()) {'
+                and i >= 2
+                and lines[i-1].rstrip(bytes([13])) == b'    std::string homePath;'
+                and lines[i-2].rstrip(bytes([13])) == b'    std::string absPath;'):
+            out += [A('#if defined(FC_OS_EMSCRIPTEN)'),
+                    A('    // FCWEB: wasm has no /proc/self/exe, and Python is not initialized when this'),
+                    A('    // runs, so the readlink branch throws "Cannot determine the absolute path of'),
+                    A('    // the executable" out of App::Application::init. 1.1 relocated FindHomePath'),
+                    A('    // here; the port had fixed it at its old Application.cpp location only.'),
+                    A('    {'),
+                    A('        const char* h = getenv("FREECAD_WASM_HOME");'),
+                    A('        absPath = (h ? std::string(h) : std::string("/freecad")) + "/bin/FreeCADCmd";'),
+                    A('    }'),
+                    A('    if (true) {'),
+                    A('#else'),
+                    line,
+                    A('#endif')]
+        else:
+            out.append(line)
+        i += 1
+    return out
+
+
 def main():
     tree = sys.argv[1]
     tmp = os.path.join(tree, '..', 'dgen')
@@ -200,7 +241,8 @@ def main():
     specs = [('src/App/Application.cpp', edit_app), ('src/Gui/Application.cpp', edit_gui),
              ('src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp', edit_sketcher),
              ('src/Main/MainGui.cpp', edit_maingui),
-             ('src/Base/Interpreter.cpp', edit_interp)]
+             ('src/Base/Interpreter.cpp', edit_interp),
+             ('src/App/ApplicationDirectories.cpp', edit_appdirs)]
     blocks = {}
     for rel, fn in specs:
         raw = io.open(os.path.join(tree, rel), 'rb').read()
@@ -236,8 +278,9 @@ def main():
     kills = {'src/App/Application.cpp': (b'@@ -260,', b'@@ -1293,', b'@@ -1301,', b'@@ -1667,'),
              'src/Gui/Application.cpp': (b'@@ -698,',),
              'src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp': (b'@@ -56,', b'@@ -57,', b'@@ -58,'),
-             'src/Main/MainGui.cpp': (b'@@ -222,',),
-             'src/Base/Interpreter.cpp': ()}
+             'src/Main/MainGui.cpp': (b'@@ -209,', b'@@ -222,', b'@@ -276,', b'@@ -342,'),
+             'src/Base/Interpreter.cpp': (b'@@ -544,',),
+             'src/App/ApplicationDirectories.cpp': (b'@@ -667,', b'@@ -707,')}
     for rel, kill in kills.items():
         try:
             i, j = block_range(rel.encode())

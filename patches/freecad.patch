@@ -4653,3 +4653,46 @@ diff -ruNp a/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp b/src/Mod/Sk
  Base::Color Vcolor = Base::Color(static_cast<uint32_t>(VColorLong));
  }  // namespace
  SbColor DrawingParameters::CrossColorH(Hcolor.r, Hcolor.g, Hcolor.b);
+diff -ruNp a/src/App/ApplicationDirectories.cpp b/src/App/ApplicationDirectories.cpp
+--- a/src/App/ApplicationDirectories.cpp
++++ b/src/App/ApplicationDirectories.cpp
+@@ -667,7 +667,19 @@
+     // Python interpreter is already initialized.
+     std::string absPath;
+     std::string homePath;
++#if defined(FC_OS_EMSCRIPTEN)
++    // FCWEB: wasm has no /proc/self/exe, and Python is not initialized when this
++    // runs, so the readlink branch throws "Cannot determine the absolute path of
++    // the executable" out of App::Application::init. 1.1 relocated FindHomePath
++    // here; the port had fixed it at its old Application.cpp location only.
++    {
++        const char* h = getenv("FREECAD_WASM_HOME");
++        absPath = (h ? std::string(h) : std::string("/freecad")) + "/bin/FreeCADCmd";
++    }
++    if (true) {
++#else
+     if (Py_IsInitialized()) {
++#endif
+         // Note: `realpath` is known to cause a buffer overflow because it
+         // expands the given path to an absolute path of unknown length.
+         // Even setting PATH_MAX does not necessarily solve the problem
+@@ -707,7 +719,19 @@
+     // Python interpreter is already initialized.
+     std::string absPath;
+     std::string homePath;
++#if defined(FC_OS_EMSCRIPTEN)
++    // FCWEB: wasm has no /proc/self/exe, and Python is not initialized when this
++    // runs, so the readlink branch throws "Cannot determine the absolute path of
++    // the executable" out of App::Application::init. 1.1 relocated FindHomePath
++    // here; the port had fixed it at its old Application.cpp location only.
++    {
++        const char* h = getenv("FREECAD_WASM_HOME");
++        absPath = (h ? std::string(h) : std::string("/freecad")) + "/bin/FreeCADCmd";
++    }
++    if (true) {
++#else
+     if (Py_IsInitialized()) {
++#endif
+         // Note: `realpath` is known to cause a buffer overflow because it
+         // expands the given path to an absolute path of unknown length.
+         // Even setting PATH_MAX does not necessarily solve the problem
