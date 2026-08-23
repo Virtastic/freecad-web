@@ -4565,3 +4565,26 @@ diff -ruNp a/src/Mod/TechDraw/Gui/Rez.cpp b/src/Mod/TechDraw/Gui/Rez.cpp
      return Rez::m_rezFactor;
  }
  
+
+diff -ruNp a/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp b/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp
+--- a/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp
++++ b/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp
+@@ -56,10 +56,16 @@
+ 
+ namespace
+ {  // Anonymous namespace to avoid making those variables global
+-unsigned long HColorLong = Gui::ViewParams::instance()->getAxisXColor();
++// FCWEB: ViewParams::instance() here ran in __wasm_call_ctors, before main()
++// created the App::Application singleton, and threw Base::ValueError out of the
++// static initializer -- the wasm boot failure. (Desktop never sees this:
++// SketcherGui is a shared library, loaded after App init.) These are only
++// placeholders: the DrawingParameters ctor re-reads ViewParams when edit mode
++// starts -- so use the ViewParams defaults and make no call at all.
++unsigned long HColorLong = 0xCC333300;  // ViewParams AxisXColor default
+ Base::Color Hcolor = Base::Color(static_cast<uint32_t>(HColorLong));
+ 
+-unsigned long VColorLong = Gui::ViewParams::instance()->getAxisYColor();
++unsigned long VColorLong = 0x33CC3300;  // ViewParams AxisYColor default
+ Base::Color Vcolor = Base::Color(static_cast<uint32_t>(VColorLong));
+ }  // namespace
+ SbColor DrawingParameters::CrossColorH(Hcolor.r, Hcolor.g, Hcolor.b);

@@ -100,11 +100,46 @@ def edit_gui(lines, CR):
     return out
 
 
+def edit_sketcher(lines, CR):
+    """The root cause the forensics found. Two anonymous-namespace globals call
+    Gui::ViewParams::instance() -> GetParameterGroupByPath() at static-init time. On
+    desktop SketcherGui is a shared library loaded after App::Application::init(); in the
+    static wasm monolith every static ctor runs in __wasm_call_ctors, BEFORE main(), so
+    the App singleton is null and the lookup throws Base::ValueError with nothing to catch
+    it -- the boot failure this whole chain of diagnostics was chasing. Identified by
+    scanning __wasm_call_ctors' call sequence in the binary (tools/find-ctor-caller.py):
+    one SbColor ctor, instance(), color-unpack, instance(), color-unpack, then the long
+    run of SbColor statics -- exactly this file, lines 58-66.
+
+    The values are only PLACEHOLDERS: DrawingParameters' constructor re-assigns
+    CrossColorH/V from ViewParams when Sketcher edit mode starts, post-App-init. So the
+    fix is the ViewParams DEFAULTS (AxisXColor 0xCC333300, AxisYColor 0x33CC3300 --
+    ViewParams.h lines 69-70), constant-initialized, no call at all."""
+    def A(t):
+        return t.encode() + CR
+    out = []
+    for line in lines:
+        if b'HColorLong = Gui::ViewParams::instance()->getAxisXColor();' in line:
+            out += [A('// FCWEB: ViewParams::instance() here ran in __wasm_call_ctors, before main()'),
+                    A('// created the App::Application singleton, and threw Base::ValueError out of the'),
+                    A('// static initializer -- the wasm boot failure. (Desktop never sees this:'),
+                    A('// SketcherGui is a shared library, loaded after App init.) These are only'),
+                    A('// placeholders: the DrawingParameters ctor re-reads ViewParams when edit mode'),
+                    A('// starts -- so use the ViewParams defaults and make no call at all.'),
+                    A('unsigned long HColorLong = 0xCC333300;  // ViewParams AxisXColor default')]
+        elif b'VColorLong = Gui::ViewParams::instance()->getAxisYColor();' in line:
+            out.append(A('unsigned long VColorLong = 0x33CC3300;  // ViewParams AxisYColor default'))
+        else:
+            out.append(line)
+    return out
+
+
 def main():
     tree = sys.argv[1]
     tmp = os.path.join(tree, '..', 'dgen')
     os.makedirs(tmp, exist_ok=True)
-    specs = [('src/App/Application.cpp', edit_app), ('src/Gui/Application.cpp', edit_gui)]
+    specs = [('src/App/Application.cpp', edit_app), ('src/Gui/Application.cpp', edit_gui),
+             ('src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp', edit_sketcher)]
     blocks = {}
     for rel, fn in specs:
         raw = io.open(os.path.join(tree, rel), 'rb').read()
@@ -137,9 +172,19 @@ def main():
         hs = [k for k in range(i, j) if lst[k].startswith(b'@@')]
         return [(h, (hs[x + 1] if x + 1 < len(hs) else j)) for x, h in enumerate(hs)]
 
-    for rel, kill in (('src/App/Application.cpp', (b'@@ -259,', b'@@ -1293,', b'@@ -1665,')),
-                      ('src/Gui/Application.cpp', (b'@@ -695,',))):
-        i, j = block_range(rel.encode())
+    kills = {'src/App/Application.cpp': (b'@@ -260,', b'@@ -1293,', b'@@ -1301,', b'@@ -1667,'),
+             'src/Gui/Application.cpp': (b'@@ -698,',),
+             'src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp': ()}
+    for rel, kill in kills.items():
+        try:
+            i, j = block_range(rel.encode())
+        except StopIteration:
+            # file not previously in the patch -- append a fresh block at the end
+            raw.append('diff -ruNp a/%s b/%s' % (rel, rel))
+            raw.append('--- a/%s' % rel)
+            raw.append('+++ b/%s' % rel)
+            raw[-3:] = [x.encode() for x in raw[-3:]]
+            i, j = len(raw) - 3, len(raw)
         keep = []
         for h, he in spans(raw, i, j):
             if not any(raw[h].startswith(k) for k in kill):
@@ -155,7 +200,10 @@ def main():
         merged = sorted(hunklist(keep) + hunklist(new), key=lambda t: t[0])
         body = [x for _, chunk in merged for x in chunk]
         raw = raw[:i + 3] + body + raw[j:]
-    io.open(patch_path, 'wb').write(b'\n'.join(raw))
+    out = b'\n'.join(raw)
+    if not out.endswith(b'\n'):
+        out += b'\n'        # "patch unexpectedly ends in middle of line" otherwise
+    io.open(patch_path, 'wb').write(out)
     print('spliced diff-generated hunks into', patch_path)
 
 
