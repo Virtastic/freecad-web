@@ -211,6 +211,17 @@ def edit_appdirs(lines, CR):
     i = 0
     while i < len(lines):
         line = lines[i]
+        if line.rstrip(bytes([13])) == b'    struct passwd pwd {};':
+            # getUserHome(): getpwuid_r has no answer under emscripten and threw
+            # 'Getting HOME path from system failed!' out of App init. The runtime
+            # HOME is /home/web_user (the port already uses that path elsewhere).
+            out += [A('#if defined(FC_OS_EMSCRIPTEN)'),
+                    A('    // FCWEB: no passwd database in the browser.'),
+                    A('    return Base::FileInfo::stringToPath(std::string("/home/web_user"));'),
+                    A('#endif')]
+            out.append(line)
+            i += 1
+            continue
         if (line.rstrip(bytes([13])) == b'    if (Py_IsInitialized()) {'
                 and i >= 2
                 and lines[i-1].rstrip(bytes([13])) == b'    std::string homePath;'
@@ -280,7 +291,7 @@ def main():
              'src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp': (b'@@ -56,', b'@@ -57,', b'@@ -58,'),
              'src/Main/MainGui.cpp': (b'@@ -209,', b'@@ -222,', b'@@ -276,', b'@@ -342,'),
              'src/Base/Interpreter.cpp': (b'@@ -544,',),
-             'src/App/ApplicationDirectories.cpp': (b'@@ -667,', b'@@ -707,')}
+             'src/App/ApplicationDirectories.cpp': (b'@@ -352,', b'@@ -667,', b'@@ -707,')}
     for rel, kill in kills.items():
         try:
             i, j = block_range(rel.encode())

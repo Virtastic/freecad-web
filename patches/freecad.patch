@@ -4656,7 +4656,18 @@ diff -ruNp a/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.cpp b/src/Mod/Sk
 diff -ruNp a/src/App/ApplicationDirectories.cpp b/src/App/ApplicationDirectories.cpp
 --- a/src/App/ApplicationDirectories.cpp
 +++ b/src/App/ApplicationDirectories.cpp
-@@ -667,7 +667,19 @@
+@@ -353,6 +353,10 @@
+     fs::path path;
+ #if defined(FC_OS_LINUX) || defined(FC_OS_CYGWIN) || defined(FC_OS_BSD) || defined(FC_OS_MACOSX)
+     // Default paths for the user-specific stuff
++#if defined(FC_OS_EMSCRIPTEN)
++    // FCWEB: no passwd database in the browser.
++    return Base::FileInfo::stringToPath(std::string("/home/web_user"));
++#endif
+     struct passwd pwd {};
+     struct passwd *result {};
+     constexpr std::size_t bufferLength = 16384;
+@@ -667,7 +671,19 @@
      // Python interpreter is already initialized.
      std::string absPath;
      std::string homePath;
@@ -4676,7 +4687,7 @@ diff -ruNp a/src/App/ApplicationDirectories.cpp b/src/App/ApplicationDirectories
          // Note: `realpath` is known to cause a buffer overflow because it
          // expands the given path to an absolute path of unknown length.
          // Even setting PATH_MAX does not necessarily solve the problem
-@@ -707,7 +719,19 @@
+@@ -707,7 +723,19 @@
      // Python interpreter is already initialized.
      std::string absPath;
      std::string homePath;
