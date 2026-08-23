@@ -3464,7 +3464,7 @@ diff -ruNp a/src/Main/MainCmd.cpp b/src/Main/MainCmd.cpp
 diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -130,8 +130,194 @@ static void displayCritical(const QStrin
+@@ -130,8 +130,202 @@
      }
  }
  
@@ -3575,6 +3575,13 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
  int main(int argc, char** argv)
  {
 +#if defined(__EMSCRIPTEN__)
++    // Asyncify re-executes main() from the top on every suspension rewind, and only
++    // instrumented calls are skipped -- plain top-of-main code runs AGAIN for real.
++    // Re-registering a live interpreter's inittab was tolerated by older CPython;
++    // 3.13 is fatal: "_PyThreadState_Attach: non-NULL old thread state". Statics
++    // survive the rewind, so a run-once guard is the standard asyncify pattern.
++    static bool fcwebInittabDone = false;
++    if (!fcwebInittabDone) { fcwebInittabDone = true;
 +    PyImport_AppendInittab("Materials", PyInit_Materials);
 +    PyImport_AppendInittab("Part", PyInit_Part);
 +    PyImport_AppendInittab("PartGui", PyInit_PartGui);
@@ -3655,30 +3662,11 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 +    PyImport_AppendInittab("kiwisolver._cext", PyInit__cext);
 +    PyImport_AppendInittab("_ctypes", PyInit__ctypes);
 +    PyImport_AppendInittab("PIL._imaging", PyInit__imaging);
++    }
 +#endif
  #if defined(FC_OS_LINUX) || defined(FC_OS_BSD)
      setlocale(LC_ALL, "");       // use native environment settings
      setlocale(LC_NUMERIC, "C");  // except for numbers to not break XML import
-@@ -222,6 +222,19 @@
- #else
-         App::Application::init(argc, argv);
- #endif
-+#if defined(__EMSCRIPTEN__)
-+        {
-+            // FCWEB: selftest of the Python error machinery, pre-Gui. See the
-+            // regen tool for the full account of the PyErr recursion this probes.
-+            Base::PyGILStateLocker fcwebLock;
-+            fprintf(stderr, "[fcweb] pyerr selftest: raising...\n");
-+            PyErr_SetString(PyExc_ValueError, "fcweb selftest");
-+            const int fcwebOk = PyErr_ExceptionMatches(PyExc_ValueError);
-+            PyErr_Clear();
-+            fprintf(stderr, "[fcweb] pyerr selftest: ok=%d exc_check=%d\n",
-+                    fcwebOk, PyExceptionClass_Check(PyExc_SystemError));
-+        }
-+#endif
-         // to set window icon on wayland, the desktop file has to be available to the compositor
-         QGuiApplication::setDesktopFileName(
-             QString::fromStdString(App::Application::Config()["DesktopFileName"])
 @@ -358,15 +544,34 @@
      std::clog.rdbuf(oldclog);
      std::cerr.rdbuf(oldcerr);
