@@ -649,7 +649,7 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
      status = PyConfig_SetBytesArgv(&config, argc, argv);
      if (PyStatus_Exception(status)) {
          throw Base::RuntimeError("Failed to set config");
-@@ -626,7 +641,108 @@
+@@ -626,7 +641,180 @@
  
      status = Py_InitializeFromConfig(&config);
      if (PyStatus_Exception(status)) {
@@ -748,6 +748,78 @@ diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
 +                    PyObject* fcMeth = PyObject_GetAttrString(fcImp, "is_frozen");
 +                    fprintf(stderr, "[FCWEB] replay getattr(_imp,is_frozen): %s\n",
 +                            fcMeth ? Py_TYPE(fcMeth)->tp_name : "FAILED");
++                }
++            }
++            if (fcMods) {
++                PyObject* fcSysM = PyDict_GetItemString(fcMods, "sys");
++                PyObject* fcImpM = PyDict_GetItemString(fcMods, "_imp");
++                PyObject* fcBoot = PyDict_GetItemString(fcMods, "_frozen_importlib");
++                // 1. replay the whole frozen _install from C. Same bytecode, same
++                //    inputs -- reproducing here gives an on-demand repro.
++                if (fcBoot && fcSysM && fcImpM) {
++                    PyErr_Clear();
++                    PyObject* fcR2 = PyObject_CallMethod(fcBoot, "_install", "OO", fcSysM, fcImpM);
++                    if (fcR2) {
++                        fprintf(stderr, "[FCWEB] replay _install: OK\n");
++                    } else {
++                        PyObject* fcT2 = nullptr;
++                        PyObject* fcV2 = nullptr;
++                        PyObject* fcB2 = nullptr;
++                        PyErr_Fetch(&fcT2, &fcV2, &fcB2);
++                        PyObject* fcS2 = fcV2 ? PyObject_Str(fcV2) : nullptr;
++                        fprintf(stderr, "[FCWEB] replay _install FAILED: %s\n",
++                                (fcS2 && PyUnicode_Check(fcS2)) ? PyUnicode_AsUTF8(fcS2) : "(?)");
++                        for (PyObject* fcC2 = fcB2; fcC2 && fcC2 != Py_None;) {
++                            PyTracebackObject* fcO2 = reinterpret_cast<PyTracebackObject*>(fcC2);
++                            PyCodeObject* fcK2 = fcO2->tb_frame ? PyFrame_GetCode(fcO2->tb_frame) : nullptr;
++                            if (fcK2) {
++                                fprintf(stderr, "[FCWEB]   at %s:%d\n",
++                                        PyUnicode_AsUTF8(fcK2->co_name), fcO2->tb_lineno);
++                            }
++                            fcC2 = reinterpret_cast<PyObject*>(fcO2->tb_next);
++                        }
++                    }
++                }
++                // 2. FCWEB_PROBE: run arbitrary Python from the environment at this
++                //    exact failure point. Iterating hypotheses via ENV costs a page
++                //    reload; iterating via patch costs a two-hour CI round.
++                const char* fcProbe = getenv("FCWEB_PROBE");
++                if (fcProbe && fcProbe[0]) {
++                    PyErr_Clear();
++                    PyObject* fcG = PyDict_New();
++                    PyObject* fcBins = PyDict_GetItemString(fcMods, "builtins");
++                    if (fcG && fcBins) {
++                        PyDict_SetItemString(fcG, "__builtins__", fcBins);
++                        if (fcSysM) PyDict_SetItemString(fcG, "sys", fcSysM);
++                        if (fcImpM) PyDict_SetItemString(fcG, "_imp", fcImpM);
++                        if (fcBoot) PyDict_SetItemString(fcG, "_bootstrap", fcBoot);
++                        PyObject* fcPR = PyRun_String(fcProbe, Py_file_input, fcG, fcG);
++                        if (fcPR) {
++                            PyObject* fcOut = PyDict_GetItemString(fcG, "OUT");
++                            PyObject* fcOS = fcOut ? PyObject_Str(fcOut) : nullptr;
++                            fprintf(stderr, "[FCWEB] probe OK: %s\n",
++                                    (fcOS && PyUnicode_Check(fcOS)) ? PyUnicode_AsUTF8(fcOS) : "(no OUT)");
++                        } else {
++                            PyObject* fcT3 = nullptr;
++                            PyObject* fcV3 = nullptr;
++                            PyObject* fcB3 = nullptr;
++                            PyErr_Fetch(&fcT3, &fcV3, &fcB3);
++                            PyObject* fcTS = fcT3 ? PyObject_Str(fcT3) : nullptr;
++                            PyObject* fcVS = fcV3 ? PyObject_Str(fcV3) : nullptr;
++                            fprintf(stderr, "[FCWEB] probe FAILED: %s :: %s\n",
++                                    (fcTS && PyUnicode_Check(fcTS)) ? PyUnicode_AsUTF8(fcTS) : "(?)",
++                                    (fcVS && PyUnicode_Check(fcVS)) ? PyUnicode_AsUTF8(fcVS) : "(?)");
++                            for (PyObject* fcC3 = fcB3; fcC3 && fcC3 != Py_None;) {
++                                PyTracebackObject* fcO3 = reinterpret_cast<PyTracebackObject*>(fcC3);
++                                PyCodeObject* fcK3 = fcO3->tb_frame ? PyFrame_GetCode(fcO3->tb_frame) : nullptr;
++                                if (fcK3) {
++                                    fprintf(stderr, "[FCWEB]   at %s:%d\n",
++                                            PyUnicode_AsUTF8(fcK3->co_name), fcO3->tb_lineno);
++                                }
++                                fcC3 = reinterpret_cast<PyObject*>(fcO3->tb_next);
++                            }
++                        }
++                    }
 +                }
 +            }
 +        }
