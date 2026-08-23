@@ -32,10 +32,32 @@ ply                     BSD-3-Clause        https://github.com/dabeaz/ply
 typing_extensions       PSF-2.0             https://github.com/python/typing_extensions
 Emscripten / LLVM       MIT and NCSA        https://emscripten.org
 
-Full texts for the vendored copies held in this repository are in LICENSES/.
-The remaining components ship their licenses within their own source trees under
-deps/ (not committed here; see BUILD-WEH.md for the pinned versions and how to
-obtain them).
+Full texts for every licence this build ships under are in LICENSES/ (LGPL-2.1 is
+LICENSE at the repository root). The remaining components ship their licences within
+their own source trees under deps/ (not committed here; see BUILD-WEH.md for the
+pinned versions and how to obtain them).
+
+The running application serves this attribution at /legal.html, linked from the boot
+screen, alongside same-origin copies of LICENSE, NOTICE and LICENSES/ -- so the
+notices reach a user who cannot reach GitHub. ci.yml's `licensing` job keeps that
+true: it fails the build if an authored file loses its SPDX header, if the app stops
+linking the attribution page, or if the image stops shipping it.
+
+================================================================================
+Corresponding source (LGPL sections 4 and 6)
+================================================================================
+
+There is no written-offer step: everything needed to modify a component and relink
+this application is public.
+
+  * https://github.com/Virtastic/freecad-web  -- build scripts, front-end shell, CI
+  * patches/                                  -- every modification to FreeCAD and its
+                                                 dependencies, against pinned upstream
+  * BUILD-WEH.md                              -- pinned versions and the exact build
+                                                 procedure, including how to obtain the
+                                                 dependency sources not committed here
+  * .../releases                              -- the published artifacts, each traceable
+                                                 to the CI run and commit that built it
 
 ================================================================================
 Components shipped as SEPARATE WebAssembly modules

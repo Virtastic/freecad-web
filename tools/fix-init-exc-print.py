@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Make the port's Py_InitializeFromConfig failure branch print the pending exception.
 
 One-shot patch-text surgery on the existing @@ -641 Interpreter.cpp hunk (port-authored

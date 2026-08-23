@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Put the hand-written compat headers where every build script force-includes them from
 # ($DW/include), and refuse to continue if one is missing.
 #

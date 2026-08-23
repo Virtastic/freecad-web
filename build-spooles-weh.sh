@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build SPOOLES 2.2 (CalculiX's direct sparse solver) as a wasm static library.
 #
 # SPOOLES ships a per-directory makeLib system that shells out to sh/awk and hardcodes

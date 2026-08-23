@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build libffi (pyodide's wasm-capable fork) + CPython _ctypes for wasm.
 # Enables the `ctypes` stdlib module (and thus matplotlib's interactive QtAgg
 # canvas). libffi creates function-table entries at runtime for closures, so the

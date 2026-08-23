@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Production compose for freecad.virtastic.app — synced to /opt/freecad/ on the OVH VPS.
 # One static-serving nginx container joined to the shared `nostalgia` docker network; the shared
 # edge Caddy reaches it by name (freecad:80). Publishes NO host ports — only the edge talks to it.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Check that every ported block still sits in the function it was written for.
 
     python tools/check-hunk-placement.py OLD.patch NEW.patch

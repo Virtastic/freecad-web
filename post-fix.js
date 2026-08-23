@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (c) Virtastic
 // Injected via --post-js. Qt-for-WebAssembly's event glue calls getWasmTableEntry
 // from callback scopes where emscripten 3.1.70's module-local definition isn't
 // visible; expose it (and setWasmTableEntry) globally so those calls resolve.

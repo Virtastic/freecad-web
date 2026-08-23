@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Re-apply the GL fixes that live in the linked FreeCAD.js, not in any source file.
 
 These patch emscripten's generated GL-emulation JS, so they cannot be expressed in

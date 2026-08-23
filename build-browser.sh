@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build a BROWSER variant of FreeCADCmd: no NODERAWFS; preload the python stdlib
 # and FreeCAD resources into MEMFS so it runs in a browser tab (served via COOP/COEP).
 set -e

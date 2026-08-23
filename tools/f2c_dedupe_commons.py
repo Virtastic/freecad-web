@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Give each Fortran COMMON block exactly one definition across f2c's output.
 
 f2c emits a COMMON block as a tentative definition -- `struct { ... } debug_;` -- in

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 name: build the Python extension libraries (wasm)
 
 # The FreeCAD C++ compiles clean (2676/2676) but does not LINK, and this is most of what

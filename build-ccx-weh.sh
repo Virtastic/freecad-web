@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build CalculiX (ccx) as a wasm static library.
 #
 # Pipeline per Fortran file:  tools/f77ify.py (F90 -> F77)  ->  f2c  ->  emcc

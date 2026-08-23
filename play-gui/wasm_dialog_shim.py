@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # FreeCAD-WASM: make Python-triggered modal dialogs safe under Emscripten Asyncify.
 #
 # Why: on the wasm build (Qt-for-WebAssembly + -sASYNCIFY), a modal QDialog/

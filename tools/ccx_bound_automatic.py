@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Give CalculiX's F90 automatic arrays a fixed bound plus a runtime guard.
 
 An automatic array is a local whose size is a runtime expression:

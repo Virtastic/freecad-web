@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Generate the meson cross-files from their .in templates, substituting the repo root.
 #
 # The cross-files need ABSOLUTE paths (meson resolves [binaries] against PATH, not the

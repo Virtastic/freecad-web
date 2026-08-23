@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Link the CalculiX wasm module that FreeCAD-Web calls instead of the ccx binary.
 # Run build-{spooles,libf2c,arpack,ccx}-weh.sh first.
 #

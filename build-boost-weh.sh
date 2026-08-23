@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build the Boost libs FreeCAD core needs, static, for wasm32-emscripten (-pthread).
 set -e
 cd "$(dirname "$0")"

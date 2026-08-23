@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Phase 1: OCCT 7.8.1 static cross-compile for wasm32-emscripten.
 # Mirrors the CS-Web emcmake+Ninja pattern. Headless geometry kernel only.
 set -e

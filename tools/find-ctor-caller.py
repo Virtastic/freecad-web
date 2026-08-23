@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Which static initializer calls a given function? Answered from the wasm binary itself.
 
     python tools/find-ctor-caller.py FreeCAD.wasm "ViewParams::instance"

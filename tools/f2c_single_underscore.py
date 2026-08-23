@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Match gfortran's external-name convention in f2c's output.
 
 A Fortran symbol becomes a C symbol by appending an underscore -- `op_corio` ->

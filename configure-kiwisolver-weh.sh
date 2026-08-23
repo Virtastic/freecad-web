@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Cross-compile kiwisolver 1.4.7 (matplotlib layout dependency) to wasm.
 # kiwisolver is a small header-only-solver C++ extension (module kiwisolver._cext,
 # PyInit__cext). setuptools-based, so we compile its 7 sources directly with em++.

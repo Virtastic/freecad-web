@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build the FreeCAD GUI (FreeCAD.js) for a browser tab: preload resources into
 # MEMFS (no NODERAWFS) and run main() on a worker (PROXY_TO_PTHREAD) so the Qt
 # event loop doesn't block the browser main thread.

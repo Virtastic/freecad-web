@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # gmsh as a standalone wasm module (its own .wasm, loaded on demand) so FreeCAD's FEM
 # workbench can mesh in the browser. FreeCAD drives gmsh through a file boundary
 # (write <Part>_Geometry.brep + shape2mesh.geo -> run -> read <name>.unv), so we only

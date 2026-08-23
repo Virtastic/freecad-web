@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # CPython stage 2 only: emscripten cross build using the already-built host python.exe.
 set -e
 cd "$(dirname "$0")"

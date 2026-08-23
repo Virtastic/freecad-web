@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Spike (c): link embed.cpp against our wasm libpython3.13.a and run in node.
 set -e
 cd "$(dirname "$0")"

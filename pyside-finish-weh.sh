@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 cd "$(dirname "$0")"
 . toolchain/env.sh
 TARGETS="libpyside/libpyside6.abi3.a PySide6/QtCore/QtCore.abi3.a PySide6/QtGui/QtGui.abi3.a PySide6/QtWidgets/QtWidgets.abi3.a"

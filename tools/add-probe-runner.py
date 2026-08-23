@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Extend the init-failure diagnostics with a bytecode replay and an ENV probe runner.
 
 Run AFTER tools/fix-init-exc-print.py (patch-text surgery on the same hunk).

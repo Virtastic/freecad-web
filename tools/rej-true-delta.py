@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Extract the REAL change out of a whole-file patch hunk.
 
 patches/freecad.patch stores nine files as a single hunk covering the entire file -- 3,538

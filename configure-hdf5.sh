@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Port HDF5 1.14.3 to wasm32-emscripten (static, -pthread). Needed by FreeCAD's
 # SMESH MED driver and the FEM/MED file format. Pure C — cross-compiles with the
 # node emulator running HDF5's small configure-time test programs.

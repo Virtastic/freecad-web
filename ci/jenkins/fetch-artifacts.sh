@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Fetch the prebuilt WASM artifacts from a GitHub Release into play-gui/.
 #
 # freecad-web does NOT compile in CI: the toolchain build (boost + cpython + gmsh + calculix +

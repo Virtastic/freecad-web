@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Run headless FreeCADCmd (wasm) in node with resources + python stdlib wired.
 cd "$(dirname "$0")"
 ROOT="$PWD"

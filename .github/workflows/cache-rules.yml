@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 name: cache rules (freecad.virtastic.app)
 
 # Apply the edge cache rule that infra/terraform/main.tf declares but production does not have.

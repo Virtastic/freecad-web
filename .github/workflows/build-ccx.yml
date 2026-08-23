@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 name: build ccx.wasm
 
 # Build the CalculiX solver module in CI, on a hosted runner.

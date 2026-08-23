@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build ARPACK + the BLAS/LAPACK it needs as a wasm static library.
 #
 # CalculiX is not buildable without ARPACK: feasibledirection.c -- which ccx_2.22.c calls

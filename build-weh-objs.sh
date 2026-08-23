@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build weh-objs/*.o -- the objects that are linked into FreeCAD.wasm but are NOT built by
 # cmake. configure-gui-weh.sh names all seven on CMAKE_EXE_LINKER_FLAGS, so the link fails
 # without them, and until now they existed only as em++ command lines in comments and in

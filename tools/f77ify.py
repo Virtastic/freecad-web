@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Rewrite CalculiX's Fortran into something f2c (FORTRAN 77 only) can parse.
 
 CalculiX writes F90 constructs into fixed-form .f files. f2c rejects them, which is the

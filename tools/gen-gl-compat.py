@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Generate toolchain/include/gl_compat.h from gl_legacy_stubs.c plus the legacy enum table.
 
 gl_compat.h is force-included into Coin3D and every FreeCAD translation unit. It supplies

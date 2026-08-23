@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Add clang options to shiboken's emscripten branch, each independently switchable.
 
     python tools/patch-pyside-clang-options.py deps/src/pyside-setup

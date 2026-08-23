@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Heap-allocate stack QMenus and make exec() non-blocking, for Qt-for-WebAssembly.
 
 WHY

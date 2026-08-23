@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Let shiboken skip injecting clang's builtin include directory.
 
     python tools/patch-shiboken-builtin-includes.py deps/src/pyside-setup

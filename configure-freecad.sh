@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Phase 2: configure FreeCAD core (Base + App + Part) headless for wasm.
 # BUILD_GUI=OFF, only Part among Mods. Links our OCCT + CPython(-mt) + Boost + Xerces.
 set -e

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Rebuild FreeCAD (keep-going) and summarize distinct errors + files.
 cd "$(dirname "$0")"
 . toolchain/env.sh >/dev/null 2>&1

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Make every reference to a symbol agree on one argument count.
 
 CalculiX calls a few of its own routines with more arguments than the routine declares

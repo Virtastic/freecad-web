@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Which routines does the DEPLOYED CalculiX module stub?
 
 docs-ccx-stubbed-routines.md said the binary "cannot be mined for a stub list" because the

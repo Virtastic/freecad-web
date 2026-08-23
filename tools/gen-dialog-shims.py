@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Embed the dialog-shim sources into freecad-gui.html as base64.
 
 The two shims run inside the wasm CPython, so they have to reach it as a string in the

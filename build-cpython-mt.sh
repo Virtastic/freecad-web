@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Rebuild CPython 3.13 emscripten target WITH wasm pthreads (-pthread/atomics)
 # so it links cleanly with -pthread OCCT/Boost/Qt. Separate builddir.
 set -e

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Cross-compile Pillow 10.4.0 PIL._imaging to wasm (matplotlib image I/O + PNG).
 # PNG uses Pillow's zlib-based codec (no libpng needed); JPEG/TIFF/WebP/LCMS/
 # FreeType-text extensions are omitted (not needed by matplotlib's Agg PNG path).

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # FreeCAD-Web JSPI build: route Python-triggered modal dialogs through a BLOCKING
 # HTML modal (_fcwebdlg.confirm) that returns the user's REAL choice. Native Qt
 # QMessageBox windows don't composite their body/buttons on this Qt-wasm build,

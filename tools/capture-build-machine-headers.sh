@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Capture the hand-written headers that exist only on the build machine.
 #
 # WHY THIS EXISTS

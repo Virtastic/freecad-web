@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Phase 3: configure FreeCAD WITH GUI (BUILD_GUI=ON) for wasm.
 # PySide/Shiboken OFF (don't exist for wasm); Coin3D viewport via bundled Quarter.
 set -e

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Ship the built freecad image to the test app server and (re)start it there.
 # Run ON the build server (holds freecad:test, can ssh the test host). The image is large (~785 MB,
 # the engine + 341 MB preload are baked in), so `docker save | ssh docker load` takes a bit over the

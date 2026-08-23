@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 name: probe — can the FreeCAD deps build in CI?
 
 # I claimed a FreeCAD relink "needs the build machine" and could not happen in CI, citing 14

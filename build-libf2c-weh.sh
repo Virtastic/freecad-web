@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build libf2c (the runtime that f2c-translated Fortran calls into) as a wasm library.
 #
 # Needed because CalculiX is Fortran and emscripten has no Fortran frontend: tools/f77ify.py

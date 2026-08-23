@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build the freecad test image from the fetched artifacts (run after fetch-artifacts.sh).
 # Applies the GL patch table then packages infra/Dockerfile (nginx + the site). Mirrors the
 # "Apply the GL patch table" + "Build image" steps in .github/workflows/deploy-ovh.yml.

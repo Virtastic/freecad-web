@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Link the gmsh wasm module that FreeCAD-Web calls instead of the gmsh binary.
 # Run configure-gmsh-weh.sh + `cmake --build build-gmsh-weh --target lib` first.
 #

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Cross-compile pivy (the SWIG Coin3D bindings) to wasm32-emscripten, producing the
 # _coin.a that MainGui.cpp registers as the builtin `_coin` module.
 #

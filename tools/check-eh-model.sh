@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Which objects on the link line were built with JS exception handling?
 #
 #     bash tools/check-eh-model.sh [extra dirs...]

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 name: deploy-ovh (freecad.virtastic.app)
 
 # Deploys the FreeCAD-WASM app to the OVH VPS via the self-hosted runner in the Virtastic org.
@@ -244,6 +246,7 @@ jobs:
             --data '{"files":[
               "https://freecad.virtastic.app/",
               "https://freecad.virtastic.app/freecad-gui.html",
+              "https://freecad.virtastic.app/legal.html",
               "https://freecad.virtastic.app/FreeCAD.js",
               "https://freecad.virtastic.app/FreeCAD.wasm",
               "https://freecad.virtastic.app/FreeCAD.data",

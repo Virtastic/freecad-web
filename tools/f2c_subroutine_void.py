@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Make f2c-translated Fortran SUBROUTINEs return void instead of int.
 
 wasm is strictly typed: if one object declares `foo_` as returning void and another

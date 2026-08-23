@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Cross-compile numpy's C extensions to wasm32-emscripten and harvest them into
 # deps/wasm/lib/numpy-mod/ for the FreeCAD monolith link.
 #

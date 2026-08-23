@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Translate every CalculiX source locally and report exactly which routines get stubbed.
 #
 # The same question build-ccx.yml answers, in about two minutes on a laptop instead of a

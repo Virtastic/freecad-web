@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Stop PySide's QtCore expecting wrappers for classes Qt-for-wasm has not got.
 
     python tools/patch-pyside-drop-absent-classes.py deps/src/pyside-setup

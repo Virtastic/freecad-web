@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Capture exactly which source revision each dependency was built from.
 #
 # WHY THIS EXISTS

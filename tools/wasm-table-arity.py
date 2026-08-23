@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Ground-truth table-index -> parameter-count map from a wasm binary.
 
     python tools/wasm-table-arity.py FreeCAD.wasm out.json [sample]

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Publish a boot-verified link artifact as the latest GitHub Release, ready for the
 # Jenkins test deploy and the OVH prod deploy (both consume the LATEST release).
 #

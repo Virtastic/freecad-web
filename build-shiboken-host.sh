@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build the HOST shiboken6 generator -- the tool that reads Qt's headers and emits the C++
 # binding sources the wasm shiboken then compiles.
 #

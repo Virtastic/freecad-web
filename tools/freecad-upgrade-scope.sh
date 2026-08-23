@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Measure what upgrading FreeCAD costs, by trying the patch instead of estimating it.
 #
 # patches/freecad.patch is 31,718 lines across 83 files and is the single largest piece of

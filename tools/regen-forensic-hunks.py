@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Regenerate the four boot-forensics hunks with real diff(1) and splice them in.
 
     python tools/regen-forensic-hunks.py <freecad-tree>

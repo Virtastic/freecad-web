@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build Xerces-C (XML, required by FreeCAD Base) static for wasm (-pthread).
 set -e
 cd "$(dirname "$0")"

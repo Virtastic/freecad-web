@@ -67,5 +67,8 @@ shell in [play-gui/](play-gui/), and the verification harnesses in `scratchpad/`
 ## License
 
 LGPL-2.1-or-later, matching FreeCAD. See [LICENSE](LICENSE), and [NOTICE](NOTICE) for the
-third-party components and their licenses — including Gmsh and CalculiX, which ship as
+third-party components and their licenses. Every file this repository authors carries an
+SPDX header (`tools/add-spdx-headers.py --check`, enforced by the `licensing` job in CI),
+full license texts live in [LICENSES/](LICENSES), and the running app serves the same
+attribution at `/legal.html` — linked from the boot screen — including Gmsh and CalculiX, which ship as
 separate GPL WebAssembly modules rather than being linked in.

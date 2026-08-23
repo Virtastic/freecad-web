@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Check a unified diff against a source tree byte for byte, the way GNU patch does.
 
     python tools/check-patch-applies.py patches/freecad.patch deps/src/freecad

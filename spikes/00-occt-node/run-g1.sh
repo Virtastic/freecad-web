@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # G1: compile occt_probe.cpp against our own libTK*.a and run under node.
 set -e
 cd "$(dirname "$0")"

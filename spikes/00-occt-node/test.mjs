@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (c) Virtastic
 // Spike (b): independent OCCT-in-wasm signal using the prebuilt opencascade.js.
 // box ∪ sphere -> tessellate -> count triangles -> write STEP. Throwaway smoke test.
 // index.js uses bundler-style .wasm imports that don't resolve under plain node,

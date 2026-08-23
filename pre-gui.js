@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (c) Virtastic
 // Injected via --pre-js for the browser GUI build. Sets FreeCAD's env + writable
 // dirs in the wasm MEMFS before main runs (paths point at the preloaded resources).
 Module['preRun'] = Module['preRun'] || [];

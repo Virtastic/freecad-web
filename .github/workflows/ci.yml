@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 name: ci
 
 # The first automated verification this repo has ever had.
@@ -327,3 +329,39 @@ jobs:
           else
             echo "::warning::deps-versions.txt is missing — 21 of 23 dependencies have no recorded version, so this build is not reproducible. Run tools/capture-dep-versions.sh on the build machine (read-only, ~1 min) and commit the output. See BUILD-WEH.md."
           fi
+
+  # LGPL compliance is a build invariant here, not a one-time edit: the app ships under
+  # LGPL-2.1-or-later, links LGPL-3.0 Qt/PySide, and fetches GPL gmsh/ccx as separate modules.
+  # Two things must stay true on every commit -- every file we author says what it is licensed
+  # under, and the attribution page the app links to is actually in the image.
+  licensing:
+    runs-on: [self-hosted, ovh, virtastic]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Every authored file carries an SPDX header
+        run: python3 tools/add-spdx-headers.py --check
+
+      - name: The attribution page exists, is linked, and is shipped
+        run: |
+          set -e
+          test -s play-gui/legal.html || { echo "::error::play-gui/legal.html is missing"; exit 1; }
+          grep -qF 'legal.html' play-gui/freecad-gui.html \
+            || { echo "::error::freecad-gui.html no longer links the license page"; exit 1; }
+          grep -qF 'play-gui/legal.html' infra/Dockerfile \
+            || { echo "::error::infra/Dockerfile does not COPY legal.html into the image"; exit 1; }
+          grep -qF 'COPY LICENSE NOTICE' infra/Dockerfile \
+            || { echo "::error::infra/Dockerfile no longer serves LICENSE/NOTICE same-origin"; exit 1; }
+          echo "OK"
+
+      - name: License texts present for everything we ship under
+        run: |
+          set -e
+          for l in LGPL-3.0-only GPL-2.0-or-later GPL-3.0-only Apache-2.0 BSL-1.0 PSF-2.0; do
+            test -s "LICENSES/$l.txt" || { echo "::error::LICENSES/$l.txt missing"; exit 1; }
+          done
+          test -s LICENSE && test -s NOTICE
+          echo "OK"

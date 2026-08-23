@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Emit a Fortran stub for every CalculiX routine f2c cannot translate.
 
 Some of ccx's F90 has no FORTRAN 77 spelling -- chiefly automatic arrays sized by a

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Post-deploy contract test against a deployed freecad origin (or the container port directly).
 # Usage: smoke-test.sh <base-url>     e.g. smoke-test.sh http://192.168.1.131:8084
 set -uo pipefail
@@ -21,6 +23,12 @@ has '^cross-origin-embedder-policy: *require-corp' "$H" && pass "COEP: require-c
 # 2. Root serves the FreeCAD GUI (freecad-gui.html), not a 404 / directory listing.
 B="$(get "$BASE/")"
 has 'freecad' "$B" && pass "root serves the FreeCAD GUI" || fail "GUI at /" "root did not return freecad-gui.html"
+
+# 2b. LGPL attribution reachable same-origin: the license page, the license text itself, and the
+# link from the app shell to it. A deploy that drops these is a compliance regression, not cosmetics.
+[ "$(code "$BASE/legal.html")" = 200 ] && pass "legal.html served" || fail "legal.html" "LGPL attribution page missing"
+[ "$(code "$BASE/LICENSE")"    = 200 ] && pass "LICENSE served"    || fail "LICENSE" "license text not served same-origin"
+has 'legal.html' "$B" && pass "GUI links to the license page" || fail "license link" "freecad-gui.html has no legal.html link"
 
 # 3. The engine triple is present and typed. FreeCAD.data is the 341 MB preload FS.
 [ "$(code "$BASE/FreeCAD.wasm")" = 200 ] && pass "FreeCAD.wasm served" || fail "FreeCAD.wasm" "engine wasm missing"

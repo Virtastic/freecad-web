@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Build f2c natively, so a translation question takes a second instead of a CI run.
 #
 # WHY THIS EXISTS

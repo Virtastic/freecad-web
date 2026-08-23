@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Drop f2c's hidden CHARACTER-length arguments where CalculiX's C code omits them.
 
 For `character` dummy arguments, f2c (like gfortran) appends a hidden `ftnlen` parameter

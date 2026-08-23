@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Spike (c) prerequisite: cross-build CPython 3.13 for wasm32-emscripten (node
 # target = threads + direct FS). Produces libpython3.13.a + pyconfig.h to embed.
 set -e

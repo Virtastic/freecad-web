@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Count and name the entry points in gl_legacy_stubs.c that still do nothing.
 
 That file exists to DEFINE the fixed-function GL symbols emscripten's LEGACY_GL_EMULATION

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Copy a fresh link's engine triple into play-gui and rebuild the local .data.gz.
 #
 # The page loads FreeCAD.data.gz, never FreeCAD.data (see freecad-gui.html locateFile),

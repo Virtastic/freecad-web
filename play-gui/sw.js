@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (c) Virtastic
 // Deliberately a pass-through. This service worker exists so the app is installable, and
 // an INSTALLED app is the one case where Chrome grants persistent storage without a
 // prompt -- which is what stops the browser evicting a user's documents under disk

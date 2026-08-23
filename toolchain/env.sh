@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 # Single source of truth for the FreeCAD-Web wasm toolchain.
 # Usage:  . toolchain/env.sh   (source it; do NOT execute)
 #

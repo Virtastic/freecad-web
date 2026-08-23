@@ -12,7 +12,10 @@ RUN rm -f /etc/nginx/conf.d/default.conf
 COPY infra/nginx.conf /etc/nginx/conf.d/freecad.conf
 
 # Front-end (in git).
-COPY play-gui/freecad-gui.html play-gui/qtloader.js /usr/share/nginx/html/
+COPY play-gui/freecad-gui.html play-gui/qtloader.js play-gui/legal.html /usr/share/nginx/html/
+# LGPL attribution served same-origin, so the notices reach a user who cannot reach GitHub.
+COPY LICENSE NOTICE /usr/share/nginx/html/
+COPY LICENSES /usr/share/nginx/html/LICENSES/
 # Installability: an installed app is the only case where Chrome grants persistent
 # storage without a prompt, which is what protects a user's documents from eviction.
 COPY play-gui/manifest.webmanifest play-gui/sw.js play-gui/icon-192.png play-gui/icon-512.png /usr/share/nginx/html/
