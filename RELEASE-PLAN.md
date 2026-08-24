@@ -227,7 +227,7 @@ These are unknowns rather than known defects. Each needs one measurement.
 | V2 | Did the 117 MB `FreeCAD.data` reduction lose anything? | **I answered "no" earlier today and I was wrong.** I checked the workbenches and the examples, found them present, and stopped. It lost the entire third-party Python stack — see R10. The lesson is in the failure: I verified the things I thought of, then reported a general conclusion. |
 | V3 | Can the build be reproduced from a clean checkout? | ROADMAP #11: `gl_compat.h` and `qprocess_stub.h` exist only on the build machine. One command (`tools/capture-build-machine-headers.sh`) and a commit. |
 | V4 | Which dependency versions is production built from? | `deps-versions.txt` is absent; CI warns rather than fails. Run `tools/capture-dep-versions.sh` on the build machine and commit. |
-| V5 | Keep `--profiling-funcs` in production? | It adds ~25 MB to a 182 MB wasm. It is why today's crash could be named at all. Decide deliberately: named crash reports, or a faster first load. |
+| V5 | Keep `--profiling-funcs` in production? | **Answered: keep it.** The raw 25.6 MB looked expensive; compressed it is not. Measured on the shipped binary: the name section is 14% of the raw wasm but costs **2.9 MB of the compressed download** (59.9 -> 57.0 MB), about 3% of an ~88 MB first load. Three per cent is not worth trading for crash reports that cannot name a function. |
 | V6 | Does the 3D view render correctly on real hardware? | ROADMAP Tier 2 #4: nine fixed-function GL calls silently do nothing. Establish whether any affects correct output, as opposed to performance. |
 
 ---

@@ -582,3 +582,19 @@ out-of-memory warning and draw-call batching at once. Both looked completely nor
 
 So for every item here: **add a positive signal that the thing is alive**, not just an absence of
 errors. "Nothing threw" has already proven itself worthless twice in this codebase.
+
+## First-load size, measured 2026-08-24
+
+What a first-time visitor actually pulls over the wire, from production, with brotli:
+
+| asset | compressed |
+|---|---|
+| FreeCAD.wasm | 57.9 MB |
+| FreeCAD.data | 30.2 MB |
+| FreeCAD.js | 0.17 MB |
+| **total** | **~88 MB** |
+
+So the "~115 MB first load" quoted elsewhere is the uncompressed figure; the real cost is
+~88 MB. And the `--profiling-funcs` name section, which looks like the obvious thing to
+cut at 25.6 MB raw, is worth only **2.9 MB compressed** -- 3% of the download in exchange
+for crash reports that can name a function. Keep it.
