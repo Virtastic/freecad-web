@@ -509,7 +509,7 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
   window.__fcwebUseGestureNav = function () {
     try {
       var m = window.fcInstance;
-      if (!m || !m._fcweb_run_python) { return false; }
+      if (!window.__fcAppReady || !m || !m._fcweb_run_python) { return false; }
       var py = [
         "import FreeCAD as App",
         "try:",
@@ -1111,7 +1111,7 @@ window.fcRunPy = fcRunPy;
      ""].join("\n");
    const iv=setInterval(()=>{
      try{
-       const m=window.fcInstance; if(!m||!m._fcweb_run_python) return;
+       const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
        if(window.__fcPyBusy) return;   // don't re-enter CPython while a call is suspended
        if(/FCFS-DONE/.test(logEl.textContent||'')){ clearInterval(iv); __fsApplied(); return; }
        const n=new TextEncoder().encode(FS_PY).length+1, q=m._malloc(n);
@@ -1293,6 +1293,14 @@ window.fcRunPy = fcRunPy;
          } catch(e){} },
        qt: {
          onLoaded: () => { const st=document.getElementById('status'); if(st) st.textContent='FreeCAD loaded';
+           // The ONLY point at which it is safe to call into CPython from JS. Every gate
+           // below used to ask whether _fcweb_run_python EXISTS, which is true the moment
+           // the module instantiates -- long before main() has initialised the interpreter.
+           // A poller that fired in that window re-entered Python and killed the app with
+           // "Fatal Python error: _PyThreadState_Attach: non-NULL old thread state" while
+           // the runtime was still 'preinitialized'. Qt fires onLoaded once the app is up,
+           // so this flag is the real readiness signal.
+           window.__fcAppReady = true;
            // App is up: reveal the full-window FreeCAD UI and drop the loader.
            __setBoot('Ready'); __hideBoot();
            // Time to Ready, and whether the engine came from cache. Together these
@@ -1587,7 +1595,7 @@ window.fcRunPy = fcRunPy;
       ""
     ].join("\n");
     function publishRect(){
-      try{ var m=window.fcInstance; if(!m||!m._fcweb_run_python) return;
+      try{ var m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
         if(window.__fcPyBusy) return;   // skip tick while a call is suspended (no reentrancy)
         var n=new TextEncoder().encode(RECT_PY).length+1; var q=m._malloc(n);
         m.stringToUTF8(RECT_PY,q,n); fcRunPy(m,q);
@@ -1603,7 +1611,7 @@ window.fcRunPy = fcRunPy;
     // event-loop trap (or any reload) never loses work — web-app "always restore"
     // model. saveCopy() persists without touching the doc's own path/dirty state.
     function runPy(src){
-      try{ var m=window.fcInstance; if(!m||!m._fcweb_run_python) return;
+      try{ var m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
         if(window.__fcPyBusy) return;   // skip tick while a call is suspended (no reentrancy)
         var n=new TextEncoder().encode(src).length+1; var q=m._malloc(n);
         m.stringToUTF8(src,q,n); fcRunPy(m,q);
@@ -1775,7 +1783,7 @@ window.fcRunPy = fcRunPy;
       var installed = false, restored = false;
       function ready(){
         var m = window.fcInstance;
-        return !!(m && m._fcweb_run_python && m.FS && !window.__fcPyBusy);
+        return !!(window.__fcAppReady && m && m._fcweb_run_python && m.FS && !window.__fcPyBusy);
       }
       // Did the install actually take? runPy reports nothing -- it swallows every error and
       // is a silent no-op whenever the interpreter is not yet able to take the call. The
@@ -2152,7 +2160,8 @@ window.fcRunPy = fcRunPy;
    so the broken native dialog never fires). Work also persists across reloads via the
    IDBFS home, so nothing is lost regardless. */
 (function(){
-  function py(code){ var m=window.fcInstance; if(!m||!m._fcweb_run_python) return false;
+  function py(code){ var m=window.fcInstance;
+    if(!window.__fcAppReady||!m||!m._fcweb_run_python) return false;
     var n=new TextEncoder().encode(code).length+1, q=m._malloc(n); m.stringToUTF8(code,q,n);
     // Route through the guarded runner: sets __fcPyBusy so periodic intervals back
     // off while this (possibly long, JSPI-suspending) op runs, and frees the ptr
@@ -2160,7 +2169,8 @@ window.fcRunPy = fcRunPy;
     // suspended call still holds it). File open/save go through here.
     (window.fcRunPy||function(mm,pp){ mm._fcweb_run_python(pp); mm._free(pp); })(m,q);
     return true; }
-  function ready(){ var m=window.fcInstance; return m && m._fcweb_run_python && m.FS; }
+  function ready(){ var m=window.fcInstance;
+    return window.__fcAppReady && m && m._fcweb_run_python && m.FS; }
 
   async function download(){
     if(!ready()){ return; }
@@ -2523,7 +2533,7 @@ window.fcRunPy = fcRunPy;
   // close one level per press, as on desktop.
   function closeActivePopup(){
     try{
-      var m=window.fcInstance; if(!m||!m._malloc) return;
+      var m=window.fcInstance; if(!window.__fcAppReady||!m||!m._malloc) return;
       if(window.__fcPyBusy) return;           // never re-enter a running interpreter
       var code="from PySide6 import QtWidgets as _W\n"
              + "_w=_W.QApplication.activePopupWidget()\n"
