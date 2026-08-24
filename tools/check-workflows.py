@@ -56,7 +56,15 @@ def scripts_vs_paths(path, doc, text):
     invoked = set(re.findall(r'(?:^|\s)(?:bash|sh)\s+([A-Za-z0-9_./-]+\.sh)', text))
     missing = []
     for s in sorted(invoked):
-        if any(fnmatch.fnmatch(s, pat.strip("'\"")) for pat in watched):
+        # Steps often run from a build directory, so a script is invoked as
+        # ../scratchpad/x.sh while on.push.paths names it scratchpad/x.sh. Compare the
+        # repo-relative form too, or the check reports a file that IS watched.
+        forms = {s, s.lstrip('./')}
+        t = s
+        while t.startswith('../'):
+            t = t[3:]
+            forms.add(t)
+        if any(fnmatch.fnmatch(f, pat.strip("'\"")) for f in forms for pat in watched):
             continue
         missing.append(s)
     return missing

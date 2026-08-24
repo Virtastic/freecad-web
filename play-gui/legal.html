@@ -1,0 +1,145 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Copyright (c) Virtastic -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeCAD-Web — licenses and attribution</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1b1b1a; --dim: #5b5b57; --rule: #dedcd6;
+    --card: #ffffff; --accent: #b04b2f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --fg: #e9e8e4; --dim: #9d9c96; --rule: #2f2f34;
+      --card: #1e1e22; --accent: #e08a63;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1.25rem 5rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  h2 { font-size: 1.06rem; margin: 2.4rem 0 .7rem; padding-bottom: .35rem;
+       border-bottom: 1px solid var(--rule); }
+  p, li { color: var(--fg); }
+  .lede { color: var(--dim); margin: 0 0 2rem; }
+  a { color: var(--accent); }
+  code { background: var(--card); border: 1px solid var(--rule); border-radius: 4px;
+         padding: .08em .35em; font-size: .88em; }
+  .tblwrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px;
+             background: var(--card); }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--rule);
+           white-space: nowrap; }
+  th { color: var(--dim); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .note { background: var(--card); border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+          border-radius: 6px; padding: .85rem 1rem; margin: 1rem 0; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+           color: var(--dim); font-size: .87rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Licenses and attribution</h1>
+<p class="lede">FreeCAD-Web is FreeCAD compiled to WebAssembly, published by
+  <a href="https://virtastic.app" target="_blank" rel="noopener">Virtastic</a>. It is not a work
+  of the FreeCAD project, and the FreeCAD project neither endorses nor supports it — please report
+  problems to <a href="https://github.com/Virtastic/freecad-web/issues" target="_blank" rel="noopener">this
+  repository</a>, not to FreeCAD upstream.</p>
+
+<h2>This application</h2>
+<p>The build scripts, patches, front-end shell and verification harnesses are licensed under the
+  <strong>GNU Lesser General Public License, version 2.1 or (at your option) any later
+  version</strong> — matching FreeCAD, from which the shipped application is derived.
+  Full text: <a href="https://github.com/Virtastic/freecad-web/blob/main/LICENSE" target="_blank" rel="noopener">LICENSE</a>.</p>
+
+<h2>Corresponding source</h2>
+<p>Everything needed to rebuild and relink this application is public — there is no written-offer
+  step to go through:</p>
+<ul>
+  <li><a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">github.com/Virtastic/freecad-web</a>
+    — build scripts, the front-end shell, and the CI that produces the published binaries</li>
+  <li><code>patches/</code> — every modification made to FreeCAD and its dependencies, as
+    applied patches against the pinned upstream sources</li>
+  <li><a href="https://github.com/Virtastic/freecad-web/blob/main/BUILD-WEH.md" target="_blank" rel="noopener">BUILD-WEH.md</a>
+    — the pinned upstream versions and the exact build procedure, including how to obtain the
+    dependency sources that are not committed here</li>
+  <li><a href="https://github.com/Virtastic/freecad-web/releases" target="_blank" rel="noopener">Releases</a>
+    — the published <code>.wasm</code>/<code>.js</code>/<code>.data</code> artifacts, each traceable
+    to the CI run and commit that produced it</li>
+</ul>
+<div class="note">LGPL §6 asks that a user be able to modify the covered library and relink the
+  combined work. Because the whole build — sources, patches, flags, and CI definition — is
+  published, anyone can change a component and produce their own binaries with the same procedure
+  we use.</div>
+
+<h2>Components linked into FreeCAD.wasm</h2>
+<div class="tblwrap">
+<table>
+  <thead><tr><th>Component</th><th>License</th><th>Upstream</th></tr></thead>
+  <tbody>
+    <tr><td>FreeCAD</td><td>LGPL-2.1-or-later</td><td><a href="https://github.com/FreeCAD/FreeCAD" target="_blank" rel="noopener">FreeCAD/FreeCAD</a></td></tr>
+    <tr><td>Open CASCADE Technology</td><td>LGPL-2.1 + exception</td><td><a href="https://dev.opencascade.org" target="_blank" rel="noopener">dev.opencascade.org</a></td></tr>
+    <tr><td>Coin3D</td><td>BSD-3-Clause</td><td><a href="https://github.com/coin3d/coin" target="_blank" rel="noopener">coin3d/coin</a></td></tr>
+    <tr><td>VTK</td><td>BSD-3-Clause</td><td><a href="https://vtk.org" target="_blank" rel="noopener">vtk.org</a></td></tr>
+    <tr><td>CPython</td><td>PSF-2.0</td><td><a href="https://python.org" target="_blank" rel="noopener">python.org</a></td></tr>
+    <tr><td>Qt 6</td><td>LGPL-3.0-only</td><td><a href="https://qt.io" target="_blank" rel="noopener">qt.io</a></td></tr>
+    <tr><td>PySide6 / shiboken6</td><td>LGPL-3.0-only</td><td><a href="https://wiki.qt.io/Qt_for_Python" target="_blank" rel="noopener">Qt for Python</a></td></tr>
+    <tr><td>IfcOpenShell</td><td>LGPL-3.0-or-later</td><td><a href="https://ifcopenshell.org" target="_blank" rel="noopener">ifcopenshell.org</a></td></tr>
+    <tr><td>pivy</td><td>ISC</td><td><a href="https://github.com/coin3d/pivy" target="_blank" rel="noopener">coin3d/pivy</a></td></tr>
+    <tr><td>NumPy</td><td>BSD-3-Clause</td><td><a href="https://numpy.org" target="_blank" rel="noopener">numpy.org</a></td></tr>
+    <tr><td>matplotlib</td><td>matplotlib (PSF-based)</td><td><a href="https://matplotlib.org" target="_blank" rel="noopener">matplotlib.org</a></td></tr>
+    <tr><td>kiwisolver</td><td>BSD-3-Clause</td><td><a href="https://github.com/nucleic/kiwi" target="_blank" rel="noopener">nucleic/kiwi</a></td></tr>
+    <tr><td>Xerces-C++</td><td>Apache-2.0</td><td><a href="https://xerces.apache.org" target="_blank" rel="noopener">xerces.apache.org</a></td></tr>
+    <tr><td>Boost</td><td>BSL-1.0</td><td><a href="https://boost.org" target="_blank" rel="noopener">boost.org</a></td></tr>
+    <tr><td>ply</td><td>BSD-3-Clause</td><td><a href="https://github.com/dabeaz/ply" target="_blank" rel="noopener">dabeaz/ply</a></td></tr>
+    <tr><td>typing_extensions</td><td>PSF-2.0</td><td><a href="https://github.com/python/typing_extensions" target="_blank" rel="noopener">python/typing_extensions</a></td></tr>
+    <tr><td>Emscripten / LLVM</td><td>MIT and NCSA</td><td><a href="https://emscripten.org" target="_blank" rel="noopener">emscripten.org</a></td></tr>
+  </tbody>
+</table>
+</div>
+<p>Full license texts are in
+  <a href="https://github.com/Virtastic/freecad-web/tree/main/LICENSES" target="_blank" rel="noopener">LICENSES/</a>.</p>
+
+<h2>Separate WebAssembly modules (GPL)</h2>
+<div class="tblwrap">
+<table>
+  <thead><tr><th>Component</th><th>License</th><th>Upstream</th></tr></thead>
+  <tbody>
+    <tr><td>Gmsh</td><td>GPL-2.0-or-later</td><td><a href="https://gmsh.info" target="_blank" rel="noopener">gmsh.info</a></td></tr>
+    <tr><td>CalculiX (ccx)</td><td>GPL-2.0-or-later</td><td><a href="https://calculix.de" target="_blank" rel="noopener">calculix.de</a></td></tr>
+  </tbody>
+</table>
+</div>
+<p>These are GPL and are deliberately <strong>not</strong> linked into <code>FreeCAD.wasm</code>.
+  Each is built as its own standalone WebAssembly module (<code>gmsh.wasm</code>,
+  <code>ccx.wasm</code>) with its own filesystem, fetched on demand, and driven through a
+  JavaScript bridge that copies input files in and results back out — the same arrangement desktop
+  FreeCAD uses when it shells out to an installed <code>gmsh</code> or <code>ccx</code> binary.
+  Anyone redistributing this application should confirm that arrangement against their own legal
+  advice rather than relying on this note.</p>
+
+<h2>Qt licensing</h2>
+<p>Qt is used under the LGPL-3.0. <code>play-gui/qtloader.js</code> is distributed by The Qt Company
+  under <code>LicenseRef-Qt-Commercial OR GPL-3.0-only</code> and retains its original header.
+  FreeCAD is LGPL-2.1-or-later, so it may be used under LGPL-3.0, which is compatible with
+  GPL-3.0; the combined work is distributed under terms no weaker than those.</p>
+
+<h2>Trademarks</h2>
+<p>“FreeCAD” is a trademark of the FreeCAD project, used here to identify the software this build
+  is derived from. No affiliation or endorsement is claimed.</p>
+
+<footer>
+  <a href="./freecad-gui.html">← back to FreeCAD-Web</a> ·
+  <a href="https://github.com/Virtastic/freecad-web/blob/main/NOTICE" target="_blank" rel="noopener">NOTICE</a> ·
+  <a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">Source</a>
+</footer>
+</main>
+</body>
+</html>

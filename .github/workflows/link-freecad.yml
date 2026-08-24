@@ -43,6 +43,11 @@ on:
       - 'patches/apply.sh'
       - 'toolchain/**'
       - 'tools/patch-freecad-js.py'
+      # Run by this workflow, so a change to them must retrigger it (the hygiene
+      # check in ci.yml enforces exactly this).
+      - 'tools/check-eh-model.sh'
+      - 'tools/check-symbol-hijack.py'
+      - 'tools/wasm-func-sig.py'
   workflow_dispatch:
     inputs:
       rebuild:

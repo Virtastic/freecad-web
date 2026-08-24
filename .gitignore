@@ -28,6 +28,8 @@
 # ignore the multi-hundred-MB build artifacts (shipped via GitHub Release instead).
 /play-gui/*
 !/play-gui/freecad-gui.html
+# LGPL attribution page, served same-origin and linked from the boot screen
+!/play-gui/legal.html
 !/play-gui/qtloader.js
 # installability assets: hand-authored / generated once, shipped in the image
 !/play-gui/manifest.webmanifest
