@@ -8,11 +8,18 @@
 # GitHub Release before building (see .github/workflows/deploy-ovh.yml).
 FROM nginx:1.27-alpine
 
-RUN rm -f /etc/nginx/conf.d/default.conf
+# Drop the base image's stock pages along with its config. /index.html was serving nginx's
+# "Welcome to nginx!" placeholder with a 200 and Google indexed it; 50x.html is equally
+# reachable. Neither is ever used -- errors are served by the locations in nginx.conf.
+RUN rm -f /etc/nginx/conf.d/default.conf \
+          /usr/share/nginx/html/index.html \
+          /usr/share/nginx/html/50x.html
 COPY infra/nginx.conf /etc/nginx/conf.d/freecad.conf
 
 # Front-end (in git).
 COPY play-gui/freecad-gui.html play-gui/qtloader.js play-gui/legal.html /usr/share/nginx/html/
+# Social card + crawler files (see the matching locations in infra/nginx.conf).
+COPY play-gui/og.png play-gui/robots.txt play-gui/sitemap.xml /usr/share/nginx/html/
 # LGPL attribution served same-origin, so the notices reach a user who cannot reach GitHub.
 COPY LICENSE NOTICE /usr/share/nginx/html/
 COPY LICENSES /usr/share/nginx/html/LICENSES/
@@ -27,6 +34,16 @@ COPY play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data /usr/share/
 # -6 rather than -9: within a megabyte of the same size for a fraction of the build time.
 RUN gzip -6 -k /usr/share/nginx/html/FreeCAD.data \
  && test -s /usr/share/nginx/html/FreeCAD.data.gz
+# And a brotli copy. Every browser that can run this build has accepted br for years, and
+# it beats gzip by a useful margin on this payload -- which is the largest single thing a
+# first-time visitor waits for. nginx prefers it when the client offers br and falls back
+# to the gzip copy otherwise, so nothing regresses for anything older.
+# -q 5 rather than -q 11: minutes of build time instead of an hour, for a few per cent.
+RUN apk add --no-cache brotli \
+ && brotli -q 5 -k /usr/share/nginx/html/FreeCAD.data \
+ && test -s /usr/share/nginx/html/FreeCAD.data.br \
+ && apk del brotli \
+ && ls -l /usr/share/nginx/html/FreeCAD.data.gz /usr/share/nginx/html/FreeCAD.data.br
 # Tie the data URL to the data's CONTENT. The page requests FreeCAD.data.gz?v=... and that
 # response is Cache-Control: immutable for a year, so a hand-written version is a trap:
 # ship new data under the old ?v= and every returning visitor keeps the stale copy until
