@@ -4867,3 +4867,67 @@ diff -ruNp a/src/App/ApplicationDirectories.cpp b/src/App/ApplicationDirectories
          // Note: `realpath` is known to cause a buffer overflow because it
          // expands the given path to an absolute path of unknown length.
          // Even setting PATH_MAX does not necessarily solve the problem
+diff --git a/src/Mod/AddonManager/NetworkManager.py b/src/Mod/AddonManager/NetworkManager.py
+--- a/src/Mod/AddonManager/NetworkManager.py
++++ b/src/Mod/AddonManager/NetworkManager.py
+@@ -88,6 +88,51 @@
+     default_timeout = 30000
+ 
+ 
++# FCWEB: route every request through this origin's allow-listed proxy.
++#
++# The browser build is cross-origin isolated -- a -pthread wasm needs SharedArrayBuffer,
++# which needs COOP+COEP -- and under COEP:require-corp the browser refuses any
++# cross-origin response that does not carry CORP. Almost nothing sends it, GitHub
++# included, so from inside the page every Addon Manager request fails before it starts.
++# Going through our own origin makes the response same-origin, which satisfies COEP.
++#
++# The map must match the keys in infra/nginx.conf. A host that is not listed is left
++# exactly as it was, so it fails visibly rather than being sent somewhere the user did
++# not ask for.
++FCWEB_PROXY_HOSTS = {
++    "github.com": "github",
++    "api.github.com": "api",
++    "codeload.github.com": "codeload",
++    "raw.githubusercontent.com": "raw",
++    "objects.githubusercontent.com": "objects",
++    "wiki.freecad.org": "wiki",
++    "freecad.org": "docs",
++    "www.freecad.org": "docs",
++}
++
++
++def fcweb_proxy_url(url):
++    """Rewrite an absolute URL onto this origin's proxy path, in the browser build only."""
++    try:
++        import sys                      # not imported at module scope in this file
++        from urllib.parse import urlsplit, urlunsplit
++
++        if sys.platform != "emscripten":
++            return url
++        parts = urlsplit(str(url))
++        if parts.scheme not in ("http", "https"):
++            return url
++        key = FCWEB_PROXY_HOSTS.get(parts.netloc.lower())
++        if key is None:
++            return url
++        # Root-relative on purpose: it resolves against whatever origin the app is served
++        # from, so one build works on localhost in a gate run and in production.
++        return urlunsplit(("", "", "/proxy/%s/%s" % (key, parts.path.lstrip("/")),
++                           parts.query, ""))
++    except Exception:
++        return url
++
++
+ class QueueItem:
+     """A container for information about an item in the network queue."""
+ 
+@@ -408,7 +453,7 @@
+         url: str, timeout_ms: int, disable_cache: bool
+     ) -> QtNetwork.QNetworkRequest:
+         """Construct a network request to a given URL"""
+-        request = QtNetwork.QNetworkRequest(QtCore.QUrl(url))
++        request = QtNetwork.QNetworkRequest(QtCore.QUrl(fcweb_proxy_url(url)))
+         request.setAttribute(
+             QtNetwork.QNetworkRequest.RedirectPolicyAttribute,
+             QtNetwork.QNetworkRequest.ManualRedirectPolicy,
