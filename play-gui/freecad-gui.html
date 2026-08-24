@@ -1499,6 +1499,13 @@ window.fcRunPy = fcRunPy;
   (function(){
     var qp = new URLSearchParams(location.search);
     // The 3D overlay compositor activates whenever 3D rendering is on.
+    // ?no3d must switch OFF the compositor and nothing else. It used to `return` from
+    // this IIFE -- which by then also contained runPy, the memory-pressure monitor and
+    // the autosave install/restore poll, so ?no3d silently disabled AUTOSAVE. That is
+    // the very failure the comment above this IIFE warns about, one level deeper, and it
+    // was measured: with ?no3d the observer never installs and .fcweb-autosave is never
+    // created; without it the observer reports installed in 13 s.
+    (function(){          // compositor only -- do not put durability code in here
     if (qp.has('no3d')) return;  // compositor on by default with the 3D pipeline
     var ov, ovctx, buf, imgData, lastW=0, lastH=0, throttle=0;
     // Publish the 3D widget's on-screen rect (CSS px, relative to the main window)
@@ -1620,6 +1627,8 @@ window.fcRunPy = fcRunPy;
     }
     setTimeout(publishRect, 4000); setInterval(publishRect, 1500);
     window.addEventListener('resize', ()=>setTimeout(publishRect,120));
+
+    })();               // end compositor
 
     // --- Crash resilience: periodic auto-save of open documents to the persisted
     // home (IDBFS), plus restore-on-boot. FreeCAD's native recovery writes to /tmp
