@@ -140,8 +140,15 @@ AR="$ROOT/emsdk/upstream/bin/llvm-ar"
 # file's existence would have let that archive skip the very rebuild that fixes it.
 SKIP_BUILD=""
 QTW_A="$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a"
-if [ -s "$QTW_A" ] && [ -n "$NM" ] \
+# EVERY module in MODULES has to be accounted for here, not just the one this check grew
+# up with. Adding Network to the list changed nothing on a cached tree: QtWidgets was
+# present with its PyInit, the build skipped, and the archive gate then failed on a
+# QtNetwork that was never going to be built. A skip condition that does not know what it
+# is skipping is how a build silently ignores a change to its own inputs.
+QTN_A="$ROOT/build-pyside-wasm/PySide6/QtNetwork/QtNetwork.abi3.a"
+if [ -s "$QTW_A" ] && [ -s "$QTN_A" ] && [ -n "$NM" ] \
    && "$NM" "$QTW_A" 2>/dev/null | grep -q "PyInit_QtWidgets" \
+   && "$NM" "$QTN_A" 2>/dev/null | grep -q "PyInit_QtNetwork" \
    && [ "$FCWEB_PYSIDE_REBUILD" != "1" ]; then
     echo "=== PYSIDE: archives already present and carry their PyInit -- skipping the build"
     echo "    (set FCWEB_PYSIDE_REBUILD=1 to force a rebuild)"
