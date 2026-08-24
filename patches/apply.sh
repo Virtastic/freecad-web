@@ -36,28 +36,26 @@ apply_one() {
     want="$(sha256sum "$patch" 2>/dev/null | cut -d' ' -f1)"
     [ -n "$want" ] || want="$(shasum -a 256 "$patch" | cut -d' ' -f1)"
   fi
-  stale_stamp() {
-    # true when the tree cannot be shown to carry exactly this patch text
-    [ -n "$want" ] || return 1
-    [ -f "$stamp" ] || return 0
-    [ "$(cat "$stamp")" != "$want" ]
-  }
-  if stale_stamp; then
-    if [ "${FCWEB_ALLOW_STALE_PATCH:-0}" = "1" ]; then
-      echo "  !! $1: tree does not carry the current $2 (FCWEB_ALLOW_STALE_PATCH=1, continuing)"
-    elif [ -d "$tree" ]; then
+  # The marker decides first: it says whether SOME version of the patch is in the tree.
+  # Only then does the hash matter -- a freshly fetched, unpatched tree has no stamp and is
+  # not stale, it just needs patching. "Marker matches but hash does not" is the dangerous
+  # state, and the one that shipped a green build around a tree missing the shiboken fix.
+  if [ -n "$marker" ]; then
+    local mfile="$tree/${marker%%::*}" mtext="${marker#*::}"
+    if [ -f "$mfile" ] && grep -qF -- "$mtext" "$mfile"; then
+      if [ -z "$want" ] || { [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; }; then
+        echo "  == $1: already applied (marker + hash)"
+        [ -n "$want" ] && echo "$want" > "$stamp"
+        return 0
+      fi
+      if [ "${FCWEB_ALLOW_STALE_PATCH:-0}" = "1" ]; then
+        echo "  !! $1: tree carries a different $2 (FCWEB_ALLOW_STALE_PATCH=1, continuing)"
+        return 0
+      fi
       echo "  !! $1: $tree was patched with a DIFFERENT version of $2." >&2
       echo "     Delete the tree so it is re-fetched and re-patched, or set" >&2
       echo "     FCWEB_ALLOW_STALE_PATCH=1 if you know the delta does not matter." >&2
       return 1
-    fi
-  fi
-  if [ -n "$marker" ]; then
-    local mfile="$tree/${marker%%::*}" mtext="${marker#*::}"
-    if [ -f "$mfile" ] && grep -qF -- "$mtext" "$mfile"; then
-      echo "  == $1: already applied (marker, hash $(echo "$want" | cut -c1-8))"
-      [ -n "$want" ] && echo "$want" > "$stamp"
-      return 0
     fi
   fi
   if [ ! -d "$tree" ]; then
