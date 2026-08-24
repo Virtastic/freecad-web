@@ -109,7 +109,7 @@ jobs:
             deps/wasm/shiboken6
             build-shiboken-wasm
             build-pyside-wasm
-          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in') }}
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in', 'tools/stage-python-packages.sh', 'tools/verify-patch-applied.py') }}
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
 
@@ -695,4 +695,4 @@ jobs:
             deps/wasm/shiboken6
             build-shiboken-wasm
             build-pyside-wasm
-          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in') }}
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in', 'tools/stage-python-packages.sh', 'tools/verify-patch-applied.py') }}

@@ -187,6 +187,18 @@ jobs:
           need deps/wasm/shiboken6/lib/libshiboken6.abi3.a         "libshiboken6"        build-python-deps.yml
           need build-pyside-wasm/PySide6/QtNetwork/QtNetwork.abi3.a "PySide6 QtNetwork"   build-python-deps.yml
           need deps/wasm/pyside-pkg/PySide6/__init__.py            "pyside-pkg glue"     build-python-deps.yml
+          # The PYTHON half of every third-party package. The C half is linked from the
+          # archives above and registered in the inittab, so a build missing these produces
+          # a binary where numpy._core._multiarray_umath is a builtin that nothing can
+          # import -- FEM, Draft, BIM and Plot all dead, with every other gate green. That
+          # shipped once. It happened because the dependency lane staged the tree and then
+          # could not save its cache (the key did not cover the staging script), so the link
+          # restored a pre-staging cache and never noticed.
+          need deps/wasm/pyside-pkg/numpy/__init__.py               "numpy (python half)" build-python-deps.yml
+          need deps/wasm/pyside-pkg/matplotlib/__init__.py          "matplotlib (python)" build-python-deps.yml
+          need deps/wasm/pyside-pkg/PIL/__init__.py                 "PIL (python half)"   build-python-deps.yml
+          need deps/wasm/pyside-pkg/ifcopenshell/__init__.py        "ifcopenshell (py)"   build-python-deps.yml
+          need deps/wasm/pyside-pkg/pivy/pivy_meta.py               "pivy (python half)"  build-python-deps.yml
           exit $fail
 
       - name: Cache emsdk
