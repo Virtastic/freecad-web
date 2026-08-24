@@ -14,6 +14,23 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 ---
 
+---
+
+## Progress, 2026-08-24 (later the same day)
+
+| # | item | state |
+|---|---|---|
+| **R0** | boot gate | **done.** `tools/boot-gate.py` runs the artifact in headless Chromium and makes it build a `Part::Box`. Proven both ways: passes today's engine, and fails the pre-fix binary with the engine's own `err=failed to initialize importlib`. Wired into the link so no artifact ships unproven. |
+| **R0b** | restore scenario | **done.** A second scenario keeps one browser profile across two loads and requires the document to come back with its geometry intact (volume 480.0, not merely a name in a list). Fails the pre-fix shell with "autosave never installed". |
+| **R3** | shiboken buffer symbols | **fixed, awaiting the link that proves it.** Renamed in `patches/pyside-setup.patch`; PySide rebuilt green. `check-symbol-hijack.py` now watches all ten symbols and currently names the two that are still wrong in the shipped engine. |
+| **R2** | `QEventLoop::exit` null function | **still open, and now understood to be elusive.** It does not reproduce in headless Chromium with 3D on or off, with the restore path working. Left open rather than closed; the detector sits in the gate's fatal list so a recurrence fails CI instead of being noticed by a person. |
+| **R8** | `?no3d` disabled autosave | **found and fixed.** The compositor's early return sat in an IIFE that had grown to contain the memory monitor and the autosave install/restore poll, so the flag silently switched off durability. Users are on the default path, but `?no3d` is what someone with a GPU problem is told to use — and it is what the gate runs. |
+| **R9** | patched trees trusted a stamp | **found and fixed.** A run reported "already applied (marker + hash)" for a tree that lacked the lines the patch adds. `tools/verify-patch-applied.py` now checks the content, and both `apply.sh` and the workflow require stamp and content to agree. Second time this shape of bug has cost this project a build; the first cost it the boot. |
+
+Nothing in Section 1 has been dropped — R1 and R4 through R7 are untouched.
+
+---
+
 ## 0. The gap that let a dead build look healthy for the whole port
 
 Everything below matters less than this one item.
