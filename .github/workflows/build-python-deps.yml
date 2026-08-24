@@ -222,8 +222,12 @@ jobs:
             tree="deps/src/$1"; patch="patches/$2"; stamp="$tree/.fcweb-patch-$2.sha256"
             [ -d "$tree" ] || return 0
             want=$(sha256sum "$patch" | cut -d' ' -f1)
-            if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
-              echo "  ok    $1 carries the current $2"
+            # The stamp is a claim; the tree is the fact. A run once reported
+            # "already applied (marker + hash)" for a tree that plainly lacked the lines
+            # the patch adds, and the build failed on exactly those lines. So agree with
+            # the stamp only when the content agrees too.
+            if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]                && python3 tools/verify-patch-applied.py "$tree" "$patch" --quiet; then
+              echo "  ok    $1 carries the current $2 (stamp and content agree)"
               return 0
             fi
             echo "::notice::$1 was patched with a different (or unrecorded) $2 -- re-fetching"

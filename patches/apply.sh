@@ -43,8 +43,11 @@ apply_one() {
   if [ -n "$marker" ]; then
     local mfile="$tree/${marker%%::*}" mtext="${marker#*::}"
     if [ -f "$mfile" ] && grep -qF -- "$mtext" "$mfile"; then
-      if [ -z "$want" ] || { [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; }; then
-        echo "  == $1: already applied (marker + hash)"
+      # ... and the content has to agree with the stamp. A stamp is a claim ABOUT a
+      # tree; only the tree is the tree. This exact branch once passed a pyside-setup
+      # whose bufferprocs_py37.cpp lacked the lines the current patch adds.
+      if [ -z "$want" ] || { [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]            && python3 tools/verify-patch-applied.py "$tree" "$patch" --quiet; }; then
+        echo "  == $1: already applied (marker + hash + content)"
         [ -n "$want" ] && echo "$want" > "$stamp"
         return 0
       fi
