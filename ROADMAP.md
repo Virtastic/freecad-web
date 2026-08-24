@@ -396,6 +396,28 @@ build id and no document names.
 
 ---
 
+### 3b. shiboken still owns `PyObject_GetBuffer` / `PyBuffer_Release` *(lane A, 0.5 d)*
+
+The same hazard that cost the 1.1.3 boot, one layer down. shiboken's limited-API
+build defines its own `PyObject_GetBuffer` and `PyBuffer_Release`
+(`bufferprocs_py37.cpp`), and in this static monolith those win the symbols for the
+whole program — the wasm name section puts them at indices 742/743, in shiboken's
+object cluster, not CPython's. `patches/pyside-setup.patch` renames the
+`pep384impl.cpp` group out of the way but leaves this pair alone.
+
+Unlike `PyMethod_New`, these do not depend on lazily initialised state, so they are
+not obviously broken — shiboken's `Pep_buffer` is a re-declaration of `Py_buffer`
+with `#define Py_buffer Pep_buffer`, so the ABI matches. The behavioural path does
+differ (`PepType_AS_BUFFER` lookups rather than CPython's slot access), so **if a
+boot or a memoryview/io path fails after the interpreter comes up, this is the first
+suspect.** Treating it needs care: shiboken's own call sites are typed against
+`Pep_buffer`, so removing the definitions outright will not compile. Renaming, as
+the `pep384impl.cpp` group does, is the shape that works.
+
+`tools/check-symbol-hijack.py` deliberately does not fail on these yet — a check
+that fails on a known-unfixed condition is a check people learn to ignore. Add them
+to its `RENAMED` list in the same change that renames them.
+
 ## Tier 2 — rendering, and much cheaper than it looks
 
 ### 4. Nine fixed-function GL calls silently do nothing *(lane A2, 1–2 d)*
