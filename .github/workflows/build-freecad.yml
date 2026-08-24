@@ -258,7 +258,7 @@ jobs:
           if command -v swig >/dev/null 2>&1; then
             echo "  system swig: $(swig -version | grep -i version | head -1)"
           else
-            python3 -m pip install --quiet --break-system-packages swig 2>/dev/null \n              || python3 -m pip install --quiet swig
+            python3 -m pip install --quiet --break-system-packages swig 2>/dev/null || python3 -m pip install --quiet swig
           fi
           swig -version | grep -i version | head -1 | sed 's/^/  /'
 

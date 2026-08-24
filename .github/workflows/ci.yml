@@ -229,6 +229,14 @@ jobs:
       - name: Workflow files have no duplicate keys
         run: python3 tools/check-workflows.py
 
+      # A backslash-n that reaches a run block as two characters is not a newline: bash
+      # drops the backslash and passes a bare `n` as an argument. The first CI run of the
+      # boot gate died that way AFTER two hours of compiling, and the same mangling was
+      # sitting unnoticed in three older conditions -- one of which made the host shiboken
+      # skip-check always false, so it rebuilt LLVM-linked shiboken on every single run.
+      - name: Workflow run blocks have no mangled escapes
+        run: python3 tools/check-run-block-escapes.py
+
       - name: No absolute home directories in tracked files
         run: |
           if git grep -nE '/Users/[a-z]+/|C:\\\\Users\\\\' -- $(git ls-files) ; then

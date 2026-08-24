@@ -535,7 +535,7 @@ jobs:
 
           ver=$(grep -v '^#' patches/freecad.version | grep -v '^$' | head -1)
           echo "expecting App.Version() $ver"
-          python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 \n            --expect-version "$ver" --scenario all
+          python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version "$ver" --scenario all
 
       - name: Upload the boot-gate serve tree on failure
         if: failure()
