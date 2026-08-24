@@ -63,6 +63,8 @@ def main():
     ap.add_argument('--wait', type=int, default=45, help='seconds to watch after dispatch')
     ap.add_argument('--with-3d', action='store_true')
     ap.add_argument('--page', default='index.html')
+    ap.add_argument('--dump-js', default=None,
+                    help='JS expression evaluated after the script, for page state')
     args = ap.parse_args()
 
     code = io.open(args.script, encoding='utf-8').read()
@@ -115,6 +117,12 @@ def main():
                     print('   %s' % l[:400])
                 seen = len(lines)
                 time.sleep(2)
+            if args.dump_js:
+                try:
+                    print('--- page state ---')
+                    print('   %s' % page.evaluate(args.dump_js))
+                except Exception as e:
+                    print('   dump-js failed: %s' % e)
             errs = page.evaluate('window.__ERRS || []')
             if errs:
                 print('--- page errors ---')

@@ -29,7 +29,9 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 | **R4** | `QInputDialog` cancels everything | **closed by measurement, not by work.** The ROADMAP entry was stale: the stub is gone, the modal opens, and the typed value comes back. Now a gate scenario so it cannot rot again. |
 
-R1, R5, R6 and R7 are untouched.
+| **R5** | documents can be evicted | **built and wired; one human check left.** Manifest and service worker meet the installability bar, the install offer waits until real work is saved, and a refusal warns the user and offers a disk backup folder. The grant itself cannot be tested headlessly, so it moved to MANUAL-QA. |
+
+R1, R6 and R7 are untouched.
 
 ---
 
@@ -120,12 +122,25 @@ Kept as a gate scenario (`--scenario dialog`) rather than deleted, because this 
 class of feature — anything that asks for a name, a count or a length — and it broke
 silently once already.
 
-### R5. Documents can be evicted *(blocker — ROADMAP Tier 1 #2)*
+### R5. Documents can be evicted — **built; needs one human confirmation**
 
-Work lives in IDBFS and the browser may evict it. Losing a user's model is the worst
-failure this application can have, and it is worse than a crash because it is silent and
-unrecoverable. Installability (the PWA manifest) is the route to persistent storage without
-a prompt; verify the grant is actually obtained, rather than assuming the manifest is enough.
+Losing a user's model is the worst failure this application can have, and worse than a
+crash because it is silent. Checked what is actually there rather than assuming:
+
+- the manifest meets Chrome's installability bar (name, short_name, start_url, standalone,
+  192 and 512 icons including maskable) and `sw.js` registers with a fetch handler, so
+  `beforeinstallprompt` has what it needs to fire;
+- the install offer is deliberately deferred to the moment the user first saves real work,
+  which is the only moment the ask is about something they would mind losing;
+- when persistence is refused, the app warns in plain words and offers to mirror the work
+  into a real folder on disk;
+- both paths hang off `__fcWorkSaved`, which is called from the two real save routes
+  (the OS save dialog and File > Save / Save As / Export). A scripted `saveAs` does not
+  trigger them, which is correct.
+
+What remains cannot be automated: headless Chromium has no install UI, so the grant itself
+has to be confirmed by a person. Added to `MANUAL-QA.md` — install the app, then require
+`navigator.storage.persisted()` to return `true`.
 
 ### R6. Nothing reports failures from the field *(blocker — ROADMAP Tier 1 #3)*
 

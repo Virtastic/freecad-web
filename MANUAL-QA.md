@@ -59,7 +59,18 @@ wrong rather than anything that errors.
 **Files and persistence (4 min)**
 - [ ] Save the document, reload the browser tab, reopen it — geometry intact
 - [ ] Export a STEP and an STL; open the STEP back
-- [ ] **Save via the OS file dialog** — Chromium's `showSaveFilePicker` path cannot be
+- [ ] - [ ] **Save real work, then look for the storage offer.** After the first File > Save the
+      app should either offer to install (which is the only way Chrome grants persistent
+      storage) or, if it cannot, warn that the browser may clear your documents and offer a
+      backup folder. Seeing neither means the one safeguard against silent data loss is not
+      reaching users — the code paths exist and are wired to File > Save, but only a real
+      browser can prove the offer appears.
+- [ ] **Install it, then confirm persistence actually took.** With the app installed, run
+      `navigator.storage.persisted()` in the console: it must return `true`. This cannot be
+      tested headlessly — headless Chromium has no install UI — so it is checked here or
+      nowhere, and until it returns true a user's documents can be evicted.
+
+**Save via the OS file dialog** — Chromium's `showSaveFilePicker` path cannot be
       scripted, so only a person can confirm the picker appears and the file lands where
       they chose. (The download fallback other browsers use is verified automatically.)
 - [ ] **Choose a backup folder, then confirm files appear in it.** Same limitation:
