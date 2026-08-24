@@ -147,6 +147,19 @@ try:
 except Exception as _e:
     _s.__stderr__.write("FCNET " + repr({"error": -1, "bytes": 0, "why": repr(_e)}) + chr(10))
     _s.__stderr__.flush()
+
+# Separate try: "open this page" does not depend on QtNetwork, and one failing must
+# not hide the other. Reporting a working feature as broken is its own defect.
+try:
+    from PySide6 import QtCore as _QtCore, QtGui as _QtGui
+
+    _handled = _QtGui.QDesktopServices.openUrl(
+        _QtCore.QUrl("https://wiki.freecad.org/Main_Page"))
+    _s.__stderr__.write("FCOPEN " + repr({"handled": bool(_handled)}) + chr(10))
+    _s.__stderr__.flush()
+except Exception as _e2:
+    _s.__stderr__.write("FCOPEN " + repr({"handled": False, "why": repr(_e2)}) + chr(10))
+    _s.__stderr__.flush()
 '''
 
 COUNT_DOCS_PY = r'''
@@ -186,6 +199,14 @@ CAPTURE_JS = """
     },
     set(fn) { real = fn; },
   });
+  // Record window.open: "open this page" is nine call sites in Gui alone (help, the
+  // wiki, macro links, project information), and a build where that silently does
+  // nothing has nine dead buttons.
+  window.__OPENED = [];
+  window.open = function (u) {
+    try { window.__OPENED.push(String(u)); } catch (e) {}
+    return null;
+  };
   window.__ERRS = [];
   window.addEventListener('error', (e) => {
     try { window.__ERRS.push(String(e.message) + ' :: ' + ((e.error && e.error.stack) || '')); }
@@ -442,6 +463,22 @@ def scenario_network(ctx, url, args, fail):
              % (r.get('error'), r.get('bytes'), ', ' + r['why'] if r.get('why') else ''))
     else:
         print('==> network: fetched %d bytes through the proxy with Qt' % r['bytes'])
+
+    # "Open this page" has to reach the browser, not merely return true.
+    o = s.wait_for('FCOPEN', 30)
+    opened = []
+    try:
+        opened = s.page.evaluate('window.__OPENED || []')
+    except Exception:
+        pass
+    if not isinstance(o, dict) or not o.get('handled'):
+        fail('QDesktopServices.openUrl did not handle the URL -- every help, wiki '
+             'and macro link in the GUI is a dead button')
+    elif not any('wiki.freecad.org' in u for u in opened):
+        fail('openUrl returned true but the browser was never asked to open '
+             'anything (window.open saw %r)' % (opened,))
+    else:
+        print('==> links: openUrl reached the browser (%s)' % opened[-1])
     return s
 
 

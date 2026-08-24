@@ -35,6 +35,14 @@ CAPTURE_JS = """
     },
     set(fn) { real = fn; },
   });
+  // Record window.open so a probe can tell whether the app really handed a URL to the
+  // browser, rather than merely returning true.
+  window.__OPENED = [];
+  const _open = window.open;
+  window.open = function (u) {
+    try { window.__OPENED.push(String(u)); } catch (e) {}
+    return null;            // do not actually spawn tabs during a probe
+  };
   window.__ERRS = [];
   window.addEventListener('error', (e) => {
     try { window.__ERRS.push(String(e.message) + ' :: ' + ((e.error && e.error.stack) || '')); }
