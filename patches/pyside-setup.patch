@@ -26,7 +26,7 @@ diff --git a/sources/shiboken6/libshiboken/bufferprocs_py37.cpp b/sources/shibok
 index 4ccf970..03b517c 100644
 --- a/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
 +++ b/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
-@@ -12,6 +12,26 @@
+@@ -12,6 +12,40 @@
  #ifdef Py_LIMITED_API
  
  #include "sbkpython.h"
@@ -48,6 +48,20 @@ index 4ccf970..03b517c 100644
 +#  define PyBuffer_FromContiguous        fcweb_shib_PyBuffer_FromContiguous
 +#  define PyBuffer_FillContiguousStrides fcweb_shib_PyBuffer_FillContiguousStrides
 +#  define PyBuffer_FillInfo              fcweb_shib_PyBuffer_FillInfo
++
++// Forward declarations, because this file calls these before it defines them and
++// includes no header that declares them. Without the rename that worked by accident:
++// the calls bound to CPython's declarations from Python.h and then linked to the
++// definitions below -- which IS the hijack, visible in miniature.
++int PyObject_GetBuffer(PyObject *obj, Pep_buffer *view, int flags);
++int PyBuffer_IsContiguous(const Pep_buffer *view, char order);
++void *PyBuffer_GetPointer(Pep_buffer *view, Py_ssize_t *indices);
++int PyBuffer_FromContiguous(Pep_buffer *view, void *buf, Py_ssize_t len, char fort);
++void PyBuffer_FillContiguousStrides(int nd, Py_ssize_t *shape, Py_ssize_t *strides,
++                                    int itemsize, char fort);
++int PyBuffer_FillInfo(Pep_buffer *view, PyObject *obj, void *buf, Py_ssize_t len,
++                      int readonly, int flags);
++void PyBuffer_Release(Pep_buffer *view);
 +#endif
 +
  /* Buffer C-API for Python 3.0 */
