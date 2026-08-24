@@ -41,7 +41,7 @@ rendering verdict from here would look like coverage while proving something els
 rendering stays a human check (RELEASE-PLAN.md V6). Pass --with-3d to override.
 """
 import argparse
-import json
+import ast
 import os
 import re
 import shutil
@@ -77,6 +77,33 @@ _d.recompute()
 _d.saveAs("/home/web_user/RestoreProbe.FCStd")
 _s.__stderr__.write("FCMADE ok\n")
 _s.__stderr__.flush()
+'''
+
+DIALOG_PY = r'''
+# Prompt-driven workflows are a whole class of feature: anything that asks for a name, a
+# count or a length. A stub here once made every one of them take the cancel branch and
+# quietly do nothing, so drive a real modal and require the typed value back.
+import sys as _s
+try:
+    from PySide6 import QtWidgets, QtCore
+
+    def _accept():
+        dlg = QtWidgets.QApplication.activeModalWidget()
+        if dlg is None:
+            _s.__stderr__.write("FCDIALOG {'ok': False, 'why': 'no modal appeared'}\n")
+            _s.__stderr__.flush()
+            return
+        for e in dlg.findChildren(QtWidgets.QLineEdit):
+            e.setText("typed-by-gate")
+        dlg.accept()
+
+    QtCore.QTimer.singleShot(1500, _accept)
+    _v, _ok = QtWidgets.QInputDialog.getText(None, "gate", "Name:")
+    _s.__stderr__.write("FCDIALOG " + repr({"ok": bool(_ok), "value": _v}) + "\n")
+    _s.__stderr__.flush()
+except Exception as _e:
+    _s.__stderr__.write("FCDIALOG " + repr({"ok": False, "why": repr(_e)}) + "\n")
+    _s.__stderr__.flush()
 '''
 
 COUNT_DOCS_PY = r'''
@@ -220,7 +247,10 @@ class Session:
             for c in self.lines():
                 m = re.search(re.escape(marker) + r' (\{.*\})', c)
                 if m:
-                    return json.loads(m.group(1).replace("'", '"'))
+                    # The probes emit repr(dict), so parse it as a Python literal. JSON
+                    # cannot: Python writes True, not true, and a dialog result is mostly
+                    # booleans.
+                    return ast.literal_eval(m.group(1))
                 if marker in c:
                     return True
             time.sleep(2)
@@ -312,6 +342,27 @@ def scenario_restore(ctx, url, args, fail):
     return s2
 
 
+def scenario_dialog(ctx, url, args, fail):
+    """A modal has to open, take input, and give the value back."""
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('dialog scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(DIALOG_PY)
+    r = s.wait_for('FCDIALOG', 120)
+    if not isinstance(r, dict):
+        fail('QInputDialog never returned -- a blocking dialog that does not come back '
+             'is worse than one that cancels')
+    elif not r.get('ok'):
+        fail('QInputDialog reported cancelled (%s) -- every prompt-driven command is '
+             'dead' % r.get('why', 'no reason given'))
+    elif r.get('value') != 'typed-by-gate':
+        fail('QInputDialog returned %r, not what was typed' % r.get('value'))
+    else:
+        print('==> dialog: value came back intact')
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -319,7 +370,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'all'))
     ap.add_argument('--with-3d', action='store_true',
                     help='leave the 3D pipeline on (headless GL proves little; see V6)')
     args = ap.parse_args()
@@ -367,6 +418,8 @@ def main():
                 sessions.append(scenario_boot(ctx, url, args, fail))
             if args.scenario in ('restore', 'all'):
                 sessions.append(scenario_restore(ctx, url, args, fail))
+            if args.scenario in ('dialog', 'all'):
+                sessions.append(scenario_dialog(ctx, url, args, fail))
             dump = []
             for s in sessions:
                 dump.append((s.lines(), s.console, s.errors()))
@@ -392,8 +445,16 @@ def main():
                 print(c[:300], file=sys.stderr)
         return 1
 
-    print('==> boot gate passed: the application starts, does CAD work%s'
-          % (', and gives work back after a reload' if args.scenario != 'boot' else ''))
+    # Say what was actually checked. A pass line that claims more than the run covered is
+    # how a gate starts being trusted for things it never tested.
+    did = {
+        'boot': 'starts and does CAD work',
+        'restore': 'gives work back after a reload',
+        'dialog': 'can ask the user a question and use the answer',
+        'all': 'starts, does CAD work, gives work back after a reload, and can ask the '
+               'user a question',
+    }[args.scenario]
+    print('==> boot gate passed: the application %s' % did)
     return 0
 
 

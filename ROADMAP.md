@@ -323,6 +323,13 @@ Fixing them needs **no relink at all**. That moves the two rendering items from 
 
 ### 1. `QInputDialog` always returns "cancelled" *(lane A, 0.5–3 d)*
 
+> **Superseded 2026-08-24 — this is fixed and the prose below is history.** Re-measured
+> against the running application: a real modal opens (visible, 240×107, one line edit)
+> and returns the typed value — `getText` gave `('typed-by-test', True)`, `getInt` gave
+> `(42, True)`. The status table at the top of this file already said "shipped"; this
+> section did not, and it cost a re-investigation. `tools/boot-gate.py --scenario dialog`
+> now holds the line.
+
 Measured live today:
 
 ```

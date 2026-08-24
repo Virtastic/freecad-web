@@ -27,7 +27,9 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 | **R8** | `?no3d` disabled autosave | **found and fixed.** The compositor's early return sat in an IIFE that had grown to contain the memory monitor and the autosave install/restore poll, so the flag silently switched off durability. Users are on the default path, but `?no3d` is what someone with a GPU problem is told to use — and it is what the gate runs. |
 | **R9** | patched trees trusted a stamp | **found and fixed.** A run reported "already applied (marker + hash)" for a tree that lacked the lines the patch adds. `tools/verify-patch-applied.py` now checks the content, and both `apply.sh` and the workflow require stamp and content to agree. Second time this shape of bug has cost this project a build; the first cost it the boot. |
 
-Nothing in Section 1 has been dropped — R1 and R4 through R7 are untouched.
+| **R4** | `QInputDialog` cancels everything | **closed by measurement, not by work.** The ROADMAP entry was stale: the stub is gone, the modal opens, and the typed value comes back. Now a gate scenario so it cannot rot again. |
+
+R1, R5, R6 and R7 are untouched.
 
 ---
 
@@ -107,10 +109,16 @@ failure in a memoryview, file or image path.
 Deletion will not compile: shiboken's own call sites are typed against `Pep_buffer`.
 Then add both to `RENAMED` in `tools/check-symbol-hijack.py`.
 
-### R4. `QInputDialog` always returns "cancelled" *(blocker — ROADMAP Tier 1 #1)*
+### R4. `QInputDialog` always returns "cancelled" — **not true any more; closed**
 
-Anything that prompts for a value silently does nothing. That is not a rough edge; it is a
-class of workflow that cannot be completed.
+Inherited from ROADMAP Tier 1 #1 and measured against the running application rather than
+re-read: the cancelling stub is gone from the JSPI dialog shim, a real modal opens
+(`QInputDialog`, visible, 240×107, one line edit), and the value comes back —
+`getText` returned `('typed-by-test', True)`, `getInt` returned `(42, True)`.
+
+Kept as a gate scenario (`--scenario dialog`) rather than deleted, because this is a whole
+class of feature — anything that asks for a name, a count or a length — and it broke
+silently once already.
 
 ### R5. Documents can be evicted *(blocker — ROADMAP Tier 1 #2)*
 
