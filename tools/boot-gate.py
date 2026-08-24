@@ -162,6 +162,74 @@ except Exception as _e2:
     _s.__stderr__.flush()
 '''
 
+WORKFLOW_PY = r'''
+# The half of the manual pass that is fact rather than judgement. A person still has to
+# say whether the app LOOKS right; nobody needs to be in the room to find out whether a
+# constrained sketch pads to the right volume or a STEP survives a round trip.
+import sys as _s
+import FreeCAD as App
+import Part
+import Sketcher
+
+_res = {}
+_doc = App.newDocument('GateQA')
+
+try:
+    # A rectangle built from constraints, not coordinates, so the solver is exercised.
+    _body = _doc.addObject('PartDesign::Body', 'Body')
+    _sk = _doc.addObject('Sketcher::SketchObject', 'Sketch')
+    _body.addObject(_sk)
+    _v = App.Vector
+    _sk.addGeometry(Part.LineSegment(_v(0, 0, 0), _v(40, 0, 0)), False)
+    _sk.addGeometry(Part.LineSegment(_v(40, 0, 0), _v(40, 25, 0)), False)
+    _sk.addGeometry(Part.LineSegment(_v(40, 25, 0), _v(0, 25, 0)), False)
+    _sk.addGeometry(Part.LineSegment(_v(0, 25, 0), _v(0, 0, 0)), False)
+    for _i in range(4):
+        _sk.addConstraint(Sketcher.Constraint('Coincident', _i, 2, (_i + 1) % 4, 1))
+    _sk.addConstraint(Sketcher.Constraint('Horizontal', 0))
+    _sk.addConstraint(Sketcher.Constraint('Vertical', 1))
+    _sk.addConstraint(Sketcher.Constraint('DistanceX', 0, 1, 0, 2, 40.0))
+    _sk.addConstraint(Sketcher.Constraint('DistanceY', 1, 1, 1, 2, 25.0))
+    _doc.recompute()
+    _pad = _doc.addObject('PartDesign::Pad', 'Pad')
+    _body.addObject(_pad)
+    _pad.Profile = _sk
+    _pad.Length = 10.0
+    _doc.recompute()
+    _res['padVolume'] = round(_pad.Shape.Volume, 6)
+    _res['padValid'] = bool(_pad.Shape.isValid())
+    _res['sketchDoF'] = _sk.solve()
+
+    _b = Part.makeBox(10, 10, 10)
+    _cut = _b.cut(Part.makeCylinder(3, 20, App.Vector(5, 5, -5)))
+    _common = _b.common(Part.makeBox(6, 6, 6, App.Vector(4, 4, 4)))
+    _res['cutValid'] = bool(_cut.isValid())
+    _res['commonVolume'] = round(_common.Volume, 3)
+
+    _step = '/home/web_user/gate_roundtrip.step'
+    _src = Part.makeBox(12, 8, 6)
+    _src.exportStep(_step)
+    _back = Part.Shape()
+    _back.read(_step)
+    _res['stepValid'] = bool(_back.isValid())
+    _res['stepVolumeMatches'] = abs(_back.Volume - _src.Volume) < 1e-6
+
+    _fcstd = '/home/web_user/gate_doc.FCStd'
+    _doc.saveAs(_fcstd)
+    _name = _doc.Name
+    App.closeDocument(_name)
+    _re = App.openDocument(_fcstd)
+    _vol = None
+    for _o in _re.Objects:
+        if _o.TypeId == 'PartDesign::Pad':
+            _vol = round(_o.Shape.Volume, 6)
+    _res['reloadedPadVolume'] = _vol
+except Exception as _e:
+    _res['error'] = repr(_e)
+
+_s.__stderr__.write('FCQA ' + repr(_res) + chr(10))
+_s.__stderr__.flush()
+'''
 COUNT_DOCS_PY = r'''
 import FreeCAD as App, sys as _s
 _names = list(App.listDocuments().keys())
@@ -493,6 +561,35 @@ def scenario_network(ctx, url, args, fail):
     return s
 
 
+def scenario_workflow(ctx, url, args, fail):
+    """Real modelling: a constrained sketch, a pad, booleans, STEP, save and reopen."""
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('workflow scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(WORKFLOW_PY)
+    r = s.wait_for('FCQA', 180)
+    if not isinstance(r, dict):
+        fail('the modelling workflow produced no result')
+        return s
+    print('==> workflow: %s' % r)
+    if r.get('error'):
+        fail('the modelling workflow raised %s' % r['error'])
+        return s
+    if r.get('sketchDoF') != 0:
+        fail('the sketch did not solve to zero degrees of freedom (got %r) -- the constraint solver is the heart of parametric modelling' % r.get('sketchDoF'))
+    if not r.get('padValid') or abs(r.get('padVolume', 0) - 10000.0) > 1e-6:
+        fail('the pad is %r with volume %r, expected a valid solid of 10000.0'
+             % (r.get('padValid'), r.get('padVolume')))
+    if not r.get('cutValid') or abs(r.get('commonVolume', 0) - 216.0) > 1e-3:
+        fail('booleans are wrong: cut valid=%r, common volume=%r (expected 216.0)'
+             % (r.get('cutValid'), r.get('commonVolume')))
+    if not r.get('stepValid') or not r.get('stepVolumeMatches'):
+        fail('a STEP round trip did not come back intact -- interchange is how work leaves this app')
+    if abs((r.get('reloadedPadVolume') or 0) - 10000.0) > 1e-6:
+        fail('the document reopened with pad volume %r, not 10000.0 -- saved work is not coming back the same' % r.get('reloadedPadVolume'))
+    return s
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -500,7 +597,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'all'))
     ap.add_argument('--with-3d', action='store_true',
                     help='leave the 3D pipeline on (headless GL proves little; see V6)')
     args = ap.parse_args()
@@ -554,6 +651,8 @@ def main():
                 sessions.append(scenario_imports(ctx, url, args, fail))
             if args.scenario in ('network', 'all'):
                 sessions.append(scenario_network(ctx, url, args, fail))
+            if args.scenario in ('workflow', 'all'):
+                sessions.append(scenario_workflow(ctx, url, args, fail))
             dump = []
             for s in sessions:
                 dump.append((s.lines(), s.console, s.errors()))
@@ -587,6 +686,7 @@ def main():
         'dialog': 'can ask the user a question and use the answer',
         'imports': 'can import the Python packages its workbenches need',
         'network': 'can reach the web through the proxy',
+        'workflow': 'can model: constrained sketch, pad, booleans, STEP, save and reopen',
         'all': 'starts, does CAD work, gives work back after a reload, can ask the user a '
                'question, has the Python packages its workbenches need, and can reach the '
                'web',

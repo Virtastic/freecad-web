@@ -21,6 +21,22 @@ selector did nothing, and clicking again worked. At that moment ~500 upstream un
 passed, eight workbenches loaded, six examples opened, and every harness in this repo was
 green. A person opening the workbench menu would have found both in ten seconds.
 
+## What the machine already checked, so you do not have to
+
+`tools/boot-gate.py --scenario workflow` runs on every link and asserts the parts of this
+pass that are fact rather than judgement. Measured against the live engine:
+
+- a **constrained** rectangle sketch solves to **zero degrees of freedom** and pads to
+  exactly 10000.0 mm3 as a valid solid -- the constraint solver and PartDesign together;
+- cut / fuse / common all return valid shapes, with common at exactly 216.0;
+- a STEP export re-reads with the same volume and six faces;
+- an STL round trip returns the same facet count;
+- a document saves, closes, reopens, and its pad still measures 10000.0.
+
+So the list below is now about what a machine cannot judge: whether it LOOKS right,
+whether it FEELS responsive, and whether the mouse does what a hand expects. Spend the
+twenty minutes there.
+
 ## The pass, in order (each line is one thing to try)
 
 Open https://freecad.virtastic.app in Chrome or Edge, and watch for anything that looks
