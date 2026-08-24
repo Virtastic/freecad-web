@@ -534,12 +534,6 @@ jobs:
           bin=build-freecad-gui-weh/bin
           [ -s "$bin/FreeCAD.wasm" ] || { echo "::error::no linked wasm to boot"; exit 1; }
 
-          python3 -m pip install --quiet --user playwright
-          # No --with-deps: that wants root, and this runner's sudo is deliberately scoped.
-          # If Chromium cannot launch for want of a system library, the gate says exactly
-          # that, and this is the line to fix it at.
-          python3 -m playwright install chromium
-
           rm -rf gate-serve && mkdir -p gate-serve
           cp play-gui/freecad-gui.html gate-serve/index.html
           cp play-gui/qtloader.js play-gui/sw.js play-gui/manifest.webmanifest gate-serve/
@@ -552,7 +546,19 @@ jobs:
 
           ver=$(grep -v '^#' patches/freecad.version | grep -v '^$' | head -1)
           echo "expecting App.Version() $ver"
-          python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version "$ver" --scenario all
+          # Run the gate inside Playwright's own image rather than on the box. Chromium
+          # needs a pile of system libraries (this failed on libatk-1.0.so.0), installing
+          # them needs root, and this runner's sudo is deliberately scoped -- so the first
+          # CI run of the gate died on a missing .so after two hours of compiling.
+          #
+          # The image already carries those libraries and the matching browsers, docker is
+          # already on this box because the app itself runs in a container, and nothing has
+          # to be installed on the host. The playwright pip version is pinned to the image
+          # tag so the client and the bundled browser build always agree.
+          #
+          # Root inside the container is fine: the gate only reads the workspace, and its
+          # browser profile goes to /tmp inside the container.
+          docker run --rm -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
 
       - name: Upload the boot-gate serve tree on failure
         if: failure()
