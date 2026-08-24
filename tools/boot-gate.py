@@ -106,6 +106,22 @@ except Exception as _e:
     _s.__stderr__.flush()
 '''
 
+IMPORTS_PY = r'''
+# The inittab is a promise; an import is the delivery. Every one of these has its C
+# half linked into the binary, and each needs a Python package on the filesystem to be
+# reachable. Shipping one half of numpy is the same as shipping none of it.
+import sys as _s
+_res = {}
+for _n in ('numpy', 'matplotlib', 'PIL', 'ifcopenshell', 'pivy.coin', 'femmesh.gmshtools', 'Draft'):
+    try:
+        __import__(_n)
+        _res[_n] = 'ok'
+    except Exception as _e:
+        _res[_n] = type(_e).__name__
+_s.__stderr__.write('FCIMPORTS ' + repr(_res) + chr(10))
+_s.__stderr__.flush()
+'''
+
 COUNT_DOCS_PY = r'''
 import FreeCAD as App, sys as _s
 _names = list(App.listDocuments().keys())
@@ -363,6 +379,26 @@ def scenario_dialog(ctx, url, args, fail):
     return s
 
 
+def scenario_imports(ctx, url, args, fail):
+    """Half-shipped packages: C extensions linked in, Python package missing."""
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('imports scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(IMPORTS_PY)
+    r = s.wait_for('FCIMPORTS', 120)
+    if not isinstance(r, dict):
+        fail('the import probe produced no result')
+        return s
+    print('==> imports: %s' % r)
+    broken = sorted(k for k, v in r.items() if v != 'ok')
+    if broken:
+        fail('these cannot be imported: %s -- their C extensions are linked into the '
+             'binary but the Python package is not on the filesystem, so the workbenches '
+             'that need them (FEM, Draft, BIM, Plot) are dead' % ', '.join(broken))
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -370,7 +406,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'all'))
     ap.add_argument('--with-3d', action='store_true',
                     help='leave the 3D pipeline on (headless GL proves little; see V6)')
     args = ap.parse_args()
@@ -420,6 +456,8 @@ def main():
                 sessions.append(scenario_restore(ctx, url, args, fail))
             if args.scenario in ('dialog', 'all'):
                 sessions.append(scenario_dialog(ctx, url, args, fail))
+            if args.scenario in ('imports', 'all'):
+                sessions.append(scenario_imports(ctx, url, args, fail))
             dump = []
             for s in sessions:
                 dump.append((s.lines(), s.console, s.errors()))
@@ -451,8 +489,9 @@ def main():
         'boot': 'starts and does CAD work',
         'restore': 'gives work back after a reload',
         'dialog': 'can ask the user a question and use the answer',
-        'all': 'starts, does CAD work, gives work back after a reload, and can ask the '
-               'user a question',
+        'imports': 'can import the Python packages its workbenches need',
+        'all': 'starts, does CAD work, gives work back after a reload, can ask the user a '
+               'question, and has the Python packages its workbenches need',
     }[args.scenario]
     print('==> boot gate passed: the application %s' % did)
     return 0

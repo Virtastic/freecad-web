@@ -598,6 +598,14 @@ jobs:
           FCWEB_FORCE_STAGE_HEADERS=1 bash toolchain/stage-headers.sh
           bash configure-pivy-weh.sh
 
+      # The archives are only half of each package. Their Python side has to reach the
+      # virtual filesystem too, or the link registers numpy._core._multiarray_umath as a
+      # builtin that nothing can ever import. That is what shipped on 2026-08-24: three
+      # files in /pyside-pkg where a working release had 1,850, and FEM, Draft, BIM and
+      # Plot all dead behind a green pipeline.
+      - name: Stage the Python half of every third-party package
+        run: bash tools/stage-python-packages.sh
+
       - name: Gate -- every archive the link needs
         run: |
           fail=0

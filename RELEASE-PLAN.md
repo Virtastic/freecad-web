@@ -33,6 +33,8 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 | **R6** | failures invisible from the field | **closed.** Script errors and unhandled rejections were shown to one user and counted for nobody; both now beacon an enumerated class. Still no message, stack or identifier — the detail stays on the user's clipboard. |
 
+| **R10** | half of every third-party Python package missing | **found today, fix landed, awaiting a build.** numpy, matplotlib, PIL, ifcopenshell and pivy cannot be imported in the live release: C halves linked, Python halves absent. FEM, Draft, BIM and Plot are dead. Staging is now repo-driven and the gate imports them in a real browser. |
+
 R1 and R7 are untouched.
 
 ---
@@ -70,6 +72,39 @@ exactly this).
 ---
 
 ## 1. Release blockers
+
+### R10. Half of every third-party Python package is missing *(blocker, and it is live)*
+
+**Production right now cannot `import numpy`.** Nor matplotlib, PIL, ifcopenshell, or
+pivy. Their C extensions are linked into the binary and registered in CPython's inittab —
+`numpy._core._multiarray_umath` really is a builtin module in the shipped wasm — but the
+Python packages they belong to are not on the virtual filesystem, so nothing can reach
+them. Measured in the running application:
+
+```
+numpy ModuleNotFoundError · matplotlib ModuleNotFoundError · PIL ModuleNotFoundError
+ifcopenshell ModuleNotFoundError · pivy.coin ImportError · Draft ImportError
+femmesh.gmshtools ModuleNotFoundError
+```
+
+That is **FEM, Draft, BIM and Plot dead**, plus any macro that imports numpy.
+
+The cause is the fragility ROADMAP #11 warned about, realised. `/pyside-pkg` held 1,850
+files in the 2026-08-13 release — numpy, matplotlib, ifcopenshell, fontTools, PIL, lark,
+dateutil and the rest — and holds **three** today: the PySide6, shiboken6 and pivy glue
+that `patches/apply.sh` copies. Nothing in this repository ever created the other 1,847.
+They were placed on the build machine by hand, survived in the runner's workspace, and at
+some point went away. No gate noticed, because Part and PartDesign need none of it and the
+boot smoke test uses exactly those.
+
+**Fixed by:** `tools/stage-python-packages.sh`, run by the dependency lane, which builds the
+tree from things the repository controls — the source trees the lanes already fetch, plus
+pinned pip downloads of the pure-Python libraries — and fails loudly if any package is
+missing rather than producing a partial tree.
+**Guarded by:** the boot gate's `imports` scenario, which imports each of them in the real
+browser and names the dead workbenches if any fails.
+
+
 
 ### R1. gmsh and CalculiX are not built against 1.1.3 *(blocker)*
 
@@ -182,7 +217,7 @@ These are unknowns rather than known defects. Each needs one measurement.
 | # | Question | How to answer it |
 |---|---|---|
 | V1 | Does a returning visitor with a cached old engine get the new one? | Load the previous release, deploy this one, reload without clearing anything. `?v=<md5>` should bust it — but I hit a stale `fcweb-engine` cache locally today, so prove it end to end. |
-| V2 | Did the 117 MB `FreeCAD.data` reduction lose anything? | **Answered: no.** All 29 workbenches, all bundled examples, stylesheets and icons are present in the running filesystem. |
+| V2 | Did the 117 MB `FreeCAD.data` reduction lose anything? | **I answered "no" earlier today and I was wrong.** I checked the workbenches and the examples, found them present, and stopped. It lost the entire third-party Python stack — see R10. The lesson is in the failure: I verified the things I thought of, then reported a general conclusion. |
 | V3 | Can the build be reproduced from a clean checkout? | ROADMAP #11: `gl_compat.h` and `qprocess_stub.h` exist only on the build machine. One command (`tools/capture-build-machine-headers.sh`) and a commit. |
 | V4 | Which dependency versions is production built from? | `deps-versions.txt` is absent; CI warns rather than fails. Run `tools/capture-dep-versions.sh` on the build machine and commit. |
 | V5 | Keep `--profiling-funcs` in production? | It adds ~25 MB to a 182 MB wasm. It is why today's crash could be named at all. Decide deliberately: named crash reports, or a faster first load. |
