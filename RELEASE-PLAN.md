@@ -1,0 +1,174 @@
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Copyright (c) Virtastic -->
+# Release plan: from "it boots" to "we can put our name on it"
+
+**Written 2026-08-24, against `build-20260824-freecad113` (commit `1ccbd1f`), which is live
+on freecad.virtastic.app.**
+
+FreeCAD 1.1.3 now starts in a browser and does real geometry: a `Part::Box` 10×20×30
+recomputes to volume 6000.0 with 8 vertices and 6 faces under `App.Version()` 1.1.3. That
+is the end of "does it run" and the beginning of this document.
+
+The standard here is *no known issues at release*, so this plan is organised by what would
+have to be untrue for that sentence to hold — not by what is easiest to do next.
+
+---
+
+## 0. The gap that let a dead build look healthy for the whole port
+
+Everything below matters less than this one item.
+
+For the entire 1.1.3 port, the application **could not start at all** — and every gate we
+had was green. CI compiled, linked, validated the wasm, checked the GL patch table, checked
+the exception model, checked archive symbol counts, and deployed. Not one of them ran the
+program. The bug was found only because a person opened the page.
+
+Worse, the fix for it had already been written in an earlier session and was gated on
+`FCWEB_REAL_CPYTHON`, a macro **defined nowhere in this repository**. It had been silently
+inert for months. A guard that can go quiet is not a guard.
+
+### R0. A boot gate that actually runs the application *(blocker, ~1 day)*
+
+Add a CI job that launches headless Chrome against the built artifact and asserts:
+
+1. the page reaches `Ready` (the overlay reports it, `window.__fcAppReady` is set),
+2. no `Fatal Python error`, no `Aborted()`, no `RuntimeError` on the console,
+3. a scripted `Part::Box` recomputes to the expected volume and topology,
+4. `App.Version()` matches the release being built,
+5. the run finishes inside a fixed time budget (a hang is a failure, not a wait).
+
+This is the same check performed by hand today; the whole point is that a machine performs
+it on every link. Requires cross-origin isolation headers, so serve the artifact from a
+local static server with COOP/COEP in the job (`build-artifact-serve/server.py` already does
+exactly this).
+
+**Done when** deliberately reverting the shiboken rename makes this job fail.
+
+---
+
+## 1. Release blockers
+
+### R1. gmsh and CalculiX are not built against 1.1.3 *(blocker)*
+
+`tools/publish-release.sh` carries `gmsh.{js,wasm}` and `ccx.{js,wasm}` over from the
+previous release because they come from their own build lanes. Confirmed by asset sizes:
+they are byte-for-byte the same as `build-20260813-eventstack`, an engine from before this
+port. So every FEM workflow in the current release runs 1.0.x-era modules against a 1.1.3
+engine, and that combination has never been executed.
+
+They are separate wasm modules driven over a file-copy bridge, so it may well be fine — but
+"may well be fine" is the thing this document exists to eliminate.
+
+**Do:** rebuild both lanes against 1.1.3, publish them in the release, then mesh and solve
+`FEMExample.FCStd` end to end and compare results against desktop FreeCAD.
+**Watch for:** CalculiX reproducibility is only caught by comparing solver decks — compile
+success, module size and stub counts all stay green while the solver is wrong.
+
+### R2. `QEventLoop::exit` hits a null function on document restore *(blocker)*
+
+Observed today on a clean local boot: the session-restore path
+(`restored 1 document(s) from your last session`) throws
+`RuntimeError: null function at QEventLoop::exit(int)`. The app survives and reaches Ready,
+so it is not fatal — but it is an error thrown on one of the most common paths there is
+(reopening the tab), and a null function pointer is never benign; it means a call landed on
+an empty table slot.
+
+**Do:** name the function at that table index the way `PyMethod_New` was named
+(`tools/wasm-func-sig.py`), find why the slot is empty, fix it.
+**Done when** a restore-with-open-document boot is clean, asserted by the R0 gate.
+
+### R3. shiboken still owns `PyObject_GetBuffer` / `PyBuffer_Release` *(blocker)*
+
+The same hazard class that cost this port its boot, one layer down. shiboken's limited-API
+build defines both, and in this static monolith they win the symbols program-wide (wasm
+indices 742/743, in shiboken's object cluster rather than CPython's). Unlike `PyMethod_New`
+they do not depend on lazily initialised state, and `Pep_buffer` is a re-declaration of
+`Py_buffer`, so this may be harmless — but it is unproven, and it is first suspect for any
+failure in a memoryview, file or image path.
+
+**Do:** rename them as `patches/pyside-setup.patch` does for the `pep384impl.cpp` group.
+Deletion will not compile: shiboken's own call sites are typed against `Pep_buffer`.
+Then add both to `RENAMED` in `tools/check-symbol-hijack.py`.
+
+### R4. `QInputDialog` always returns "cancelled" *(blocker — ROADMAP Tier 1 #1)*
+
+Anything that prompts for a value silently does nothing. That is not a rough edge; it is a
+class of workflow that cannot be completed.
+
+### R5. Documents can be evicted *(blocker — ROADMAP Tier 1 #2)*
+
+Work lives in IDBFS and the browser may evict it. Losing a user's model is the worst
+failure this application can have, and it is worse than a crash because it is silent and
+unrecoverable. Installability (the PWA manifest) is the route to persistent storage without
+a prompt; verify the grant is actually obtained, rather than assuming the manifest is enough.
+
+### R6. Nothing reports failures from the field *(blocker — ROADMAP Tier 1 #3)*
+
+The counters added for boot/abort answer *how many*, never *what*. If a user hits R2 or an
+OOM tomorrow, we learn nothing. Shipping "no known issues" without a way to hear about the
+unknown ones is a statement about our visibility, not about the software.
+
+### R7. The manual pass has never been run against this engine *(blocker)*
+
+`MANUAL-QA.md` records its last result against `build-20260813-eventstack+c41d84b` — a
+different engine, before the 1.1.3 port. Every line of that checklist is currently unverified
+for what is live: workbench switching, sketching by clicking, Pad, property editing, task
+panels, context menus, tree drag-and-drop, save/reload, STEP and STL round-trips, the OS file
+dialog, and the bundled examples.
+
+**Do:** run the full pass against the live build and record the result in `MANUAL-QA.md`.
+Anything it finds joins this list before release.
+
+---
+
+## 2. Verify, then decide
+
+These are unknowns rather than known defects. Each needs one measurement.
+
+| # | Question | How to answer it |
+|---|---|---|
+| V1 | Does a returning visitor with a cached old engine get the new one? | Load the previous release, deploy this one, reload without clearing anything. `?v=<md5>` should bust it — but I hit a stale `fcweb-engine` cache locally today, so prove it end to end. |
+| V2 | Did the 117 MB `FreeCAD.data` reduction lose anything? | **Answered: no.** All 29 workbenches, all bundled examples, stylesheets and icons are present in the running filesystem. |
+| V3 | Can the build be reproduced from a clean checkout? | ROADMAP #11: `gl_compat.h` and `qprocess_stub.h` exist only on the build machine. One command (`tools/capture-build-machine-headers.sh`) and a commit. |
+| V4 | Which dependency versions is production built from? | `deps-versions.txt` is absent; CI warns rather than fails. Run `tools/capture-dep-versions.sh` on the build machine and commit. |
+| V5 | Keep `--profiling-funcs` in production? | It adds ~25 MB to a 182 MB wasm. It is why today's crash could be named at all. Decide deliberately: named crash reports, or a faster first load. |
+| V6 | Does the 3D view render correctly on real hardware? | ROADMAP Tier 2 #4: nine fixed-function GL calls silently do nothing. Establish whether any affects correct output, as opposed to performance. |
+
+---
+
+## 3. Known limitations — document, do not pretend
+
+These are real constraints. They should appear in the README and on the site before release,
+so nobody discovers them as surprises.
+
+- **Addon Manager is off.** It is a git submodule, and installing an addon assumes `git` plus
+  a writable install tree via QProcess. A wasm-native path (fetch a zip, unpack into IDBFS)
+  is a project, not a fix. *The single biggest gap against "usable by anyone".*
+- **Addons with compiled extensions can never be installed.** One static monolith, inittab
+  fixed at link time. Pure-Python addons can work; compiled ones cannot, by construction.
+- **The Web workbench has no engine behind it** — Qt is built `-skip qtwebengine`.
+- **Outbound HTTP is constrained by COEP.** Cross-origin isolation is required for threads,
+  and under it most third-party hosts are refused. Anything reaching the wider web needs a
+  same-origin proxy, which is not built.
+- **~2 GB heap ceiling**, **Chrome/Edge 137+ only**, **CalculiX is single-threaded**.
+
+---
+
+## 4. Order of work
+
+1. **R0 first.** Everything after it is verified by a machine instead of by memory, and
+   without it any fix below can silently regress the way the boot did.
+2. **R2, R3** — engine correctness, and both are cheap now that the naming tooling exists.
+3. **R1** — the gmsh/ccx lanes and a real FEM run.
+4. **R4, R5, R6** — the Tier 1 usability and durability items.
+5. **R7** — the full manual pass, after the above, so it tests the release candidate rather
+   than a moving target.
+6. **Section 2** measurements, then the Section 3 documentation.
+7. Re-run R7 on the final candidate. Release.
+
+## What "release" should mean when we get there
+
+- The R0 gate is green, and was proven to fail when the fix it guards is removed.
+- `MANUAL-QA.md` carries a full pass against the exact build being released.
+- Every item in Section 1 is closed, not deferred.
+- Every item in Section 3 is written down where a user will see it before they rely on it.
