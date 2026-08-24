@@ -4931,3 +4931,75 @@ diff --git a/src/Mod/AddonManager/NetworkManager.py b/src/Mod/AddonManager/Netwo
          request.setAttribute(
              QtNetwork.QNetworkRequest.RedirectPolicyAttribute,
              QtNetwork.QNetworkRequest.ManualRedirectPolicy,
+diff --git a/src/Mod/Mesh/Gui/RemeshGmsh.cpp b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
+--- a/src/Mod/Mesh/Gui/RemeshGmsh.cpp
++++ b/src/Mod/Mesh/Gui/RemeshGmsh.cpp
+@@ -33,6 +33,7 @@
+ #include <App/DocumentObserver.h>
+ #include <Base/Console.h>
+ #include <Base/FileInfo.h>
++#include <Base/Interpreter.h>
+ #include <Base/Stream.h>
+ #include <Gui/ReportView.h>
+ #include <Mod/Mesh/App/MeshFeature.h>
+@@ -195,6 +196,44 @@
+              << inpFile
+              << QLatin1String("-o")
+              << outFile;
++#if defined(__EMSCRIPTEN__)
++        // FCWEB: there is no process to start in a page and QProcess is stubbed, so
++        // this dialog used to write its files, call start(), and sit there having
++        // done nothing at all -- no mesh, no error, nothing. gmsh IS here, as a
++        // separate wasm module behind the same bridge the FEM mesher already uses.
++        //
++        // Input and output are the same path on purpose: that is what the native
++        // command line does with -o, and the bridge copies what gmsh wrote back.
++        //
++        // The call blocks and suspends through JSPI, so the mesh is ready when it
++        // returns and there is no finished() signal to wait for.
++        Q_UNUSED(proc)
++        Q_UNUSED(args)
++        d->time.start();
++        int rc = 1;
++        try {
++            std::string geoArg = inpFile.toStdString();
++            std::string outArg = outFile.toStdString();
++            std::string cmd = "__import__(\'_fcwebgmsh\').run(r\'" + geoArg + "\', r\'" + outArg + "\', r\'" + outArg + "\', 4)";
++            Py::Object res = Base::Interpreter().runStringObject(cmd.c_str());
++            rc = static_cast<int>(Py::Long(res));
++        }
++        catch (const Base::PyException& e) {
++            Base::Console().error("Remesh: the gmsh bridge failed: %s\n", e.what());
++            rc = 1;
++        }
++        d->ui.labelTime->setText(QStringLiteral("%1 %2 ms")
++                                     .arg(tr("Time:")).arg(d->time.elapsed()));
++        if (rc == 0) {
++            loadOutput();
++        }
++        else {
++            // Say so. Failing silently is the defect being fixed here.
++            Base::Console().error(
++                "Remesh: gmsh returned %d, so the mesh is unchanged\n", rc);
++        }
++        return;
++#endif
+         d->gmsh.start(proc, args);
+ 
+         d->time.start();
+@@ -343,7 +382,15 @@
+             << "   Error(\"Too old Gmsh version %g.%g. At least 4.x is required\", GMSH_MAJOR_VERSION, GMSH_MINOR_VERSION);\n"
+             << "   Exit;\n"
+             << "EndIf\n"
++#if defined(__EMSCRIPTEN__)
++            // FCWEB: the bridge copies the .geo and the .stl into a single flat
++            // directory in the gmsh module's own filesystem, so an absolute path
++            // from this filesystem would not resolve. gmsh resolves Merge relative
++            // to the script.
++            << "Merge \"" << stl.fileName() << "\";\n\n"
++#else
+             << "Merge \"" << stl.filePath() << "\";\n\n"
++#endif
+             << "// 2D mesh algorithm (1=MeshAdapt, 2=Automatic, 5=Delaunay, 6=Frontal, 7=BAMG, 8=Frontal Quad, 9=Packing of Parallelograms, 11=Quasi-structured Quad)\n"
+             << "Mesh.Algorithm = " << algorithm << ";\n\n"
+             << "// 3D mesh algorithm (1=Delaunay, 2=New Delaunay, 4=Frontal, 7=MMG3D, 9=R-tree, 10=HTX)\n"

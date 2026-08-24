@@ -1,4 +1,36 @@
-<!doctype html><html><head><meta charset="utf-8"><title>FreeCAD-Web</title><link rel="icon" href="/icon-192.png">
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>FreeCAD in your browser - the full CAD app compiled to WebAssembly</title><link rel="icon" href="/icon-192.png">
+<meta name="description" content="Run FreeCAD in your browser - the real parametric CAD application, with its Qt interface, the OpenCASCADE kernel and Python, compiled to WebAssembly. No install, nothing uploaded.">
+<!-- Canonical: nginx serves this file for the bare root, so / is the only URL that should ever
+     rank. /freecad-gui.html reaches the same page directly and folds into it here. -->
+<link rel="canonical" href="https://freecad.virtastic.app/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Virtastic">
+<meta property="og:title" content="FreeCAD in your browser">
+<meta property="og:description" content="The full parametric CAD app - Qt GUI, OpenCASCADE kernel and Python - compiled to WebAssembly. Runs at freecad.virtastic.app with nothing to install.">
+<meta property="og:url" content="https://freecad.virtastic.app/">
+<meta property="og:image" content="https://freecad.virtastic.app/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="FreeCAD in your browser - the full parametric CAD app compiled to WebAssembly, at freecad.virtastic.app">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="FreeCAD in your browser">
+<meta name="twitter:description" content="The full parametric CAD app - Qt GUI, OpenCASCADE kernel and Python - compiled to WebAssembly. Runs at freecad.virtastic.app.">
+<meta name="twitter:image" content="https://freecad.virtastic.app/og.png">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication",
+ "name":"FreeCAD in your browser (freecad-web)",
+ "url":"https://freecad.virtastic.app/",
+ "description":"FreeCAD, the open-source parametric 3D CAD modeller, compiled to WebAssembly. The real application - its Qt interface, the OpenCASCADE geometry kernel and an embedded Python stack - running in a browser tab with nothing to install and no drawing leaving the machine.",
+ "image":"https://freecad.virtastic.app/og.png",
+ "applicationCategory":"DesignApplication",
+ "applicationSubCategory":"CAD",
+ "operatingSystem":"Web browser (desktop Chrome/Chromium)",
+ "browserRequirements":"Requires WebAssembly and SharedArrayBuffer. Desktop Chrome or Chromium.",
+ "isAccessibleForFree":true,
+ "offers":{"@type":"Offer","price":"0","priceCurrency":"USD","availability":"https://schema.org/InStock"},
+ "publisher":{"@type":"Organization","name":"Virtastic","url":"https://virtastic.app"},
+ "license":"https://www.gnu.org/licenses/lgpl-2.1.html"}
+</script>
 <!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
 <!-- Copyright (c) Virtastic -->
 <!-- Build identity. infra/Dockerfile rewrites the placeholder at image build time with the
@@ -102,6 +134,7 @@ document.addEventListener('DOMContentLoaded', function () {
  @keyframes ldSlide{0%{transform:translateX(-110%)} 100%{transform:translateX(330%)}}
  #load .ld-detail{margin-top:13px; min-height:16px; font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;
    color:var(--faint)}
+ #load .ld-lede{margin:22px 0 0; font-size:13.5px; line-height:1.55; color:var(--muted)}
  #load .ld-credit{margin-top:26px; font-size:11px; letter-spacing:.08em; color:var(--faint)}
  #load .ld-credit a{color:var(--bronze-hi); text-decoration:none; border-bottom:1px solid var(--line)}
  #load .ld-credit a:hover{color:var(--gold)}
@@ -127,10 +160,17 @@ document.addEventListener('DOMContentLoaded', function () {
         <circle cx="24" cy="24" r="2.2" fill="currentColor" stroke="none"/>
       </svg>
     </div>
-    <div class="ld-title" id="ld-title">Free<span class="accent">CAD</span></div>
+    <h1 class="ld-title" id="ld-title">Free<span class="accent">CAD</span></h1>
     <div class="ld-status" id="ld-status">Preparing the workbench&hellip;</div>
     <div class="ld-bar"><div class="ld-fill" id="ld-fill"></div></div>
     <div class="ld-detail" id="ld-detail">first load downloads about 115 MB</div>
+    <!-- Says what this page IS, in prose. Two audiences need it and neither was served before:
+         a visitor staring at a 115 MB download with no explanation, and a crawler, for which
+         this boot panel is the ENTIRE readable page — the app itself is a canvas. -->
+    <p class="ld-lede">FreeCAD, the open-source parametric 3D CAD modeller, compiled to
+      WebAssembly. The real application — its Qt interface, the OpenCASCADE geometry kernel
+      and an embedded Python — running in this tab. Nothing is installed, and no drawing
+      leaves your machine.</p>
     <div class="ld-credit">freecad-web by
       <a href="https://virtastic.app" target="_blank" rel="noopener">Virtastic</a>
       &middot; <a href="./legal.html" target="_blank" rel="noopener">LGPL-2.1</a> &middot;
