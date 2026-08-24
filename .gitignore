@@ -96,3 +96,9 @@ desktop.ini
 
 # CI infra config (hosts, tokens) — never committed
 ci/jenkins/config.env
+
+# A container that inherits a Windows TMPDIR writes its cache to a path starting with a
+# drive letter, and git turns the colon into U+F03A -- so "C:" becomes a real directory
+# inside the repository. Twenty-seven pip cache blobs got committed that way once.
+C[:]/
+*/AppData/Local/Temp/
