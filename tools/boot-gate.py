@@ -379,7 +379,18 @@ def scenario_restore(ctx, url, args, fail):
         fail('autosave installed but wrote nothing to .fcweb-autosave in 90s')
         return s1
     print('==> autosaved: %s' % listing)
-    time.sleep(25)          # the IDBFS persist backstop runs every 15s
+
+    # Force the persist and WAIT for it, rather than sleeping past the 15 s backstop
+    # and hoping. The sleep passed locally and failed in CI, which is the signature of
+    # a test that depends on load rather than on the thing it claims to check.
+    persisted = s1.page.evaluate(
+        """() => new Promise((resolve) => {
+             try {
+               window.fcInstance.FS.syncfs(false, (err) => resolve(err ? String(err) : 'ok'));
+             } catch (e) { resolve('throw: ' + e); }
+           })""")
+    if persisted != 'ok':
+        fail('IDBFS refused to persist the autosave (%s) -- work would not survive a reload' % persisted)
     s1.page.close()
 
     s2 = Session(ctx, url, args.timeout)
