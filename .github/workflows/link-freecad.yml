@@ -499,6 +499,55 @@ jobs:
             echo "no linked wasm to check"
           fi
 
+      # THE GATE THIS REPOSITORY DID NOT HAVE. For the whole of the 1.1.3 port the
+      # application could not start, and every check above was green: they compile, link,
+      # validate and measure the binary, but not one of them RUNS it. This one launches the
+      # artifact in headless Chromium, waits for the app to report Ready, then makes FreeCAD
+      # build a Part::Box and checks the volume and topology that come back -- interpreter,
+      # bindings and OCCT kernel together, which is exactly what the boot bug broke.
+      #
+      # Proven in both directions before it landed: it passes the fixed engine, and against
+      # the pre-fix binary it fails with "err=failed to initialize importlib".
+      #
+      # ?no3d is deliberate. Headless GL is not the GL a user has, so a rendering verdict
+      # from here would look like coverage while proving something else (RELEASE-PLAN V6).
+      - name: Boot gate -- does the application actually start and do CAD work?
+        run: |
+          set -e
+          bin=build-freecad-gui-weh/bin
+          [ -s "$bin/FreeCAD.wasm" ] || { echo "::error::no linked wasm to boot"; exit 1; }
+
+          python3 -m pip install --quiet --user playwright
+          # No --with-deps: that wants root, and this runner's sudo is deliberately scoped.
+          # If Chromium cannot launch for want of a system library, the gate says exactly
+          # that, and this is the line to fix it at.
+          python3 -m playwright install chromium
+
+          rm -rf gate-serve && mkdir -p gate-serve
+          cp play-gui/freecad-gui.html gate-serve/index.html
+          cp play-gui/qtloader.js play-gui/sw.js play-gui/manifest.webmanifest gate-serve/
+          cp play-gui/icon-192.png play-gui/icon-512.png gate-serve/ || true
+          cp "$bin/FreeCAD.js" "$bin/FreeCAD.wasm" gate-serve/
+          # Mirror what production serves: the shell asks for FreeCAD.data.gz, and the GL
+          # patch table is applied to the served loader.
+          gzip -1 -c "$bin/FreeCAD.data" > gate-serve/FreeCAD.data.gz
+          python3 tools/patch-freecad-js.py gate-serve/FreeCAD.js
+
+          ver=$(grep -v '^#' patches/freecad.version | grep -v '^$' | head -1)
+          echo "expecting App.Version() $ver"
+          python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version "$ver"
+
+      - name: Upload the boot-gate serve tree on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-gate-shell
+          path: |
+            gate-serve/index.html
+            gate-serve/FreeCAD.js
+          if-no-files-found: ignore
+          retention-days: 5
+
       - name: Upload the artifact
         if: always()
         uses: actions/upload-artifact@v4
