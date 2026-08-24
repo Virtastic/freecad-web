@@ -46,9 +46,17 @@ stage_dir() {
         if [ -d "$src" ]; then
             rm -rf "${DEST:?}/$name"
             cp -r "$src" "$DEST/$name"
-            # .pyc for a different interpreter is dead weight in a 145 MB payload.
+            # .pyc for a different interpreter is dead weight in a payload every visitor
+            # downloads.
             find "$DEST/$name" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
             find "$DEST/$name" -name '*.pyc' -delete 2>/dev/null || true
+            # Test suites too. numpy alone ships thousands of test files, and staging from a
+            # source tree takes the lot -- the working release carried 325 numpy files, a
+            # raw copy is several times that, and every one of them is bytes a user waits
+            # for on first load. Directories named `tests` only: numpy.testing is a public
+            # API that numpy itself imports, and dropping it would break the package.
+            find "$DEST/$name" -type d -name 'tests' -prune -exec rm -rf {} + 2>/dev/null || true
+            find "$DEST/$name" -type d -name 'test' -prune -exec rm -rf {} + 2>/dev/null || true
             staged+=("$name <- $src")
             return 0
         fi
