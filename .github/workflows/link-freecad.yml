@@ -478,6 +478,22 @@ jobs:
           echo "--- module archives built ---"
           find build-freecad-gui-weh -name '*.a' 2>/dev/null | wc -l
 
+      # shiboken's limited-API stand-ins (PyMethod_New and friends) hijack CPython's
+      # symbols in a static monolith. patches/pyside-setup.patch renames them out of the
+      # way -- but that rename sat behind a macro defined nowhere and was inert for the
+      # whole of the 1.1.3 port, which is precisely why the app could not boot: every
+      # bound method built during interpreter startup raised "null argument to internal
+      # routine". Check the linked binary, not the build flags, so it cannot go quiet again.
+      - name: No CPython symbols hijacked by shiboken shims
+        if: always()
+        run: |
+          f=build-freecad-gui-weh/bin/FreeCAD.wasm
+          if [ -s "$f" ]; then
+            python3 tools/check-symbol-hijack.py "$f"
+          else
+            echo "no linked wasm to check"
+          fi
+
       - name: Upload the artifact
         if: always()
         uses: actions/upload-artifact@v4

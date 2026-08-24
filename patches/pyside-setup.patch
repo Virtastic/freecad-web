@@ -39,7 +39,7 @@ diff --git a/sources/shiboken6/libshiboken/pep384impl.cpp b/sources/shiboken6/li
 index bd7a4c5..ce743c1 100644
 --- a/sources/shiboken6/libshiboken/pep384impl.cpp
 +++ b/sources/shiboken6/libshiboken/pep384impl.cpp
-@@ -15,6 +15,23 @@
+@@ -15,6 +15,28 @@
  #include <cstdlib>
  #include <cstring>
  
@@ -51,7 +51,12 @@ index bd7a4c5..ce743c1 100644
 +// (NULL) and segfaults. Rename shiboken's definitions to local names so the real
 +// libpython versions satisfy every external reference; shiboken's own calls still
 +// resolve to the (identical-behaviour) local copies.
-+#ifdef FCWEB_REAL_CPYTHON
++// The macro below was previously the only gate, and it is defined NOWHERE in this
++// repository -- so this rename never took effect and shiboken kept winning the
++// symbols, which is what broke the 1.1.3 boot: CPython bound methods went through
++// shiboken PyMethod_New, whose PepMethod_TypePtr is still nullptr during startup.
++// Keying off __EMSCRIPTEN__ as well means the guard cannot silently go inert again.
++#if defined(FCWEB_REAL_CPYTHON) || defined(__EMSCRIPTEN__)
 +#  define PyRun_String       fcweb_shib_PyRun_String
 +#  define PyMethod_New       fcweb_shib_PyMethod_New
 +#  define PyMethod_Function  fcweb_shib_PyMethod_Function
