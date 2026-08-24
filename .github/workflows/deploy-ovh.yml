@@ -278,6 +278,21 @@ jobs:
           chk "COEP require-corp"              'grep -qi "^cross-origin-embedder-policy: require-corp" /tmp/ch'
           chk "entry HTML is no-cache"         'grep -qi "^cache-control:.*no-cache" /tmp/ch'
 
+          # SEO posture. /index.html used to serve the base image's "Welcome to nginx!" page with a
+          # 200 -- an indexable placeholder on a production host, and Google found it. It must now
+          # redirect to the real page. The h1 matters too: this app is a canvas, so the boot panel
+          # is the only markup a crawler can read; without it the page has nothing to rank on.
+          idx=$(curl -sS -o /dev/null -w '%{http_code}' https://freecad.virtastic.app/index.html)
+          ogc=$(curl -sS -o /dev/null -w '%{http_code}' https://freecad.virtastic.app/og.png)
+          can=$(grep -c 'rel="canonical" href="https://freecad.virtastic.app/"' /tmp/cb || true)
+          ogi=$(grep -c 'og:image" content="https://freecad.virtastic.app/og.png"' /tmp/cb || true)
+          hh1=$(grep -c '<h1 class="ld-title"' /tmp/cb || true)
+          chk "/index.html redirects ($idx)"   '[ "$idx" = 301 ] || [ "$idx" = 308 ]'
+          chk "og.png resolves ($ogc)"         '[ "$ogc" = 200 ]'
+          chk "canonical on /"                 '[ "$can" -ge 1 ]'
+          chk "og:image on /"                  '[ "$ogi" -ge 1 ]'
+          chk "h1 in the boot panel"           '[ "$hh1" -ge 1 ]'
+
           # The stamps the browser will actually request must resolve THROUGH the CDN. A stale
           # edge object here is exactly the failure that killed returning users once before.
           for u in $(grep -oE "(FreeCAD\.wasm|FreeCAD\.data\.gz|gmsh\.js|ccx\.js)\?v=[a-z0-9]+" /tmp/cb | sort -u); do

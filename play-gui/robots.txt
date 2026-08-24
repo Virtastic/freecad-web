@@ -1,0 +1,7 @@
+# freecad.virtastic.app — FreeCAD compiled to WebAssembly.
+# Cloudflare prepends its managed AI-crawler block to this file at the edge; what follows is
+# the origin's own policy. Everything here is meant to be found, so nothing is disallowed.
+User-agent: *
+Allow: /
+
+Sitemap: https://freecad.virtastic.app/sitemap.xml

@@ -36,6 +36,11 @@
 !/play-gui/sw.js
 !/play-gui/icon-192.png
 !/play-gui/icon-512.png
+# crawler + social files: hand-authored, COPYed by infra/Dockerfile. Without these negations
+# /play-gui/* swallows them, the build context arrives without them, and the COPY fails.
+!/play-gui/og.png
+!/play-gui/robots.txt
+!/play-gui/sitemap.xml
 # sources of truth for the dialog-shim payloads embedded in freecad-gui.html.
 # Both are regenerated into the page by tools/gen-dialog-shims.py; CI fails if they drift.
 !/play-gui/wasm_dialog_shim.py
