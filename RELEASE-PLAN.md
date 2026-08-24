@@ -35,6 +35,13 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 | **R10** | half of every third-party Python package missing | **found today, fix landed, awaiting a build.** numpy, matplotlib, PIL, ifcopenshell and pivy cannot be imported in the live release: C halves linked, Python halves absent. FEM, Draft, BIM and Plot are dead. Staging is now repo-driven and the gate imports them in a real browser. |
 
+| **2.1** | outbound HTTP blocked by COEP | **built, tested, deployed.** A same-origin proxy with fixed destination keys (no `?url=`, so no SSRF into the box's own network), reads only, no credentials forwarded, rate limited. Verified against the real hosts: GitHub metadata, a 1.4 GB codeload stream, 403 for an unknown key and for POST. |
+| **2.2** | Addon Manager off | **build half done.** The submodule is fetched at the commit 1.1.3 pins and `BUILD_ADDONMGR=ON`; its network is routed through the proxy at NetworkManager's single request chokepoint. Runtime install still to verify. |
+| **2.2b** | PySide6 had no QtNetwork | **found by the new gate, fixed.** The Addon Manager's first real import is `QtNetwork`, which this PySide did not build -- the workbench would have been decorative. `Network` is in the module list, the archive is in the link, and both gates require it. |
+| **2.5** | gmsh remeshing failed silently | **fixed.** It now calls the same wasm gmsh bridge the FEM mesher uses, and says so on the console when gmsh returns non-zero instead of leaving the mesh quietly unchanged. |
+| **2.6** | Web workbench "has no engine" | **overstated; measured.** Mod/Web in 1.1.3 is a server, not a browser view. The nine `QDesktopServices::openUrl` sites in Gui do work -- openUrl returns true and calls `window.open`. Gated. |
+| **2.10a** | first-load size | **brotli added** beside the existing gzip copy of FreeCAD.data, preferred when the client offers it, gzip untouched for anything older. |
+
 R1 and R7 are untouched.
 
 ---
