@@ -60,64 +60,81 @@ document.addEventListener('DOMContentLoaded', function () {
  #logtoggle{position:absolute;right:6px;bottom:6px;z-index:11;background:#1e1e2e;color:#8087a2;
       border:1px solid #45475a;border-radius:4px;padding:1px 7px;font:11px ui-monospace,Menlo,monospace;cursor:pointer;opacity:.45}
  #logtoggle:hover{opacity:1}
- /* --- Themed loading overlay (Virtastic house style, shared with openmw-web / ja2-web:
-    deep-slate ground + a cool CAD-blue glow). Covers the app during download/boot;
-    fades out on the first frame. --- */
- #boot{position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;
-      padding:24px;text-align:center;background:#0d0f12;color:#e3e9f2;
-      font:16px/1.6 "Inter","Segoe UI",-apple-system,Roboto,"Helvetica Neue",sans-serif;
-      transition:opacity .6s ease}
- #boot.done{opacity:0;pointer-events:none}
- #boot::before{content:'';position:absolute;inset:0;pointer-events:none;
-      background:radial-gradient(150% 74% at 50% 134%, rgba(74,158,255,.28), rgba(74,158,255,.05) 34%, transparent 60%),
-        radial-gradient(90% 60% at 50% 136%, rgba(127,196,255,.12), transparent 56%);
-      animation:fcGlow 9s ease-in-out infinite}
- @keyframes fcGlow{0%,100%{opacity:.8}50%{opacity:1}}
- #boot .ld-inner{position:relative;width:100%;max-width:440px}
- #boot .ld-glyph{width:60px;height:60px;margin:0 auto 26px;color:#4a9eff;animation:fcsp 7s linear infinite}
- #boot .ld-glyph svg{width:100%;height:100%;display:block;
-      filter:drop-shadow(0 0 14px rgba(74,158,255,.35))}
- @keyframes fcsp{to{transform:rotate(360deg)}}
- #boot .bt{margin:0 0 10px;font-family:"Inter","Segoe UI",Roboto,sans-serif;font-weight:600;
-      font-size:clamp(28px,5vw,42px);letter-spacing:.005em;color:#eef3fa;
-      text-shadow:0 1px 0 rgba(0,0,0,.5),0 0 34px rgba(74,158,255,.14)}
- #boot .bt .accent{color:#4a9eff;text-shadow:0 0 22px rgba(74,158,255,.45)}
- #boot .bs{margin:0 0 22px;font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;
-      font-weight:600;color:#7fb2e6;min-height:1.4em}
- #boot .ld-bar{position:relative;height:4px;border-radius:3px;overflow:hidden;background:rgba(74,158,255,.16)}
- #boot .ld-fill{height:100%;width:0;border-radius:3px;
-      background:linear-gradient(90deg,#2f6fb0,#4a9eff,#8fc7ff);transition:width .3s ease}
- #boot.indet .ld-fill{width:34%;animation:ldSlide 1.25s ease-in-out infinite}
- @keyframes ldSlide{0%{transform:translateX(-110%)}100%{transform:translateX(330%)}}
- #boot .ld-detail{margin-top:13px;min-height:16px;font:12px/1.4 ui-monospace,Menlo,monospace;color:#6b7686}
- #boot .ld-credit{margin-top:28px;font-size:11px;letter-spacing:.08em;color:#5c6675}
- #boot .ld-credit a{color:#4a9eff;text-decoration:none;border-bottom:1px solid rgba(74,158,255,.4)}
- #boot .berr{color:#f38ba8}
- #boot.err .ld-glyph{animation:none;color:#f38ba8}
- #boot.err .bs{color:#f38ba8}
+ /* --- Loading overlay: the Virtastic house style, identical to jk2-web / jka-web /
+    ja2-web / openmw-web. The palette, type, bar geometry and motion below are copied
+    from those projects rather than re-derived, so the four sit side by side without a
+    seam; only the glyph, the title, the seed phrase and the credit line differ. --- */
+ :root{
+   --ash:#0a0a09; --panel:#14100c; --panel-2:#1c1712; --line:#3a2f22;
+   --ink:#ece2c8; --muted:#a2977c; --faint:#786c58;
+   --bronze:#8a7a4e; --bronze-hi:#c7b070; --gold:#c9a54a; --gold-hi:#eccf7e;
+   --ember:#8b1a1a; --err:#e0836a; --ok:#a9c48a;
+ }
+ #load{position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center;
+   padding:24px; text-align:center; background:var(--ash); color:var(--ink);
+   font:16px/1.6 "Optima","Gill Sans","Gill Sans MT",-apple-system,"Segoe UI",Roboto,sans-serif;
+   transition:opacity .6s ease}
+ #load.hide{opacity:0; pointer-events:none}
+ #load::before{content:''; position:absolute; inset:0; pointer-events:none;
+   background:
+     radial-gradient(150% 72% at 50% 132%, rgba(230,140,40,.26), rgba(0,0,0,0) 60%),
+     radial-gradient(90% 60% at 50% 134%, rgba(255,200,110,.12), rgba(0,0,0,0) 56%);
+   animation:ldEmber 9s ease-in-out infinite}
+ @keyframes ldEmber{0%,100%{opacity:.82}50%{opacity:1}}
+ #load .ld-inner{position:relative; width:100%; max-width:460px}
+ #load .ld-glyph{width:56px; height:56px; margin:0 auto 24px; color:var(--bronze-hi);
+   animation:ldSpin 7s linear infinite}
+ #load .ld-glyph svg{width:100%; height:100%; display:block}
+ @keyframes ldSpin{to{transform:rotate(360deg)}}
+ #load .ld-title{margin:0 0 10px;
+   font-family:"Hoefler Text","Baskerville","Palatino Linotype",Palatino,Georgia,serif;
+   font-weight:600; font-size:clamp(26px,5vw,40px); letter-spacing:.01em; color:var(--ink);
+   text-shadow:0 1px 0 rgba(0,0,0,.6), 0 0 34px rgba(201,165,74,.12)}
+ #load .ld-title .accent{color:#c0392b; text-shadow:0 0 20px rgba(192,57,43,.4)}
+ #load .ld-status{margin:0 0 22px; font-size:11.5px; letter-spacing:.22em; text-transform:uppercase;
+   font-weight:600; color:var(--bronze-hi)}
+ #load .ld-bar{position:relative; height:4px; border-radius:3px; overflow:hidden;
+   background:rgba(138,122,78,.28)}
+ #load .ld-fill{height:100%; width:0; border-radius:3px;
+   background:linear-gradient(90deg,var(--bronze),var(--gold),var(--gold-hi));
+   transition:width .3s ease}
+ #load.indet .ld-fill{width:34%; animation:ldSlide 1.25s ease-in-out infinite}
+ @keyframes ldSlide{0%{transform:translateX(-110%)} 100%{transform:translateX(330%)}}
+ #load .ld-detail{margin-top:13px; min-height:16px; font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;
+   color:var(--faint)}
+ #load .ld-credit{margin-top:26px; font-size:11px; letter-spacing:.08em; color:var(--faint)}
+ #load .ld-credit a{color:var(--bronze-hi); text-decoration:none; border-bottom:1px solid var(--line)}
+ #load .ld-credit a:hover{color:var(--gold)}
+ #load.err .ld-glyph{animation:none; color:var(--err)}
+ #load.err .ld-status{color:var(--err)}
+ #load.err .ld-detail{color:var(--err)}
+ #load.err .ld-fill{background:var(--err)}
  @media (prefers-reduced-motion:reduce){
-   #boot::before,#boot .ld-glyph{animation:none}
-   #boot.indet .ld-fill{animation:none;width:100%}
+   #load::before,#load .ld-glyph{animation:none}
+   #load.indet .ld-fill{animation:none; width:100%}
  }
 </style></head>
 <body>
 <div id="screen"></div>
-<div id="boot" class="indet">
+<div id="load" class="indet">
   <div class="ld-inner">
     <div class="ld-glyph" aria-hidden="true">
-      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"
+           stroke-linecap="round" stroke-linejoin="round">
         <!-- isometric CAD cube -->
         <path d="M24 5 41 14.5 41 33.5 24 43 7 33.5 7 14.5Z"/>
         <path d="M24 5 24 24 41 14.5M24 24 7 14.5M24 24 24 43"/>
-        <circle cx="24" cy="24" r="2" fill="currentColor" stroke="none"/>
+        <circle cx="24" cy="24" r="2.2" fill="currentColor" stroke="none"/>
       </svg>
     </div>
-    <div class="bt">Free<span class="accent">CAD</span></div>
-    <div class="bs" id="bootstatus">starting… (the first load downloads about 115 MB)</div>
-    <div class="ld-bar"><div class="ld-fill" id="bootfill"></div></div>
-    <div class="ld-detail" id="bootdetail"></div>
-    <div class="ld-credit">FreeCAD-Web by <a href="https://virtastic.app" target="_blank" rel="noopener">Virtastic</a>
-      &middot; <a href="./legal.html" target="_blank" rel="noopener">LGPL &amp; attribution</a> &middot; <a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">Source</a>
+    <div class="ld-title" id="ld-title">Free<span class="accent">CAD</span></div>
+    <div class="ld-status" id="ld-status">Preparing the workbench&hellip;</div>
+    <div class="ld-bar"><div class="ld-fill" id="ld-fill"></div></div>
+    <div class="ld-detail" id="ld-detail">first load downloads about 115 MB</div>
+    <div class="ld-credit">freecad-web by
+      <a href="https://virtastic.app" target="_blank" rel="noopener">Virtastic</a>
+      &middot; <a href="./legal.html" target="_blank" rel="noopener">LGPL-2.1</a> &middot;
+      <a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">Source</a>
       <span id="buildstamp"></span></div>
   </div>
 </div>
@@ -925,18 +942,18 @@ window.fcwebNotify = function (text, kind, actions) {
 <script>
  const logEl=document.getElementById('log');
  const __t0=performance.now();
- const __bootEl=document.getElementById('boot'), __bootStatus=document.getElementById('bootstatus');
+ const __bootEl=document.getElementById('load'), __bootStatus=document.getElementById('ld-status');
  const __DEBUG=/[?&]debug/.test(location.search);
  // Boot-progress noise: emscripten download/dep counters + our own diagnostic
  // markers. Never shown in the log unless ?debug; instead summarized in the
  // loading overlay. This is what looked like "tons of errors": pure progress spam.
  const __NOISE=/\[deps\] remaining|Downloading data|\bRunning\.\.\.|\[FCWEB-MARK|\[BOOTTIME|\[SPE \d|\[FCWEB\]|InitApplications|InitGui \d|all InitGui|activateWorkbench:|showMainWindow:|setBranding:|loadOpenInventor:|checkParameters:|execute:(begin|end)|mw wrapper singleton|pyside warmup|emscripten GL emulation|immediate mode emulation/;
- const __bootFill=document.getElementById('bootfill'), __bootDetail=document.getElementById('bootdetail');
- // Drive the themed overlay: uppercase phase label (#bootstatus), progress bar (#bootfill),
- // and a monospace detail line (#bootdetail). A numeric "… NN%" switches the bar to
+ const __bootFill=document.getElementById('ld-fill'), __bootDetail=document.getElementById('ld-detail');
+ // Drive the themed overlay: uppercase phase label (#ld-status), progress bar (#ld-fill),
+ // and a monospace detail line (#ld-detail). A numeric "… NN%" switches the bar to
  // determinate; otherwise it stays indeterminate. Errors turn the whole overlay red.
  function __setBoot(msg,isErr){
-   if(isErr){ if(__bootEl) __bootEl.classList.add('err'); if(__bootStatus){ __bootStatus.textContent='Error'; __bootStatus.classList.add('berr'); } if(__bootDetail) __bootDetail.textContent=String(msg).slice(0,140); return; }
+   if(isErr){ if(__bootEl) __bootEl.classList.add('err'); if(__bootStatus){ __bootStatus.textContent='Error';  } if(__bootDetail) __bootDetail.textContent=String(msg).slice(0,140); return; }
    if(!__bootStatus) return;
    const m=/(.*?)\s*(\d+)\s*%/.exec(String(msg));
    if(m){
@@ -951,7 +968,7 @@ window.fcwebNotify = function (text, kind, actions) {
      if(paren){ __bootStatus.textContent=paren[1].replace(/[…\.\s]+$/,'')||paren[1]; if(__bootDetail) __bootDetail.textContent=paren[2]; }
      else { __bootStatus.textContent=String(msg).replace(/…$/,''); if(__bootDetail) __bootDetail.textContent=''; }
    }
-   __bootStatus.classList.remove('berr'); if(__bootEl) __bootEl.classList.remove('err');
+    if(__bootEl) __bootEl.classList.remove('err');
  }
  // Reveal the app only once BOTH the loader says it's ready AND the Qt window has gone
  // fullscreen. Qt-wasm paints a vestigial title bar; if we reveal first and strip it after,
@@ -959,7 +976,7 @@ window.fcwebNotify = function (text, kind, actions) {
  // ~1.5s, showFullScreen ran at 4s). Gate the reveal on both, with a timeout so the overlay
  // can never get stuck covering a working app.
  var __bootReady=false, __fsReady=false;
- function __maybeReveal(){ if(__bootReady && __fsReady && __bootEl) __bootEl.classList.add('done'); }
+ function __maybeReveal(){ if(__bootReady && __fsReady && __bootEl) __bootEl.classList.add('hide'); }
  function __hideBoot(){ __bootReady=true; __maybeReveal(); }
  function __fsApplied(){ __fsReady=true; __maybeReveal(); }
  setTimeout(function(){ __fsReady=true; __maybeReveal(); }, 15000); // safety net
@@ -1040,7 +1057,7 @@ window.fcwebNotify = function (text, kind, actions) {
    // Only genuinely-fatal boot messages turn the overlay red — stderr WARNING/INFO
    // lines (e.g. the benign "using emscripten GL immediate mode emulation") must not
    // hijack the loading screen. Anything not fatal is dropped (it's boot noise).
-   if(cls==='err' && !noise && __bootEl && !__bootEl.classList.contains('done')
+   if(cls==='err' && !noise && __bootEl && !__bootEl.classList.contains('hide')
       && /\b(abort|aborted|fatal|uncaught|RuntimeError|cannot|failed to|out of memory|not supported)\b/i.test(String(t))
       && !/\bWARNING\b/i.test(String(t))) __setBoot(String(t).slice(0,140),true);
    // Optional: persist FCWEB diagnostic markers to the server synchronously (for
@@ -2116,7 +2133,7 @@ window.fcRunPy = fcRunPy;
         });
       });
     }, Promise.resolve()).then(function () { init(); }, function (e) {
-      var d = document.getElementById('bootstatus');
+      var d = document.getElementById('ld-status');
       if (d) { d.textContent = 'could not load ' + e.message; }
     });
     return;
@@ -2132,13 +2149,13 @@ window.fcRunPy = fcRunPy;
             : /WebGL2/.test(missing[0][0]) ? 'webgl2' : 'other';
     window.fcwebEvent('boot_gate', why);
   } catch (e) {}
-  var boot = document.getElementById('boot');
+  var boot = document.getElementById('load');
   if (boot) { boot.className = ''; }
-  var st = document.getElementById('bootstatus');
+  var st = document.getElementById('ld-status');
   if (st) { st.textContent = 'This browser cannot run FreeCAD-Web'; }
-  var fill = document.getElementById('bootfill');
+  var fill = document.getElementById('ld-fill');
   if (fill && fill.parentNode) { fill.parentNode.style.display = 'none'; }
-  var det = document.getElementById('bootdetail');
+  var det = document.getElementById('ld-detail');
   if (det) {
     var html = 'Nothing has been downloaded. FreeCAD-Web needs:<br><br>';
     for (var i = 0; i < missing.length; i++) {
