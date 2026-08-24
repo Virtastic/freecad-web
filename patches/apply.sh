@@ -24,10 +24,40 @@ apply_one() {
   # patch added as its anchor. Once a build has run, the region matches neither the patched
   # nor the unpatched text, so both `patch --dry-run` and `patch -R --dry-run` fail and a
   # restored source cache aborts the whole job with "tree may be at the wrong version".
+  # A marker says SOME version of this patch was applied -- not THIS one. That gap cost
+  # the entire 1.1.3 boot: patches/pyside-setup.patch gained the fix that stops shiboken
+  # hijacking CPython's PyMethod_New, the cached source tree still carried the old text,
+  # the marker matched, the patch was skipped, and the build went green around a source
+  # tree that did not contain the fix. So record the patch's hash beside the tree and
+  # treat "marker present, hash absent or different" as stale rather than as applied.
+  local stamp="$tree/.fcweb-patch-$(basename "$2").sha256"
+  local want=""
+  if [ -f "$patch" ]; then
+    want="$(sha256sum "$patch" 2>/dev/null | cut -d' ' -f1)"
+    [ -n "$want" ] || want="$(shasum -a 256 "$patch" | cut -d' ' -f1)"
+  fi
+  stale_stamp() {
+    # true when the tree cannot be shown to carry exactly this patch text
+    [ -n "$want" ] || return 1
+    [ -f "$stamp" ] || return 0
+    [ "$(cat "$stamp")" != "$want" ]
+  }
+  if stale_stamp; then
+    if [ "${FCWEB_ALLOW_STALE_PATCH:-0}" = "1" ]; then
+      echo "  !! $1: tree does not carry the current $2 (FCWEB_ALLOW_STALE_PATCH=1, continuing)"
+    elif [ -d "$tree" ]; then
+      echo "  !! $1: $tree was patched with a DIFFERENT version of $2." >&2
+      echo "     Delete the tree so it is re-fetched and re-patched, or set" >&2
+      echo "     FCWEB_ALLOW_STALE_PATCH=1 if you know the delta does not matter." >&2
+      return 1
+    fi
+  fi
   if [ -n "$marker" ]; then
     local mfile="$tree/${marker%%::*}" mtext="${marker#*::}"
     if [ -f "$mfile" ] && grep -qF -- "$mtext" "$mfile"; then
-      echo "  == $1: already applied (marker)"; return 0
+      echo "  == $1: already applied (marker, hash $(echo "$want" | cut -c1-8))"
+      [ -n "$want" ] && echo "$want" > "$stamp"
+      return 0
     fi
   fi
   if [ ! -d "$tree" ]; then
@@ -45,9 +75,9 @@ apply_one() {
 
   if [ -d "$tree/.git" ]; then
     if git -C "$tree" apply --reverse --check "$patch" 2>/dev/null; then
-      echo "  == $1: already applied (skip)"
+      echo "  == $1: already applied (skip)"; [ -n "$want" ] && echo "$want" > "$stamp"
     elif git -C "$tree" apply --check "$patch" 2>/dev/null; then
-      git -C "$tree" apply "$patch"; echo "  ++ $1: applied ${2}"
+      git -C "$tree" apply "$patch"; echo "  ++ $1: applied ${2}"; [ -n "$want" ] && echo "$want" > "$stamp"
     else
       echo "  !! $1: $2 does NOT apply cleanly — tree may be at the wrong commit"; return 1
     fi
@@ -58,9 +88,9 @@ apply_one() {
   # own work tree git would resolve the enclosing .git and bring index semantics to a
   # directory that has nothing to do with it. -R --dry-run first, so re-running is a no-op.
   if patch -d "$tree" -p1 -F0 -R --dry-run --force --silent < "$patch" >/dev/null 2>&1; then
-    echo "  == $1: already applied (skip, tarball)"
+    echo "  == $1: already applied (skip, tarball)"; [ -n "$want" ] && echo "$want" > "$stamp"
   elif patch -d "$tree" -p1 -F0 --dry-run --force --silent < "$patch" >/dev/null 2>&1; then
-    patch -d "$tree" -p1 -F0 --silent < "$patch"; echo "  ++ $1: applied ${2} (tarball)"
+    patch -d "$tree" -p1 -F0 --silent < "$patch"; echo "  ++ $1: applied ${2} (tarball)"; [ -n "$want" ] && echo "$want" > "$stamp"
   else
     # "does not apply cleanly" with nothing else is a message that costs an hour. Re-run
     # WITHOUT --silent and show what actually rejected, plus enough about the two inputs to

@@ -208,6 +208,36 @@ jobs:
             echo "  Provision once with: sudo apt-get install -y libtool automake autoconf"
           fi
 
+      # A restored cache carries source trees that were patched by an EARLIER commit's
+      # patches. Nothing downstream notices: apply.sh sees its marker, the build lane sees
+      # its archives, and the job goes green around source that does not contain the fix
+      # you just pushed. That is exactly how the shiboken PyMethod_New fix stayed invisible.
+      # patches/apply.sh now stamps each tree with the patch's sha256; drop any tree whose
+      # stamp does not match so the fetch below re-downloads it, and force the dependent
+      # lane to rebuild.
+      - name: Drop source trees patched with a different version of the patch
+        run: |
+          set -e
+          check() {   # <tree-name> <patch-file> <build-output-to-clear>
+            tree="deps/src/$1"; patch="patches/$2"; stamp="$tree/.fcweb-patch-$2.sha256"
+            [ -d "$tree" ] || return 0
+            want=$(sha256sum "$patch" | cut -d' ' -f1)
+            if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+              echo "  ok    $1 carries the current $2"
+              return 0
+            fi
+            echo "::notice::$1 was patched with a different (or unrecorded) $2 -- re-fetching"
+            rm -rf "$tree"
+            [ -n "${3:-}" ] && rm -rf $3 || true
+            echo "FCWEB_PYSIDE_REBUILD=1" >> "$GITHUB_ENV"
+          }
+          # Only pyside-setup for now: its rebuild lane is self-contained and its skip
+          # condition is understood. apply.sh stamps every other tree as it goes, so the
+          # same check can be extended to them once those stamps exist in the caches --
+          # deleting a source tree whose build lane keys off a SEPARATE cache would force
+          # a rebuild that proves nothing.
+          check pyside-setup pyside-setup.patch "build-pyside-wasm build-shiboken-wasm"
+
       - name: Fetch sources
         run: |
           set -e
