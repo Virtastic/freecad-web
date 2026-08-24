@@ -27,8 +27,7 @@ jobs:
       # Needed so the sudoers candidate can be syntax-checked from the repo. Without it the
       # workspace holds whatever the last job left behind, and the validation step reported
       # "file not present" while looking straight at a stale directory.
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Runner identity and registration scope
         run: |
           echo "--- who this job runs as ---"

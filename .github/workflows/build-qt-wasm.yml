@@ -49,8 +49,7 @@ jobs:
     runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
     timeout-minutes: 350
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # HOSTED RUNNERS ONLY. On a throwaway CI image these trees are reclaimable space; on the
       # OVH box they are somebody's filesystem, and that box also runs another product's
       # database. The `|| true` here would have swallowed the mistake rather than prevented
@@ -87,7 +86,7 @@ jobs:
           echo "  toolchain ok: $(cmake --version | head -1), $(ninja --version)"
 
       - name: Cache the built Qt
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: qt/6.9.0/wasm_mt_weh
           key: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
@@ -237,7 +236,7 @@ jobs:
       # works. So the diagnostics leave by the door that is actually open.
       - name: Upload diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: qt-wasm-logs
           path: /tmp/qtlogs

@@ -72,8 +72,7 @@ jobs:
     # steps and no message.
     runs-on: ${{ inputs.runner == 'hosted' && 'ubuntu-latest' || fromJSON('["self-hosted","ovh","virtastic"]') }}
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Free disk (hosted runners are tight)
         if: ${{ inputs.runner == 'hosted' }}
         run: |
@@ -98,7 +97,7 @@ jobs:
       # asserted below instead of trusted.
       - name: Restore built dependencies
         id: depcache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/wasm
           key: fcweb-deps-${{ env.DEPS_KEY }}-freecad-build
@@ -107,7 +106,7 @@ jobs:
 
       - name: Restore Qt 6.9.0 for wasm
         id: qtcache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: qt/6.9.0/wasm_mt_weh
           key: ${{ env.QT_KEY }}
@@ -150,7 +149,7 @@ jobs:
       # the runner's own python3 (3.12 on ubuntu-24.04) would fail as "unsuitable version".
       - name: Host Python 3.13 (must match the wasm CPython)
         id: hostpy
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
 
@@ -169,7 +168,7 @@ jobs:
 
       - name: Cache emsdk
         id: emsdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: emsdk
           key: emsdk-3.1.70-shims-v1
@@ -493,7 +492,7 @@ jobs:
 
       - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: freecad-wasm-logs
           path: /tmp/fclogs

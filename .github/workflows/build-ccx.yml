@@ -52,8 +52,7 @@ jobs:
     runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Disk before
         run: |
           echo "  building on $(hostname)"
@@ -446,7 +445,7 @@ jobs:
       # different answer rather than a crash.
       - name: Upload the module for deck validation
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ccx-wasm-${{ inputs.pthreads && 'pthreads' || 'serial' }}
           path: |

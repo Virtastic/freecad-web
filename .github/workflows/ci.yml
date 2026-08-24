@@ -12,7 +12,14 @@ name: ci
 # once made nine patches report "already applied" while the file still threw from all nine.
 #
 # None of it ran automatically. This is an hour of work for the best correctness-per-effort
-# ratio available here. Runs on a hosted runner, NOT the production self-hosted one.
+# ratio available here.
+#
+# SAFETY: these jobs run on the Virtastic OVH runner -- the same box that hosts every production
+# container -- and this workflow triggers on pull_request. Once this repo is public, that pairing
+# means anyone can open a PR and have their code execute on our own hardware. The `if` on every
+# job therefore refuses pull requests that come from a fork; PRs from branches inside this repo
+# (people who already have write access) still get full CI, and pushes to main always run. Same
+# guard jk2-web and jka-web already carry.
 on:
   push:
     branches: [main]
@@ -24,10 +31,11 @@ permissions:
 
 jobs:
   patch-tool:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, ovh, virtastic]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -55,13 +63,13 @@ jobs:
   # emcc -fsyntax-only is seconds once emsdk is cached, and it checks the thing that actually
   # bites: whether the entry points these files forward to exist with the signatures used.
   shims:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, ovh, virtastic]
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Cache emsdk
         id: emsdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: emsdk
           key: emsdk-3.1.70-shims-v1
@@ -217,10 +225,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   hygiene:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, ovh, virtastic]
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The publication gate, as a test. Each of these was a real finding, and each would
       # silently come back the next time someone regenerates a build file.
       # PyYAML keeps the last of a duplicated key and says nothing; GitHub refuses the
@@ -343,10 +351,11 @@ jobs:
   # Two things must stay true on every commit -- every file we author says what it is licensed
   # under, and the attribution page the app links to is actually in the image.
   licensing:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, ovh, virtastic]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 

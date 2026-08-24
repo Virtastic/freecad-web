@@ -69,8 +69,7 @@ jobs:
     timeout-minutes: 360
     runs-on: [self-hosted, ovh, virtastic]
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The key MUST change when any lane's recipe changes. It hashed five configure
       # scripts and numpy.patch only, so fixing rebuild-pyside-weh.sh left the key
       # identical -- and actions/cache will not overwrite an existing key:
@@ -82,7 +81,7 @@ jobs:
       - name: Restore the Python extension libraries
         id: pycache
         if: ${{ !inputs.rebuild }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             deps/wasm/lib/numpy-mod
@@ -124,7 +123,7 @@ jobs:
       # key, and none of that is anything this workflow changes.
       - name: Restore the C++ dependency stack
         id: depcache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/wasm
           key: fcweb-deps-v1-emsdk3.1.70-pydeps-consumer
@@ -133,14 +132,14 @@ jobs:
 
       - name: Restore CPython build tree
         id: cpycache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/src/cpython
           key: fcweb-cpython-3.13.3-emsdk3.1.70-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
 
       - name: Cache emsdk
         id: emsdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: emsdk
           key: emsdk-3.1.70-shims-v1
@@ -159,7 +158,7 @@ jobs:
       # ahead of it.
       - name: Host Python 3.13
         id: hostpy
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
 
@@ -342,7 +341,7 @@ jobs:
 
       - name: Save CPython build tree
         if: always() && steps.cpycache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/src/cpython
           key: fcweb-cpython-3.13.3-emsdk3.1.70-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
@@ -352,7 +351,7 @@ jobs:
       # the first and installs the second with aqt; do the same rather than rebuild Qt.
       - name: Restore Qt (wasm)
         id: qtcache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: qt/6.9.0/wasm_mt_weh
           key: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
@@ -654,7 +653,7 @@ jobs:
 
       - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pydeps-logs
           path: |
@@ -668,7 +667,7 @@ jobs:
       # again. Partial progress is exactly what is worth caching here.
       - name: Save the Python extension libraries
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             deps/wasm/lib/numpy-mod

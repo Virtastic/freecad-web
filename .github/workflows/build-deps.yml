@@ -72,8 +72,7 @@ jobs:
     runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
     timeout-minutes: 350
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # HOSTED RUNNERS ONLY. This deletes /usr/share/dotnet, /usr/local/lib/android and the
       # ghc trees to claw back space on a 14 GB image. On the OVH box those are not throwaway
       # CI images, they are somebody's filesystem -- and that box also runs another product's
@@ -115,7 +114,7 @@ jobs:
       - name: Restore built dependencies
         id: depcache
         if: ${{ !inputs.rebuild }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/wasm
           key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
@@ -573,7 +572,7 @@ jobs:
       # logs. The jobs/logs API 404s for this repo, so the artifact is the only channel out.
       - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fcweb-deps-logs
           path: /tmp/deplogs
@@ -582,7 +581,7 @@ jobs:
 
       - name: Upload the built libraries
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fcweb-wasm-deps
           path: |
@@ -596,7 +595,7 @@ jobs:
       # reason the previous fixed-key form never delivered it.
       - name: Save built dependencies
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/wasm
           key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}

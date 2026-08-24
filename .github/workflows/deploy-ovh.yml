@@ -33,8 +33,7 @@ jobs:
     if: github.repository == 'Virtastic/freecad-web' && github.event_name != 'pull_request'
     runs-on: [self-hosted, ovh, virtastic]
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Pull the prebuilt engine artifacts into the build context. A clean checkout omits them
       # (gitignored); the Dockerfile COPY would fail without this. Self-contained (curl + python3,
       # both on the runner) — the self-hosted runner has no `gh` CLI.
