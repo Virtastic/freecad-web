@@ -136,8 +136,14 @@ REQUIRED=(numpy matplotlib mpl_toolkits PIL ifcopenshell fontTools packaging dat
 for pkg in "${REQUIRED[@]}"; do
     if [ -e "$DEST/$pkg/__init__.py" ] || [ -e "$DEST/$pkg.py" ]; then
         echo "  ok       $pkg"
+    elif [ -d "$DEST/$pkg" ] && [ -n "$(find "$DEST/$pkg" -name '*.py' -print -quit)" ]; then
+        # A PEP 420 namespace package has no __init__.py and is still perfectly
+        # importable. mpl_toolkits is one, which is why matplotlib ships it that way, so
+        # requiring __init__.py would fail a tree that is actually complete. Requiring at
+        # least one .py keeps the check meaningful: an empty directory still fails.
+        echo "  ok       $pkg (namespace package, no __init__.py by design)"
     else
-        missing+=("$pkg has no __init__.py in $DEST")
+        missing+=("$pkg is missing from $DEST (no __init__.py, no module file, no .py at all)")
     fi
 done
 
