@@ -21,8 +21,14 @@ rename sat behind a macro defined nowhere and was silently inert for the whole o
 the 1.1.3 port. A guard that can go quiet is not a guard, so this checks the linked
 binary instead of trusting the build flags.
 
-The invariant: every renamed stand-in is present under its fcweb_shib_ name, and
-none of the hijacked names resolves into shiboken's object-file cluster.
+The invariant is WHICH CLUSTER the symbol lands in. Static archives link in order, so
+shiboken's objects sit far ahead of CPython's: while a shim owned PyMethod_New it was
+function 1112, next to shiboken's Pep* helpers; once the rename takes effect it is 90072,
+beside cm_descr_get and func_descr_get in CPython's own classobject.c.
+
+Checking for the renamed fcweb_shib_ names instead would be wrong, and was: with nothing
+referencing them any more, the linker garbage-collects the renamed copies, so their ABSENCE
+is what success looks like. Their presence is accepted as corroboration, never required.
 """
 import importlib.util
 import os
@@ -36,8 +42,10 @@ RENAMED = [
     'PyStaticMethod_New',
 ]
 
-# A CPython function this port is known to keep, used to locate the CPython cluster.
+# Two anchors that bracket the link order: a CPython function this port always keeps, and
+# a shiboken helper. Each checked symbol must sit nearer the CPython one.
 CPYTHON_ANCHOR = 'cm_descr_get'
+SHIBOKEN_ANCHOR = '_PepType_Lookup'
 
 
 def load_parser():
@@ -63,31 +71,34 @@ def main():
     for idx, nm in names.items():
         by_name.setdefault(nm, []).append(idx)
 
-    anchor = by_name.get(CPYTHON_ANCHOR)
-    if not anchor:
-        print('::warning::%s not found; skipping the cluster check' % CPYTHON_ANCHOR)
-        anchor_idx = None
-    else:
-        anchor_idx = min(anchor)
+    def anchor_of(nm):
+        hits = by_name.get(nm)
+        return min(hits) if hits else None
+
+    cpy = anchor_of(CPYTHON_ANCHOR)
+    shib = anchor_of(SHIBOKEN_ANCHOR)
+    if cpy is None or shib is None:
+        print('::warning::cannot locate both cluster anchors (%s=%s, %s=%s); skipping'
+              % (CPYTHON_ANCHOR, cpy, SHIBOKEN_ANCHOR, shib))
+        return 0
+    print('clusters: CPython near %d, shiboken near %d' % (cpy, shib))
 
     failures = []
     for nm in RENAMED:
-        shimmed = by_name.get('fcweb_shib_' + nm)
-        real = by_name.get(nm)
-        if not shimmed:
-            failures.append('%s: shiboken\'s stand-in is NOT renamed (fcweb_shib_%s absent) -- '
-                            'the guard in patches/pyside-setup.patch went inert again' % (nm, nm))
+        hits = by_name.get(nm)
+        if not hits:
+            # Not linked in at all. Nothing can call a shim that is not there.
+            print('  ok  %-20s not present in the binary' % nm)
             continue
-        if real and anchor_idx is not None:
-            # shiboken's objects link far ahead of CPython's; a hijacked symbol shows up
-            # in shiboken's index range instead of beside its own translation unit.
-            idx = min(real)
-            if idx < anchor_idx // 2:
-                failures.append('%s resolves at index %d, far from CPython\'s cluster near %d '
-                                '-- it looks like a shim still owns this symbol'
-                                % (nm, idx, anchor_idx))
-        print('  ok  %-20s renamed stand-in present%s'
-              % (nm, '' if not real else ', real symbol at %d' % min(real)))
+        idx = min(hits)
+        renamed_too = 'fcweb_shib_' + nm in by_name
+        if abs(idx - cpy) < abs(idx - shib):
+            print("  ok  %-20s at %d, in CPython's cluster%s"
+                  % (nm, idx, ' (shim kept too)' if renamed_too else ''))
+            continue
+        failures.append("%s resolves at index %d -- nearer shiboken's cluster (%d) than "
+                        "CPython's (%d), so a limited-API shim owns this symbol. The rename "
+                        'in patches/pyside-setup.patch is not taking effect.' % (nm, idx, shib, cpy))
 
     if failures:
         for f in failures:
