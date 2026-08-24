@@ -629,6 +629,7 @@ jobs:
           need build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a       "PySide6 QtCore"
           need build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a         "PySide6 QtGui"
           need build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a "PySide6 QtWidgets"
+          need build-pyside-wasm/PySide6/QtNetwork/QtNetwork.abi3.a "PySide6 QtNetwork"
           need build-pyside-wasm/libpyside/libpyside6.abi3.a        "libpyside6"
           need deps/wasm/shiboken6/lib/libshiboken6.abi3.a          "libshiboken6"
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')

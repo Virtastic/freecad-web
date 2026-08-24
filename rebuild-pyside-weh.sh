@@ -189,7 +189,11 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   -DQt6_DIR="$QNEW/lib/cmake/Qt6" -DQT_HOST_PATH="$QT_HOST" \
   -DQFP_PYTHON_HOST_PATH="$HOSTPY3" -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
   -DShiboken6_DIR="$ROOT/deps/wasm/shiboken6/lib/cmake/Shiboken6" \
-  -DMODULES="Core;Gui;Widgets" -DFORCE_LIMITED_API=no \
+  `# Network is here for the Addon Manager: its NetworkManager.py imports QtNetwork, so` \
+  `# without these bindings every addon operation dies at the import and the workbench` \
+  `# is decorative. The Qt C++ library was already in the link; only the bindings were` \
+  `# missing, and the boot gate's network scenario is what caught it.` \
+  -DMODULES="Core;Gui;Widgets;Network" -DFORCE_LIMITED_API=no \
   `# BUILD_TESTS=OFF: pysidetest parses HOST headers, and this build removes the clang` \
   `# builtins injection that host parsing genuinely needs, so it failed with` \
   `#   /usr/include/c++/15/cstddef: fatal error: 'stddef.h' file not found` \

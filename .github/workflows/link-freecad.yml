@@ -186,6 +186,7 @@ jobs:
           need deps/wasm/lib/ifc-mod/libIfcParse.a                 "IfcOpenShell IfcParse" build-python-deps.yml
           need build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a "PySide6 QtWidgets"  build-python-deps.yml
           need deps/wasm/shiboken6/lib/libshiboken6.abi3.a         "libshiboken6"        build-python-deps.yml
+          need build-pyside-wasm/PySide6/QtNetwork/QtNetwork.abi3.a "PySide6 QtNetwork"   build-python-deps.yml
           need deps/wasm/pyside-pkg/PySide6/__init__.py            "pyside-pkg glue"     build-python-deps.yml
           exit $fail
 

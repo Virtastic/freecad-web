@@ -36,6 +36,51 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return 'application/wasm'
         return super().guess_type(path)
 
+    # Same allow-list as infra/nginx.conf. Kept in step deliberately: the gate is meant to
+    # prove the APP routes through /proxy correctly, so if the two ever disagree the gate
+    # would pass against a proxy production does not have.
+    PROXY_HOSTS = {
+        'github': 'github.com',
+        'api': 'api.github.com',
+        'codeload': 'codeload.github.com',
+        'raw': 'raw.githubusercontent.com',
+        'objects': 'objects.githubusercontent.com',
+        'wiki': 'wiki.freecad.org',
+        'docs': 'freecad.org',
+    }
+
+    def _serve_proxy(self, path):
+        """Stand in for nginx's /proxy/<key>/<path> so the gate can exercise the routing."""
+        import http.client
+        rest = path[len('/proxy/'):]
+        key, _, tail = rest.partition('/')
+        host = self.PROXY_HOSTS.get(key)
+        if host is None:
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b'proxy: destination not allowed\n')
+            return
+        try:
+            conn = http.client.HTTPSConnection(host, timeout=30)
+            conn.request('GET', '/' + tail, headers={'User-Agent': 'fcweb-gate'})
+            resp = conn.getresponse()
+            body = resp.read(8 * 1024 * 1024)
+        except Exception as exc:
+            self.send_response(502)
+            self.end_headers()
+            self.wfile.write(('proxy: %s\n' % exc).encode())
+            return
+        self.send_response(resp.status)
+        self.send_header('Content-Type', resp.getheader('Content-Type', 'application/octet-stream'))
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.startswith('/proxy/'):
+            return self._serve_proxy(self.path.split('?')[0])
+        return super().do_GET()
+
     def send_head(self):
         self._gz = self.path.split('?')[0].endswith('.data.gz')
         return super().send_head()

@@ -122,6 +122,33 @@ _s.__stderr__.write('FCIMPORTS ' + repr(_res) + chr(10))
 _s.__stderr__.flush()
 '''
 
+NETWORK_PY = r'''
+# Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
+# fetch is refused however co-operative the remote server is, so everything has to go
+# through this origin's /proxy. This drives Qt's own network stack -- the same one the
+# Addon Manager uses -- rather than the browser's fetch, because that is what has to work.
+import sys as _s
+try:
+    from PySide6 import QtCore, QtNetwork
+
+    _nam = QtNetwork.QNetworkAccessManager()
+    _url = QtCore.QUrl("/proxy/raw/FreeCAD/FreeCAD/main/README.md")
+    _reply = _nam.get(QtNetwork.QNetworkRequest(_url))
+    _loop = QtCore.QEventLoop()
+    _reply.finished.connect(_loop.quit)
+    QtCore.QTimer.singleShot(30000, _loop.quit)      # never hang the gate
+    _loop.exec()
+    _body = bytes(_reply.readAll())
+    _s.__stderr__.write("FCNET " + repr({
+        "error": int(_reply.error().value) if hasattr(_reply.error(), "value") else int(_reply.error()),
+        "bytes": len(_body),
+    }) + chr(10))
+    _s.__stderr__.flush()
+except Exception as _e:
+    _s.__stderr__.write("FCNET " + repr({"error": -1, "bytes": 0, "why": repr(_e)}) + chr(10))
+    _s.__stderr__.flush()
+'''
+
 COUNT_DOCS_PY = r'''
 import FreeCAD as App, sys as _s
 _names = list(App.listDocuments().keys())
@@ -399,6 +426,25 @@ def scenario_imports(ctx, url, args, fail):
     return s
 
 
+def scenario_network(ctx, url, args, fail):
+    """Reaching the web at all -- the thing COEP takes away and the proxy gives back."""
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('network scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(NETWORK_PY)
+    r = s.wait_for('FCNET', 120)
+    if not isinstance(r, dict):
+        fail('the network probe produced no result -- Qt never came back from the request')
+    elif r.get('error') or r.get('bytes', 0) <= 0:
+        fail('the app could not fetch through the proxy (QNetworkReply error %s, %s bytes%s) '
+             '-- with this broken the Addon Manager and every documentation link are dead'
+             % (r.get('error'), r.get('bytes'), ', ' + r['why'] if r.get('why') else ''))
+    else:
+        print('==> network: fetched %d bytes through the proxy with Qt' % r['bytes'])
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -406,7 +452,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'all'))
     ap.add_argument('--with-3d', action='store_true',
                     help='leave the 3D pipeline on (headless GL proves little; see V6)')
     args = ap.parse_args()
@@ -458,6 +504,8 @@ def main():
                 sessions.append(scenario_dialog(ctx, url, args, fail))
             if args.scenario in ('imports', 'all'):
                 sessions.append(scenario_imports(ctx, url, args, fail))
+            if args.scenario in ('network', 'all'):
+                sessions.append(scenario_network(ctx, url, args, fail))
             dump = []
             for s in sessions:
                 dump.append((s.lines(), s.console, s.errors()))
@@ -490,8 +538,10 @@ def main():
         'restore': 'gives work back after a reload',
         'dialog': 'can ask the user a question and use the answer',
         'imports': 'can import the Python packages its workbenches need',
+        'network': 'can reach the web through the proxy',
         'all': 'starts, does CAD work, gives work back after a reload, can ask the user a '
-               'question, and has the Python packages its workbenches need',
+               'question, has the Python packages its workbenches need, and can reach the '
+               'web',
     }[args.scenario]
     print('==> boot gate passed: the application %s' % did)
     return 0
