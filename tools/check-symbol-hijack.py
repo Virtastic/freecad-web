@@ -35,11 +35,18 @@ import os
 import sys
 
 RENAMED = [
+    # pep384impl.cpp -- PyMethod_New is the one that cost the port its boot
     'PyMethod_New',
     'PyRun_String',
     'PyMethod_Function',
     'PyMethod_Self',
     'PyStaticMethod_New',
+    # bufferprocs_py37.cpp -- the same hazard, found while closing out the first
+    'PyObject_GetBuffer',
+    'PyBuffer_Release',
+    'PyBuffer_IsContiguous',
+    'PyBuffer_FromContiguous',
+    'PyBuffer_FillInfo',
 ]
 
 # Two anchors that bracket the link order: a CPython function this port always keeps, and

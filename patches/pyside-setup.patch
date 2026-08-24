@@ -26,11 +26,29 @@ diff --git a/sources/shiboken6/libshiboken/bufferprocs_py37.cpp b/sources/shibok
 index 4ccf970..03b517c 100644
 --- a/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
 +++ b/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
-@@ -12,6 +12,8 @@
+@@ -12,6 +12,26 @@
  #ifdef Py_LIMITED_API
  
  #include "sbkpython.h"
-+
++// FCWEB: same hazard as pep384impl.cpp above. These limited-API stand-ins are not
++// private to libshiboken in a static wasm monolith -- they win the symbol for the
++// whole program, CPython included. PyObject_GetBuffer and PyBuffer_Release were
++// still doing exactly that (wasm indices 742/743, in shiboken's object cluster
++// rather than beside CPython's buffer code), while the other five here happened to
++// lose to libpython. Which definition wins is not a thing to leave to link order.
++//
++// Renaming is safe because Pep_buffer is a field-for-field re-declaration of
++// CPython's Py_buffer and the header defines one as the other, so shiboken's own
++// call sites bind to the real implementation without reinterpreting a byte.
++#if defined(FCWEB_REAL_CPYTHON) || defined(__EMSCRIPTEN__)
++#  define PyObject_GetBuffer             fcweb_shib_PyObject_GetBuffer
++#  define PyBuffer_Release               fcweb_shib_PyBuffer_Release
++#  define PyBuffer_IsContiguous          fcweb_shib_PyBuffer_IsContiguous
++#  define PyBuffer_GetPointer            fcweb_shib_PyBuffer_GetPointer
++#  define PyBuffer_FromContiguous        fcweb_shib_PyBuffer_FromContiguous
++#  define PyBuffer_FillContiguousStrides fcweb_shib_PyBuffer_FillContiguousStrides
++#  define PyBuffer_FillInfo              fcweb_shib_PyBuffer_FillInfo
++#endif
 +
  /* Buffer C-API for Python 3.0 */
  
