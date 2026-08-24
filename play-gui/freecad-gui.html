@@ -870,6 +870,23 @@ window.fcwebNotify = function (text, kind, actions) {
     var key = kind + '|' + String(detail).slice(0, 120);
     if (seen.has(key)) return;
     seen.add(key);
+    // Count it. Until now a script error or an unhandled rejection was shown to the ONE
+    // user who hit it and to nobody else: the toast offers a report, but that needs them
+    // to copy it and open an issue, so anything short of a determined user is invisible.
+    // Only wasm aborts were counted, which meant the failure classes we knew least about
+    // were also the ones we could not see.
+    //
+    // This sends the CLASS and nothing else -- an enumerated word from the list below, no
+    // message, no stack, no document name, no identifier. The detail stays on the user's
+    // clipboard where they decide what to do with it. A counter that says "37 rejections
+    // yesterday" is enough to know something is wrong and to go looking.
+    try {
+      var klass = kind === 'script error' ? 'script'
+                : kind === 'unhandled rejection' ? 'rejection'
+                : kind === 'wasm abort' ? null      // already counted, do not double-count
+                : 'other';
+      if (klass) { window.fcwebEvent && window.fcwebEvent('crash', klass); }
+    } catch (e) { /* a counter must never break the crash path it reports on */ }
     var text = 'Something went wrong (' + kind + '). Your work is autosaved and will be ' +
                'restored if you reload. If it keeps happening, please send us the report.';
     if (typeof window.fcwebNotify !== 'function') { try { console.error(text, detail); } catch (e) {} return; }

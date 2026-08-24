@@ -31,7 +31,9 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 | **R5** | documents can be evicted | **built and wired; one human check left.** Manifest and service worker meet the installability bar, the install offer waits until real work is saved, and a refusal warns the user and offers a disk backup folder. The grant itself cannot be tested headlessly, so it moved to MANUAL-QA. |
 
-R1, R6 and R7 are untouched.
+| **R6** | failures invisible from the field | **closed.** Script errors and unhandled rejections were shown to one user and counted for nobody; both now beacon an enumerated class. Still no message, stack or identifier — the detail stays on the user's clipboard. |
+
+R1 and R7 are untouched.
 
 ---
 
@@ -142,7 +144,19 @@ What remains cannot be automated: headless Chromium has no install UI, so the gr
 has to be confirmed by a person. Added to `MANUAL-QA.md` — install the app, then require
 `navigator.storage.persisted()` to return `true`.
 
-### R6. Nothing reports failures from the field *(blocker — ROADMAP Tier 1 #3)*
+### R6. Nothing reports failures from the field — **the blind spot is closed**
+
+Every failure class the user is shown is now also counted: `fcwebCrash` beacons `script`,
+`rejection` or `other`, and wasm aborts keep their existing counter rather than being
+counted twice. Verified in the running app — a synthetic rejection produced the toast and
+exactly one `/t?e=crash&k=rejection`.
+
+What is deliberately NOT sent: any message, stack, document name, identifier or free text.
+The detailed diagnostic report stays on the user's clipboard, for them to attach to an
+issue if they choose. A count is enough to know something is wrong and go looking, and
+going further would trade a real privacy property for a convenience.
+
+The original text of this item follows, for the record.
 
 The counters added for boot/abort answer *how many*, never *what*. If a user hits R2 or an
 OOM tomorrow, we learn nothing. Shipping "no known issues" without a way to hear about the
