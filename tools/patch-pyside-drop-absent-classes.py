@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-"""Stop PySide's QtCore expecting wrappers for classes Qt-for-wasm has not got.
+"""Stop PySide expecting wrappers for classes Qt-for-wasm has not got.
 
     python tools/patch-pyside-drop-absent-classes.py deps/src/pyside-setup
 
@@ -53,16 +53,30 @@ import io
 import os
 import sys
 
-REL = 'sources/pyside6/PySide6/QtCore/CMakeLists.txt'
 MARK = 'FCWEB-DROP-ABSENT'
-ANCHOR = 'if("permissions" IN_LIST QtCore_disabled_features)'
+
+# Per module: where its CMakeLists is, and the line to insert before. The anchor
+# has to sit after both get_property(<mod>_disabled_features ...) and
+# set(<mod>_SRC ...), because the block below appends to one and removes from the
+# other.
+MODULES = {
+    'QtCore': {
+        'rel': 'sources/pyside6/PySide6/QtCore/CMakeLists.txt',
+        'anchor': 'if("permissions" IN_LIST QtCore_disabled_features)',
+    },
+    'QtNetwork': {
+        'rel': 'sources/pyside6/PySide6/QtNetwork/CMakeLists.txt',
+        'anchor': 'set(QtNetwork_SRC',
+        'anchor_after': True,   # this list IS the thing being edited
+    },
+}
 
 # (Qt feature, [type entries], [wrapper sources], why)
 #
 # Measured, not guessed: every entry here was reported absent by shiboken against the
 # 6.9.0 Qt-for-wasm build. EMSCRIPTEN is checked alongside the feature so the guard does
 # not hinge on the feature name appearing in QT_DISABLED_PUBLIC_FEATURES.
-DROPS = [
+DROPS = {'QtCore': [
     ('process',
      ['QProcess', 'QProcess.UnixProcessParameters'],
      ['qprocess_wrapper.cpp', 'qprocess_unixprocessparameters_wrapper.cpp'],
@@ -78,40 +92,61 @@ DROPS = [
      ['qtimezone_offsetdata_wrapper.cpp'],
      'QTimeZone itself IS found and keeps its wrapper; only the nested OffsetData struct,\n'
      '# which sits inside QT_CONFIG(timezone), is absent.'),
-]
+], 'QtNetwork': [
+    # Measured the same way as the QtCore entries above: these are the exact three
+    # types shiboken reported as "specified in typesystem, but not defined" when
+    # QtNetwork was first built for wasm. Nothing here is guessed, and the list is
+    # short because Qt-for-wasm's QtNetwork is otherwise complete.
+    ('networkinterface',
+     ['QNetworkInterface', 'QNetworkAddressEntry'],
+     ['qnetworkinterface_wrapper.cpp', 'qnetworkaddressentry_wrapper.cpp'],
+     'a page cannot enumerate network interfaces, so Qt-for-wasm builds without\n'
+     '# QT_FEATURE_networkinterface and neither class exists. QNetworkAddressEntry\n'
+     '# is declared inside qnetworkinterface.h, which is why both go together.'),
+    ('ssl',
+     ['QSslEllipticCurve'],
+     ['qsslellipticcurve_wrapper.cpp'],
+     'the wasm TLS backend is certificate-only (QTlsBackendCertOnlyPlugin), so the\n'
+     '# elliptic-curve type is absent while the rest of the QSsl* family is present.'),
+]}
 
 
-def block(feature, entries, sources, why):
+def block(mod, feature, entries, sources, why):
     lines = ['# %s: %s' % (MARK, why)]
-    lines.append('if(EMSCRIPTEN OR "%s" IN_LIST QtCore_disabled_features)' % feature)
-    lines.append('    list(APPEND QtCore_DROPPED_ENTRIES %s)' % ' '.join(entries))
-    lines.append('    list(REMOVE_ITEM QtCore_SRC')
+    lines.append('if(EMSCRIPTEN OR "%s" IN_LIST %s_disabled_features)' % (feature, mod))
+    lines.append('    list(APPEND %s_DROPPED_ENTRIES %s)' % (mod, ' '.join(entries)))
+    lines.append('    list(REMOVE_ITEM %s_SRC' % mod)
     for s in sources:
-        lines.append('         ${QtCore_GEN_DIR}/%s' % s)
+        lines.append('         ${%s_GEN_DIR}/%s' % (mod, s))
     lines.append('    )')
-    lines.append('    message(STATUS "Qt${QT_MAJOR_VERSION}Core: Dropping %s '
-                 '(absent on this target)")' % ', '.join(entries))
+    lines.append('    message(STATUS "%s: Dropping %s (absent on this target)")'
+                 % (mod, ', '.join(entries)))
     lines.append('endif()')
     lines.append('')
     return chr(10).join(lines)
 
 
-def main():
-    if len(sys.argv) != 2:
-        sys.exit(__doc__)
-    path = os.path.join(sys.argv[1], REL)
+def patch_module(root, mod):
+    """Returns True if the file was changed, False if it was already patched."""
+    spec = MODULES[mod]
+    rel = spec['rel']
+    anchor = spec['anchor']
+    path = os.path.join(root, rel)
     if not os.path.exists(path):
-        sys.exit('not found: %s' % path)
+        # A module the build does not include is not an error: MODULES is the union of
+        # everything this port has ever needed, and QtNetwork only appeared when the
+        # Addon Manager did.
+        print('  %s: not in this source tree, skipping' % rel)
+        return False
 
     src = io.open(path, encoding='utf-8', errors='replace').read()
-
     if MARK in src:
-        print('  already patched: %s' % REL)
-        return
+        print('  already patched: %s' % rel)
+        return False
 
-    # A cached tree may carry the earlier version of this patch, which covered QProcess's
-    # nested value-type only. Start from the pristine file rather than stacking a second
-    # block on top of it.
+    # A cached tree may carry the earlier version of this patch, which covered
+    # QProcess's nested value-type only. Start from the pristine file rather than
+    # stacking a second block on top of it.
     old_mark = 'FCWEB: QProcess::UnixProcessParameters'
     if old_mark in src:
         keep, dropping = [], False
@@ -124,22 +159,40 @@ def main():
                 continue
             keep.append(line)
         src = chr(10).join(keep)
-        print('  %s: superseded the earlier UnixProcessParameters-only block' % REL)
+        print('  %s: superseded the earlier UnixProcessParameters-only block' % rel)
 
-    if ANCHOR not in src:
-        print('!! anchor not found in %s' % REL)
-        print('   expected: %s' % ANCHOR)
+    if anchor not in src:
+        print('!! anchor not found in %s' % rel)
+        print('   expected: %s' % anchor)
         for i, line in enumerate(src.split(chr(10)), 1):
-            if 'QtCore_disabled_features' in line or 'SPECIFIC_OS_FILES' in line:
+            if (mod + '_disabled_features') in line or (mod + '_SRC') in line:
                 print('     %d: %s' % (i, line.strip()))
         sys.exit(1)
 
-    # Must land AFTER get_property(QtCore_disabled_features ...) and after set(QtCore_SRC);
-    # the anchor is the first use of the feature list, which satisfies both.
-    src = src.replace(ANCHOR, ''.join(block(*d) for d in DROPS) + ANCHOR, 1)
+    text = ''.join(block(mod, *d) for d in DROPS[mod])
+    if spec.get('anchor_after'):
+        # The anchor IS the list being edited, so the block has to follow the whole
+        # set(...) call rather than precede it -- REMOVE_ITEM on a variable that does
+        # not exist yet silently does nothing, which would look exactly like success.
+        i = src.index(anchor)
+        j = src.index(')', src.index('_wrapper.cpp', i))
+        j = src.index(chr(10), j) + 1
+        src = src[:j] + text + src[j:]
+    else:
+        src = src.replace(anchor, text + anchor, 1)
     io.open(path, 'w', encoding='utf-8', newline='').write(src)
-    print('  %s: dropped %d absent class group(s)' % (REL, len(DROPS)))
+    print('  %s: dropped %d absent class group(s)' % (rel, len(DROPS[mod])))
+    return True
 
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit(__doc__)
+    root = sys.argv[1]
+    changed = 0
+    for mod in MODULES:
+        changed += 1 if patch_module(root, mod) else 0
+    print('  %d module(s) patched' % changed)
 
 if __name__ == '__main__':
     main()
