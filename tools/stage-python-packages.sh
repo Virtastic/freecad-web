@@ -68,6 +68,9 @@ stage_dir PIL          deps/src/Pillow/src/PIL deps/src/pillow/src/PIL
 # IfcOpenShell ships its Python under src/ifcopenshell-python.
 stage_dir ifcopenshell deps/src/IfcOpenShell/src/ifcopenshell-python/ifcopenshell \
                        deps/src/ifcopenshell/src/ifcopenshell-python/ifcopenshell
+# pivy's Python package. Its __init__.py is replaced by the glue below, which points
+# pivy.coin at the statically linked _coin rather than at a shared library.
+stage_dir pivy         deps/src/pivy/pivy
 
 echo
 echo "== pure-Python libraries, pinned"
@@ -103,6 +106,22 @@ PY
 else
     missing+=("the pinned pure-Python wheels (pip download failed -- no network?)")
 fi
+
+echo
+echo "== re-apply the glue, last"
+# apply.sh copies these, but it runs BEFORE this script and staging pivy from source would
+# overwrite pivy/__init__.py with the upstream one -- which looks for a shared library that
+# does not exist in a static build. Copying them last makes this script correct whatever
+# order it runs in, rather than correct by luck.
+mkdir -p "$DEST/PySide6" "$DEST/shiboken6" "$DEST/pivy"
+for pair in "PySide6/__init__.py" "shiboken6/__init__.py" "pivy/__init__.py"; do
+    if [ -f "patches/pyside-pkg-glue/$pair" ]; then
+        cp "patches/pyside-pkg-glue/$pair" "$DEST/$pair"
+        echo "   $pair"
+    else
+        missing+=("glue patches/pyside-pkg-glue/$pair")
+    fi
+done
 
 echo
 echo "== what is in $DEST now"
