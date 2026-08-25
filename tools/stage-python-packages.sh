@@ -90,6 +90,10 @@ stage_dir ifcopenshell deps/src/IfcOpenShell/src/ifcopenshell-python/ifcopenshel
 # pivy's Python package. Its __init__.py is replaced by the glue below, which points
 # pivy.coin at the statically linked _coin rather than at a shared library.
 stage_dir pivy         deps/src/pivy/pivy
+# matplotlib imports kiwisolver for its layout solver, and only the C half of that
+# is linked in -- the package itself was never staged, so matplotlib died with
+# "No module named 'kiwisolver'" once its own files were finally in place.
+stage_dir kiwisolver   deps/src/kiwisolver/py/kiwisolver deps/src/kiwi/py/kiwisolver
 
 
 echo
@@ -227,8 +231,22 @@ PROLOGUE = (
 if os.path.exists(ifc):
     src = io.open(ifc, encoding="utf-8", errors="replace").read()
     if "_fcweb_il.import_module" not in src:
-        io.open(ifc, "w", encoding="utf-8", newline="").write(PROLOGUE + src)
-        print("   aliased the ifcopenshell wrapper builtin into the package")
+        # AFTER any __future__ imports. Putting it at the very top produced
+        #   SyntaxError: from __future__ imports must occur at the beginning of the file
+        # because ifcopenshell has one at line 66 -- and a package that will not parse
+        # is worse than the naming mismatch this is here to fix.
+        lines = src.split(chr(10))
+        at = 0
+        for i, line in enumerate(lines):
+            if line.startswith("from __future__ import"):
+                at = i + 1
+        out = chr(10).join(lines[:at]) + (chr(10) if at else "") + PROLOGUE + \
+            chr(10).join(lines[at:])
+        import ast as _ast
+        _ast.parse(out)          # never write a file this script has just broken
+        io.open(ifc, "w", encoding="utf-8", newline="").write(out)
+        print("   aliased the ifcopenshell wrapper builtin into the package "
+              "(after %d __future__ line(s))" % at)
 PYEOF
 
 echo
@@ -320,7 +338,7 @@ ls -1 "$DEST" | sed 's/^/   /'
 # this script exists to prevent, so a missing package is an error, not a warning.
 echo
 echo "== verification"
-REQUIRED=(numpy matplotlib mpl_toolkits PIL ifcopenshell fontTools packaging dateutil
+REQUIRED=(numpy matplotlib mpl_toolkits PIL ifcopenshell kiwisolver fontTools packaging dateutil
           pyparsing cycler lark PySide6 shiboken6 pivy)
 for pkg in "${REQUIRED[@]}"; do
     if [ -e "$DEST/$pkg/__init__.py" ] || [ -e "$DEST/$pkg.py" ]; then
