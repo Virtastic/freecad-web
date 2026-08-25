@@ -1342,7 +1342,23 @@ window.fcRunPy = fcRunPy;
        // Hand emscripten the package we already fetched (and cached). Returning null
        // makes it fall back to fetching the URL itself, so a prefetch failure degrades
        // to the old behaviour instead of breaking boot.
-       getPreloadedPackage: (name, size) => __fcDataBytes || null,
+       // ... but only if it is the package THIS build asked for. emscripten passes the
+       // size it expects; the cache is keyed on the URL alone, so an engine whose URL did
+       // not change (a deploy that missed the ?v= stamping, or any unstamped tree) reads
+       // the previous build's package and boots with mismatched offsets. What the user
+       // sees is "Fatal Python error: Failed to import encodings module" -- an empty
+       // filesystem, from a cache hit. Measured: the upgrade gate reproduced it 3 times
+       // in 4. On a mismatch, throw the cache away and let emscripten fetch.
+       getPreloadedPackage: (name, size) => {
+         if (__fcDataBytes && size && __fcDataBytes.byteLength !== size) {
+           append('cached data package is ' + __fcDataBytes.byteLength + ' bytes but this '
+                  + 'engine wants ' + size + ' -- discarding the engine cache', 'err');
+           try { caches.delete(ENGINE_CACHE); } catch(e){}
+           __fcDataBytes = null;
+           return null;
+         }
+         return __fcDataBytes || null;
+       },
        // ?v= is not cosmetic: Cloudflare had already cached /FreeCAD.data.gz from a
        // probe made BEFORE nginx served it with Content-Encoding, and that entry would
        // hand the browser raw gzip bytes. A new query string is a new cache object, so

@@ -938,9 +938,31 @@ def scenario_upgrade(ctx, url, args, fail):
              'nothing')
         return Session(ctx, url, args.timeout)
 
+    # infra/Dockerfile stamps every engine URL with the md5 of its content, and refuses to
+    # ship if the stamp is not there. Do the same here: an unstamped tree is a shape
+    # production never serves, and testing it produces failures nobody can have (the
+    # shell's engine cache is keyed on the URL, so without a stamp a returning browser
+    # hands the new loader the previous build's wasm -- "ASM_CONSTS[code] is not a
+    # function"). Mirror the deploy, then the gate is measuring the deploy.
+    import hashlib
+
+    html = os.path.join(args.directory, args.page)
+    template = io.open(html, encoding='utf-8', newline='').read()
+
     def install(blobs):
         for name, data in blobs.items():
             io.open(os.path.join(args.directory, name), 'wb').write(data)
+        page = template
+        for name, data in blobs.items():
+            stamp = hashlib.md5(data).hexdigest()[:12]
+            if name.endswith('.data.gz'):
+                page = re.sub(r"FreeCAD\.data\.gz(\?v=[A-Za-z0-9]*)?",
+                              'FreeCAD.data.gz?v=%s' % stamp, page)
+            else:
+                base = name.replace('.', r'\.')
+                page = re.sub(r"'%s(\?v=[A-Za-z0-9]*)?'" % base,
+                              "'%s?v=%s'" % (name, stamp), page)
+        io.open(html, 'w', encoding='utf-8', newline='').write(page)
 
     try:
         install(old)
@@ -978,6 +1000,7 @@ def scenario_upgrade(ctx, url, args, fail):
         s1.page.close()
     finally:
         install(served)
+        io.open(html, 'w', encoding='utf-8', newline='').write(template)
 
     s2 = Session(ctx, url, args.timeout)
     if not s2.load():
