@@ -356,7 +356,14 @@ jobs:
           nm=emsdk/upstream/bin/llvm-nm
           [ -x "$nm" ] || { echo "::error::$nm is missing -- cannot verify the archives"; exit 1; }
           fail=0
-          for m in QtCore QtGui QtWidgets; do
+          # Every module MainGui.cpp registers, not the three this loop was written
+          # with. QtNetwork and QtSvg were added to the inittab, built, and put on the
+          # link line, and this check looked straight past both -- so the first thing
+          # to notice that QtSvg.abi3.a had no PyInit_QtSvg was wasm-ld, two hours in.
+          mods=$(grep -oE 'PyImport_AppendInittab[(]"Qt[A-Za-z]+_fcweb"' patches/freecad.patch | grep -oE 'Qt[A-Za-z]+' | sort -u)
+          [ -n "$mods" ] || { echo "::error::no PySide inittab registrations found in the patch"; exit 1; }
+          echo "  checking: $(echo $mods)"
+          for m in $mods; do
             a="build-pyside-wasm/PySide6/$m/$m.abi3.a"
             if "$nm" "$a" 2>/dev/null | grep -q "T PyInit_$m"; then
               echo "  ok       $m ($a)"

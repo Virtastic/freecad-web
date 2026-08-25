@@ -292,9 +292,13 @@ check_mod() {   # <archive> <expected PyInit symbol>
     printf '%s\n' "$out" | grep -q "$want" \
         || { echo "        ^^ expected $want and it is not among them"; pyside_missing=1; }
 }
-check_mod "$ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a"       PyInit_QtCore
-check_mod "$ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a"         PyInit_QtGui
-check_mod "$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a" PyInit_QtWidgets
+# Every module in PYSIDE_MODULES, not the three this loop was written with. QtNetwork and
+# QtSvg were built, listed on the link line, and never once verified here -- so the link
+# was the first thing to notice that QtSvg.abi3.a carried no PyInit_QtSvg, two hours in.
+# That is the third hardcoded copy of this list to drift; there is now one list.
+for m in ${PYSIDE_MODULES//;/ }; do
+    check_mod "$ROOT/build-pyside-wasm/PySide6/Qt$m/Qt$m.abi3.a" "PyInit_Qt$m"
+done
 # libpyside6 and libshiboken6 carry no PyInit_ of their own -- Shiboken's module init comes
 # from shibokenmodule's object file, which the link names directly -- so existence is all
 # there is to check for these two.
