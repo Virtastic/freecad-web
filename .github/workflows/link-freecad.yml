@@ -80,10 +80,18 @@ env:
 jobs:
   link:
     timeout-minutes: 720
-    # One box was a single point of failure: when the runner agent died on 2026-08-25 the
+    # One box is a single point of failure: when the runner agent died on 2026-08-25 the
     # queue simply stopped, with a verdict an hour away and no way to reach it. An absent
     # input (any push event) means vps, which is the same trap build-deps.yml fell into --
     # `inputs.runner == 'vps'` is false when there are no inputs at all.
+    #
+    # BUT: `runner: hosted` does not currently work, and it is not this expression's fault.
+    # Dispatching it fails in two seconds with
+    #     The job was not started because an Actions budget is preventing further use.
+    # GitHub-hosted minutes are blocked on this account, which is the reason the whole
+    # pipeline is self-hosted in the first place. The option is kept because it is correct
+    # and costs nothing, and because the alternative is someone rediscovering the budget
+    # wall in an hour when a build box is down. If the box is down, the box is the fix.
     runs-on: ${{ (inputs.runner || 'vps') == 'hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "ovh", "virtastic"]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
