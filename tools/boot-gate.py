@@ -458,6 +458,8 @@ def scenario_boot(ctx, url, args, fail):
                 "() => { const m = window.fcInstance;"
                 " try { return !!(m && m.wasmMemory && m.wasmMemory.buffer"
                 " && m.wasmMemory.grow); } catch (e) { return false; } }")
+            # 2 GB, not growable, is the deliberate configuration: memory growth
+            # changes emscripten's codegen and breaks the GL patch table (ROADMAP 6).
             print('==> heap: %s MB, growable=%s' % (heap, grows))
         except Exception:
             pass

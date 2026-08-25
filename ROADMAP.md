@@ -491,7 +491,25 @@ numbers, and measure load average before believing any timing — this repo has 
 
 ## Tier 3 — real limits, real cost
 
-### 6. The 2 GB heap *(lane C, 2–5 d, genuine risk)*
+### 6. The 2 GB heap
+
+> **Attempted 2026-08-25 and reverted, with the reason worth keeping.** Switching the
+> production link to `ALLOW_MEMORY_GROWTH=1` with `MAXIMUM_MEMORY=4 GB` builds fine and
+> then fails the GL patch step: `line batching drain: glDrawElements NOT FOUND`. Memory
+> growth changes emscripten's codegen -- `_glDrawElements` becomes a function declaration
+> with an `indices>>>=0;` pointer coercion instead of an arrow function, and heap access
+> becomes `GROWABLE_HEAP_F32()[x>>>2>>>0]` rather than `HEAPF32[x>>2]`.
+>
+> `tools/patch-freecad-js.py` documents having been bitten by exactly this before: nine
+> throw-removal patches reported "already applied" while the file still threw from nine GL
+> entry points, because their search text no longer matched. A throw inside a GL call
+> unwinds through Coin and takes the viewport with it.
+>
+> So the ceiling is not free: it costs the patch table that makes the 3D view render, and
+> rendering correctness outranks headroom. Raising it means re-deriving every GL pattern
+> for the growth codegen and confirming the result with the pixel gate -- a real piece of
+> work with a visible viewport, not a flag flip. The gate caught this immediately, which
+> is the system working.
 
 **Measured on live production, 2026-08-17** (`build-20260813-eventstack+e835c2b`), via memory
 reflection in the browser rather than from the build flags:
