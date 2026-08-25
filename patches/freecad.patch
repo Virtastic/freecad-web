@@ -4031,7 +4031,7 @@ diff -ruNp a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/Vie
 diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 --- a/src/Mod/Fem/femmesh/gmshtools.py
 +++ b/src/Mod/Fem/femmesh/gmshtools.py
-@@ -30,6 +30,7 @@ __url__ = "https://www.freecad.org"
+@@ -30,6 +30,7 @@
  import os
  import re
  import shutil
@@ -4039,7 +4039,7 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
  import subprocess
  from PySide.QtCore import QProcess, QThread
  
-@@ -46,6 +47,84 @@ from femtools.objecttools import ObjectT
+@@ -46,6 +47,100 @@
  
  class GmshError(Exception):
      pass
@@ -4080,12 +4080,27 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 +        self._tool = tool
 +        self._out = b""
 +        self._err = b""
++        self._done = False
++        self._rc = 1
 +
 +    def start(self):
 +        QtCore.QTimer.singleShot(0, self._run)
 +        return self
 +
++    def waitForFinished(self, msecs=-1):
++        """The blocking path: ObjectTools.run(blocking=True) waits on this.
++
++        The mesher is synchronous here, so there is nothing to wait for -- run it
++        now rather than on the timer, and let _run's guard stop the timer repeating
++        the work when it fires afterwards.
++        """
++        self._run()
++        return self._rc == 0
++
 +    def _run(self):
++        if self._done:
++            return
++        self._done = True
 +        self.started.emit()
 +        rc = 1
 +        try:
@@ -4097,6 +4112,7 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 +        except Exception as e:
 +            self._err = f"{e}\n".encode("utf-8", "replace")
 +            self.readyReadStandardError.emit()
++        self._rc = rc
 +        # QProcess.NormalExit == 0
 +        self.finished.emit(rc, 0)
 +
@@ -4124,27 +4140,31 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
  
  
  class GmshTools(ObjectTools):
-@@ -219,6 +298,16 @@ class GmshTools(ObjectTools):
-     def update_properties(self):
-         self.mesh_obj.FemMesh = Fem.read(self.temp_file_mesh)
-         self.rename_groups()
-+        # FCWEB: the task panel (femtaskpanels/base_femmeshtaskpanel.py) connects to
-+        # started/finished/readyRead* on whatever this returns and calls
-+        # update_properties() from its finished handler. There is no process to start in
-+        # the browser, so run the mesher inline and hand back an object that emits the
-+        # same signals -- the panel keeps working untouched. Signals are emitted from a
-+        # zero-delay timer so the caller has finished connecting first.
+@@ -209,6 +304,20 @@
+         self.write_gmsh_input_files()
+ 
+     def compute(self):
++        # FCWEB: there is no process to start in a page. Run the mesher in the wasm
++        # module and hand back an object that emits the same started/finished/readyRead*
++        # signals, so femtaskpanels/base_femmeshtaskpanel.py -- which connects to whatever
++        # compute() returns and calls update_properties() from its finished handler --
++        # keeps working untouched. The signals come from a zero-delay timer so the caller
++        # has finished connecting first.
++        #
++        # This block used to sit at the end of update_properties(), which runs AFTER a
++        # mesh has been read and whose return value nobody uses. It therefore never ran,
++        # and compute() went on calling QProcess.start into the stub.
 +        _w = _fcweb_gmsh()
 +        if _w is not None:
 +            return _FcwebGmshProcess(self).start()
 +
+         log_level = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh").GetString(
+             "LogVerbosity", "3"
+         )
+@@ -320,6 +429,13 @@
+         Console.PrintMessage("  " + self.temp_file_geo + "\n")
  
-     def create_mesh(self):
-         # for backward compatibility only
-@@ -336,6 +425,13 @@ class GmshTools(ObjectTools):
-             from platform import system
- 
-             gmsh_path = shutil.which("gmsh")
+     def get_gmsh_command(self):
 +        # FCWEB: in the browser there is no binary to find -- gmsh is a wasm module
 +        # loaded on demand (see _fcwebgmsh / window.fcwebGmshRun). Skip the whole
 +        # which/preferences dance, which would otherwise fail on subprocess.
@@ -4152,10 +4172,10 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 +            self.gmsh_bin = "<wasm>"
 +            return self.gmsh_bin
 +
-             if system() == "Darwin" and not gmsh_path:
-                 gmsh_path = shutil.which("/Applications/Gmsh.app/Contents/MacOS/gmsh")
- 
-@@ -413,6 +509,15 @@ class GmshTools(ObjectTools):
+         self.gmsh_bin = FreeCAD.ParamGet(
+             "User parameter:BaseApp/Preferences/Mod/Fem/Gmsh"
+         ).GetString("gmshBinaryPath", "")
+@@ -413,6 +529,15 @@
                  fem_mesh.renameGroup(i, m.group("item"))
  
      def version(self):
@@ -4171,7 +4191,7 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
          self.get_gmsh_command()
          if shutil.which(self.gmsh_bin):
              found_message = "file found: " + self.gmsh_bin
-@@ -913,6 +1018,25 @@ class GmshTools(ObjectTools):
+@@ -913,6 +1038,25 @@
          geo.close()
  
      def run_gmsh_with_geo(self):
@@ -5036,3 +5056,25 @@ diff --git a/src/Mod/Fem/femtools/objecttools.py b/src/Mod/Fem/femtools/objectto
  
      def _create_working_directory(self, obj):
          """
+@@ -81,8 +90,20 @@
+ 
+     def run(self, blocking=False):
+         self.prepare()
+-        self.compute()
++        proc = self.compute()
+         if blocking:
++            # FCWEB: in the browser compute() hands back a stand-in for QProcess that
++            # runs the tool in a wasm module (see femmesh/gmshtools._FcwebGmshProcess).
++            # self.process is the stub QProcess, so waiting on it would raise, and
++            # nothing would call update_properties() -- create_mesh() returned an object
++            # with no mesh in it. Wait on whatever compute() returned instead, and read
++            # the result here, since the finished signal has no listener on this path.
++            # On the desktop compute() returns self.process, so nothing changes.
++            if proc is not None and proc is not self.process:
++                ok = proc.waitForFinished(-1)
++                if ok:
++                    self.update_properties()
++                return ok
+             return self.process.waitForFinished(-1)
+         return None
+ 

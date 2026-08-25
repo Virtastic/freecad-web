@@ -138,6 +138,15 @@ apply_one cpython       cpython-ctypes-wasm.patch
 apply_one numpy         numpy.patch
 apply_one coin3d        coin3d.patch
 
+# Applying cleanly says the lines went in, not that they went in somewhere they can run.
+# Four fixes in this port were written where control never reached them; the last one had
+# been spliced into the middle of an if-body, so the rest of that branch sat after a return
+# and was dead. patch(1) is perfectly happy with that, and so is the compiler.
+if [ -d deps/src/freecad/src ]; then
+  echo "Checking port-authored Python is reachable:"
+  python3 tools/check-unreachable-fcweb.py deps/src/freecad/src | sed 's/^/  /'
+fi
+
 # The preloaded Python tree (--preload-file deps/wasm/pyside-pkg@/pyside-pkg). None of it
 # comes out of a build -- it is hand-written glue that aliases the inittab modules to their
 # dotted names -- so create the destinations rather than requiring some earlier step to have
