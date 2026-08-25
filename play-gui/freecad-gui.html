@@ -1153,7 +1153,15 @@ function fcRunPy(m, ptr){
                   // _fcweb_run_python. Swallowing it silently makes that look exactly
                   // like a hang (the Python simply stops, no traceback, no error), which
                   // is how the FEM .vtu failure hid for so long. Always surface it.
-                  try { (window.__fcPyErrors = window.__fcPyErrors || []).push(String(e)); } catch(_){}
+                  // String(e) on a wasm trap gives "[object Object]", which names
+                  // nothing. Keep the stack -- with --profiling-funcs the frames carry
+                  // real C++ names, and that is the difference between "something
+                  // failed" and "vtkXMLParser::GetXMLByteIndex trapped".
+                  try {
+                    var _d = (e && (e.stack || e.message)) ? String(e.stack || e.message)
+                                                           : String(e);
+                    (window.__fcPyErrors = window.__fcPyErrors || []).push(_d);
+                  } catch(_){}
                   try { console.error('[fcweb] python call rejected:', e); } catch(_){}
                   try { if (typeof err === 'function') err('[fcweb] python call rejected: ' + e); } catch(_){}
                   // A rejection here means the C++ side trapped, so the operation the
