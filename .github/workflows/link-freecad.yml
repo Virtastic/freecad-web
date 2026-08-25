@@ -376,6 +376,21 @@ jobs:
       # "the symbol is absent" from "the checker did not run" is not a check, which is the
       # same trap this repository has now hit in four different places. Hence the explicit
       # test for nm below.
+      # A signature mismatch across a library boundary does not fail the link -- with
+      # ERROR_ON_UNDEFINED_SYMBOLS=0 wasm-ld resolves it to a stub that traps, and the bill
+      # arrives as "RuntimeError: unreachable" in the browser. That is how the shipped
+      # FEMExample crashed the engine for months on expat's XML_Index width. Seconds here
+      # against a two-hour link and a crash a user finds.
+      - name: Do the expat halves agree about XML_Index?
+        run: |
+          set -e
+          fail=0
+          for sym in vtkexpat_XML_GetCurrentByteIndex                      vtkexpat_XML_GetCurrentLineNumber                      vtkexpat_XML_GetCurrentColumnNumber; do
+            echo "  $sym"
+            python3 tools/wasm-archive-sig.py "$sym"               deps/wasm/lib/libvtkexpat-9.3.a deps/wasm/lib/libvtkIOXMLParser-9.3.a || fail=1
+          done
+          exit $fail
+
       - name: The PySide archives carry their PyInit
         run: |
           set -e
