@@ -138,9 +138,20 @@ so it is not fatal — but it is an error thrown on one of the most common paths
 (reopening the tab), and a null function pointer is never benign; it means a call landed on
 an empty table slot.
 
-**Do:** name the function at that table index the way `PyMethod_New` was named
-(`tools/wasm-func-sig.py`), find why the slot is empty, fix it.
-**Done when** a restore-with-open-document boot is clean, asserted by the R0 gate.
+**Diagnosed 2026-08-24, not yet fixed.** `tools/wasm-indirect-calls.py` shows that
+`QEventLoop::exit` makes exactly one indirect call, through a *computed* index -- a
+vtable load. So the empty slot is in an object, not in the code. Qt ends `exit()` by
+calling `interrupt()` on the thread event dispatcher, which makes this a virtual call
+on a **destroyed dispatcher**: a use-after-destroy, not a missing symbol.
+
+The callers say when. Among them are `QMenu::~QMenu()`,
+`ColorPickerPopup::~ColorPickerPopup()`, their `hideEvent` handlers and
+`QDialogPrivate::setVisible` -- destructors exiting a nested event loop. A transient
+popup torn down after the dispatcher has gone matches where this was seen: restoring a
+session, where opening documents create and destroy transient widgets.
+
+**Still open** because it does not reproduce headlessly, so nothing here is confirmed by
+a failing test yet. The gate carries the detector, so a recurrence fails CI.
 
 ### R3. shiboken still owns `PyObject_GetBuffer` / `PyBuffer_Release` *(blocker)*
 
