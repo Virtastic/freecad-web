@@ -48,7 +48,10 @@ def main():
 
     linked = set(re.findall(r'PySide6/(Qt\w+)/Qt\w+\.abi3\.a', configure))
     built = set()
-    m = re.search(r'-DMODULES="([^"]+)"', rebuild)
+    # rebuild-pyside-weh.sh single-sources the list into PYSIDE_MODULES and passes that
+    # to -DMODULES, so read the variable and fall back to a literal list.
+    m = (re.search(r'PYSIDE_MODULES="([^"$]+)"', rebuild)
+         or re.search(r'-DMODULES="([^"$]+)"', rebuild))
     if m:
         built = {'Qt' + x.strip() for x in m.group(1).split(';') if x.strip()}
 

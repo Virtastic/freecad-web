@@ -138,23 +138,31 @@ AR="$ROOT/emsdk/upstream/bin/llvm-ar"
 # The condition is the SYMBOL, not the file. A cached archive that emstrip had already
 # emptied is exactly the artifact this lane must not accept, and keying the skip on the
 # file's existence would have let that archive skip the very rebuild that fixes it.
+# ONE list, used both by the skip check below and by -DMODULES further down. They used to
+# be written out separately, and drifted: adding Network to -DMODULES changed nothing on a
+# cached tree, because the skip check still only knew about QtWidgets -- so the build
+# skipped and the archive gate then failed on a QtNetwork that was never going to be built.
+# A skip condition that does not know what it is skipping is how a build silently ignores a
+# change to its own inputs. Deriving both from this variable makes that drift impossible.
+PYSIDE_MODULES="Core;Gui;Widgets;Network;Svg"
+
 SKIP_BUILD=""
-QTW_A="$ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a"
-# EVERY module in MODULES has to be accounted for here, not just the one this check grew
-# up with. Adding Network to the list changed nothing on a cached tree: QtWidgets was
-# present with its PyInit, the build skipped, and the archive gate then failed on a
-# QtNetwork that was never going to be built. A skip condition that does not know what it
-# is skipping is how a build silently ignores a change to its own inputs.
-QTN_A="$ROOT/build-pyside-wasm/PySide6/QtNetwork/QtNetwork.abi3.a"
-if [ -s "$QTW_A" ] && [ -s "$QTN_A" ] && [ -n "$NM" ] \
-   && "$NM" "$QTW_A" 2>/dev/null | grep -q "PyInit_QtWidgets" \
-   && "$NM" "$QTN_A" 2>/dev/null | grep -q "PyInit_QtNetwork" \
-   && [ "$FCWEB_PYSIDE_REBUILD" != "1" ]; then
-    echo "=== PYSIDE: archives already present and carry their PyInit -- skipping the build"
+missing=""
+if [ -n "$NM" ] && [ "$FCWEB_PYSIDE_REBUILD" != "1" ]; then
+  SKIP_BUILD=1
+  for m in ${PYSIDE_MODULES//;/ }; do
+    a="$ROOT/build-pyside-wasm/PySide6/Qt$m/Qt$m.abi3.a"
+    if [ ! -s "$a" ] || ! "$NM" "$a" 2>/dev/null | grep -q "PyInit_Qt$m"; then
+      missing="$missing Qt$m"
+      SKIP_BUILD=""
+    fi
+  done
+fi
+if [ -n "$SKIP_BUILD" ]; then
+    echo "=== PYSIDE: every archive in $PYSIDE_MODULES carries its PyInit -- skipping the build"
     echo "    (set FCWEB_PYSIDE_REBUILD=1 to force a rebuild)"
-    SKIP_BUILD=1
-elif [ -s "$QTW_A" ]; then
-    echo "=== PYSIDE: QtWidgets.abi3.a exists but has no PyInit_QtWidgets -- rebuilding"
+elif [ -n "$missing" ]; then
+    echo "=== PYSIDE: rebuilding --$missing missing or without its PyInit"
 fi
 
 if [ -z "$SKIP_BUILD" ]; then
@@ -200,7 +208,7 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   `# without these bindings every addon operation dies at the import and the workbench` \
   `# is decorative. The Qt C++ library was already in the link; only the bindings were` \
   `# missing, and the boot gate's network scenario is what caught it.` \
-  -DMODULES="Core;Gui;Widgets;Network" -DFORCE_LIMITED_API=no \
+  -DMODULES="$PYSIDE_MODULES" -DFORCE_LIMITED_API=no \
   `# BUILD_TESTS=OFF: pysidetest parses HOST headers, and this build removes the clang` \
   `# builtins injection that host parsing genuinely needs, so it failed with` \
   `#   /usr/include/c++/15/cstddef: fatal error: 'stddef.h' file not found` \

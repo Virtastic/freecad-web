@@ -10,7 +10,7 @@ import importlib
 
 __version__ = "6.9.0"
 __version_info__ = (6, 9, 0, "", "")
-__all__ = ["QtCore", "QtGui", "QtWidgets", "QtNetwork"]
+__all__ = ["QtCore", "QtGui", "QtWidgets", "QtNetwork", "QtSvg"]
 __path__ = []  # mark as package
 
 # Order matters: QtGui pulls in QtCore, QtWidgets pulls in both.
@@ -26,3 +26,7 @@ sys.modules["PySide6.QtWidgets"] = QtWidgets
 # so without this the workbench installs and then cannot fetch a thing.
 QtNetwork = importlib.import_module("QtNetwork_fcweb")
 sys.modules["PySide6.QtNetwork"] = QtNetwork
+
+# the Addon Manager's PySideWrapper imports QtSvg in the same statement as QtNetwork
+QtSvg = importlib.import_module("QtSvg_fcweb")
+sys.modules["PySide6.QtSvg"] = QtSvg

@@ -410,6 +410,22 @@ except Exception as _e:
 _s.__stderr__.write('FCADDONS ' + repr(_out) + chr(10))
 _s.__stderr__.flush()
 '''
+RESOURCES_JS = r"""(() => {
+  const out = {};
+  for (const r of performance.getEntriesByType('resource')) {
+    const m = /(FreeCAD\.(?:js|wasm|data\.gz))/.exec(r.name);
+    if (m) out[m[1]] = r.encodedBodySize || r.decodedBodySize || r.transferSize || 0;
+  }
+  return JSON.stringify(out);
+})()"""
+
+WASM_SIZE_JS = r"""(() => {
+  const e = performance.getEntriesByType('resource')
+    .filter(r => /FreeCAD\.wasm/.test(r.name)).pop();
+  if (!e) return 0;
+  return e.encodedBodySize || e.decodedBodySize || e.transferSize || 0;
+})()"""
+
 COUNT_DOCS_PY = r'''
 import FreeCAD as App, sys as _s
 _names = list(App.listDocuments().keys())
@@ -885,6 +901,135 @@ def scenario_examples(ctx, url, args, fail):
     return s
 
 
+def scenario_upgrade(ctx, url, args, fail):
+    """The returning user whose engine changed underneath them (RELEASE-PLAN V1).
+
+    Boot the PREVIOUS engine, do work, save it, then swap the new engine into the same
+    serve directory and reload the same browser profile -- which is exactly what a deploy
+    does to someone with the tab open. Two things have to hold: the new engine is the one
+    that runs, and the work is still there.
+
+    Nothing had ever tested this. The service worker is a deliberate pass-through so it
+    cannot serve a stale engine, but that is an argument, not a measurement, and it says
+    nothing about whether a document written by the old build reopens in the new one.
+    """
+    import glob
+    import io
+
+    if not args.upgrade_from:
+        fail('upgrade scenario: --upgrade-from was not given, so there is no previous '
+             'engine to upgrade from. Point it at the released build (or unpack the live '
+             'one); skipping would make this scenario a decoration.')
+        return Session(ctx, url, args.timeout)
+
+    served = {}
+    for path in glob.glob(os.path.join(args.directory, 'FreeCAD.*')):
+        served[os.path.basename(path)] = io.open(path, 'rb').read()
+    old = {}
+    for name in served:
+        src = os.path.join(args.upgrade_from, name)
+        if not os.path.exists(src):
+            fail('upgrade scenario: %s is not in %s, so the two trees are not comparable'
+                 % (name, args.upgrade_from))
+            return Session(ctx, url, args.timeout)
+        old[name] = io.open(src, 'rb').read()
+    if all(old[n] == served[n] for n in served):
+        fail('upgrade scenario: the two engines are byte-identical, so this would prove '
+             'nothing')
+        return Session(ctx, url, args.timeout)
+
+    def install(blobs):
+        for name, data in blobs.items():
+            io.open(os.path.join(args.directory, name), 'wb').write(data)
+
+    try:
+        install(old)
+        s1 = Session(ctx, url, args.timeout)
+        if not s1.load():
+            fail('upgrade: the PREVIOUS engine did not reach Ready (overlay: %s) -- fix '
+                 'that before reading anything into the rest' % s1.phase())
+            return s1
+        before = s1.page.evaluate(WASM_SIZE_JS)
+        s1.run_python(MAKE_DOC_PY)
+        if not s1.wait_for('FCMADE', 120):
+            fail('upgrade: the previous engine never saved the document')
+            return s1
+        if not s1.wait_for('[autosave] observer installed', 120):
+            fail('upgrade: autosave never installed on the previous engine')
+            return s1
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            listing = s1.page.evaluate(AUTOSAVE_DIR_JS) or []
+            if any('RestoreProbe' in str(f) for f in listing):
+                break
+            time.sleep(2)
+        else:
+            fail('upgrade: the previous engine autosaved nothing in 90s')
+            return s1
+        persisted = s1.page.evaluate(
+            """() => new Promise((resolve) => {
+                 try {
+                   window.fcInstance.FS.syncfs(false, (err) => resolve(err ? String(err) : 'ok'));
+                 } catch (e) { resolve('throw: ' + e); }
+               })""")
+        if persisted != 'ok':
+            fail('upgrade: IDBFS refused to persist on the previous engine (%s)' % persisted)
+            return s1
+        s1.page.close()
+    finally:
+        install(served)
+
+    s2 = Session(ctx, url, args.timeout)
+    if not s2.load():
+        # Say WHICH bytes the returning browser got. "It did not start" leaves open
+        # whether the swap served a mixed pair or whether something the old engine
+        # persisted is what the new one cannot survive, and those are different bugs.
+        try:
+            got = json.loads(s2.page.evaluate(RESOURCES_JS) or '{}')
+        except Exception:
+            got = {}
+        disk = {}
+        for name in ('FreeCAD.js', 'FreeCAD.wasm', 'FreeCAD.data.gz'):
+            path = os.path.join(args.directory, name)
+            if os.path.exists(path):
+                disk[name] = os.path.getsize(path)
+        print('==> upgrade: fetched %s' % (got,))
+        print('==> upgrade: on disk %s' % (disk,))
+        mixed = [n for n in got if n in disk and got[n] and got[n] != disk[n]]
+        fail('upgrade: the NEW engine did not reach Ready for a returning user '
+             '(overlay: %s)%s. A fresh profile is not the case that breaks.'
+             % (s2.phase(),
+                ' -- and it fetched a stale %s' % ', '.join(mixed) if mixed
+                else ' -- the bytes it fetched match what is being served, so this is '
+                     'state the old engine left behind, not a caching problem'))
+        return s2
+    after = s2.page.evaluate(WASM_SIZE_JS)
+    want = os.path.getsize(os.path.join(args.directory, 'FreeCAD.wasm'))
+    # window.FCWEB_BUILD is stamped at deploy time and reads "dev" in any local tree, so it
+    # cannot tell these two apart. The bytes can: ask the browser how big the engine it
+    # actually fetched was, and compare with the one now on disk.
+    if after and after != want:
+        fail('upgrade: the reload fetched a %d-byte engine while %d bytes are being served '
+             '-- the browser kept the old one, so a deploy would not reach anyone with the '
+             'tab open' % (after, want))
+    else:
+        print('==> upgrade: engine %s bytes -> %s bytes (serving %d)'
+              % (before or '?', after or '?', want))
+    if not s2.wait_for('restored', 180):
+        fail('upgrade: nothing was restored, so work saved by the previous engine is gone')
+        return s2
+    r = s2.wait_for('FCDOCS', 120)
+    if not isinstance(r, dict):
+        s2.run_python(COUNT_DOCS_PY)
+        r = s2.wait_for('FCDOCS', 120)
+    if not isinstance(r, dict) or r.get('boxVolume', -1) <= 0:
+        fail('upgrade: the restored document has no geometry (%s) -- a name in a list is '
+             'not a document' % (r,))
+    else:
+        print('==> upgrade: restored %s with box volume %s' % (r.get('docs'), r['boxVolume']))
+    return s2
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -892,10 +1037,12 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'fem', 'examples', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'fem', 'examples', 'upgrade', 'all'))
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
+    ap.add_argument('--upgrade-from', default=None,
+                    help='a serve tree holding the PREVIOUS engine. The upgrade scenario boots that one, saves work, swaps this one in and reloads the same profile -- the returning user a fresh profile never tests (V1).')
     ap.add_argument('--with-3d', action='store_true',
                     help='leave the 3D pipeline on (headless GL proves little; see V6)')
     args = ap.parse_args()
@@ -972,6 +1119,8 @@ def main():
                 sessions.append(scenario_fem(ctx, url, args, fail))
             if args.scenario in ('examples', 'all'):
                 sessions.append(scenario_examples(ctx, url, args, fail))
+            if args.scenario == 'upgrade':
+                sessions.append(scenario_upgrade(ctx, url, args, fail))
             dump = []
             for s in sessions:
                 dump.append((s.lines(), s.console, s.errors()))
