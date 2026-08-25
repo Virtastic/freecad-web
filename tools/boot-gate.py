@@ -230,6 +230,40 @@ except Exception as _e:
 _s.__stderr__.write('FCQA ' + repr(_res) + chr(10))
 _s.__stderr__.flush()
 '''
+ADDONS_PY = r'''
+# The Addon Manager, driven through its own code rather than around it: import the
+# module the workbench uses, ask it for the real catalogue, and require a sane answer.
+#
+# This is the whole chain in one call -- PySide6.QtNetwork bindings exist, the URL
+# rewrite sends the request at this origin's /proxy, the proxy is allowed to reach
+# raw.githubusercontent.com, and the bytes come back as parseable JSON. Any link in
+# that chain breaking leaves the workbench looking installed and doing nothing.
+import sys as _s
+import sys
+_out = {}
+try:
+    sys.path.append('/freecad/Mod/AddonManager')
+except Exception:
+    pass
+try:
+    import json
+    import NetworkManager
+
+    _url = 'https://raw.githubusercontent.com/FreeCAD/Addons/main/Data/Index.json'
+    _out['rewritten'] = NetworkManager.fcweb_proxy_url(_url)
+
+    NetworkManager.InitializeNetworkManager()
+    _idx = NetworkManager.AM_NETWORK_MANAGER.blocking_get(_url)
+    _txt = bytes(_idx).decode('utf-8') if _idx is not None else ''
+    _out['bytes'] = len(_txt)
+    _data = json.loads(_txt) if _txt else {}
+    _out['addons'] = len(_data) if isinstance(_data, (dict, list)) else -1
+except Exception as _e:
+    _out['error'] = repr(_e)
+
+_s.__stderr__.write('FCADDONS ' + repr(_out) + chr(10))
+_s.__stderr__.flush()
+'''
 COUNT_DOCS_PY = r'''
 import FreeCAD as App, sys as _s
 _names = list(App.listDocuments().keys())
@@ -604,6 +638,26 @@ def scenario_workflow(ctx, url, args, fail):
         fail('the document reopened with pad volume %r, not 10000.0 -- saved work is not coming back the same' % r.get('reloadedPadVolume'))
     return s
 
+def scenario_addons(ctx, url, args, fail):
+    """The Addon Manager fetching the real catalogue through the proxy."""
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('addons scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(ADDONS_PY)
+    r = s.wait_for('FCADDONS', 180)
+    if not isinstance(r, dict):
+        fail('the addon probe produced no result')
+        return s
+    print('==> addons: %s' % r)
+    if r.get('error'):
+        fail('the Addon Manager could not reach its catalogue: %s -- the workbench would be installed and useless' % r['error'])
+    elif not str(r.get('rewritten', '')).startswith('/proxy/raw/'):
+        fail('the catalogue URL was not rewritten through the proxy (got %r), so it would be refused by COEP' % r.get('rewritten'))
+    elif r.get('bytes', 0) < 1000 or r.get('addons', 0) < 10:
+        fail('the catalogue came back as %r bytes / %r entries, which is not a real index' % (r.get('bytes'), r.get('addons')))
+    return s
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -611,7 +665,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'all'))
     ap.add_argument('--with-3d', action='store_true',
                     help='leave the 3D pipeline on (headless GL proves little; see V6)')
     args = ap.parse_args()
@@ -667,6 +721,8 @@ def main():
                 sessions.append(scenario_network(ctx, url, args, fail))
             if args.scenario in ('workflow', 'all'):
                 sessions.append(scenario_workflow(ctx, url, args, fail))
+            if args.scenario in ('addons', 'all'):
+                sessions.append(scenario_addons(ctx, url, args, fail))
             dump = []
             for s in sessions:
                 dump.append((s.lines(), s.console, s.errors()))
@@ -701,6 +757,7 @@ def main():
         'imports': 'can import the Python packages its workbenches need',
         'network': 'can reach the web through the proxy',
         'workflow': 'can model: constrained sketch, pad, booleans, STEP, save and reopen',
+        'addons': 'can reach the addon catalogue through the proxy',
         'all': 'starts, does CAD work, gives work back after a reload, can ask the user a '
                'question, has the Python packages its workbenches need, and can reach the '
                'web',
