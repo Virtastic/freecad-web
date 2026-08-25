@@ -136,6 +136,28 @@ Two things this pass caught that no scripted API test would have:
 Both are fixed and re-verified above. The lesson for future passes: check that a subsystem
 is *alive*, not merely that nothing threw.
 
+## What the gate now checks, so you do not have to
+
+`tools/boot-gate.py --scenario all` runs on every link and covers these lines mechanically,
+in a real browser, against the exact artifact being released:
+
+| checklist line | scenario | what it asserts |
+|---|---|---|
+| the app starts | `boot` | Ready, and a `Part::Box` with volume 6000.0 |
+| work survives a reload | `restore` | a document written before the reload comes back with its geometry |
+| deploying while a tab is open | `upgrade` | the previous engine's document opens in the new engine, URLs stamped as the deploy stamps them |
+| workbench first-click activation | `workbenches` | every workbench activates -- 20/20 today |
+| sketch, pad, boolean, STEP/STL | `workflow` | pad 10000.0, sketch DoF 0, boolean valid, round-trip volume matches |
+| dialogs return a value | `dialog` | the typed value comes back, not a cancel |
+| third-party Python | `imports` | numpy, matplotlib, PIL, ifcopenshell, pivy, femmesh, Draft |
+| reaching the web | `network` | a real cross-origin GET through the same-origin proxy, driven by Qt |
+| FEM end to end | `fem` | gmsh meshes and CalculiX solves, within 5% of the closed form |
+| the bundled examples | `examples` | all seven open, and a wasm trap is reported as a trap |
+
+What is left for a person is what a person is actually needed for: starting a native drag,
+the `showSaveFilePicker` dialog, the PWA install and its storage grant, and whether the
+thing looks and feels right. Those are the sections above.
+
 ## What to write down
 
 For anything that looks or feels wrong, note **what you did, what you expected, what you

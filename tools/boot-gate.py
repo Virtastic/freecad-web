@@ -268,6 +268,33 @@ _s.__stderr__.write("FCEXAMPLES " + repr(_res) + _NL)
 _s.__stderr__.flush()
 '''
 
+WORKBENCHES_PY = r'''
+# Activate every workbench the build ships. This is the largest line in MANUAL-QA and the
+# one most likely to rot quietly: a workbench that fails to activate does not crash the
+# app, it just is not there when someone reaches for it -- and the import that failed is
+# swallowed into the report view where nobody is looking.
+#
+# activate() is what clicking the selector does, so this is the same path a person takes.
+import sys as _s
+
+_NL = chr(10)
+_res = {}
+try:
+    import FreeCADGui as Gui
+
+    names = sorted(Gui.listWorkbenches().keys())
+    for n in names:
+        try:
+            Gui.activateWorkbench(n)
+            _res[n] = "ok"
+        except Exception as e:
+            _res[n] = "%s: %s" % (type(e).__name__, str(e)[:60])
+except Exception as e:
+    _res["*"] = "%s: %s" % (type(e).__name__, str(e)[:90])
+_s.__stderr__.write("FCWB " + repr(_res) + _NL)
+_s.__stderr__.flush()
+'''
+
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
 # fetch is refused however co-operative the remote server is, so everything has to go
@@ -1053,6 +1080,25 @@ def scenario_upgrade(ctx, url, args, fail):
     return s2
 
 
+def scenario_workbenches(ctx, url, args, fail):
+    """Every workbench activates -- MANUAL-QA's "19/19", checked by machine."""
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('workbenches scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(WORKBENCHES_PY)
+    r = s.wait_for('FCWB', 300)
+    if not isinstance(r, dict):
+        fail('the workbench probe produced no result')
+        return s
+    broken = sorted(k for k, v in r.items() if v != 'ok')
+    print('==> workbenches: %d activated, %d failed' % (len(r) - len(broken), len(broken)))
+    if broken:
+        fail('these workbenches do not activate: %s'
+             % ', '.join('%s (%s)' % (k, r[k]) for k in broken))
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -1060,7 +1106,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'fem', 'examples', 'upgrade', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'fem', 'examples', 'workbenches', 'upgrade', 'all'))
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
@@ -1142,6 +1188,8 @@ def main():
                 sessions.append(scenario_fem(ctx, url, args, fail))
             if args.scenario in ('examples', 'all'):
                 sessions.append(scenario_examples(ctx, url, args, fail))
+            if args.scenario in ('workbenches', 'all'):
+                sessions.append(scenario_workbenches(ctx, url, args, fail))
             if args.scenario == 'upgrade':
                 sessions.append(scenario_upgrade(ctx, url, args, fail))
             dump = []
