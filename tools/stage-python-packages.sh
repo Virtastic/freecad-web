@@ -164,6 +164,72 @@ else
     missing+=("the pinned pure-Python wheels (pip download failed -- no network?)")
 fi
 
+
+echo
+echo "== does every staged file actually parse?"
+# A payload can be complete and still broken. matplotlib shipped an IndentationError for
+# who knows how long because this repository's own PIL guard was applied twice to a cached
+# source tree, and nothing between that edit and the browser ever compiled the result.
+#
+# The lane that owns the fix cannot be relied on to run -- it skips when its archive is
+# already built, which is exactly the case on a machine that keeps its state. So the check
+# lives here, where the bytes are actually chosen, and repairs what it can from the pinned
+# upstream tag rather than only complaining.
+python3 - "$DEST" <<'PYEOF'
+import ast
+import io
+import os
+import sys
+import urllib.request
+
+dest = sys.argv[1]
+
+# package -> how to fetch a pristine copy of one of its files, pinned to the version built
+PINNED = {
+    'matplotlib': 'https://raw.githubusercontent.com/matplotlib/matplotlib/v3.9.2/lib/matplotlib/%s',
+    'numpy': 'https://raw.githubusercontent.com/numpy/numpy/v2.1.3/numpy/%s',
+}
+
+bad = []
+healed = 0
+checked = 0
+for root, dirs, files in os.walk(dest):
+    dirs[:] = [d for d in dirs if d != '__pycache__']
+    for fn in files:
+        if not fn.endswith('.py'):
+            continue
+        p = os.path.join(root, fn)
+        checked += 1
+        try:
+            src = io.open(p, encoding='utf-8', errors='replace').read()
+            ast.parse(src)
+            continue
+        except SyntaxError as exc:
+            rel = os.path.relpath(p, dest).replace(os.sep, '/')
+            pkg = rel.split('/')[0]
+            url = PINNED.get(pkg)
+            if not url:
+                bad.append('%s: %s' % (rel, exc.msg))
+                continue
+            inner = rel.split('/', 1)[1]
+            try:
+                fresh = urllib.request.urlopen(url % inner, timeout=60).read().decode('utf-8')
+                ast.parse(fresh)
+            except Exception as e2:
+                bad.append('%s: %s (and re-fetch failed: %s)' % (rel, exc.msg, e2))
+                continue
+            io.open(p, 'w', encoding='utf-8', newline='').write(fresh)
+            healed += 1
+            print('   healed %s (was: %s)' % (rel, exc.msg))
+
+print('   %d python files checked, %d healed' % (checked, healed))
+if bad:
+    print('::error::%d staged file(s) do not parse and could not be repaired' % len(bad))
+    for b in bad[:10]:
+        print('::error::  %s' % b)
+    raise SystemExit(1)
+PYEOF
+
 echo
 echo "== re-apply the glue, last"
 # apply.sh copies these, but it runs BEFORE this script and staging pivy from source would
