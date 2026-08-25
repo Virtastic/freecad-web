@@ -39,6 +39,74 @@ fi
 # matplotlib imports Pillow (PIL) at module top in a few files; Pillow is not
 # ported, so guard the imports (the Agg render / Qt display paths do not need it).
 python3 - "$MPL/lib/matplotlib" <<'PYEOF'
+import ast
+import io
+import os
+import sys
+import urllib.request
+
+base = sys.argv[1]
+
+# matplotlib imports Pillow at module scope in three files. Pillow IS built here, but
+# these imports run before it is importable in some paths, so they are guarded.
+REPS = {
+ 'colors.py': [('from PIL import Image\n',
+                'try:\n    from PIL import Image\nexcept ImportError:\n    Image = None\n'),
+               ('from PIL.PngImagePlugin import PngInfo\n',
+                'try:\n    from PIL.PngImagePlugin import PngInfo\nexcept ImportError:\n    PngInfo = None\n')],
+ 'animation.py': [('from PIL import Image\n',
+                   'try:\n    from PIL import Image\nexcept ImportError:\n    Image = None\n')],
+ 'image.py': [('import PIL.Image\nimport PIL.PngImagePlugin\n',
+               'try:\n    import PIL.Image\n    import PIL.PngImagePlugin\nexcept ImportError:\n    PIL = None\n')],
+}
+
+# The pinned tag, so a damaged file can be replaced with exactly what upstream wrote
+# rather than with whatever the newest release happens to contain.
+RAW = 'https://raw.githubusercontent.com/matplotlib/matplotlib/v3.9.2/lib/matplotlib/%s'
+
+
+def guard(text):
+    """Apply each guard once. Idempotent: keyed on the RESULT, not on its surroundings."""
+    for old, new in REPS[fn]:
+        if new in text:
+            continue          # already guarded, by this script on an earlier run
+        if old in text:
+            text = text.replace(old, new, 1)
+    return text
+
+
+for fn in REPS:
+    p = os.path.join(base, fn)
+    src = io.open(p, encoding="utf-8").read()
+
+    # The previous version of this block tested for "except ImportError" in the 30
+    # characters BEFORE the import. After one pass that text sits AFTER it, so the
+    # test never fired again and a cached source tree got wrapped a second time:
+    #
+    #     try:
+    #         try:
+    #         from PIL import Image
+    #     except ImportError:
+    #         Image = None
+    #     except ImportError:
+    #         Image = None
+    #
+    # which is an IndentationError, and matplotlib -- and therefore Plot, and every
+    # FEM result graph -- stopped importing. Re-fetch anything that no longer parses.
+    try:
+        ast.parse(src)
+    except SyntaxError as exc:
+        print("  %s is damaged (%s); re-fetching the pinned original" % (fn, exc.msg))
+        src = urllib.request.urlopen(RAW % fn, timeout=60).read().decode("utf-8")
+        ast.parse(src)        # if upstream does not parse, stop rather than paper over it
+
+    out = guard(src)
+    ast.parse(out)            # never write a file this script has just broken
+    if out != src:
+        io.open(p, "w", encoding="utf-8", newline="").write(out)
+
+print("PIL imports guarded")
+PYEOF'
 import sys, os
 base = sys.argv[1]
 reps = {
