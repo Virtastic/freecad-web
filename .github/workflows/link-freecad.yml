@@ -621,7 +621,16 @@ jobs:
           #
           # Root inside the container is fine: the gate only reads the workspace, and its
           # browser profile goes to /tmp inside the container.
-          docker run --rm -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
+          # Cap the container's memory at three quarters of the box. On 2026-08-25 the
+          # gate exhausted RAM, the OOM killer took the container AND the runner agent,
+          # and the queue sat idle for the rest of the night with nothing to say. The
+          # cause is fixed (the gate now holds one engine, not eleven), but a harness that
+          # can kill the build machine should not be able to do it twice: with a cap the
+          # container dies and the runner survives to report it.
+          memgb=$(free -g | awk '/^Mem:/{print $2}')
+          cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
+          echo "  box has ${memgb}G; giving the gate ${cap}G"
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
 
       - name: Upload the boot-gate serve tree on failure
         if: failure()
