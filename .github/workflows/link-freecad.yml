@@ -199,6 +199,13 @@ jobs:
           need deps/wasm/pyside-pkg/PIL/__init__.py                 "PIL (python half)"   build-python-deps.yml
           need deps/wasm/pyside-pkg/ifcopenshell/__init__.py        "ifcopenshell (py)"   build-python-deps.yml
           need deps/wasm/pyside-pkg/pivy/pivy_meta.py               "pivy (python half)"  build-python-deps.yml
+
+          # An archive that exists is not the same as an archive that is linked. QtNetwork
+          # was built, verified to carry PyInit_QtNetwork, registered in the inittab and
+          # aliased in the package glue -- and the link still died two hours in on
+          # "undefined symbol: PyInit_QtNetwork", because nothing had put it on the link
+          # line. This compares the three files that have to agree, in a second.
+          python3 tools/check-pyside-link-line.py || fail=1
           exit $fail
 
       - name: Cache emsdk
