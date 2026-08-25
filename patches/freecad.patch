@@ -3998,19 +3998,29 @@ diff -ruNp a/src/Mod/Fem/App/FemVTKTools.cpp b/src/Mod/Fem/App/FemVTKTools.cpp
 diff -ruNp a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 --- a/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
 +++ b/src/Mod/Fem/Gui/ViewProviderFemConstraint.cpp
-@@ -56,6 +56,17 @@ ViewProviderFemConstraint::ViewProviderF
+@@ -56,6 +56,27 @@ ViewProviderFemConstraint::ViewProviderF
      , pExtraTrans(nullptr)
      , ivFile(nullptr)
  {
 +    // Fill the symbol dir on first construction, NOT at namespace scope: a file-scope
 +    // initializer runs in __wasm_call_ctors before App::Application exists, so
-+    // getResourceDir() returned an incomplete path and every constraint then logged
-+    // "Coin read error: Could not find 'share/Mod/Fem/Resources/symbols/...'" before
-+    // falling back. Every subclass runs this base constructor before its own body builds
-+    // the path, so this is populated in time. (Same static-init-order class of bug as the
-+    // TechDraw Rez.cpp fix.)
-+    if (resourceSymbolDir.empty()) {
-+        resourceSymbolDir = App::Application::getResourceDir() + "Mod/Fem/Resources/symbols/";
++    // getResourceDir() returned "" and the member became the RELATIVE string
++    // "Mod/Fem/Resources/symbols/", which Coin then resolved against the working
++    // directory. Every FEM constraint died with
++    //   Error opening symbol file /Mod/Fem/Resources/symbols/ConstraintFixed.iv
++    //
++    // An earlier version of this guard asked whether the value was EMPTY. A wrong value
++    // is not an empty one, so it never fired and the fix sat here inert. Compare against
++    // what it should be instead: it cannot be fooled by a wrong-but-non-empty value, and
++    // on a desktop build, where the namespace-scope initializer was right all along, the
++    // comparison simply matches. (Same static-init-order class as the TechDraw Rez.cpp
++    // fix, and the same "a fix that never ran" shape as FCWEB_REAL_CPYTHON.)
++    {
++        const std::string want =
++            App::Application::getResourceDir() + "Mod/Fem/Resources/symbols/";
++        if (resourceSymbolDir != want) {
++            resourceSymbolDir = want;
++        }
 +    }
 +
      pShapeSep = new SoSeparator();
