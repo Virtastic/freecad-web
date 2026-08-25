@@ -668,6 +668,9 @@ def main():
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
     ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'all'))
+    ap.add_argument('--browser', default='chromium',
+                    choices=('chromium', 'firefox', 'webkit'),
+                    help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
     ap.add_argument('--with-3d', action='store_true',
                     help='leave the 3D pipeline on (headless GL proves little; see V6)')
     args = ap.parse_args()
@@ -708,8 +711,23 @@ def main():
         with sync_playwright() as pw:
             # A persistent context throughout: scenario `restore` needs IndexedDB to
             # survive between loads, and `boot` is unaffected by having one.
-            ctx = pw.chromium.launch_persistent_context(profile, headless=True,
-                                                        args=CHROME_ARGS)
+            engine = getattr(pw, args.browser)
+            # The JSPI flags are Chromium's; passing them to another engine is at
+            # best ignored and at worst a launch failure.
+            launch_args = CHROME_ARGS if args.browser == 'chromium' else []
+            kw = {}
+            if args.browser == 'firefox':
+                # Headless Firefox ships with WebGL2 off, so the app's own capability
+                # gate refuses it before downloading anything -- which says something
+                # about this container, not about Firefox. A desktop Firefox has WebGL2.
+                kw['firefox_user_prefs'] = {
+                    'webgl.disabled': False,
+                    'webgl.force-enabled': True,
+                    'gfx.webrender.all': True,
+                    'dom.webgpu.enabled': False,
+                }
+            ctx = engine.launch_persistent_context(profile, headless=True,
+                                                   args=launch_args, **kw)
             print('==> %s (scenario: %s)' % (url, args.scenario))
             if args.scenario in ('boot', 'all'):
                 sessions.append(scenario_boot(ctx, url, args, fail))

@@ -586,7 +586,21 @@ must match the current numbers, not merely converge. Then measure speedup on the
 if assembly parallelises but SPOOLES factorisation dominates, the win may be small, and that is
 worth knowing before spending the time.
 
-### 8. Chrome/Edge 137+ only *(not ours to fix)*
+### 8. Chrome/Edge 137+ only
+
+> **Scoped 2026-08-25.** `tools/boot-gate.py --browser firefox|webkit` exists now, so the
+> day there is an Asyncify build it can be tested rather than argued about. Two things
+> were established trying it:
+>
+> The shipped wasm is linked `-sJSPI`. It cannot run on Firefox at all, whatever the
+> dialog code does -- so this is not a bug to fix in the fallback, it is a SECOND ARTIFACT
+> to build and ship, chosen at load time by feature detection. That is the real shape of
+> the work and it was not written down before.
+>
+> And it cannot be verified in the Playwright container: headless Firefox there has no GL
+> driver at all ("Exhausted GL driver options"), so the app's own capability gate refuses
+> it before downloading anything -- correctly, and for a reason that says nothing about
+> Firefox on a real machine. Chromium gets swiftshader in that image; Firefox does not.
 
 JSPI is the hard dependency, and it is what makes modal dialogs return real answers. Firefox has
 it in development; Safari does not. The Asyncify fallback still exists in the tree but is the
