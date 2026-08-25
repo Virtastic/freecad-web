@@ -57,6 +57,17 @@ stage_dir() {
             # API that numpy itself imports, and dropping it would break the package.
             find "$DEST/$name" -type d -name 'tests' -prune -exec rm -rf {} + 2>/dev/null || true
             find "$DEST/$name" -type d -name 'test' -prune -exec rm -rf {} + 2>/dev/null || true
+            # And the C sources. Staging from a source tree brings numpy's .c/.h/.s
+            # along -- 21 MB of a 226 MB payload for files that cannot be used: there
+            # is no compiler in the browser, so headers for building extensions and
+            # the assembly kernels' sources are pure download.
+            #
+            # Deliberately NOT pruned by extension alone: ifcopenshell's .ifc files are
+            # property-set SCHEMAS it reads at runtime, and the .stp under Mod/Idf is the
+            # IDF workbench's component library. Both look like test data and are not.
+            for ext in c h hpp cpp cc s S pyx pxd pyi in f f90 m4; do
+                find "$DEST/$name" -type f -name "*.$ext" -delete 2>/dev/null || true
+            done
             staged+=("$name <- $src")
             return 0
         fi
