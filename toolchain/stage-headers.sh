@@ -69,8 +69,17 @@ for h in "$SRC"/*.h; do
       diff -u "$dest" "$h" | sed 's/^/[headers]   | /' | head -40
     fi
   else
-    cp "$h" "$dest"
-    echo "[headers] $name: staged from toolchain/include"
+    # FORCE means "overwrite one that differs", not "rewrite one that is already right".
+    # These headers are -include'd into every translation unit, so copying an identical
+    # file still moves its mtime and ninja then rebuilds all ~2,700 objects. That is why
+    # every link in this project recompiled from scratch for 68 minutes when the source
+    # had not changed and only the link line had. Compare first.
+    if cmp -s "$h" "$dest" 2>/dev/null; then
+      echo "[headers] $name: identical, left alone (a copy would only move its mtime)"
+    else
+      cp "$h" "$dest"
+      echo "[headers] $name: staged from toolchain/include"
+    fi
   fi
 done
 
