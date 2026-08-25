@@ -87,7 +87,11 @@ jobs:
     # registered to three different GitHub scopes -- so a long job here can queue another
     # Virtastic repo's deploy behind it. Pick `ubuntu-latest` when a deploy matters more than
     # the minutes.
-    runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
+    # On a push there are no inputs, so `inputs.runner == 'vps'` is false and this used
+    # to resolve to ubuntu-latest -- which has none of the caches and cannot build this
+    # stack. The first push-triggered run failed before it ran a single step. Treat an
+    # absent input as the dispatch default rather than as 'not vps'.
+    runs-on: ${{ (inputs.runner || 'vps') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
