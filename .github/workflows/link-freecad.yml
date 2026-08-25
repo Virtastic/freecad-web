@@ -556,6 +556,20 @@ jobs:
           gzip -1 -c "$bin/FreeCAD.data" > gate-serve/FreeCAD.data.gz
           python3 tools/patch-freecad-js.py gate-serve/FreeCAD.js
 
+          # The mesher and the solver are separate wasm modules, fetched by the shell at
+          # the moment FEM needs them. Without them in the serve tree the fem scenario
+          # cannot run, and a scenario that cannot run is not a gate -- so take them from
+          # the working copy if a ccx/gmsh build left them there, and otherwise from
+          # production, which is where the deployed shell gets them.
+          for f in gmsh.js gmsh.wasm ccx.js ccx.wasm; do
+            if [ -s "play-gui/$f" ]; then
+              cp "play-gui/$f" gate-serve/
+            else
+              curl -fsS --retry 2 "https://freecad.virtastic.app/$f" -o "gate-serve/$f"                 || { echo "::error::no $f locally and none served by production -- the FEM gate cannot run"; exit 1; }
+            fi
+            echo "  $f: $(stat -c%s gate-serve/$f) bytes"
+          done
+
           ver=$(grep -v '^#' patches/freecad.version | grep -v '^$' | head -1)
           echo "expecting App.Version() $ver"
           # Run the gate inside Playwright's own image rather than on the box. Chromium

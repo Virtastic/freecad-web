@@ -4039,7 +4039,7 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
  import subprocess
  from PySide.QtCore import QProcess, QThread
  
-@@ -46,6 +47,100 @@
+@@ -46,6 +47,120 @@
  
  class GmshError(Exception):
      pass
@@ -4082,25 +4082,48 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 +        self._err = b""
 +        self._done = False
 +        self._rc = 1
++        self._timer = None
 +
 +    def start(self):
-+        QtCore.QTimer.singleShot(0, self._run)
++        # A real QTimer rather than singleShot, because this one has to be cancellable.
++        # The mesher suspends the whole wasm stack (JSPI) while gmsh runs, and a suspended
++        # stack yields to the browser -- so a pending zero-timer fires DURING the mesh and
++        # re-enters _run on a stack that was not entered through a promising export. That
++        # second entry cannot suspend: it dies with "trying to suspend without
++        # WebAssembly.promising", the mesh is never written, and the caller is left reading
++        # a .unv that does not exist. Holding the timer lets waitForFinished stop it before
++        # anything suspends.
++        self._timer = QtCore.QTimer(self)
++        self._timer.setSingleShot(True)
++        self._timer.setInterval(0)
++        self._timer.timeout.connect(self._run)
++        self._timer.start()
 +        return self
 +
 +    def waitForFinished(self, msecs=-1):
 +        """The blocking path: ObjectTools.run(blocking=True) waits on this.
 +
-+        The mesher is synchronous here, so there is nothing to wait for -- run it
-+        now rather than on the timer, and let _run's guard stop the timer repeating
-+        the work when it fires afterwards.
++        The mesher is synchronous here, so there is nothing to wait for -- run it on this
++        stack, which was entered through the promising fcweb_run_python export and can
++        therefore suspend. The timer is stopped first so it cannot fire mid-suspension.
 +        """
++        self._stop_timer()
 +        self._run()
 +        return self._rc == 0
++
++    def _stop_timer(self):
++        if self._timer is not None:
++            try:
++                self._timer.stop()
++            except Exception:
++                pass
++            self._timer = None
 +
 +    def _run(self):
 +        if self._done:
 +            return
 +        self._done = True
++        self._stop_timer()
 +        self.started.emit()
 +        rc = 1
 +        try:
@@ -4128,9 +4151,6 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 +    def state(self):
 +        return 0  # QProcess.NotRunning
 +
-+    def waitForFinished(self, msecs=-1):
-+        return True
-+
 +    def kill(self):
 +        pass
 +
@@ -4140,7 +4160,7 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
  
  
  class GmshTools(ObjectTools):
-@@ -209,6 +304,20 @@
+@@ -209,6 +324,20 @@
          self.write_gmsh_input_files()
  
      def compute(self):
@@ -4161,7 +4181,7 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
          log_level = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh").GetString(
              "LogVerbosity", "3"
          )
-@@ -320,6 +429,13 @@
+@@ -320,6 +449,13 @@
          Console.PrintMessage("  " + self.temp_file_geo + "\n")
  
      def get_gmsh_command(self):
@@ -4175,7 +4195,7 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
          self.gmsh_bin = FreeCAD.ParamGet(
              "User parameter:BaseApp/Preferences/Mod/Fem/Gmsh"
          ).GetString("gmshBinaryPath", "")
-@@ -413,6 +529,15 @@
+@@ -413,6 +549,15 @@
                  fem_mesh.renameGroup(i, m.group("item"))
  
      def version(self):
@@ -4191,7 +4211,7 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
          self.get_gmsh_command()
          if shutil.which(self.gmsh_bin):
              found_message = "file found: " + self.gmsh_bin
-@@ -913,6 +1038,25 @@
+@@ -913,6 +1058,43 @@
          geo.close()
  
      def run_gmsh_with_geo(self):
@@ -4200,6 +4220,9 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 +        # read_and_set_new_mesh() below is unchanged.
 +        _w = _fcweb_gmsh()
 +        if _w is not None:
++            # The desktop prints the command it is about to run; print the wasm
++            # equivalent, so a report log shows which mesher actually ran.
++            Console.PrintMessage("  gmsh (wasm): " + self.temp_file_geo + "\n")
 +            try:
 +                rc = _w.run(self.temp_file_geo, self.temp_file_geometry, self.temp_file_mesh, 4)
 +            except Exception as e:
@@ -4207,11 +4230,26 @@ diff -ruNp a/src/Mod/Fem/femmesh/gmshtools.py b/src/Mod/Fem/femmesh/gmshtools.py
 +                err = f"Meshing failed: {e}\n"
 +                Console.PrintError(err)
 +                return err
++            Console.PrintMessage(f"  gmsh (wasm): returned {rc}\n")
 +            if rc != 0:
 +                self.error = True
 +                err = f"Meshing failed (gmsh returned {rc}).\n"
 +                Console.PrintError(err)
 +                return err
++            # Trust the file, not the return code. The bridge carries the mesh across
++            # two filesystems (gmsh's module and this one), and every way that can go
++            # wrong ends with a zero rc and nothing on disk -- after which the caller
++            # fails with "File to load not existing", naming neither gmsh nor the
++            # bridge that lost the file.
++            if not os.path.isfile(self.temp_file_mesh):
++                self.error = True
++                err = (f"Meshing reported success but wrote no mesh file "
++                       f"({self.temp_file_mesh}).\n")
++                Console.PrintError(err)
++                return err
++            Console.PrintLog(
++                f"  gmsh wasm wrote {os.path.getsize(self.temp_file_mesh)} bytes to "
++                f"{self.temp_file_mesh}\n")
 +            return ""
 +
          command_list = [self.gmsh_bin, "-", self.temp_file_geo]
@@ -4379,10 +4417,50 @@ diff -ruNp a/src/Mod/Fem/femtaskpanels/task_result_mechanical.py b/src/Mod/Fem/f
          if len(plt.get_fignums()) > 0:
              plt.close()
          plt.ioff()  # disable interactive mode so we have full control when plot is shown
+diff -ruNp a/src/Mod/Fem/femsolver/calculix/calculixtools.py b/src/Mod/Fem/femsolver/calculix/calculixtools.py
+--- a/src/Mod/Fem/femsolver/calculix/calculixtools.py
++++ b/src/Mod/Fem/femsolver/calculix/calculixtools.py
+@@ -30,8 +30,17 @@
+ import os
+ import shutil
+ 
+-from vtkmodules.util import numpy_support as vtk_np
+-from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
++try:
++    from vtkmodules.util import numpy_support as vtk_np
++    from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
++except ImportError:
++    # FCWEB: this build compiles VTK with VTK_WRAP_PYTHON=OFF, so there is no vtkmodules
++    # package. The import is at module scope, so its absence took down femsolver.run and
++    # with it every CalculiX path, including the ccxtools one that reads the .frd
++    # directly and never touches VTK. Degrade in _load_vtk_results instead, where the
++    # dependency is actually used.
++    vtk_np = None
++    vtkMultiBlockDataSet = None
+ import numpy as np
+ 
+ import FreeCAD
+@@ -151,6 +160,16 @@
+                 break
+ 
+     def _load_vtk_results(self):
++        if vtk_np is None:
++            # FCWEB: without the Python bindings the .vtm/.vtu pipeline cannot be built.
++            # Say so once and carry on to the .dat results, which do not need them --
++            # returning silently would look like a solve that produced nothing.
++            FreeCAD.Console.PrintError(
++                "This build has no Python VTK bindings, so the post-processing pipeline "
++                "was not created. The solver ran and its .dat output is loaded; for full "
++                "results use the CalculiX (ccxtools) solver, which reads the .frd.\n"
++            )
++            return
+         # search current pipeline
+         keep_result = self.fem_param.GetGroup("General").GetBool("KeepResultsOnReRun", False)
+         pipeline = None
 diff -ruNp a/src/Mod/Fem/femtools/ccxtools.py b/src/Mod/Fem/femtools/ccxtools.py
 --- a/src/Mod/Fem/femtools/ccxtools.py
 +++ b/src/Mod/Fem/femtools/ccxtools.py
-@@ -37,6 +37,20 @@ import shutil
+@@ -37,6 +37,20 @@
  import FreeCAD
  
  from femtools import femutils
@@ -4403,20 +4481,25 @@ diff -ruNp a/src/Mod/Fem/femtools/ccxtools.py b/src/Mod/Fem/femtools/ccxtools.py
  from femtools import membertools
  
  from PySide import QtCore  # there might be a special reason this is not guarded ?!?
-@@ -400,6 +414,12 @@ class FemToolsCcx(QtCore.QRunnable, QtCo
+@@ -399,8 +413,16 @@
+             the path is guessed.
          ccx_binary_sig : str, optional
              Defaults to 'CalculiX'. Expected output from `ccx` when run empty.
- 
+-
+         """
++        # FCWEB: the solver is a wasm module, not a file on disk, so there is no path to
++        # find and no binary to interrogate. This block used to sit INSIDE the docstring
++        # above -- valid Python, and prose: every browser solve raised "CalculiX binary
++        # not found" from the search below.
 +        if _fcweb_ccx() is not None:
-+            # the solver is a wasm module, not a file on disk
 +            self.ccx_binary = "ccx"
 +            self.ccx_binary_present = True
 +            return
 +
-         """
          error_title = self.tr("No or wrong CalculiX binary ccx")
          self.ccx_binary = ccx_binary
-@@ -487,6 +507,15 @@ class FemToolsCcx(QtCore.QRunnable, QtCo
+         if self.ccx_binary is None:
+@@ -487,6 +509,15 @@
          cwd = QtCore.QDir.currentPath()
          f = QtCore.QFileInfo(self.inp_file_name)
          QtCore.QDir.setCurrent(f.path())

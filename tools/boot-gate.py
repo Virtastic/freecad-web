@@ -122,6 +122,118 @@ _s.__stderr__.write('FCIMPORTS ' + repr(_res) + chr(10))
 _s.__stderr__.flush()
 '''
 
+FEM_PY = r'''
+# FEM end to end: mesh a solid with gmsh and solve it with CalculiX, both separate wasm
+# modules reached over a JSPI bridge -- and then check the ANSWER.
+#
+# "It ran" is not a result. Every failure this scenario exists to catch reported success:
+# the mesher shim whose waitForFinished was shadowed by a stub returning True, the wasm
+# branch that returned rc=0 having written no file, and the threaded ccx that solved a
+# matrix of zeros. So this compares the solved displacement against the closed form and
+# fails on a number rather than on an exception.
+#
+# The case is a 100 x 20 x 20 mm steel bar, fixed at one end and pulled normal to the
+# other. That is pure tension, so delta = F*L/(E*A) exactly -- no mesh-refinement caveat,
+# which is why it is used here instead of a cantilever.
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    import FreeCAD as App
+    import ObjectsFem
+    from femmesh.gmshtools import GmshTools
+
+    doc = App.newDocument("FemGate")
+    box = doc.addObject("Part::Box", "Box")
+    box.Length, box.Width, box.Height = 100.0, 20.0, 20.0
+    doc.recompute()
+
+    analysis = ObjectsFem.makeAnalysis(doc, "Analysis")
+    solver = ObjectsFem.makeSolverCalculiXCcxTools(doc, "CalculiX")
+    analysis.addObject(solver)
+    mat = ObjectsFem.makeMaterialSolid(doc, "Steel")
+    md = mat.Material
+    md["Name"] = "Steel-Generic"
+    md["YoungsModulus"] = "210000 MPa"
+    md["PoissonRatio"] = "0.30"
+    md["Density"] = "7900 kg/m^3"
+    mat.Material = md
+    analysis.addObject(mat)
+    fixed = ObjectsFem.makeConstraintFixed(doc, "Fixed")
+    fixed.References = [(box, "Face1")]
+    analysis.addObject(fixed)
+    force = ObjectsFem.makeConstraintForce(doc, "Force")
+    force.References = [(box, "Face2")]
+    force.Force = 100000.0                 # FreeCAD's internal force unit; 100 N
+    force.Reversed = True
+    analysis.addObject(force)
+    fm = ObjectsFem.makeMeshGmsh(doc, "Mesh")
+    fm.Shape = box
+    fm.CharacteristicLengthMax = "15 mm"
+    analysis.addObject(fm)
+    doc.recompute()
+
+    GmshTools(fm).create_mesh()
+    _out["nodes"] = fm.FemMesh.NodeCount
+    _out["volumes"] = fm.FemMesh.VolumeCount
+    if not fm.FemMesh.NodeCount:
+        raise RuntimeError("gmsh produced no mesh")
+
+    from femtools import ccxtools
+
+    fea = ccxtools.FemToolsCcx(analysis, solver)
+    fea.update_objects()
+    fea.setup_working_dir()
+    fea.setup_ccx()
+    fea.purge_results()
+    fea.write_inp_file()
+    fea.ccx_run()
+    fea.load_results()
+
+    # The load the deck actually carries. Lines beginning "**" are comments and sit
+    # INSIDE *CLOAD, so they must not be mistaken for the start of a new section.
+    total, rows, section = 0.0, 0, None
+    with open(fea.inp_file_name, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            t = line.strip()
+            if t.startswith("**") or not t:
+                continue
+            if t.startswith("*"):
+                section = t.upper()
+                continue
+            if section and section.startswith("*CLOAD"):
+                parts = [p.strip() for p in t.split(",")]
+                if len(parts) >= 3:
+                    try:
+                        total += abs(float(parts[2]))
+                        rows += 1
+                    except ValueError:
+                        pass
+    _out["cloadRows"] = rows
+    _out["loadN"] = round(total, 6)
+
+    res = None
+    for o in doc.Objects:
+        if o.isDerivedFrom("Fem::FemResultObject"):
+            res = o
+    if res is None:
+        raise RuntimeError("the solver produced no result object")
+    disp = list(res.DisplacementLengths or [])
+    mx = max(disp) if disp else 0.0
+    analytic = total * 100.0 / (210000.0 * 400.0)      # F*L/(E*A)
+    _out["maxDisplacementMm"] = round(mx, 9)
+    _out["analyticMm"] = round(analytic, 9)
+    _out["ratio"] = round(mx / analytic, 4) if analytic else 0.0
+except Exception as _e:
+    import traceback
+
+    _out["error"] = "%s: %s" % (type(_e).__name__, _e)
+    _out["where"] = traceback.format_exc().strip().splitlines()[-3][:160]
+_s.__stderr__.write("FCFEM " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
+
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
 # fetch is refused however co-operative the remote server is, so everything has to go
@@ -664,6 +776,38 @@ def scenario_addons(ctx, url, args, fail):
         fail('the catalogue came back as %r bytes / %r entries, which is not a real index' % (r.get('bytes'), r.get('addons')))
     return s
 
+def scenario_fem(ctx, url, args, fail):
+    """R1: mesh with gmsh, solve with CalculiX, and check the answer against theory."""
+    for f in ('gmsh.js', 'gmsh.wasm', 'ccx.js', 'ccx.wasm'):
+        if not os.path.exists(os.path.join(args.directory, f)):
+            fail('fem scenario: %s is not in the serve tree, so the mesher and solver '
+                 'cannot load. Fetch them alongside the engine rather than skipping the '
+                 'scenario -- a gate that quietly does nothing is worse than no gate.' % f)
+            return Session(ctx, url, args.timeout)
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('fem scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(FEM_PY)
+    r = s.wait_for('FCFEM', 600)
+    if not isinstance(r, dict):
+        fail('the FEM probe produced no result')
+        return s
+    print('==> fem: %s' % r)
+    if r.get('error'):
+        fail('FEM failed: %s (%s)' % (r['error'], r.get('where', '')))
+        return s
+    if not r.get('nodes'):
+        fail('gmsh produced no mesh')
+    ratio = r.get('ratio', 0)
+    if not 0.95 <= ratio <= 1.05:
+        fail('the solve came out at %.3f of the closed-form answer (%s mm solved against '
+             '%s mm for %s N over 100 mm of 20x20 steel). Merely non-zero is what the '
+             'zero-matrix threading bug produced.'
+             % (ratio, r.get('maxDisplacementMm'), r.get('analyticMm'), r.get('loadN')))
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -671,7 +815,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'fem', 'all'))
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
@@ -747,6 +891,8 @@ def main():
                 sessions.append(scenario_workflow(ctx, url, args, fail))
             if args.scenario in ('addons', 'all'):
                 sessions.append(scenario_addons(ctx, url, args, fail))
+            if args.scenario in ('fem', 'all'):
+                sessions.append(scenario_fem(ctx, url, args, fail))
             dump = []
             for s in sessions:
                 dump.append((s.lines(), s.console, s.errors()))
