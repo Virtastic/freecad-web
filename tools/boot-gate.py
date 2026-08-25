@@ -1304,7 +1304,6 @@ def main():
         return 2
 
     failures = []
-    sessions = []
 
     def fail(msg):
         failures.append(msg)
@@ -1346,44 +1345,47 @@ def main():
                      'cannot finish is a failure, not a wait -- raise --budget only if the '
                      'work genuinely grew.' % (spent, args.budget, after))
                 return True
-            if not out_of_time and args.scenario in ('boot', 'all'):
-                sessions.append(scenario_boot(ctx, url, args, fail))
-                out_of_time = over_budget('boot')
-            if not out_of_time and args.scenario in ('restore', 'all'):
-                sessions.append(scenario_restore(ctx, url, args, fail))
-                out_of_time = over_budget('restore')
-            if not out_of_time and args.scenario in ('dialog', 'all'):
-                sessions.append(scenario_dialog(ctx, url, args, fail))
-                out_of_time = over_budget('dialog')
-            if not out_of_time and args.scenario in ('imports', 'all'):
-                sessions.append(scenario_imports(ctx, url, args, fail))
-                out_of_time = over_budget('imports')
-            if not out_of_time and args.scenario in ('network', 'all'):
-                sessions.append(scenario_network(ctx, url, args, fail))
-                out_of_time = over_budget('network')
-            if not out_of_time and args.scenario in ('workflow', 'all'):
-                sessions.append(scenario_workflow(ctx, url, args, fail))
-                out_of_time = over_budget('workflow')
-            if not out_of_time and args.scenario in ('addons', 'all'):
-                sessions.append(scenario_addons(ctx, url, args, fail))
-                out_of_time = over_budget('addons')
-            if not out_of_time and args.scenario in ('fem', 'all'):
-                sessions.append(scenario_fem(ctx, url, args, fail))
-                out_of_time = over_budget('fem')
-            if not out_of_time and args.scenario in ('examples', 'all'):
-                sessions.append(scenario_examples(ctx, url, args, fail))
-                out_of_time = over_budget('examples')
-            if not out_of_time and args.scenario in ('workbenches', 'all'):
-                sessions.append(scenario_workbenches(ctx, url, args, fail))
-                out_of_time = over_budget('workbenches')
-            if not out_of_time and args.scenario in ('addoninstall', 'all'):
-                sessions.append(scenario_addoninstall(ctx, url, args, fail))
-                out_of_time = over_budget('addoninstall')
-            if args.scenario == 'upgrade':
-                sessions.append(scenario_upgrade(ctx, url, args, fail))
             dump = []
-            for s in sessions:
-                dump.append((s.lines(), s.console, s.errors()))
+
+            def run_scenario(name, fn):
+                """Run one scenario, harvest its output, and CLOSE its page.
+
+                Every scenario used to be kept open until the end so its log could be
+                dumped on failure. Eleven Chromium pages, each holding a ~250 MB engine
+                and its heap, is more than the box has: run 32893773921 was OOM-killed
+                (exit 137) 48 minutes in, having looked like a hang for most of it. The
+                logs are read out here instead, while the page is still alive, and the
+                page goes immediately.
+                """
+                sess = fn(ctx, url, args, fail)
+                try:
+                    dump.append((sess.lines(), sess.console, sess.errors()))
+                except Exception:
+                    dump.append(([], [], []))
+                try:
+                    sess.page.close()
+                except Exception:
+                    pass        # restore/upgrade/addoninstall close their own first page
+                return over_budget(name)
+
+            for _name, _fn in (
+                ('boot', scenario_boot),
+                ('restore', scenario_restore),
+                ('dialog', scenario_dialog),
+                ('imports', scenario_imports),
+                ('network', scenario_network),
+                ('workflow', scenario_workflow),
+                ('addons', scenario_addons),
+                ('fem', scenario_fem),
+                ('examples', scenario_examples),
+                ('workbenches', scenario_workbenches),
+                ('addoninstall', scenario_addoninstall),
+            ):
+                if out_of_time or args.scenario not in (_name, 'all'):
+                    continue
+                out_of_time = run_scenario(_name, _fn)
+            if args.scenario == 'upgrade':
+                out_of_time = run_scenario('upgrade', scenario_upgrade)
             ctx.close()
     finally:
         server.terminate()
