@@ -625,6 +625,10 @@ CHROME_ARGS = [
 class Session:
     """One page load, with both output channels and the python bridge."""
 
+    # How long the first successful boot took, in seconds. Later scenarios size their own
+    # patience from it rather than from the cold-boot figure on the command line.
+    first_ready = None
+
     def __init__(self, ctx, url, timeout):
         self.console = []
         self.page = ctx.new_page()
@@ -652,9 +656,17 @@ class Session:
         return [c for c in self.lines() if FATAL.search(c)]
 
     def load(self):
+        # --timeout is sized for a COLD first boot (the engine is ~250 MB). Applying it
+        # unchanged to all eleven scenarios makes the worst case eleven times fifteen
+        # minutes, which is not a gate, it is a hostage: one scenario that never reaches
+        # Ready without crashing can hold CI for hours and say nothing until the end.
+        # Once one boot has worked, a later one has no business taking six times longer.
+        budget = self.timeout
+        if Session.first_ready is not None:
+            budget = max(120.0, min(float(self.timeout), 6.0 * Session.first_ready))
         t0 = time.time()
         self.page.goto(self.url, timeout=120_000)
-        while time.time() - t0 < self.timeout:
+        while time.time() - t0 < budget:
             if self.fatals():
                 break
             try:
@@ -665,6 +677,8 @@ class Session:
                 pass            # navigation/teardown races are not verdicts
             time.sleep(2)
         self.elapsed = time.time() - t0
+        if self.ready and Session.first_ready is None:
+            Session.first_ready = self.elapsed
         return self.ready
 
     def phase(self):
@@ -1244,6 +1258,11 @@ def main():
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
     ap.add_argument('--upgrade-from', default=None,
                     help='a serve tree holding the PREVIOUS engine. The upgrade scenario boots that one, saves work, swaps this one in and reloads the same profile -- the returning user a fresh profile never tests (V1).')
+    ap.add_argument('--budget', type=int, default=2400,
+                    help='seconds for the WHOLE gate. Eleven scenarios that each wait out '
+                         'their own timeout can hold CI for hours and say nothing until the '
+                         'end; when this is spent the gate stops and names the scenario it '
+                         'was in.')
     ap.add_argument('--with-3d', action='store_true',
                     help='leave the 3D pipeline on (headless GL proves little; see V6)')
     args = ap.parse_args()
@@ -1302,28 +1321,50 @@ def main():
             ctx = engine.launch_persistent_context(profile, headless=True,
                                                    args=launch_args, **kw)
             print('==> %s (scenario: %s)' % (url, args.scenario))
-            if args.scenario in ('boot', 'all'):
+            gate_started = time.time()
+            out_of_time = False
+
+            def over_budget(after):
+                spent = time.time() - gate_started
+                if spent < args.budget:
+                    return False
+                fail('the gate ran out of time (%.0fs of %ds) after %s. A scenario that '
+                     'cannot finish is a failure, not a wait -- raise --budget only if the '
+                     'work genuinely grew.' % (spent, args.budget, after))
+                return True
+            if not out_of_time and args.scenario in ('boot', 'all'):
                 sessions.append(scenario_boot(ctx, url, args, fail))
-            if args.scenario in ('restore', 'all'):
+                out_of_time = over_budget('boot')
+            if not out_of_time and args.scenario in ('restore', 'all'):
                 sessions.append(scenario_restore(ctx, url, args, fail))
-            if args.scenario in ('dialog', 'all'):
+                out_of_time = over_budget('restore')
+            if not out_of_time and args.scenario in ('dialog', 'all'):
                 sessions.append(scenario_dialog(ctx, url, args, fail))
-            if args.scenario in ('imports', 'all'):
+                out_of_time = over_budget('dialog')
+            if not out_of_time and args.scenario in ('imports', 'all'):
                 sessions.append(scenario_imports(ctx, url, args, fail))
-            if args.scenario in ('network', 'all'):
+                out_of_time = over_budget('imports')
+            if not out_of_time and args.scenario in ('network', 'all'):
                 sessions.append(scenario_network(ctx, url, args, fail))
-            if args.scenario in ('workflow', 'all'):
+                out_of_time = over_budget('network')
+            if not out_of_time and args.scenario in ('workflow', 'all'):
                 sessions.append(scenario_workflow(ctx, url, args, fail))
-            if args.scenario in ('addons', 'all'):
+                out_of_time = over_budget('workflow')
+            if not out_of_time and args.scenario in ('addons', 'all'):
                 sessions.append(scenario_addons(ctx, url, args, fail))
-            if args.scenario in ('fem', 'all'):
+                out_of_time = over_budget('addons')
+            if not out_of_time and args.scenario in ('fem', 'all'):
                 sessions.append(scenario_fem(ctx, url, args, fail))
-            if args.scenario in ('examples', 'all'):
+                out_of_time = over_budget('fem')
+            if not out_of_time and args.scenario in ('examples', 'all'):
                 sessions.append(scenario_examples(ctx, url, args, fail))
-            if args.scenario in ('workbenches', 'all'):
+                out_of_time = over_budget('examples')
+            if not out_of_time and args.scenario in ('workbenches', 'all'):
                 sessions.append(scenario_workbenches(ctx, url, args, fail))
-            if args.scenario in ('addoninstall', 'all'):
+                out_of_time = over_budget('workbenches')
+            if not out_of_time and args.scenario in ('addoninstall', 'all'):
                 sessions.append(scenario_addoninstall(ctx, url, args, fail))
+                out_of_time = over_budget('addoninstall')
             if args.scenario == 'upgrade':
                 sessions.append(scenario_upgrade(ctx, url, args, fail))
             dump = []
