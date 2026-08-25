@@ -486,11 +486,15 @@ def scenario_restore(ctx, url, args, fail):
         fail('autosave never installed, so nothing would be restored '
              '(this is how ?no3d was caught disabling it)')
         return s1
+    # Wait for THIS document, not for any file. Running after the boot scenario, the
+    # autosave directory already holds BootGate.FCStd -- so 'is it non-empty' was true
+    # immediately and the reload happened before RestoreProbe had been written. The
+    # scenario then reported no documents restored and looked like a product bug.
     listing = None
     deadline = time.time() + 90
     while time.time() < deadline:
-        listing = s1.page.evaluate(AUTOSAVE_DIR_JS)
-        if listing:
+        listing = s1.page.evaluate(AUTOSAVE_DIR_JS) or []
+        if any('RestoreProbe' in str(f) for f in listing):
             break
         time.sleep(2)
     if not listing:

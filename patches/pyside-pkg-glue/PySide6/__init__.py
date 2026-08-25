@@ -10,7 +10,7 @@ import importlib
 
 __version__ = "6.9.0"
 __version_info__ = (6, 9, 0, "", "")
-__all__ = ["QtCore", "QtGui", "QtWidgets"]
+__all__ = ["QtCore", "QtGui", "QtWidgets", "QtNetwork"]
 __path__ = []  # mark as package
 
 # Order matters: QtGui pulls in QtCore, QtWidgets pulls in both.
@@ -20,3 +20,9 @@ QtGui = importlib.import_module("QtGui_fcweb")
 sys.modules["PySide6.QtGui"] = QtGui
 QtWidgets = importlib.import_module("QtWidgets_fcweb")
 sys.modules["PySide6.QtWidgets"] = QtWidgets
+
+# QtNetwork last: it needs QtCore, and nothing above needs it. The Addon Manager is
+# the reason it is here -- NetworkManager.py imports it before doing anything else,
+# so without this the workbench installs and then cannot fetch a thing.
+QtNetwork = importlib.import_module("QtNetwork_fcweb")
+sys.modules["PySide6.QtNetwork"] = QtNetwork

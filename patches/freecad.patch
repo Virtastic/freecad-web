@@ -3636,7 +3636,7 @@ diff -ruNp a/src/Main/MainCmd.cpp b/src/Main/MainCmd.cpp
 diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -130,8 +130,202 @@
+@@ -130,8 +130,204 @@
      }
  }
  
@@ -3693,6 +3693,7 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 +extern "C" PyObject* PyInit_QtCore();
 +extern "C" PyObject* PyInit_QtGui();
 +extern "C" PyObject* PyInit_QtWidgets();
++extern "C" PyObject* PyInit_QtNetwork();  // the Addon Manager fetches over QtNetwork
 +extern "C" PyObject* PyInit_DraftUtils();
 +extern "C" PyObject* PyInit__coin();  // pivy (SWIG Coin3D bindings)
 +extern "C" PyObject* PyInit__fcwebdlg();  // FreeCAD-Web blocking HTML dialogs
@@ -3807,6 +3808,7 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 +    PyImport_AppendInittab("QtCore_fcweb", PyInit_QtCore);
 +    PyImport_AppendInittab("QtGui_fcweb", PyInit_QtGui);
 +    PyImport_AppendInittab("QtWidgets_fcweb", PyInit_QtWidgets);
++    PyImport_AppendInittab("QtNetwork_fcweb", PyInit_QtNetwork);
 +    PyImport_AppendInittab("DraftUtils", PyInit_DraftUtils);
 +    PyImport_AppendInittab("_coin", PyInit__coin);
 +    PyImport_AppendInittab("_fcwebdlg", PyInit__fcwebdlg);
