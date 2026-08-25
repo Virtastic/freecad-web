@@ -48,6 +48,8 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 | **V1** | upgrade path never tested | **now tested, and it passes.** The gate's `upgrade` scenario boots the PREVIOUS engine, saves work, deploys the new one over it -- md5-stamped URLs and all, exactly as infra/Dockerfile does -- and reloads the same profile. Measured: 182,656,749 bytes of engine replaced by 183,464,581, and the document written by the old build comes back in the new one with its geometry (volume 480.0). Getting there found a real fault: the shell's `fcweb-engine` Cache Storage is keyed on the URL alone, so an UNSTAMPED deploy hands the new loader the previous build's data package and the app dies with "Failed to import encodings module" -- reproduced 3 times in 4. The Dockerfile refuses to ship unstamped, so production is safe by construction; the shell now also validates the cached package against the size the engine asks for and empties the cache when they disagree, so a stamping slip costs one reload instead of a permanently broken app. |
 
+| **V7** | every link costs ~90 minutes | **understood, deliberately not changed.** The link keeps `deps/src/freecad` pristine and re-applies freecad.patch every run, so ~200 files get a new mtime and ninja rebuilds 1,860 of ~2,700 edges -- about 75 of the 90 minutes. Caching the PATCHED tree would fix it and is exactly the shape that once cost this project its boot (a stamp said "patched", the tree was not). Two cheaper wins are already in: the compat headers are no longer rewritten when identical, and a failed link can no longer pass a stale binary downstream. |
+
 R7 is untouched.
 
 ---
