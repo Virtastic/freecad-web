@@ -46,6 +46,8 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 | **R11** | the shipped FEM example crashes the engine | **found and fixed, awaiting a deps rebuild.** Opening `FEMExample.FCStd` -- one of seven examples the Start page offers -- traps with `RuntimeError: unreachable` in `vtkXMLParser::GetXMLByteIndex`. `patches/vtk-expat-wasm-xmlsize.patch` was written to prevent precisely this, was named in the deps cache key, and was applied by nothing. The gate's new `examples` scenario opens all seven. |
 
+| **V1** | upgrade path never tested | **now tested, and it fails.** The gate's new `upgrade` scenario boots the PREVIOUS engine, saves work, swaps the new engine into the serve tree and reloads the same profile -- what a deploy does to someone with the tab open. Two runs, two different failures: once CPython would not bootstrap (`Failed to import encodings module`, the port's old importlib-replay failure), once the engine trapped during restore. The same-engine reload passed 4 times out of 4 in the same session, so this is the swap, not the reload. Not yet diagnosed. |
+
 R7 is untouched.
 
 ---
