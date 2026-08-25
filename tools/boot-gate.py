@@ -413,6 +413,20 @@ def scenario_boot(ctx, url, args, fail):
                      % (r['verts'], r['faces']))
             if args.expect_version and r['version'] != args.expect_version:
                 fail('App.Version() is %s, expected %s' % (r['version'], args.expect_version))
+        # The heap ceiling is a build flag that is easy to lose in a link command and
+        # impossible to notice until a user's model dies at 2 GB. Ask the running
+        # engine what it actually got.
+        try:
+            heap = s.page.evaluate(
+                "() => { const m = window.fcInstance;"
+                " return m && m.HEAPU8 ? Math.round(m.HEAPU8.length / 1048576) : -1; }")
+            grows = s.page.evaluate(
+                "() => { const m = window.fcInstance;"
+                " try { return !!(m && m.wasmMemory && m.wasmMemory.buffer"
+                " && m.wasmMemory.grow); } catch (e) { return false; } }")
+            print('==> heap: %s MB, growable=%s' % (heap, grows))
+        except Exception:
+            pass
         for f in s.fatals():
             fail('engine reported a fatal while working: %s' % f[:300])
             break
