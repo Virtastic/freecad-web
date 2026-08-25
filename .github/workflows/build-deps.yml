@@ -337,12 +337,23 @@ jobs:
           # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
           # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
           # already on disk. Honour the cache this workflow already pays to save.
-          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libvtk*.a 2>/dev/null | wc -l)" -ge 20 ]; then
-            echo "  VTK: already built (cache hit), skipping"; exit 0
+          # ... but "the archives exist" is not "the archives are the ones this source
+          # produces". The restore-keys prefix will happily hand back a VTK built before
+          # patches/vtk-expat-wasm-xmlsize.patch existed, and that VTK traps on every .vtu
+          # -- which is how the shipped FEMExample stayed unopenable while this step
+          # printed "cache hit". Stamp the inputs beside the archives and compare.
+          stamp=deps/wasm/lib/.fcweb-vtk-inputs
+          want=$(cat patches/vtk-expat-wasm-xmlsize.patch configure-vtk-weh.sh | sha256sum | cut -d" " -f1)
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libvtk*.a 2>/dev/null | wc -l)" -ge 20 ] && [ "$(cat $stamp 2>/dev/null)" = "$want" ]; then
+            echo "  VTK: already built from these inputs (cache hit), skipping"; exit 0
+          fi
+          if [ -s "$stamp" ]; then
+            echo "  VTK: the cached archives were built from different inputs, rebuilding"
           fi
           t0=$SECONDS; rc=0
           bash configure-vtk-weh.sh > /tmp/deplogs/vtk.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          [ "$rc" = 0 ] && echo "$want" > "$stamp"
           echo "  vtk exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/vtk.txt
           exit $rc
 

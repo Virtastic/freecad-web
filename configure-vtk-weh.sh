@@ -22,13 +22,16 @@ BUILD="$ROOT/build-vtk"
 emcmake cmake -S "$SRC" -B "$BUILD" -G Ninja \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_BUILD_TYPE=Release \
-  `# XML_LARGE_SIZE: VTK's IO/XMLParser expects expat's XML_Index to be 64-bit` \
-  `# (long is 64-bit on desktop). In wasm long is 32-bit, so without this the` \
-  `# vtkexpat lib builds XML_GetCurrentByteIndex as (i32)->i32 while vtkXMLParser` \
-  `# calls it as (i32)->i64 -> wasm function signature mismatch -> unreachable` \
-  `# trap in every .vtu read (FEM post-processing). Force 64-bit XML_Index.` \
-  -DEXPAT_LARGE_SIZE=ON \
-  -DCMAKE_C_FLAGS="-DXML_LARGE_SIZE=1" \
+  `# expat's XML_Index width has to match on both sides of the call, or wasm-ld` \
+  `# resolves the mismatch to a trapping stub and every .vtu read dies with` \
+  `# "RuntimeError: unreachable" -- which is what opening the shipped FEMExample` \
+  `# did. Two flags used to force 64-bit here, and could not work: vtkexpat's own` \
+  `# CMakeLists forces EXPAT_LARGE_SIZE OFF under Emscripten, so the library stayed` \
+  `# 32-bit while its C consumers went 64-bit, and the C++ consumers -- including` \
+  `# vtkXMLParser.cxx, where the trap lands -- never saw the define at all. The` \
+  `# flags made the mismatch rather than fixing it.` \
+  `# patches/vtk-expat-wasm-xmlsize.patch settles it the other way, keeping both` \
+  `# halves at 32-bit, and patches/apply.sh now applies it.` \
   -DBUILD_SHARED_LIBS=OFF \
   -DVTK_ENABLE_WRAPPING=OFF \
   -DVTK_WRAP_PYTHON=OFF \

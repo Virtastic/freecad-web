@@ -245,6 +245,21 @@ jobs:
       - name: Workflow run blocks have no mangled escapes
         run: python3 tools/check-run-block-escapes.py
 
+      # A patch that nothing applies is not a fix, however carefully it is written.
+      # patches/vtk-expat-wasm-xmlsize.patch sat in the tree for months, named in the deps
+      # cache key so a change to it would rebuild VTK, with a comment describing exactly
+      # the crash it prevents -- and no line in the repository applied it. Opening the
+      # shipped FEMExample trapped on that crash the whole time.
+      - name: Every patch is applied by something
+        run: python3 tools/check-every-patch-is-applied.py
+
+      # Registering a PySide module in the inittab, building its archive and checking that
+      # archive for the symbol are three different things from putting it on the link line.
+      # Doing the first three and not the fourth cost a two-hour compile that ended in
+      # "undefined symbol: PyInit_QtNetwork".
+      - name: PySide modules are registered, built and linked
+        run: python3 tools/check-pyside-link-line.py
+
       - name: No absolute home directories in tracked files
         run: |
           if git grep -nE '/Users/[a-z]+/|C:\\\\Users\\\\' -- $(git ls-files) ; then

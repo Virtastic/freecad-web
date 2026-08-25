@@ -137,6 +137,12 @@ apply_one occt          occt.patch
 apply_one cpython       cpython-ctypes-wasm.patch
 apply_one numpy         numpy.patch
 apply_one coin3d        coin3d.patch
+# Never applied until now, and it shows: opening the shipped FEMExample.FCStd traps with
+# "RuntimeError: unreachable" inside vtkXMLParser::GetXMLByteIndex, which is precisely the
+# failure this patch's own comment describes. It was written, committed, and named in the
+# deps cache key -- and no line ever applied it. The tree name carries the version because
+# that is how the tarball extracts.
+apply_one VTK-9.3.1     vtk-expat-wasm-xmlsize.patch   'ThirdParty/expat/CMakeLists.txt::AND NOT EMSCRIPTEN'
 
 # Applying cleanly says the lines went in, not that they went in somewhere they can run.
 # Four fixes in this port were written where control never reached them; the last one had
