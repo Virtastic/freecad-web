@@ -629,6 +629,18 @@ class Session:
     # patience from it rather than from the cold-boot figure on the command line.
     first_ready = None
 
+    # When the gate as a whole must be finished (time.time()), or None for no limit. No
+    # single wait may run past it: checking the budget only BETWEEN scenarios bounds how
+    # many run, not how long one can sit in a 900-second wait, and a gate that overruns
+    # its own budget by six minutes is not bounded, it is optimistic.
+    deadline = None
+
+    @staticmethod
+    def left(default):
+        if Session.deadline is None:
+            return default
+        return max(5.0, min(float(default), Session.deadline - time.time()))
+
     def __init__(self, ctx, url, timeout):
         self.console = []
         self.page = ctx.new_page()
@@ -664,6 +676,7 @@ class Session:
         budget = self.timeout
         if Session.first_ready is not None:
             budget = max(120.0, min(float(self.timeout), 6.0 * Session.first_ready))
+        budget = Session.left(budget)
         t0 = time.time()
         self.page.goto(self.url, timeout=120_000)
         while time.time() - t0 < budget:
@@ -710,7 +723,7 @@ class Session:
             return []
 
     def wait_for(self, marker, seconds):
-        deadline = time.time() + seconds
+        deadline = time.time() + Session.left(seconds)
         while time.time() < deadline:
             for c in self.lines():
                 m = re.search(re.escape(marker) + r' (\{.*\})', c)
@@ -1323,6 +1336,7 @@ def main():
             print('==> %s (scenario: %s)' % (url, args.scenario))
             gate_started = time.time()
             out_of_time = False
+            Session.deadline = gate_started + args.budget
 
             def over_budget(after):
                 spent = time.time() - gate_started
