@@ -612,6 +612,26 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      # RELEASE-PLAN V4. deps/ is gitignored and most of the trees carry no version marker
+      # at all, so "which sources is production built from" had no answer -- which is
+      # exactly how CalculiX ended up with 69 routines silently stubbed in a clean build
+      # while production's solver worked. This is the only place that can answer it: the
+      # machine with deps/src populated, at the moment it finished building.
+      - name: Capture which sources these libraries were built from
+        if: always()
+        run: |
+          bash tools/capture-dep-versions.sh > deps-versions.txt || true
+          echo "--- deps-versions.txt ---"
+          cat deps-versions.txt
+
+      - name: Upload the dependency manifest
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deps-versions
+          path: deps-versions.txt
+          if-no-files-found: warn
+
       - name: Upload the built libraries
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
