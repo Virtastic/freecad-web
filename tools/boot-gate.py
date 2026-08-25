@@ -295,6 +295,93 @@ _s.__stderr__.write("FCWB " + repr(_res) + _NL)
 _s.__stderr__.flush()
 '''
 
+ADDON_INSTALL_PY = r'''
+# Install an addon, for real: fetch a zip through this origin's proxy with Qt's own
+# network stack, unpack it into the IDBFS-backed Mod directory, and put it on sys.path.
+# That is the whole of the Addon Manager's no-git path, driven directly.
+#
+# It is driven directly rather than through the workbench because the two can fail
+# independently: the workbench's PySideWrapper imports five Qt modules in one statement and
+# reports the same message whichever is missing, which says nothing about whether an
+# install would work. This measures the mechanism.
+import io as _io
+import os
+import sys as _s
+import zipfile
+
+_NL = chr(10)
+_out = {}
+try:
+    _s.path.append("/freecad/Mod/AddonManager")
+except Exception:
+    pass
+try:
+    from PySide6 import QtCore, QtNetwork
+
+    URL = "https://codeload.github.com/FreeCAD/FreeCAD-macros/zip/refs/heads/master"
+    try:
+        import NetworkManager
+        rewritten = NetworkManager.fcweb_proxy_url(URL)
+        _out["viaWorkbenchRewrite"] = True
+    except Exception as e:
+        _out["viaWorkbenchRewrite"] = "%s: %s" % (type(e).__name__, str(e)[:60])
+        rewritten = URL.replace("https://codeload.github.com", "/proxy/codeload")
+    _out["url"] = rewritten
+
+    nam = QtNetwork.QNetworkAccessManager()
+    reply = nam.get(QtNetwork.QNetworkRequest(QtCore.QUrl(rewritten)))
+    loop = QtCore.QEventLoop()
+    reply.finished.connect(loop.quit)
+    QtCore.QTimer.singleShot(180000, loop.quit)
+    loop.exec()
+    _out["httpError"] = str(reply.error())
+    blob = bytes(reply.readAll())
+    _out["bytes"] = len(blob)
+    if len(blob) < 1000:
+        raise RuntimeError("too small to be a zip (%d bytes)" % len(blob))
+
+    dest = "/home/web_user/.local/share/FreeCAD/Mod"
+    os.makedirs(dest, exist_ok=True)
+    z = zipfile.ZipFile(_io.BytesIO(blob))
+    names = z.namelist()
+    z.extractall(dest)
+    root = os.path.join(dest, sorted(n.split("/")[0] for n in names)[0])
+    _out["installedTo"] = root
+    pys = []
+    for dirpath, _dirs, files in os.walk(root):
+        pys += [f for f in files if f.endswith(".py")]
+    _out["pyFiles"] = len(pys)
+    if not pys:
+        raise RuntimeError("unpacked with no Python in it")
+    _s.path.insert(0, root)
+except Exception as e:
+    _out["error"] = "%s: %s" % (type(e).__name__, str(e)[:120])
+_s.__stderr__.write("FCADDONINSTALL " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
+
+ADDON_PRESENT_PY = r'''
+# After the reload: is the addon still on disk? An install that does not survive a reload
+# is not an install, it is a download.
+import os
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    dest = "/home/web_user/.local/share/FreeCAD/Mod"
+    _out["mods"] = sorted(os.listdir(dest)) if os.path.isdir(dest) else []
+    pys = 0
+    for d in _out["mods"]:
+        for dirpath, _dirs, files in os.walk(os.path.join(dest, d)):
+            pys += len([f for f in files if f.endswith(".py")])
+    _out["pyFiles"] = pys
+except Exception as e:
+    _out["error"] = "%s: %s" % (type(e).__name__, str(e)[:90])
+_s.__stderr__.write("FCADDONPRESENT " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
+
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
 # fetch is refused however co-operative the remote server is, so everything has to go
@@ -1099,6 +1186,51 @@ def scenario_workbenches(ctx, url, args, fail):
     return s
 
 
+def scenario_addoninstall(ctx, url, args, fail):
+    """RELEASE-PLAN 2.2: an addon installs from the real index and survives a reload."""
+    s1 = Session(ctx, url, args.timeout)
+    if not s1.load():
+        fail('addoninstall: never reached Ready (overlay: %s)' % s1.phase())
+        return s1
+    s1.run_python(ADDON_INSTALL_PY)
+    r = s1.wait_for('FCADDONINSTALL', 300)
+    if not isinstance(r, dict):
+        fail('the addon install probe produced no result')
+        return s1
+    print('==> addon install: %s' % r)
+    if r.get('error'):
+        fail('installing an addon failed: %s' % r['error'])
+        return s1
+    if not r.get('pyFiles'):
+        fail('the addon unpacked with no Python in it')
+        return s1
+
+    persisted = s1.page.evaluate(
+        """() => new Promise((resolve) => {
+             try {
+               window.fcInstance.FS.syncfs(false, (err) => resolve(err ? String(err) : 'ok'));
+             } catch (e) { resolve('throw: ' + e); }
+           })""")
+    if persisted != 'ok':
+        fail('IDBFS refused to persist the installed addon (%s)' % persisted)
+        return s1
+    s1.page.close()
+
+    s2 = Session(ctx, url, args.timeout)
+    if not s2.load():
+        fail('addoninstall: the second load never reached Ready (overlay: %s)' % s2.phase())
+        return s2
+    s2.run_python(ADDON_PRESENT_PY)
+    r2 = s2.wait_for('FCADDONPRESENT', 180)
+    if not isinstance(r2, dict) or not r2.get('pyFiles'):
+        fail('the addon did not survive the reload (%s) -- an install that does not '
+             'persist is a download' % (r2,))
+    else:
+        print('==> addon survived the reload: %s (%d .py files)'
+              % (r2.get('mods'), r2['pyFiles']))
+    return s2
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -1106,7 +1238,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'fem', 'examples', 'workbenches', 'upgrade', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'addoninstall', 'fem', 'examples', 'workbenches', 'upgrade', 'all'))
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
@@ -1190,6 +1322,8 @@ def main():
                 sessions.append(scenario_examples(ctx, url, args, fail))
             if args.scenario in ('workbenches', 'all'):
                 sessions.append(scenario_workbenches(ctx, url, args, fail))
+            if args.scenario in ('addoninstall', 'all'):
+                sessions.append(scenario_addoninstall(ctx, url, args, fail))
             if args.scenario == 'upgrade':
                 sessions.append(scenario_upgrade(ctx, url, args, fail))
             dump = []
