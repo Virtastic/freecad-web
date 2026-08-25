@@ -465,7 +465,29 @@ jobs:
           set -e
           . emsdk/emsdk_env.sh
           cd build-freecad-gui-weh
+          # A marker to date the outputs against. A link that fails leaves the PREVIOUS
+          # bin/FreeCAD.* in place, and every later step happily works on them.
+          touch /tmp/fclogs/.link-started
+          # PIPESTATUS, not the pipeline's status. `cmd | tee | tail` exits with tail's
+          # status, which is always 0, so `set -e` never saw a failed link: run 32868637104
+          # ended with "wasm-ld: error: undefined symbol: PyInit_QtSvg" and reported
+          # "Link: success". What it handed on was a stale binary from an abandoned
+          # experiment, and the only reason anyone noticed is that the GL patch table no
+          # longer matched it. Configure and Compile above already do this; Link did not.
           bash ../scratchpad/linkcmds/fc-linkcmd-weh.sh 2>&1 | tee /tmp/fclogs/link.txt | tail -40
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != 0 ]; then
+            echo "::error::the link failed (exit $rc) -- see the tail above and the link log artifact"
+            exit "$rc"
+          fi
+          # ... and even a zero exit is not proof the files were rewritten.
+          for f in bin/FreeCAD.js bin/FreeCAD.wasm bin/FreeCAD.data; do
+            [ -s "$f" ] || { echo "::error::$f is missing after a link that claimed to succeed"; exit 1; }
+            [ "$f" -nt /tmp/fclogs/.link-started ] || {
+              echo "::error::$f is older than this link -- it is left over from an earlier"
+              echo "         build, so everything downstream would be testing that one"
+              exit 1; }
+          done
           ls -la bin/FreeCAD.js bin/FreeCAD.wasm bin/FreeCAD.data 2>&1 | sed 's/^/  /'
 
       # NOT scratchpad/stage-jspi.sh. That script is build-machine-shaped: it copies into

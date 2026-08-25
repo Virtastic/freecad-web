@@ -27,7 +27,12 @@ import re
 import sys
 
 PATCH = 'patches/freecad.patch'
+# BOTH files carry a link line, and they drifted. configure-gui-weh.sh is what a
+# person reads; scratchpad/linkcmds/fc-linkcmd-weh.sh is what CI actually runs (see the
+# Link step in link-freecad.yml). QtSvg was added to the first and not the second, so the
+# check passed and the link died on "undefined symbol: PyInit_QtSvg" an hour later.
 CONFIGURE = 'configure-gui-weh.sh'
+LINKCMD = 'scratchpad/linkcmds/fc-linkcmd-weh.sh'
 REBUILD = 'rebuild-pyside-weh.sh'
 
 
@@ -37,8 +42,8 @@ def read(path):
 
 def main():
     patch = read(PATCH)
-    configure = read(CONFIGURE)
     rebuild = read(REBUILD)
+    line_files = {CONFIGURE: read(CONFIGURE), LINKCMD: read(LINKCMD)}
 
     registered = set(re.findall(r'PyImport_AppendInittab\("(Qt\w+)_fcweb"', patch))
     if not registered:
@@ -46,7 +51,9 @@ def main():
               'stopped registering the bindings?' % PATCH)
         return 1
 
-    linked = set(re.findall(r'PySide6/(Qt\w+)/Qt\w+\.abi3\.a', configure))
+    linked_in = {f: set(re.findall(r'PySide6/(Qt\w+)/Qt\w+\.abi3\.a', text))
+                 for f, text in line_files.items()}
+    linked = set.intersection(*linked_in.values()) if linked_in else set()
     built = set()
     # rebuild-pyside-weh.sh single-sources the list into PYSIDE_MODULES and passes that
     # to -DMODULES, so read the variable and fall back to a literal list.
@@ -57,16 +64,17 @@ def main():
 
     rc = 0
     for mod in sorted(registered):
-        if mod not in linked:
-            print('::error::%s is registered in the inittab but its archive is not on the '
-                  'link line in %s -- the link will fail with "undefined symbol: PyInit_%s"'
-                  % (mod, CONFIGURE, mod))
-            rc = 1
+        for f, mods in sorted(linked_in.items()):
+            if mod not in mods:
+                print('::error::%s is registered in the inittab but its archive is not on '
+                      'the link line in %s -- the link will fail with "undefined symbol: '
+                      'PyInit_%s"' % (mod, f, mod))
+                rc = 1
         if built and mod not in built:
             print('::error::%s is registered in the inittab but %s does not build it'
                   % (mod, REBUILD))
             rc = 1
-    for mod in sorted(linked - registered):
+    for mod in sorted(set.union(*linked_in.values()) - registered) if linked_in else []:
         print('::error::%s is linked in but never registered in the inittab, so nothing '
               'can import it -- this is how "No viable version of PySide was found" '
               'happens' % mod)
