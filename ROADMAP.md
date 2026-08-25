@@ -528,7 +528,26 @@ pair this with other changes in the same link; if geometry goes strange you want
 **Longer term:** wasm64 (`MEMORY64`) removes the ceiling properly, but it means rebuilding the
 entire dependency stack for 64-bit pointers. Worth tracking, not worth starting.
 
-### 7. CalculiX is single-threaded *(lane C, ccx module only, 2–4 d)*
+### 7. CalculiX is single-threaded
+
+> **Measured 2026-08-25, and the answer is: leave it alone.** A `-pthread` CalculiX was
+> built (`build-ccx.yml -f pthreads=true`) and run against the serial one on the same
+> decks, in the browser, through the real bridge:
+>
+> | deck | serial | threaded | threaded, 4 threads configured |
+> |---|---|---|---|
+> | 1 element | 0.5 s | 0.5 s | — |
+> | 1,080 elements | 0.46 s | 0.45 s | — |
+> | 8,640 elements | **2.80 s** | 3.09 s | **4.71 s** |
+>
+> Every run produced byte-identical output -- the same 2,008,434-byte `.frd` and the same
+> maximum displacement of 0.0199569 mm -- so the threaded build is *correct*. It is simply
+> not faster: unconfigured it pays for threading it never uses, and given four threads it
+> is 68% slower than serial. Thread creation and atomics cost more in wasm than
+> CalculiX's parallel sections save at these sizes.
+>
+> So this is not a limitation to fix. The serial build is the right configuration, and now
+> there are numbers behind that rather than a note saying it was a stopgap.
 
 Not an oversight — a deliberate stopgap that is honest about itself in `bridge/ccx_threads.c`:
 
