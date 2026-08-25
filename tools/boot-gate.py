@@ -234,6 +234,40 @@ _s.__stderr__.write("FCFEM " + repr(_out) + _NL)
 _s.__stderr__.flush()
 '''
 
+EXAMPLES_PY = r'''
+# Every example the Start page offers, opened. These are the first thing a new user
+# clicks, they ship inside the payload, and nothing checked that they open.
+#
+# FEMExample.FCStd did not: it trapped the engine with "RuntimeError: unreachable" inside
+# vtkXMLParser::GetXMLByteIndex on the .vtu it carries, because a VTK patch that had been
+# written to prevent exactly that was never applied. A trap is not an exception -- Python
+# does not see it, the promise rejects, and from the page it looks like nothing happened.
+# So this reports per file and treats "did not come back" the same as "raised".
+import os
+import sys as _s
+
+_NL = chr(10)
+_res = {}
+try:
+    import FreeCAD as App
+
+    d = "/freecad/share/examples"
+    names = sorted(f for f in os.listdir(d) if f.endswith(".FCStd"))
+    for n in names:
+        _s.__stderr__.write("FCEXAMPLE-TRY " + n + _NL)
+        _s.__stderr__.flush()
+        try:
+            doc = App.openDocument(os.path.join(d, n))
+            _res[n] = "ok:%d" % len(doc.Objects)
+            App.closeDocument(doc.Name)
+        except Exception as e:
+            _res[n] = "%s: %s" % (type(e).__name__, str(e)[:70])
+except Exception as e:
+    _res["*"] = "%s: %s" % (type(e).__name__, str(e)[:90])
+_s.__stderr__.write("FCEXAMPLES " + repr(_res) + _NL)
+_s.__stderr__.flush()
+'''
+
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
 # fetch is refused however co-operative the remote server is, so everything has to go
@@ -519,6 +553,18 @@ class Session:
     def run_python(self, code):
         return self.page.evaluate(DISPATCH_JS, code)
 
+    def trapped(self):
+        """Did a python call reject? The shell records every rejection in __fcPyErrors.
+
+        A wasm trap is not an exception: Python never unwinds, the marker never arrives,
+        and from the page nothing happens at all. Without this a trapped engine costs the
+        full wait -- fifteen minutes of CI to learn something the shell knew at once.
+        """
+        try:
+            return [str(e) for e in (self.page.evaluate('window.__fcPyErrors || []') or [])]
+        except Exception:
+            return []
+
     def wait_for(self, marker, seconds):
         deadline = time.time() + seconds
         while time.time() < deadline:
@@ -531,6 +577,10 @@ class Session:
                     return ast.literal_eval(m.group(1))
                 if marker in c:
                     return True
+            trap = self.trapped()
+            if trap:
+                print('==> the engine trapped while waiting for %s: %s' % (marker, trap[0]))
+                return None
             time.sleep(2)
         return None
 
@@ -808,6 +858,33 @@ def scenario_fem(ctx, url, args, fail):
     return s
 
 
+def scenario_examples(ctx, url, args, fail):
+    """Open every example the Start page offers. A trap here is invisible from Python."""
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('examples scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(EXAMPLES_PY)
+    r = s.wait_for('FCEXAMPLES', 900)
+    if not isinstance(r, dict):
+        # No summary line means the engine never came back -- a wasm trap, not an
+        # exception. Name the file it was on, which the per-file marker recorded.
+        tried = [l.split(None, 1)[1].strip() for l in s.lines()
+                 if l.startswith('FCEXAMPLE-TRY ')]
+        trap = s.trapped()
+        fail('the examples probe never finished%s%s. That is a trap, not an exception: '
+             'Python cannot catch it and the page shows nothing.'
+             % (' -- last file attempted: %s' % tried[-1] if tried else '',
+                ' -- the engine reported %s' % trap[0] if trap else ''))
+        return s
+    print('==> examples: %s' % r)
+    broken = sorted(k for k, v in r.items() if not str(v).startswith('ok:'))
+    if broken:
+        fail('these bundled examples do not open: %s'
+             % ', '.join('%s (%s)' % (k, r[k]) for k in broken))
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory')
@@ -815,7 +892,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'fem', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'fem', 'examples', 'all'))
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
@@ -893,6 +970,8 @@ def main():
                 sessions.append(scenario_addons(ctx, url, args, fail))
             if args.scenario in ('fem', 'all'):
                 sessions.append(scenario_fem(ctx, url, args, fail))
+            if args.scenario in ('examples', 'all'):
+                sessions.append(scenario_examples(ctx, url, args, fail))
             dump = []
             for s in sessions:
                 dump.append((s.lines(), s.console, s.errors()))

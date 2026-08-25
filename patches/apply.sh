@@ -151,6 +151,10 @@ apply_one VTK-9.3.1     vtk-expat-wasm-xmlsize.patch   'ThirdParty/expat/CMakeLi
 if [ -d deps/src/freecad/src ]; then
   echo "Checking port-authored Python is reachable:"
   python3 tools/check-unreachable-fcweb.py deps/src/freecad/src | sed 's/^/  /'
+  # ... and the C++ half of the same idea. The port's own switches are the ones that can
+  # go quiet: the 1.1.3 boot fix sat behind #ifdef FCWEB_REAL_CPYTHON, defined nowhere,
+  # for months of green builds.
+  python3 tools/check-fcweb-macros-defined.py deps/src/freecad/src | sed 's/^/  /'
 fi
 
 # The preloaded Python tree (--preload-file deps/wasm/pyside-pkg@/pyside-pkg). None of it

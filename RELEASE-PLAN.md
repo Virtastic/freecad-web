@@ -42,7 +42,11 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 | **2.6** | Web workbench "has no engine" | **overstated; measured.** Mod/Web in 1.1.3 is a server, not a browser view. The nine `QDesktopServices::openUrl` sites in Gui do work -- openUrl returns true and calls `window.open`. Gated. |
 | **2.10a** | first-load size | **brotli added** beside the existing gzip copy of FreeCAD.data, preferred when the client offers it, gzip untouched for anything older. |
 
-R1 and R7 are untouched.
+| **R1** | FEM never ran end to end | **closed, with a number.** A 100x20x20 steel bar meshed by gmsh and solved by CalculiX entirely in the page comes out at **0.989** of the closed-form answer -- 113 nodes, 275 volumes, 100 N in the deck, 0.000118 mm against F*L/(E*A) = 0.000119 mm. It took five separate fixes to get there, all of the same shape: code that was present and could not run (see section 0b). The gate's `fem` scenario runs exactly this and fails on the ratio, not on an exception. |
+
+| **R11** | the shipped FEM example crashes the engine | **found and fixed, awaiting a deps rebuild.** Opening `FEMExample.FCStd` -- one of seven examples the Start page offers -- traps with `RuntimeError: unreachable` in `vtkXMLParser::GetXMLByteIndex`. `patches/vtk-expat-wasm-xmlsize.patch` was written to prevent precisely this, was named in the deps cache key, and was applied by nothing. The gate's new `examples` scenario opens all seven. |
+
+R7 is untouched.
 
 ---
 
@@ -58,6 +62,31 @@ program. The bug was found only because a person opened the page.
 Worse, the fix for it had already been written in an earlier session and was gated on
 `FCWEB_REAL_CPYTHON`, a macro **defined nowhere in this repository**. It had been silently
 inert for months. A guard that can go quiet is not a guard.
+
+## 0b. Code that is present and cannot run
+
+The FEM work turned up eight instances of one failure, and they are worth listing together
+because the shape is the point: each one compiles, each one reads like a fix in review, and
+each one never executes.
+
+| where | how it could not run |
+|---|---|
+| the boot fix | `#ifdef FCWEB_REAL_CPYTHON`, defined nowhere |
+| `apply.sh` | a marker that matched any version, so a stale tree passed as patched |
+| the FEM symbol dir | a guard keyed on `.empty()` when the value was wrong but not empty |
+| the gmsh bridge | appended to `update_properties()`, which runs *after* the mesh is read |
+| `get_gmsh_command` | spliced into the middle of an `if` body, leaving the rest after a `return` |
+| `_FcwebGmshProcess.waitForFinished` | shadowed by an older stub further down the class returning `True` |
+| `setup_ccx`'s wasm branch | pasted **inside the docstring**: valid Python, and prose |
+| `vtk-expat-wasm-xmlsize.patch` | written, committed, named in a cache key, applied by nothing |
+
+Three of them reported success while doing nothing, which is worse than failing.
+
+The response is not more careful reading. It is four checks that run in about a second
+each: `tools/check-unreachable-fcweb.py` (unreachable, shadowed, stringified),
+`tools/check-every-patch-is-applied.py`, `tools/check-pyside-link-line.py`, and
+`tools/verify-patch-applied.py`. Each was written after the bug it catches, and each
+reports that bug on the commit before its fix and is silent on the commit after.
 
 ### R0. A boot gate that actually runs the application *(blocker, ~1 day)*
 
