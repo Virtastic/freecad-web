@@ -960,7 +960,10 @@ def scenario_boot(ctx, url, args, fail):
     if not s.load():
         fail('never reached Ready in %ds (overlay last said: %s)' % (args.timeout, s.phase()))
     else:
-        print('==> Ready in %.0fs' % s.elapsed)
+        # One decimal, because this number is the 2 GB / 4 GB comparison. Whole
+        # seconds on a ~9 s boot is a resolution of 11%, which is the same size as
+        # the effect being measured.
+        print('==> Ready in %.1fs' % s.elapsed)
     for f in s.fatals():
         fail('engine reported a fatal: %s' % f[:300])
         break
