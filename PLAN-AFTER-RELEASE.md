@@ -58,6 +58,20 @@ growth taxes every heap access.
 
 Run the same five against the 4 GB artifact, same machine, and the answer is there.
 
+**And expect a cost.** emscripten warns about this exact pairing, in the toolchain this
+project builds with:
+
+    tools/link.py:493
+        diagnostics.warning('pthreads-mem-growth',
+            '-pthread + ALLOW_MEMORY_GROWTH may run non-wasm code slowly,
+             see https://github.com/WebAssembly/design/issues/1271')
+
+This build is `-pthread` and now also `ALLOW_MEMORY_GROWTH=1`. That is not a reason to
+abandon the 4 GB ceiling -- a real `abort/oom` from a real session is in the event log, so
+the ceiling is being hit -- but it is a reason the boot comparison has to actually be run
+before growth is called production, rather than assumed harmless because the gates stay
+green.
+
 Three purpose-built benchmarks were tried first and all three measured something else:
 
 | attempt | what it actually reported |
@@ -101,22 +115,32 @@ audience doubler". That was an assumption about the product, not a requirement o
 app refuses other browsers up front, having downloaded nothing, which is the correct
 behaviour for a deliberate support boundary.
 
-## 4. Addons with compiled extensions — a spike with a go/no-go
+## 4. Addons with compiled extensions — NO-GO for now, with the evidence
 
-The static monolith fixes the inittab at link time, so only pure-Python addons can work.
-Pure-Python installs are proven end to end (2 MB fetched through the proxy, 217 entries
-unpacked, still present after a reload).
+Asked for a spike to a go/no-go. The go/no-go is reachable without the spike, from the
+toolchain this project actually builds with (emsdk 3.1.70 on the build box):
 
-**Do.** Evaluate `-sMAIN_MODULE=2` with a published side-module ABI. It costs size and some
-speed, so this is an evaluation, not a commitment. In the meantime, pre-link the handful of
-popular compiled addons so they simply work.
+    tools/link.py:490
+        diagnostics.warning('experimental', '-sMAIN_MODULE + pthreads is experimental')
 
-**Done when.** Either a `SIDE_MODULE` extension imports at runtime, or the curated set is in
-and the trade-off is written down with numbers.
+This build cannot drop `-pthread`: it is what gives SharedArrayBuffer, `PTHREAD_POOL_SIZE=16`
+and Qt's threading, and the Addon Manager's own network calls depend on a worker thread. So
+dynamic linking here is not "supported with a size cost" — it is an experimental combination
+stacked on top of JSPI, which is itself experimental, in the one component whose failure
+mode is that nothing starts at all.
 
-**Size.** A day to a go/no-go.
+The surface is also larger than a normal `MAIN_MODULE=2` case: **247 static archives** on the
+link line and **72 inittab entries** fixed at link time. A side module can reference any of
+the FreeCAD, OCCT, Coin or Qt API, so "keep only what is referenced" keeps a great deal.
 
----
+**Decision: no.** Pure-Python addons work today and are gated end to end — fetched through
+the proxy, unpacked, surviving a reload. Compiled addons wait for `MAIN_MODULE + pthreads`
+to stop being flagged experimental, or get pre-linked individually if a specific one is
+worth it.
+
+**If someone wants the number anyway,** the spike is: copy `fc-linkcmd-weh.sh` with
+`-sMAIN_MODULE=2`, build one trivial `SIDE_MODULE`, and compare binary size, boot-to-Ready
+and the render gate against the numbers already recorded here. One link cycle, ~90 minutes.
 
 ## 5. First load / payload size — NOT A PRIORITY
 
