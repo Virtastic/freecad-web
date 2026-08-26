@@ -223,7 +223,12 @@ three are recorded as pass or fail with a screenshot.
   real path can finally be driven; watch whether the window stops painting during the fetch.
 - **R2** — `QEventLoop::exit` on a null function. Not reproducible, including against a 3D
   pipeline now demonstrably drawing. The detector stays in the gate's fatal list.
-- **V7** — 90 minutes per link, because the source tree is kept pristine and re-patched every
+- **V7** -- 110 minutes per link (measured, not the ~90 previously recorded): Compile
+  87.9 of it, ending `reached: [1860/1860]`. The ~200 files `patches/apply.sh` rewrites
+  get a fresh mtime and fan out to 1,860 of ~2,700 edges, every run, forever. Fixed with
+  ccache via `EM_COMPILER_WRAPPER` -- content-addressed, so unlike a cached patched tree
+  it has no claim-beside-content that can go stale. Caching the patched tree, and
+  touching mtimes back, are both written down as rejected and why.
   run. Caching the patched tree would fix it and is exactly the shape that cost this project
   its boot once. Left alone deliberately; revisit only with a content check, never a stamp.
 
