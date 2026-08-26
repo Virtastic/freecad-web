@@ -673,6 +673,27 @@ jobs:
           echo "  box has ${memgb}G; giving the gate ${cap}G"
           docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
 
+      # RENDERING, which has never been gated. Separate from the run above because it needs
+      # the 3D pipeline, and that one deliberately runs ?no3d -- headless GL is not the GL a
+      # user has, so a PASS here is not a statement about anyone's GPU.
+      #
+      # What it is worth: the viewport draws a shaded solid rather than nothing. Coin renders
+      # into its own offscreen FBO, so the canvas reads black however well it is drawing --
+      # that is why this was believed impossible for so long. ?pixelgate=1 reads the right
+      # buffer. Measured on the artifact this was written against: 195 distinct colours,
+      # 28.1% of the frame non-background.
+      #
+      # continue-on-error while it earns trust: it is a new measurement on a software
+      # rasteriser, and a rendering gate that blocks a release on its first flake gets
+      # deleted rather than fixed.
+      - name: Does the 3D viewport actually draw anything?
+        continue-on-error: true
+        run: |
+          set -e
+          memgb=$(free -g | awk '/^Mem:/{print $2}')
+          cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900"
+
       - name: Upload the boot-gate serve tree on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
