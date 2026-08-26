@@ -575,16 +575,38 @@ try:
     _out['rewritten'] = NetworkManager.fcweb_proxy_url(_url)
 
     NetworkManager.InitializeNetworkManager()
-    _idx = NetworkManager.AM_NETWORK_MANAGER.blocking_get(_url)
-    _txt = bytes(_idx).decode('utf-8') if _idx is not None else ''
-    _out['bytes'] = len(_txt)
-    _data = json.loads(_txt) if _txt else {}
-    _out['addons'] = len(_data) if isinstance(_data, (dict, list)) else -1
+
+    # submit_unmonitored_get + the completed signal, NOT blocking_get. The workbench uses
+    # a worker thread for the blocking calls, and NetworkManager's own docstring is blunt
+    # about why: "Do not use on the main GUI thread, it will prevent any event processing
+    # while it blocks."
+    #
+    # This probe used to call blocking_get from the main thread, which is precisely that.
+    # It froze the browser's event loop, so the page stopped answering page.evaluate, and
+    # the gate hung -- 65 minutes in CI, past its own budget, because the code that checks
+    # the budget was waiting on the frozen page. The test was doing the forbidden thing and
+    # reporting it as a product failure.
+    #
+    # Nothing here waits. The signal writes the result, and the gate polls the log ring
+    # for it like every other scenario.
+    def _done(index, code, data):
+        try:
+            _txt = bytes(data).decode('utf-8') if data is not None else ''
+            _out['httpCode'] = code
+            _out['bytes'] = len(_txt)
+            _parsed = json.loads(_txt) if _txt else {}
+            _out['addons'] = len(_parsed) if isinstance(_parsed, (dict, list)) else -1
+        except Exception as _e2:
+            _out['error'] = repr(_e2)
+        _s.__stderr__.write('FCADDONS ' + repr(_out) + chr(10))
+        _s.__stderr__.flush()
+
+    NetworkManager.AM_NETWORK_MANAGER.completed.connect(_done)
+    _out['index'] = NetworkManager.AM_NETWORK_MANAGER.submit_unmonitored_get(_url)
 except Exception as _e:
     _out['error'] = repr(_e)
-
-_s.__stderr__.write('FCADDONS ' + repr(_out) + chr(10))
-_s.__stderr__.flush()
+    _s.__stderr__.write('FCADDONS ' + repr(_out) + chr(10))
+    _s.__stderr__.flush()
 '''
 RESOURCES_JS = r"""(() => {
   const out = {};
