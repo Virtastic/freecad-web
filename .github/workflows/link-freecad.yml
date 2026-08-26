@@ -629,6 +629,24 @@ jobs:
           fi
           exit $rc
 
+      # ccache -s proves ccache RAN. It says nothing about whether the object it served is
+      # the object clang produces for that input right now, and that gap is exactly the one
+      # this project keeps falling into: a claim stored beside a thing, with nothing tying
+      # the claim to the thing's content.
+      #
+      # Advisory until it has a run history, for the same reason the rendering gate is:
+      # this assumes wasm objects are bit-reproducible. They should be -- no timestamps,
+      # deterministic symbol order -- but that must be OBSERVED before a mismatch is read
+      # as a defect rather than as a property of the compiler.
+      - name: Do ccache's objects match what the compiler produces now?
+        id: ccacheverify
+        if: ${{ always() && steps.ccache.outputs.available == 'true' && steps.ccache.outputs.mode != 'off' }}
+        continue-on-error: true
+        run: |
+          . emsdk/emsdk_env.sh
+          export CCACHE_DIR="$HOME/.cache/fcweb-ccache"
+          python3 tools/check-ccache-objects.py build-freecad-gui-weh --sample 15
+
       - name: Install
         id: install
         if: ${{ inputs.stop_after != 'configure' && inputs.stop_after != 'compile' }}
