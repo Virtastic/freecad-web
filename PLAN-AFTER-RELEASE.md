@@ -47,6 +47,28 @@ adds a bounds check to every access, and "it is bigger" is not the whole answer.
 
 **Size.** Half a day, most of it one link cycle.
 
+### How to measure the cost -- and how not to
+
+Growth is re-enabled (commit 13de69e) and the link is running. The comparison uses **boot to
+Ready**, because it is already collected on every gate run, it unpacks a 194 MB preload and
+initialises CPython, Qt and OCCT -- about as heap-bound as this application gets -- and
+growth taxes every heap access.
+
+    2 GB, growable=False, five boots on one machine:  7, 9, 9, 11, 11 s  (median 9)
+
+Run the same five against the 4 GB artifact, same machine, and the answer is there.
+
+Three purpose-built benchmarks were tried first and all three measured something else:
+
+| attempt | what it actually reported |
+|---|---|
+| `requestAnimationFrame` intervals | flat 16.67 ms at p50, p90 *and* worst — that is vsync. A CAD viewport is event driven, so rAF ticks whether or not Coin draws. |
+| `viewRotateLeft` + `updateGui` | 0.01 ms for 92,000 triangles. The redraw is deferred; the call returns before any GL work. |
+| tessellate + boolean in a loop | no result in 15 minutes — while the identical probe under `tools/run-in-app.py` finished in under a second |
+
+Two of those would have gone into a document as fact. If a fourth is attempted, the bar is
+that it must move when the thing it measures moves.
+
 ---
 
 ## 2. CalculiX threading — a flag and a verification
