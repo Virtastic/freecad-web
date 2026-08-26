@@ -1260,7 +1260,14 @@ def scenario_addoninstall(ctx, url, args, fail):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('directory')
+    ap.add_argument('directory', nargs='?', default=None,
+                    help='a serve tree to gate. Omit when --base-url is given.')
+    ap.add_argument('--base-url', default=None,
+                    help='gate a DEPLOYMENT instead of a directory, e.g. '
+                         'https://freecad.virtastic.app. Nothing is served locally; the '
+                         'scenarios run against whatever that origin is actually '
+                         'shipping. This is the only way to answer "what does the live '
+                         'site do" without a person clicking through it.')
     ap.add_argument('--port', type=int, default=8795)
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
@@ -1287,29 +1294,44 @@ def main():
               'python -m playwright install chromium', file=sys.stderr)
         return 2
 
-    for f in ('FreeCAD.js', 'FreeCAD.wasm'):
-        if not os.path.exists(os.path.join(args.directory, f)):
-            print('::error::%s is missing from %s' % (f, args.directory), file=sys.stderr)
+    server = None
+    if args.base_url:
+        if args.scenario == 'upgrade':
+            print('::error::the upgrade scenario rewrites the serve tree, so it cannot run '
+                  'against a deployment', file=sys.stderr)
             return 2
+    else:
+        if not args.directory:
+            print('::error::give a serve tree, or --base-url to gate a deployment',
+                  file=sys.stderr)
+            return 2
+        for f in ('FreeCAD.js', 'FreeCAD.wasm'):
+            if not os.path.exists(os.path.join(args.directory, f)):
+                print('::error::%s is missing from %s' % (f, args.directory), file=sys.stderr)
+                return 2
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    server = subprocess.Popen(
-        [sys.executable, os.path.join(here, 'serve-artifact.py'), args.directory,
-         str(args.port)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    time.sleep(1.5)
-    if server.poll() is not None:
-        print('::error::the static server exited immediately: %s'
-              % server.stderr.read().decode('utf-8', 'replace'), file=sys.stderr)
-        return 2
+        here = os.path.dirname(os.path.abspath(__file__))
+        server = subprocess.Popen(
+            [sys.executable, os.path.join(here, 'serve-artifact.py'), args.directory,
+             str(args.port)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        time.sleep(1.5)
+        if server.poll() is not None:
+            print('::error::the static server exited immediately: %s'
+                  % server.stderr.read().decode('utf-8', 'replace'), file=sys.stderr)
+            return 2
 
     failures = []
 
     def fail(msg):
         failures.append(msg)
 
-    url = 'http://127.0.0.1:%d/%s%s' % (args.port, args.page,
-                                        '' if args.with_3d else '?no3d')
+    if args.base_url:
+        url = '%s/%s' % (args.base_url.rstrip('/'),
+                         '' if args.with_3d else '?no3d')
+    else:
+        url = 'http://127.0.0.1:%d/%s%s' % (args.port, args.page,
+                                            '' if args.with_3d else '?no3d')
     profile = tempfile.mkdtemp(prefix='fcgate-profile-')
     try:
         with sync_playwright() as pw:
@@ -1388,7 +1410,8 @@ def main():
                 out_of_time = run_scenario('upgrade', scenario_upgrade)
             ctx.close()
     finally:
-        server.terminate()
+        if server is not None:
+            server.terminate()
         shutil.rmtree(profile, ignore_errors=True)
 
     if failures:
