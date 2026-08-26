@@ -50,6 +50,8 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 | **V7** | every link costs ~90 minutes | **understood, deliberately not changed.** The link keeps `deps/src/freecad` pristine and re-applies freecad.patch every run, so ~200 files get a new mtime and ninja rebuilds 1,860 of ~2,700 edges -- about 75 of the 90 minutes. Caching the PATCHED tree would fix it and is exactly the shape that once cost this project its boot (a stamp said "patched", the tree was not). Two cheaper wins are already in: the compat headers are no longer rewritten when identical, and a failed link can no longer pass a stale binary downstream. |
 
+| **2.2c** | the Addon Manager's catalogue fetch may block | **watch item, not yet a finding.** With a placeholder standing in for the missing QtSvg, the workbench's own PySideWrapper imports and then `NetworkManager.InitializeNetworkManager()` + `blocking_get()` does not return inside 90 s. Inconclusive -- it may be the placeholder rather than the real path -- but the gate's `addons` scenario drives exactly those two calls with a 120 s wait, so a real hang there fails the gate rather than shipping. Worth reading first if `addons` times out on the next run. |
+
 R7 is untouched.
 
 ---
