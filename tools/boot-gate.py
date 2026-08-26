@@ -41,6 +41,8 @@ rendering verdict from here would look like coverage while proving something els
 rendering stays a human check (RELEASE-PLAN.md V6). Pass --with-3d to override.
 """
 import argparse
+import base64
+import io
 import json
 import ast
 import os
@@ -443,6 +445,50 @@ READ_FRAME_JS = r"""(() => {
   gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prev);
   return JSON.stringify(best || {error: 'no readable framebuffer'});
 })()"""
+
+SAVE_MAKE_PY = r'''
+# A document with a volume nobody could produce by accident, so the file that comes back
+# out can be checked against it rather than merely existing.
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    import FreeCAD as App
+
+    doc = App.newDocument("SaveProbe")
+    b = doc.addObject("Part::Box", "Brick")
+    b.Length, b.Width, b.Height = 13.0, 17.0, 19.0     # 4199, and not a round number
+    doc.recompute()
+    _out["volume"] = round(b.Shape.Volume, 3)
+    _out["label"] = doc.Label
+except Exception as e:
+    _out["error"] = "%s: %s" % (type(e).__name__, str(e)[:120])
+_s.__stderr__.write("FCSAVEMAKE " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
+
+SAVE_REOPEN_PY = r'''
+# Reopen the bytes the BROWSER was handed, not the copy still in memory. Anything less
+# proves the app can write a file, not that a user can leave with one.
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    import FreeCAD as App
+
+    _p = "/home/web_user/_readback.FCStd"
+    d = App.openDocument(_p)
+    _out["objects"] = len(d.Objects)
+    for o in d.Objects:
+        if getattr(o, "TypeId", "") == "Part::Box":
+            _out["volume"] = round(o.Shape.Volume, 3)
+except Exception as e:
+    _out["error"] = "%s: %s" % (type(e).__name__, str(e)[:120])
+_s.__stderr__.write("FCSAVEBACK " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
 
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
@@ -1442,6 +1488,90 @@ def scenario_render(ctx, url, args, fail):
     return s
 
 
+def scenario_save(ctx, url, args, fail):
+    """Can a user actually leave with their work?
+
+    The File > Save path the app offers has two halves. showSaveFilePicker needs a human
+    and is out of reach here. The download-anchor fallback is not: it stages the document
+    under /home/web_user/_dl, hands the bytes to the browser as a Blob and clicks an
+    <a download>, and a real download event is something Playwright can catch.
+
+    Catching the event is not enough on its own -- a zero-byte file fires one too. So the
+    delivered bytes are written back into the application's filesystem and REOPENED, and
+    the geometry has to match what went in. 13 x 17 x 19 is 4199, which no accident
+    produces.
+    """
+    import hashlib
+    import os as _os
+    import zipfile
+
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('save scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+
+    s.run_python(SAVE_MAKE_PY)
+    made = s.wait_for('FCSAVEMAKE', 180)
+    if not isinstance(made, dict) or made.get('error') or not made.get('volume'):
+        fail('save scenario: the document was not created (%s)' % (made,))
+        return s
+
+    try:
+        with s.page.expect_download(timeout=120_000) as info:
+            s.page.evaluate('() => window.fcwebDownload && window.fcwebDownload()')
+        dl = info.value
+    except Exception as e:
+        fail('save scenario: File > Save handed the browser nothing (%s). A user who '
+             'cannot get a document out of this application has no way to keep their '
+             'work.' % e)
+        return s
+
+    target = _os.path.join(tempfile.gettempdir(), 'fcweb-save-probe.FCStd')
+    try:
+        dl.save_as(target)
+        blob = io.open(target, 'rb').read()
+    except Exception as e:
+        fail('save scenario: the download did not complete (%s)' % e)
+        return s
+
+    print('==> save: %s, %d bytes, sha256 %s'
+          % (dl.suggested_filename, len(blob), hashlib.sha256(blob).hexdigest()[:16]))
+
+    if not blob:
+        fail('save scenario: the delivered file is empty')
+        return s
+    if not zipfile.is_zipfile(io.BytesIO(blob)):
+        fail('save scenario: the delivered file is not a zip, so it is not an FCStd')
+        return s
+    names = zipfile.ZipFile(io.BytesIO(blob)).namelist()
+    if 'Document.xml' not in names:
+        fail('save scenario: no Document.xml in the delivered file -- %s' % names[:6])
+        return s
+
+    # Round trip: push the delivered bytes back in and reopen them.
+    s.page.evaluate("""(b64) => {
+        const m = window.fcInstance;
+        const bin = atob(b64);
+        const buf = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) { buf[i] = bin.charCodeAt(i); }
+        m.FS.writeFile('/home/web_user/_readback.FCStd', buf);
+        return true;
+    }""", base64.b64encode(blob).decode())
+    s.run_python(SAVE_REOPEN_PY)
+    back = s.wait_for('FCSAVEBACK', 180)
+    if not isinstance(back, dict) or back.get('error'):
+        fail('save scenario: the delivered file would not reopen (%s)' % (back,))
+        return s
+    if back.get('volume') != made.get('volume'):
+        fail('save scenario: the file came back with volume %s, but %s went in -- the '
+             'user would be handed a document that is not theirs'
+             % (back.get('volume'), made.get('volume')))
+        return s
+    print('==> save: reopened from the delivered bytes -- %d object(s), volume %s'
+          % (back.get('objects'), back.get('volume')))
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory', nargs='?', default=None,
@@ -1456,7 +1586,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'addoninstall', 'fem', 'examples', 'workbenches', 'render', 'upgrade', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'addoninstall', 'fem', 'examples', 'workbenches', 'save', 'render', 'upgrade', 'all'))
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
@@ -1615,6 +1745,7 @@ def main():
                 ('examples', scenario_examples),
                 ('workbenches', scenario_workbenches),
                 ('addoninstall', scenario_addoninstall),
+                ('save', scenario_save),
             ):
                 if out_of_time or args.scenario not in (_name, 'all'):
                     continue
