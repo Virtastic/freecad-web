@@ -43,10 +43,21 @@ has '^content-type: *application/wasm' "$(hdrs "$BASE/FreeCAD.wasm")" && pass "F
 # were both serving on 2026-08-26, for two days, while returning 200 for every asset with
 # every header correct. FEM, the Addon Manager and Draft were all dead. The app booted in
 # 13 s and drew a box the whole time.
-if command -v python3 >/dev/null 2>&1; then
+# Pick the interpreter by RUNNING it. On Windows `python3` resolves to a Microsoft Store
+# app-execution alias: it exists, it is on PATH, `command -v` finds it, and it prints an
+# advert instead of running. That made this check report FAIL against a production site
+# whose payload was in fact perfect -- a false alarm on a good deploy, which is the same
+# class of bug as a false pass and costs more trust.
+_PY=""
+for _c in python3 python py; do
+    if command -v "$_c" >/dev/null 2>&1 && "$_c" -c 'import sys' >/dev/null 2>&1; then
+        _PY="$_c"; break
+    fi
+done
+if [ -n "$_PY" ]; then
     _js="$(mktemp)"
     if get -o "$_js" "$BASE/FreeCAD.js" && [ -s "$_js" ]; then
-        if python3 "$(dirname "$0")/../../tools/check-payload-packages.py" "$_js" >/dev/null 2>&1; then
+        if "$_PY" "$(dirname "$0")/../../tools/check-payload-packages.py" "$_js" >/dev/null 2>&1; then
             pass "payload carries its Python packages"
         else
             fail "payload packages" "numpy/matplotlib/PIL/ifcopenshell missing -- FEM, the Addon Manager and Draft cannot start"
