@@ -39,6 +39,35 @@ PIPED = re.compile(r'\|\s*(tee|tail|head|grep)\b')
 BANNER = re.compile(r'--version|-V\b')
 
 
+def _block_start(lines, i):
+    """Index of the `run:` that opens the block containing line i, or None."""
+    for j in range(i, -1, -1):
+        t = lines[j].strip()
+        if t.startswith('run:'):
+            return j
+        if t.startswith('- name:') or t.startswith('- uses:'):
+            return None
+    return None
+
+
+def _guarded_by_pipefail(lines, i):
+    """True if this pipeline sits in a run block that sets BOTH -e and -o pipefail.
+
+    `set -o pipefail` makes a pipeline exit with the first failing command's status, and
+    `set -e` then aborts on it -- so the failure genuinely cannot be swallowed, and a
+    trailing rc=PIPESTATUS[0] would be unreachable code.
+
+    This is a real exemption, not a loophole, and it is deliberately narrow: pipefail
+    WITHOUT -e (or without an explicit status check) still drops the status on the floor,
+    which is the whole bug. Both are required.
+    """
+    start = _block_start(lines, i)
+    if start is None:
+        return False
+    body = '\n'.join(lines[start:i])
+    return 'set -o pipefail' in body and ('set -e' in body or 'set -eu' in body)
+
+
 def check(path):
     lines = io.open(path, encoding='utf-8', errors='replace').read().split('\n')
     bad = []
@@ -71,6 +100,8 @@ def check(path):
             window.append(nxt)
         joined = ' '.join(window)
         if 'PIPESTATUS' in joined:
+            continue
+        if _guarded_by_pipefail(lines, i):
             continue
         why = ('reads $? , which is the PIPE status and is always 0 here'
                if re.search(r'\brc=\$\?|\bif\s+\[\s+"?\$\?', joined)

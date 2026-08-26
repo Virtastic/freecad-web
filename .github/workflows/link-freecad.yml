@@ -773,6 +773,7 @@ jobs:
       # ?no3d is deliberate. Headless GL is not the GL a user has, so a rendering verdict
       # from here would look like coverage while proving something else (RELEASE-PLAN V6).
       - name: Boot gate -- does the application actually start and do CAD work?
+        id: bootgate
       # The gate budgets itself to 40 minutes, and that budget bounds its WAITS -- not
       # a page load, a syncfs, or anything else that can sit. Measured on run 32946598073:
       # 53 minutes and still going, on a healthy box, with the self-budget in the build.
@@ -853,13 +854,39 @@ jobs:
       # rasteriser, and a rendering gate that blocks a release on its first flake gets
       # deleted rather than fixed.
       - name: Does the 3D viewport actually draw anything?
+        id: render
         timeout-minutes: 25
         continue-on-error: true
         run: |
+          set -o pipefail
           set -e
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900"
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/render.txt
+
+      # THE GATES RUN AFTER "What came out", so their results could never appear in it.
+      # This one runs last and appends what the gates actually measured.
+      #
+      # The rendering gate stays continue-on-error deliberately. As of 2026-08-26 it had
+      # never completed a run in CI -- cancelled or skipped every time -- and separately it
+      # was exiting non-zero after a successful measurement because the pass-line lookup
+      # did not know its own scenario name. So it has no track record at all yet, and the
+      # comment above it is right that a rendering gate which blocks a release on its first
+      # flake gets deleted rather than fixed. Promote it once several consecutive runs pass.
+      # Recording the numbers here is what makes "several consecutive runs" checkable.
+      - name: What the gates measured
+        if: always()
+        run: |
+          {
+            echo
+            echo "| gate | result | measured |"
+            echo "|---|---|---|"
+            echo "| boot (all scenarios) | ${{ steps.bootgate.outcome || 'n/a' }} | |"
+            r="$(grep -m1 -oE 'render: [0-9]+ distinct colours, [0-9.]+% of the frame is not background'                   /tmp/fclogs/render.txt 2>/dev/null || true)"
+            echo "| render (advisory) | ${{ steps.render.outcome }} | ${r:-not reached} |"
+            echo
+            echo "Baseline when the render gate was written: 195 distinct colours, 28.1% non-background."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the boot-gate serve tree on failure
         if: failure()
