@@ -1535,6 +1535,27 @@ window.fcRunPy = fcRunPy;
       }
       return __getctx.call(this, type, attrs);
     };
+    // Coin renders into its OWN offscreen FBO (window.__fcCoinFbo names its GL id) and the
+    // C++ blits that into Qt's backing FBO, so the canvas default framebuffer is black by
+    // construction -- which is why every capture attempt read black while the tracer showed
+    // 399 draws. Reading the right buffer needs the WebGLFramebuffer OBJECT, and an id
+    // cannot be turned into one from JS: emscripten's GL.framebuffers map is not exported.
+    // So record the object as it is bound. Same trick the compositor's own shadow uses.
+    ['WebGL2RenderingContext', 'WebGLRenderingContext'].forEach(function(n){
+      if (!window[n]) { return; }
+      var P = window[n].prototype, orig = P.bindFramebuffer;
+      P.bindFramebuffer = function(target, fb){
+        if (fb) {
+          window.__fcPixelFbo = fb; window.__fcPixelGl = this;
+          // EVERY distinct one, not just the last: the last bound is usually Qt's UI
+          // buffer, and the scene is in one of the others. A handful exist, so a list
+          // is cheap and lets a gate find the one with the picture in it.
+          var all = (window.__fcPixelFbos = window.__fcPixelFbos || []);
+          if (all.indexOf(fb) < 0 && all.length < 16) { all.push(fb); }
+        }
+        return orig.apply(this, arguments);
+      };
+    });
     window.__fcPixelGate = true;
   }
   function wrap(proto, name){
