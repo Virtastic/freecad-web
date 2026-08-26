@@ -619,6 +619,13 @@ jobs:
       # ?no3d is deliberate. Headless GL is not the GL a user has, so a rendering verdict
       # from here would look like coverage while proving something else (RELEASE-PLAN V6).
       - name: Boot gate -- does the application actually start and do CAD work?
+      # The gate budgets itself to 40 minutes, and that budget bounds its WAITS -- not
+      # a page load, a syncfs, or anything else that can sit. Measured on run 32946598073:
+      # 53 minutes and still going, on a healthy box, with the self-budget in the build.
+      # A limit a process enforces on itself is a promise; this one is a limit. Generous
+      # enough that the gate still reports its own verdict when it can, because "the gate
+      # said which scenario" beats "the runner killed it".
+        timeout-minutes: 55
         run: |
           set -e
           bin=build-freecad-gui-weh/bin
@@ -687,6 +694,7 @@ jobs:
       # rasteriser, and a rendering gate that blocks a release on its first flake gets
       # deleted rather than fixed.
       - name: Does the 3D viewport actually draw anything?
+        timeout-minutes: 25
         continue-on-error: true
         run: |
           set -e
