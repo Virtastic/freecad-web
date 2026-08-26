@@ -349,9 +349,13 @@ PATCHES += MERGE_PATCHES
 # its site with the literal "0", and "0" occurs all over minified JS, so the
 # "elif new in text -> already applied" arm fires for ANY of them whose search text stops
 # matching. Building with ALLOW_MEMORY_GROWTH did exactly that: heap access became
-# GROWABLE_HEAP_F32()[x>>>2>>>0] instead of HEAPF32[x>>2], nine throw patches reported
+# GROWABLE_HEAP_F32()[x>>2] instead of HEAPF32[x>>2], nine throw patches reported
 # "already applied", and the file still threw from nine GL entry points. A throw inside a
 # GL call unwinds through Coin and takes the viewport with it.
+#
+# (This used to say the index became x>>>2>>>0. It does not: measured against a real
+# growable build, only the accessor name changes. The wrong detail made the fix look
+# bigger than it is -- 27 anchors to re-derive rather than one rule to apply.)
 #
 # So the invariant is checked against the thing itself, not against the status: none of
 # the exact throw sites may survive. (Other GL throws DO legitimately remain --
@@ -366,21 +370,53 @@ def check_postconditions(text):
             bad.append((t, 'Coin calls this; a throw here kills the viewport', n))
     if '__flushMerged' not in text:
         bad.append(('immediate-mode line batching', 'absent -- the heavy-scene draw-call reduction is not in this build', 1))
-    n = len(re.findall(r'GROWABLE_HEAP_[A-Z0-9]+\(\)', text))
-    if n:
-        bad.append(('GROWABLE_HEAP accessors', 'built with ALLOW_MEMORY_GROWTH -- the '
-                    'heap-access form changed, so this patch table does not apply and '
-                    'must be re-derived for it', n))
+    # A growable build is no longer rejected: _apply_once derives the growable form of each
+    # anchor mechanically (see `growable`). The invariant that mattered is the one above --
+    # none of the nine throw sites may survive -- and it holds for either form, because
+    # those anchors are throw strings and contain no heap access at all.
     return bad
+
+
+# With ALLOW_MEMORY_GROWTH the heap can move, so emscripten stops emitting a captured
+# typed-array view and calls an accessor instead:
+#
+#     HEAPF32[param>>2]        ->    GROWABLE_HEAP_F32()[param>>2]
+#
+# Only the accessor name changes; the index expression is untouched. Measured against a
+# real growable build of this application: 738 such accessors, eight names, and ZERO
+# occurrences of the `>>>2>>>0` form this file used to claim.
+#
+# This matters because the anchors below are literal strings. Against a growable build
+# they simply stop matching, and every throw-removal patch then falls through to the
+# "already applied" arm -- whose marker is the literal `0`, which occurs everywhere in
+# minified JS. Nine GL sites reported success while still throwing, and a throw inside a
+# GL call unwinds through Coin and takes the viewport with it. That is what made the 4 GB
+# build look impossible.
+#
+# Deriving the growable form mechanically is better than re-deriving 27 anchors by hand:
+# there is one rule, it is checked by the postconditions either way, and a future
+# emscripten that renames an accessor breaks loudly rather than silently.
+_GROWABLE_HEAPS = {'8': 'I8', 'U8': 'U8', '16': 'I16', 'U16': 'U16',
+                   '32': 'I32', 'U32': 'U32', 'F32': 'F32', 'F64': 'F64'}
+
+
+def growable(s):
+    """Rewrite HEAPF32[x>>2] as GROWABLE_HEAP_F32()[x>>2], for every heap type."""
+    return re.sub(r'HEAP(F32|F64|U8|U16|U32|8|16|32)\[',
+                  lambda m: 'GROWABLE_HEAP_%s()[' % _GROWABLE_HEAPS[m.group(1)], s)
 
 
 def _apply_once(text):
     status = []
+    # Only pay for the transform on a build that needs it.
+    is_growable = 'GROWABLE_HEAP_' in text
     for entry in PATCHES:
         name, old, new = entry[0], entry[1], entry[2]
         # a 4th field is the text that proves the fix is in effect, for when a
         # LATER patch rewrites the surroundings so `new` no longer appears whole
         marker = entry[3] if len(entry) > 3 else new
+        if is_growable and old not in text:
+            old, new, marker = growable(old), growable(new), growable(marker)
         # Check for the UNPATCHED site first. Testing "is the replacement present"
         # first would misfire for short replacements -- "0;" occurs throughout
         # minified JS -- and silently skip a patch that was never applied.
