@@ -68,23 +68,16 @@ beam. If the matrix is zero again, it stays off and the finding is written down.
 
 ---
 
-## 3. Firefox and Safari — the Asyncify path
+## 3. Firefox and Safari — NOT A TARGET
 
-JSPI is Chrome/Edge only today. The Asyncify fallback exists but is the known-broken variant:
-it cannot return a real dialog answer and can corrupt the CPython stack. Pyodide ran on
-Asyncify for years, so this is a bug and not a law.
+Chrome and Edge are the supported browsers, by decision. This is not a gap to close, and
+the Asyncify fallback is not work anyone should schedule.
 
-**Do.** Build a second artifact with Asyncify instead of JSPI; ensure every suspending entry
-point is in `ASYNCIFY_EXPORTS`, that the dialog bridge returns the real button, and that the
-Python stack survives unwind/rewind. The gate already takes `--browser firefox`.
-
-**Done when.** `--scenario dialog --browser firefox` passes on the Asyncify artifact, gated in
-CI. Safari follows or is stated as unsupported with a reason.
-
-**Size.** Two to three days. This is the largest item here and the only one that is genuinely
-research.
-
----
+Recorded here because it keeps being re-raised as a limitation -- including by me, in the
+first version of this plan, where it was sized at two to three days and called "the
+audience doubler". That was an assumption about the product, not a requirement of it. The
+app refuses other browsers up front, having downloaded nothing, which is the correct
+behaviour for a deliberate support boundary.
 
 ## 4. Addons with compiled extensions — a spike with a go/no-go
 
@@ -103,23 +96,16 @@ and the trade-off is written down with numbers.
 
 ---
 
-## 5. First load — currently ~115 MB
+## 5. First load / payload size — NOT A PRIORITY
 
-Four independent wins, none of them clever:
+Descoped by decision. The second visit already costs nothing (Cache Storage), brotli is in,
+and the numbers are known if it is ever wanted: 95.7 MB transferred on a cold load, of which
+58.0 MB is FreeCAD.wasm and 37.6 MB the data package.
 
-- move rarely-used Mods and the bundled examples out of the monolithic preload and fetch them
-  on demand (the largest win by far);
-- confirm the Cache Storage path so a second visit costs nothing (already true; verify it
-  stays true after the engine-cache validation change);
-- brotli is already in beside gzip;
-- `--profiling-funcs` stays: measured at 2.9 MB of the compressed download, about 3%, and it
-  is what makes crash reports name a function.
-
-**Done when.** First load is materially under 115 MB with the number recorded.
-
-**Size.** A day for the preload split.
-
----
+Recorded because I kept returning to it unprompted -- three separate proposals, including
+one costed at a week to defer 82 MB of workbench data, which would have attacked the smaller
+half of the download. The 4.79 MB of numpy C source already pruned stays, because it was an
+hour and is pure waste either way. Nothing further is scheduled.
 
 ## 6. The human half — one scripted session
 
@@ -154,9 +140,6 @@ three are recorded as pass or fail with a screenshot.
 1. Human pass (20 minutes, gates the release's credibility)
 2. Memory ceiling (half a day, largest user-visible win)
 3. CalculiX threading (one lane)
-4. First-load size (one day)
-5. Compiled-addon spike (go/no-go)
-6. Firefox/Asyncify (the real project)
+4. Compiled-addon spike (go/no-go)
 
-The first four are a week. The last is its own piece of work and should be scheduled as one,
-not squeezed in.
+These are about a week in total.
