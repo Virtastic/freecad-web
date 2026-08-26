@@ -640,6 +640,11 @@ jobs:
           # patch table is applied to the served loader.
           gzip -1 -c "$bin/FreeCAD.data" > gate-serve/FreeCAD.data.gz
           python3 tools/patch-freecad-js.py gate-serve/FreeCAD.js
+          # The payload has to contain the Python packages, not just the engine. A
+          # build staged without them boots in 13 s, draws a box, passes every
+          # header and stamping check -- and cannot run FEM, the Addon Manager or
+          # Draft. One shipped on 2026-08-25 and was live for two days.
+          python3 tools/check-payload-packages.py gate-serve/FreeCAD.js
 
           # The mesher and the solver are separate wasm modules, fetched by the shell at
           # the moment FEM needs them. Without them in the serve tree the fem scenario

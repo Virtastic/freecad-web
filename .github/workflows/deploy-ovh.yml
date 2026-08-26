@@ -168,6 +168,12 @@ jobs:
           chk "build stamp applied"     '! grep -q "__FCWEB_BUILD__" /tmp/canbody'
           chk "engine assets present"   'C -fsS -o /dev/null -I http://freecad-canary:80/FreeCAD.wasm'
 
+          # And the payload INSIDE the engine. Every check above passes for a build whose
+          # preload holds the Python standard library and nothing else -- which is exactly
+          # what went live on 2026-08-25 and stayed live for two days, boots and all.
+          C -fsS http://freecad-canary:80/FreeCAD.js > /tmp/canjs || true
+          chk "payload has its packages" 'python3 tools/check-payload-packages.py /tmp/canjs'
+
           if [ "$fail" != 0 ]; then
             echo "::error::the new image failed its gate -- NOT switching traffic to it"
             exit 1
