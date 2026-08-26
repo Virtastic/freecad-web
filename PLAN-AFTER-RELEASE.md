@@ -217,6 +217,28 @@ three are recorded as pass or fail with a screenshot.
 
 ---
 
+## 6a. The local gate "flake" that was not a flake
+
+`tools/boot-gate.py --scenario all` appeared to die at exit 255 on Windows -- a different
+scenario each time, no traceback, no watchdog message -- while every scenario passed when
+run individually. It was reported twice as an unexplained flake, and Windows, memory
+pressure and orphaned browsers were all investigated and cleared.
+
+It was none of those. **Exit 255 is what a command returns when the harness running it kills
+it at a timeout.** Verified directly: a process told to sleep 400 s under a 60 s limit exits
+255 having printed only its first line.
+
+Every symptom follows from that. It died at a different scenario each time because that is
+wherever the run had reached at the cutoff. There was no traceback because SIGKILL leaves
+none. Individual scenarios passed because each one finishes inside the limit. The full run
+takes ~4 minutes against a warm tree and considerably longer against a cold one; it was
+being given ten.
+
+Recorded because the wrong diagnosis was expensive: it cost an instrumented re-run, a
+faulthandler harness, and two status reports describing a healthy gate as unreliable.
+Under instrumentation with a sufficient timeout the same gate passed 13/13 in 4m08s with a
+clean exit.
+
 ## 7. Watch items — cheap, do them with the release
 
 - **2.2c** — the Addon Manager's catalogue fetch may block the UI. With QtSvg present the
