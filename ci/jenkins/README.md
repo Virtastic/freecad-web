@@ -2,7 +2,7 @@
 
 ## Jenkins job (live)
 
-**FreeCAD-Web-Test** on the builder's Jenkins (`http://192.168.1.130:8080`) is a *Pipeline script
+**freecad-web-dev** on the builder's Jenkins (`http://192.168.1.130:8080`) is a *Pipeline script
 from SCM* job: every build clones latest **`dev`** from `github.com/Virtastic/freecad-web.git`
 (credential `github-virtastic`) and runs this repo's `Jenkinsfile` — Fetch release artifacts → GL-patch
 + build image → Deploy to `testapp@192.168.1.131:8084` → Smoke. Click **Build Now**; no manual sync.
@@ -44,6 +44,8 @@ ci/jenkins/smoke-test.sh http://192.168.1.131:8084      # (or https://freecad.de
   ships it over the LAN with `docker save | ssh docker load`.
 - `freecad.dev.virtastic.app` is **live** (DEV-ORIGIN-IP-REDACTED, openresty, COOP/COEP set) and is what the
   smoke stage checks. It falls back to `192.168.1.131:8084` only if the public origin is unreachable.
+- The job was renamed `FreeCAD-Web-Test` -> `freecad-web-dev` on 2026-08-26, matching the
+  `*-web-dev` convention the other jobs on this Jenkins now use.
 - The job tracked `*/main` until 2026-08-26 and now tracks `*/dev`. `main` had been stale for weeks,
   so the job was rebuilding and redeploying code hundreds of commits behind. Changing the branch is
   a `config.xml` edit plus a container restart; the previous config is kept as
