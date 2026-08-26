@@ -52,7 +52,7 @@ have to be untrue for that sentence to hold — not by what is easiest to do nex
 
 | **2.2c** | the Addon Manager's catalogue fetch may block | **watch item, not yet a finding.** With a placeholder standing in for the missing QtSvg, the workbench's own PySideWrapper imports and then `NetworkManager.InitializeNetworkManager()` + `blocking_get()` does not return inside 90 s. Inconclusive -- it may be the placeholder rather than the real path -- but the gate's `addons` scenario drives exactly those two calls with a 120 s wait, so a real hang there fails the gate rather than shipping. Worth reading first if `addons` times out on the next run. |
 
-R7 is untouched.
+| **R7** | the manual pass has never been run against this engine | **the automatable half is done, against PRODUCTION rather than an artifact.** `tools/boot-gate.py --base-url` drives a live origin, and MANUAL-QA.md now records what the deployed build actually does instead of a pass from an engine that predates this port: modelling, sketch/pad/boolean, STEP round-trip, 20/20 workbenches, dialogs and openUrl all work; restore, imports, FEM, the bundled examples and the Addon Manager all fail, each with a fix waiting on this release. What is left is what needs a person: starting a native drag, the `showSaveFilePicker` dialog, the PWA install and its storage grant, and whether it looks right. |
 
 ---
 
