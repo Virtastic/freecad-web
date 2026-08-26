@@ -68,6 +68,21 @@ stage_dir() {
             for ext in c h hpp cpp cc s S pyx pxd pyi in f f90 m4; do
                 find "$DEST/$name" -type f -name "*.$ext" -delete 2>/dev/null || true
             done
+            # ... and the rest of that same tree. Pruning by extension left 4.79 MB of
+            # numpy/_core/src behind in 146 files -- .src templates, .md, .ipynb, and a
+            # 2.5 MB PDF of the highway library's design notes. It is numpy's C SOURCE
+            # directory: build input, never imported, and there is no compiler here to
+            # use it. Measured from the shipped payload, not guessed.
+            #
+            # Scoped to this one directory rather than a global doc sweep, because the
+            # things that LOOK like docs elsewhere are runtime data: ifcopenshell's .ifc
+            # property-set schemas, matplotlib's .ttf and .afm font metrics, and the .stp
+            # component library under Mod/Idf.
+            rm -rf "$DEST/$name/_core/src" 2>/dev/null || true
+            # Documentation that no runtime reads, wherever a package puts it. Kept to
+            # formats that are unambiguously prose: a .pdf or a notebook is never data
+            # the application opens.
+            find "$DEST/$name" -type f -name '*.ipynb' -delete 2>/dev/null || true
             staged+=("$name <- $src")
             return 0
         fi
