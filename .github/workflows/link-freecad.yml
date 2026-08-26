@@ -724,7 +724,13 @@ jobs:
             build-freecad-gui-weh/bin/FreeCAD.data
             play-gui/FreeCAD.*
           if-no-files-found: warn
-          retention-days: 14
+          # Three days, not fourteen. This artifact is ~110 MB and every link produces one.
+          # At fourteen days that reached 5 GB of superseded builds and the account hit its
+          # artifact storage quota on 2026-08-26 -- at which point NOTHING could upload,
+          # including the release that was being built at the time, which had to be copied
+          # off the runner by hand. The artifact exists to be deployed from, and that
+          # happens within hours; a release that matters is on the server, not here.
+          retention-days: 3
 
       - name: Upload build logs
         if: always()
