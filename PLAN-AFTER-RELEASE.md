@@ -29,7 +29,28 @@ That was found once and the growth build was reverted. The tool now *detects* th
 and refuses (`GROWABLE_HEAP accessors -- ... must be re-derived for it`), so it can no longer
 fail silently. But refusing is not the same as working.
 
-**Do.** Make the anchors form-agnostic rather than re-deriving 27 sites by hand:
+**DONE 2026-08-26.** All 27 apply on a real growable build, proven both ways: the previous
+patcher reports exactly the two sites CI reported (`glMaterialfv: EMISSION and
+AMBIENT_AND_DIFFUSE`, `line batching drain: glDrawElements`) as NOT FOUND on that file, and
+the current one applies them. Idempotent on a second pass, and unchanged on a 2 GB build.
+
+Growth turned out to change **four** things, not one. The first was known; the other three
+were found by diffing a real growable link against the 2 GB one, and each on its own is
+enough to make an anchor miss:
+
+    1. HEAPF32[i]                ->  GROWABLE_HEAP_F32()[i]
+    2. [param>>2]                ->  [param>>>2>>>0]              unsigned-safe indexing
+    3. var _f=(a,b)=>{...};      ->  function _f(a,b){...}        and the ";" goes with it
+    4. a pointer argument gains a coercion prologue:
+           function _glDrawElements(mode,count,type,indices,...){indices>>>=0;if(...
+
+(4) is why this could not stay a string transform. The prologue is emitted per pointer
+argument, is not derivable from the anchor, and dropping it would silently remove the
+coercion that keeps the pointer valid past 2 GB -- which is the whole point of the build. So
+the growable form is matched as a regex that CAPTURES the prologue and the replacement puts
+it back.
+
+The original plan for this item said to:
 
 - replace the literal heap-access text in each anchor with a pattern accepting both forms —
   `(?:HEAPF32\[|GROWABLE_HEAP_F32\(\)\[)` and the `>>2` / `>>>2>>>0` variants;

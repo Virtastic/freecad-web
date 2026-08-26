@@ -406,6 +406,69 @@ def growable(s):
                   lambda m: 'GROWABLE_HEAP_%s()[' % _GROWABLE_HEAPS[m.group(1)], s)
 
 
+# A growable build does not just rename the heap accessors. Measured by diffing a real
+# ALLOW_MEMORY_GROWTH link against the 2 GB one, at the two sites that broke run
+# 33004112792 ("glMaterialfv: EMISSION and AMBIENT_AND_DIFFUSE" and "line batching drain:
+# glDrawElements", both NOT FOUND):
+#
+#   1. HEAPF32[i]            ->  GROWABLE_HEAP_F32()[i]        (already handled)
+#   2. [param>>2]            ->  [param>>>2>>>0]               unsigned-safe indexing
+#   3. var _f=(a,b)=>{...};  ->  function _f(a,b){...}         and the ";" goes with it
+#   4. a pointer argument gains a coercion prologue:
+#          function _glDrawElements(mode,count,type,indices,start,end){indices>>>=0;if(...
+#
+# Note on (2): PLAN-AFTER-RELEASE claimed there were "zero >>>2>>>0 forms" and that the
+# comment saying otherwise was wrong. The comment was right. The plan was written against a
+# grep of the wrong file and that mistake cost a 90-minute link.
+#
+# (4) is why this cannot be a string transform. The prologue is emitted per pointer
+# argument, it is not derivable from the anchor, and DROPPING it would silently remove the
+# coercion that makes the pointer valid past 2 GB -- which is the entire point of the build.
+# So the growable form is matched as a regex that CAPTURES the prologue, and the
+# replacement puts it back.
+_PROLOGUE = r'((?:[A-Za-z_$][\w$]*>>>=0;)*)'
+_FN_HEAD = re.compile(r'var (_' + r'\w+)=' + r'\(([^)]*)' + r'\)=>' + r'\{')
+
+
+def _growable_regex(lit):
+    """A pattern matching how a growable build emits this literal anchor.
+
+    Returns (compiled_pattern, prologue_group_or_None). The group is 1 when the anchor
+    began with a function head, because only then can a prologue appear inside it.
+    """
+    s = growable(lit)
+    m = _FN_HEAD.match(s)
+    if m:
+        fn, args = m.group(1), m.group(2)
+        head = ('(?:var ' + re.escape(fn) + '=' + re.escape('(' + args + ')') + '=>'
+                + '|function ' + re.escape(fn) + re.escape('(' + args + ')') + ')'
+                + re.escape('{') + _PROLOGUE)
+        rest, group = s[m.end():], 1
+    else:
+        head, rest, group = '', s, None
+    body = re.escape(rest)
+    # >>2]  may be  >>>2>>>0]
+    # In the escaped pattern, '>>2]' appears as '>>2\\]'. Relax it to accept
+    # either that or the unsigned-safe '>>>2>>>0]'.
+    body = re.sub(r'>>(\d)\\\]',
+                  r'>>>?\1(?:>>>0)?\\]', body)
+    # a converted function no longer needs its trailing semicolon
+    body = body.replace(re.escape('};'), re.escape('}') + ';?')
+    return re.compile(head + body), group
+
+
+def _growable_replacement(new_lit, prologue):
+    """The replacement, written the way a growable build writes it."""
+    s = growable(new_lit)
+    m = _FN_HEAD.match(s)
+    if m:
+        s = ('function ' + m.group(1) + '(' + m.group(2) + '){' + prologue + s[m.end():])
+    # emit the unsigned-safe index form so the file stays internally consistent
+    s = re.sub(r'(GROWABLE_HEAP_\w+\(\)\[[^]]*?)>>(\d+)]',
+               r'\1>>>\2>>>0]', s)
+    return s
+
+
 def _apply_once(text):
     status = []
     # Only pay for the transform on a build that needs it.
@@ -423,10 +486,25 @@ def _apply_once(text):
         if old in text:
             text = text.replace(old, new, 1)
             status.append((name, 'applied'))
-        elif marker in text:
+            continue
+        if marker in text:
             status.append((name, 'already applied'))
-        else:
-            status.append((name, 'NOT FOUND'))
+            continue
+        # Still nothing, and this is a growable build: the emission differs in ways a
+        # string transform cannot express -- see _growable_regex.
+        if is_growable:
+            pat, grp = _growable_regex(entry[1])
+            m = pat.search(text)
+            if m:
+                repl = _growable_replacement(entry[2], m.group(grp) if grp else '')
+                text = text[:m.start()] + repl + text[m.end():]
+                status.append((name, 'applied (growable form)'))
+                continue
+            mpat, _ = _growable_regex(marker if len(entry) > 3 else entry[2])
+            if mpat.search(text):
+                status.append((name, 'already applied (growable form)'))
+                continue
+        status.append((name, 'NOT FOUND'))
     return text, status
 
 
