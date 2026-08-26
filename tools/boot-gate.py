@@ -1671,6 +1671,58 @@ def scenario_storage(ctx, url, args, fail):
     return s
 
 
+# Every scenario, once. An entry supplies its argparse choice, its dispatch order,
+# whether "all" includes it, and the sentence the pass line prints.
+#
+# Those four things lived in four places until 2026-08-26, and by then they had drifted:
+# the pass-line lookup knew eight of the sixteen scenarios, so "--scenario save" created a
+# document, saved it, downloaded it, reopened the delivered bytes, checked the geometry
+# matched -- and then died with KeyError('save') while looking up its own name. The render
+# gate had been exiting non-zero the same way for days, invisible because that CI step is
+# continue-on-error. A gate that does all of its work and then fails to say so is worse
+# than one that never ran, because the exit code says the build is broken.
+#
+# in_all is False for render (needs the 3D pipeline, and "all" runs ?no3d) and for upgrade
+# (rewrites the serve tree under itself).
+SCENARIOS = (
+    # name            function                in_all  what a pass actually means
+    ('boot',          scenario_boot,          True,
+     'starts and does CAD work'),
+    ('restore',       scenario_restore,       True,
+     'gives work back after a reload'),
+    ('dialog',        scenario_dialog,        True,
+     'can ask the user a question and use the answer'),
+    ('imports',       scenario_imports,       True,
+     'can import the Python packages its workbenches need'),
+    ('network',       scenario_network,       True,
+     'can reach the web through the proxy'),
+    ('workflow',      scenario_workflow,      True,
+     'can model: constrained sketch, pad, booleans, STEP, save and reopen'),
+    ('addons',        scenario_addons,        True,
+     'can reach the addon catalogue through the proxy'),
+    ('fem',           scenario_fem,           True,
+     'solves a cantilever to within 5% of the closed form'),
+    ('examples',      scenario_examples,      True,
+     'opens the bundled example documents'),
+    ('workbenches',   scenario_workbenches,   True,
+     'activates every workbench it ships'),
+    ('addoninstall',  scenario_addoninstall,  True,
+     'installs an addon from the real catalogue and still has it after a reload'),
+    ('save',          scenario_save,          True,
+     'hands the user a real .FCStd whose bytes reopen to the same geometry'),
+    ('storage',       scenario_storage,       True,
+     'knows whether the browser will keep the documents, and warns when it will not'),
+    ('render',        scenario_render,        False,
+     'draws a shaded solid in the 3D viewport'),
+    ('upgrade',       scenario_upgrade,       False,
+     'survives an engine upgrade with the documents intact'),
+)
+
+# Nothing below may name a scenario this table does not.
+assert len({s[0] for s in SCENARIOS}) == len(SCENARIOS), 'duplicate scenario name'
+SCENARIO_NAMES = tuple(s[0] for s in SCENARIOS) + ('all',)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory', nargs='?', default=None,
@@ -1685,7 +1737,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'addoninstall', 'fem', 'examples', 'workbenches', 'save', 'storage', 'render', 'upgrade', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=SCENARIO_NAMES)
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
@@ -1707,6 +1759,7 @@ def main():
               'python -m playwright install chromium', file=sys.stderr)
         return 2
 
+    ran = []            # labels of the scenarios that actually ran, for the pass line
     server = None
     if args.base_url:
         if args.scenario == 'upgrade':
@@ -1832,28 +1885,16 @@ def main():
                     pass        # restore/upgrade/addoninstall close their own first page
                 return over_budget(name)
 
-            for _name, _fn in (
-                ('boot', scenario_boot),
-                ('restore', scenario_restore),
-                ('dialog', scenario_dialog),
-                ('imports', scenario_imports),
-                ('network', scenario_network),
-                ('workflow', scenario_workflow),
-                ('addons', scenario_addons),
-                ('fem', scenario_fem),
-                ('examples', scenario_examples),
-                ('workbenches', scenario_workbenches),
-                ('addoninstall', scenario_addoninstall),
-                ('save', scenario_save),
-                ('storage', scenario_storage),
-            ):
-                if out_of_time or args.scenario not in (_name, 'all'):
+            for _name, _fn, _in_all, _label in SCENARIOS:
+                if out_of_time:
                     continue
+                if args.scenario == 'all':
+                    if not _in_all:
+                        continue
+                elif args.scenario != _name:
+                    continue
+                ran.append(_label)
                 out_of_time = run_scenario(_name, _fn)
-            if args.scenario == 'render':
-                out_of_time = run_scenario('render', scenario_render)
-            if args.scenario == 'upgrade':
-                out_of_time = run_scenario('upgrade', scenario_upgrade)
             ctx.close()
     finally:
         if server is not None:
@@ -1877,21 +1918,18 @@ def main():
                 print(c[:300], file=sys.stderr)
         return 1
 
-    # Say what was actually checked. A pass line that claims more than the run covered is
-    # how a gate starts being trusted for things it never tested.
-    did = {
-        'boot': 'starts and does CAD work',
-        'restore': 'gives work back after a reload',
-        'dialog': 'can ask the user a question and use the answer',
-        'imports': 'can import the Python packages its workbenches need',
-        'network': 'can reach the web through the proxy',
-        'workflow': 'can model: constrained sketch, pad, booleans, STEP, save and reopen',
-        'addons': 'can reach the addon catalogue through the proxy',
-        'all': 'starts, does CAD work, gives work back after a reload, can ask the user a '
-               'question, has the Python packages its workbenches need, and can reach the '
-               'web',
-    }[args.scenario]
-    print('==> boot gate passed: the application %s' % did)
+    # Say what was actually checked, from the same table that ran it. A pass line that
+    # claims more than the run covered is how a gate starts being trusted for things it
+    # never tested -- and a hand-kept second list is how it stops matching.
+    if not ran:
+        print('::error::no scenario ran, so there is nothing to pass', file=sys.stderr)
+        return 1
+    if len(ran) == 1:
+        print('==> boot gate passed: the application %s' % ran[0])
+    else:
+        print('==> boot gate passed, %d scenarios. The application:' % len(ran))
+        for _r in ran:
+            print('      - %s' % _r)
     return 0
 
 
