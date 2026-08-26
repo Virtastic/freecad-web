@@ -1514,6 +1514,29 @@ window.fcRunPy = fcRunPy;
   var __trace = /[?&]gltrace=1/.test(__qs);
   var __dev   = /[?&]dev=1/.test(__qs);
   if (__trace) { window.__gllog = []; }
+
+  // OPT-IN (?pixelgate=1): keep the drawing buffer so the frame can be READ BACK.
+  //
+  // Rendering has never been gated, and the stated reason -- that a headless run cannot
+  // judge it -- turned out to be wrong twice over. requestAnimationFrame does fire
+  // headless (measured: 179 ticks in 3 s) and Chromium's SwiftShader gives a real WebGL2
+  // context. What actually defeated every attempt is this: the context is created without
+  // preserveDrawingBuffer, so the buffer is undefined once the frame composites, and both
+  // a screenshot and a drawImage read back pure black while the app is drawing perfectly
+  // well -- 399 draw calls, 20 of them in the main viewport, all traced.
+  //
+  // preserveDrawingBuffer costs real performance, so users must never get it. Behind a
+  // flag it makes the viewport measurable, which is the whole of RELEASE-PLAN V6.
+  if (/[?&]pixelgate=1/.test(__qs)) {
+    var __getctx = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type, attrs){
+      if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
+        attrs = Object.assign({}, attrs || {}, { preserveDrawingBuffer: true });
+      }
+      return __getctx.call(this, type, attrs);
+    };
+    window.__fcPixelGate = true;
+  }
   function wrap(proto, name){
     var orig = proto[name];
     proto[name] = function(){
