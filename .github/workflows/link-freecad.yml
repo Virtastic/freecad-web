@@ -678,7 +678,7 @@ jobs:
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
           echo "  box has ${memgb}G; giving the gate ${cap}G"
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
 
       # RENDERING, which has never been gated. Separate from the run above because it needs
       # the 3D pipeline, and that one deliberately runs ?no3d -- headless GL is not the GL a
@@ -700,7 +700,7 @@ jobs:
           set -e
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900"
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900"
 
       - name: Upload the boot-gate serve tree on failure
         if: failure()

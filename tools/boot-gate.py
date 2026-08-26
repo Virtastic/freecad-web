@@ -49,6 +49,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 SMOKE_PY = r'''
@@ -702,9 +703,21 @@ class Session:
             return default
         return max(5.0, min(float(default), Session.deadline - time.time()))
 
+    # Every call this gate makes into the page has to be able to give up, because the gate
+    # asks the PAGE how it is doing. When the application blocks its own event loop --
+    # which the Addon Manager's catalogue fetch does -- page.evaluate never returns, and
+    # the gate hangs on the very call it would use to notice. Run 32946598073 sat for 65
+    # minutes that way, past its own 40-minute budget, on a healthy box: the budget could
+    # not fire because the code that checks it was itself blocked.
+    #
+    # A frozen page is a product failure, and it must read as one instead of as a stuck CI
+    # job. 30 s is far longer than any healthy evaluate here (they are sub-second).
+    PAGE_CALL_TIMEOUT_MS = 30_000
+
     def __init__(self, ctx, url, timeout):
         self.console = []
         self.page = ctx.new_page()
+        self.page.set_default_timeout(self.PAGE_CALL_TIMEOUT_MS)
         self.page.add_init_script(CAPTURE_JS)
         self.page.on('console', lambda m: self.console.append('%s %s' % (m.type, m.text)))
         self.page.on('pageerror', lambda e: self.console.append('pageerror %s' % e))
@@ -1504,6 +1517,34 @@ def main():
             ctx = engine.launch_persistent_context(profile, headless=True,
                                                    args=launch_args, **kw)
             print('==> %s (scenario: %s)' % (url, args.scenario))
+            # A watchdog that asks the page NOTHING.
+            #
+            # Everything else here bounds itself by talking to the browser, and that is
+            # exactly what fails when the application blocks its own event loop: the
+            # Addon Manager's catalogue fetch does not yield, so the page stops answering
+            # and every page.evaluate blocks forever. Playwright's default timeout does
+            # not cover evaluate, so there is nothing to catch. Run 32946598073 sat 65
+            # minutes past a 40-minute budget on a healthy box for this reason -- the code
+            # that checks the budget was itself waiting on the frozen page.
+            #
+            # So: a plain thread, a clock, and os._exit. It cannot be blocked by the page
+            # because it never touches it. A frozen application then reads as a failure
+            # with the scenario named, which is what it is.
+            watchdog_scenario = ['(starting)']
+
+            def watchdog():
+                limit = args.budget + 300      # the gate's own budget, plus slack to report
+                time.sleep(limit)
+                sys.stderr.write(
+                    '::error::the gate made no progress for %ds while running %r. The page '
+                    'stopped answering -- that is the application blocking its own event '
+                    'loop, not a slow test, and no page-level timeout can catch it because '
+                    'page.evaluate has none.\n' % (limit, watchdog_scenario[0]))
+                sys.stderr.flush()
+                os._exit(3)
+
+            threading.Thread(target=watchdog, daemon=True).start()
+
             gate_started = time.time()
             out_of_time = False
             Session.deadline = gate_started + args.budget
@@ -1528,6 +1569,7 @@ def main():
                 logs are read out here instead, while the page is still alive, and the
                 page goes immediately.
                 """
+                watchdog_scenario[0] = name
                 sess = fn(ctx, url, args, fail)
                 try:
                     dump.append((sess.lines(), sess.console, sess.errors()))
