@@ -68,6 +68,11 @@ on:
         type: choice
         options: [vps, hosted]
         default: vps
+      ccache:
+        description: "compile cache: on, off (baseline), clear (drop it first)"
+        type: choice
+        options: [on, off, clear]
+        default: on
 
 permissions:
   contents: read
@@ -248,6 +253,59 @@ jobs:
           set -e
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git
           cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+
+      # THE COMPILE CACHE.
+      #
+      # Why this is needed at all: deps/src/freecad is cached nowhere and is re-extracted
+      # every run, but a tag tarball carries the TAG's mtimes, so the ~2,700 pristine
+      # sources come back older than the cached objects and are correctly up to date.
+      # patches/apply.sh then rewrites ~200 files with patch(1), stamping them NOW --
+      # newer than every object, unconditionally, every run. Those 200 fan out to 1,860
+      # edges. Run 33004112792 ended `reached: [1860/1860]`: every target rebuilt, 87.9 of
+      # its 110 minutes, with a 421 MB build-tree cache restored and then discarded.
+      #
+      # 1,860 is a deterministic floor, not bad luck. It recurs until either the mtimes
+      # stop moving or the compiles stop costing anything. This is the second.
+      #
+      # NOT chosen: touching the patched files back to a fixed mtime. It is faster (0 edges
+      # rather than 1,860 cheap ones) and it is the wrong trade -- getting it wrong in the
+      # "should rebuild but doesn't" direction pairs new source with old objects and
+      # nothing notices. That is the shape RELEASE-PLAN.md V7 says to avoid. ccache errs
+      # the other way: an unrecognised input is a miss, and a miss is slow, not wrong.
+      #
+      # ccache is installed on the box by hand (apt, 4.12.3) rather than here, so this
+      # workflow needs no root. If it is missing the compile still runs -- slowly -- and
+      # says so loudly, because a check that cannot tell "0 hits because it missed" from
+      # "0 hits because it never ran" is not a check.
+      - name: Compile cache (ccache)
+        id: ccache
+        run: |
+          set -e
+          MODE="${{ inputs.ccache || 'on' }}"
+          if [ "${{ inputs.rebuild }}" = "true" ] && [ "$MODE" = "on" ]; then
+            MODE=clear          # "start clean" should mean clean
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          if ! command -v ccache >/dev/null 2>&1; then
+            echo "::warning::ccache is not installed on this runner -- the compile will be"
+            echo "::warning::uncached and will take ~88 minutes. Install it: sudo apt-get install -y ccache"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          export CCACHE_DIR="$HOME/.cache/fcweb-ccache"
+          mkdir -p "$CCACHE_DIR/tmp"
+          if [ "$MODE" = "clear" ]; then
+            echo "  clearing the cache on request"
+            ccache -C >/dev/null 2>&1 || true
+          fi
+          echo "  $(ccache --version | head -1), mode=$MODE"
+          # --show-config labels each value (environment)/(default), so a setting that did
+          # NOT take effect is visible rather than assumed.
+          ccache --show-config 2>/dev/null \
+            | grep -iE "cache_dir|max_size|compress|compiler_check|sloppiness|depend_mode|temporary" \
+            | sed 's/^/  /'
+          df -h "$HOME" | tail -1 | awk '{print "  disk free: "$4" (used "$5")"}'
 
       - name: Host Python 3.13 (must match the wasm CPython)
         id: hostpy
@@ -465,6 +523,57 @@ jobs:
           set -o pipefail
           . emsdk/emsdk_env.sh
           n="${{ inputs.jobs }}"; [ -n "$n" ] || n="$(nproc)"
+          t0=$(date +%s)
+
+          # ccache via EM_COMPILER_WRAPPER, not CMAKE_CXX_COMPILER_LAUNCHER.
+          #
+          # emcc.py reads it at RUNTIME (tools/config.py builds "EM_" + COMPILER_WRAPPER
+          # from the environment) and does `compiler.insert(0, ...)` at emcc.py:972 -- so
+          # ninja runs the identical command line it ran yesterday, the restored build tree
+          # stays valid, and no edge goes dirty. A compiler launcher would rewrite every
+          # command in build.ninja and dirty all ~2,700 edges, both when added and again if
+          # ever removed.
+          #
+          # It also means ccache sees the REAL clang++, not the em++ Python shim, which is
+          # what makes compiler_check=content meaningful. With a launcher it would be
+          # hashing a wrapper that has nothing to do with code generation -- a stamp, and
+          # this project has been bitten by stamps.
+          #
+          # compiler_check=content is NOT optional. The default (mtime) identifies the
+          # compiler by path+size+mtime, and the emsdk here is restored from a cache whose
+          # key is a hand-written string (emsdk-3.1.70-shims-v1) with tar-restored mtimes:
+          # an emsdk change that did not change that string would hand ccache a new clang
+          # wearing the old identity.
+          #
+          # sloppiness stays EMPTY on purpose. The -include absolute-path compat headers
+          # and -fwasm-exceptions/-pthread need none: paths are stable on this one box and
+          # header CONTENTS are hashed. file_stat_matches (trust an include's mtime over
+          # its content) and time_macros (cache objects containing __DATE__) would each
+          # reintroduce exactly the bug class this repo keeps hitting.
+          if [ "${{ steps.ccache.outputs.available }}" = "true" ] \
+             && [ "${{ steps.ccache.outputs.mode }}" != "off" ]; then
+            export CCACHE_DIR="$HOME/.cache/fcweb-ccache"
+            export CCACHE_TEMPDIR="$CCACHE_DIR/tmp"
+            export CCACHE_MAXSIZE=6G
+            export CCACHE_COMPRESS=1
+            export CCACHE_COMPRESSLEVEL=1
+            export CCACHE_COMPILERCHECK=content
+            export CCACHE_SLOPPINESS=
+            export CCACHE_DEPEND=true
+            export CCACHE_STATSLOG=/tmp/fclogs/ccache-stats.log
+            export EM_COMPILER_WRAPPER=ccache
+            echo "  ccache: $(command -v ccache) via EM_COMPILER_WRAPPER"
+            ccache --zero-stats >/dev/null 2>&1 || true
+          else
+            echo "  ccache: DISABLED (available=${{ steps.ccache.outputs.available }} mode=${{ steps.ccache.outputs.mode }})"
+          fi
+
+          # Which edges does ninja think are dirty, and why? `-d explain` names the file
+          # whose mtime moved. This turns "we believe it is the patch mtimes" into a line
+          # in the log, permanently -- if the cache ever stops working, this says what did it.
+          echo "--- why ninja thinks work is needed (first 12) ---"
+          ninja -C build-freecad-gui-weh -n -d explain 2>&1 \
+            | grep -F 'ninja explain' | head -12 | sed 's/^/  /' || true
           # -k 0 so one failure does not hide the other 40. The FreeCADMain link target is
           # excluded here on purpose: fc-linkcmd-weh.sh is the link, and it carries flags
           # (fcweb_dispatch_event in ASYNCIFY_EXPORTS, wasm_event_dispatch.o) that the cmake
@@ -478,7 +587,35 @@ jobs:
           ninja -C build-freecad-gui-weh -j "$n"             src/Mod/Draft/App/DraftUtils.a             src/Mod/CAM/libarea/area.a             src/Mod/CAM/libarea/libarea-native.a             src/Mod/Test/Gui/QtUnitGui.a 2>&1 | tail -5
           ninja -C build-freecad-gui-weh -j "$n" -k 0 2>&1 | tee /tmp/fclogs/compile.txt
           rc=${PIPESTATUS[0]}
+          # NOTE: nothing may go between the pipeline above and this line -- rc is
+          # PIPESTATUS[0] and any command in between would overwrite it.
+          echo "seconds=$(( $(date +%s) - t0 ))" >> "$GITHUB_OUTPUT"
           echo "  reached: $(grep -oE '\[[0-9]+/[0-9]+\]' /tmp/fclogs/compile.txt | tail -1)"
+          if [ "${{ steps.ccache.outputs.available }}" = "true" ] \
+             && [ "${{ steps.ccache.outputs.mode }}" != "off" ]; then
+            export CCACHE_DIR="$HOME/.cache/fcweb-ccache"
+            ccache -s -v 2>&1 | tee /tmp/fclogs/ccache.txt | sed 's/^/  /'
+            # Direct hits are the win. Preprocessed hits mean direct mode is failing --
+            # investigate, do not celebrate. "Unsupported compiler option" must be 0 or we
+            # are paying full price silently.
+            _num() { grep -iE "^ *$1" /tmp/fclogs/ccache.txt | grep -oE '[0-9]+' | head -1; }
+            H=$(_num 'Direct'); PH=$(_num 'Preprocessed'); M=$(_num 'Cache miss')
+            H=${H:-0}; PH=${PH:-0}; M=${M:-0}
+            TOT=$(( H + PH + M ))
+            if [ "$TOT" -gt 0 ]; then
+              RATE=$(( (H + PH) * 100 / TOT ))
+              echo "ccache_hits=$H" >> "$GITHUB_OUTPUT"
+              echo "ccache_miss=$M" >> "$GITHUB_OUTPUT"
+              echo "ccache_rate=$RATE" >> "$GITHUB_OUTPUT"
+              echo "  ccache: $H direct + $PH preprocessed hits, $M misses -- ${RATE}%"
+              # A warning, never a failure: the populating run legitimately misses
+              # everything, and a gate that fires on its own first correct run gets
+              # deleted rather than fixed.
+              if [ "$TOT" -gt 1000 ] && [ "$RATE" -lt 80 ]; then
+                echo "::warning::ccache hit rate ${RATE}% over $TOT compilations -- expected >=80% on a warm cache"
+              fi
+            fi
+          fi
           echo "  failed targets: $(grep -c '^FAILED:' /tmp/fclogs/compile.txt || true)"
           if [ "$rc" != 0 ]; then
             echo "--- distinct errors, most frequent first ---"
@@ -581,12 +718,18 @@ jobs:
           echo "### FreeCAD ${{ steps.ver.outputs.tag }} for wasm -- link" >> "$GITHUB_STEP_SUMMARY"
           {
             echo
-            echo "| stage | result |"
-            echo "|---|---|"
-            echo "| configure | ${{ steps.configure.outcome }} |"
-            echo "| compile | ${{ steps.compile.outcome }} |"
-            echo "| install | ${{ steps.install.outcome }} |"
-            echo "| link | ${{ steps.link.outcome }} |"
+            echo "| stage | result | seconds |"
+            echo "|---|---|---|"
+            echo "| configure | ${{ steps.configure.outcome }} | |"
+            echo "| compile | ${{ steps.compile.outcome }} | ${{ steps.compile.outputs.seconds }} |"
+            echo "| install | ${{ steps.install.outcome }} | |"
+            echo "| link | ${{ steps.link.outcome }} | |"
+            echo
+            if [ "${{ steps.ccache.outputs.available }}" != "true" ]; then
+              echo "**ccache: NOT AVAILABLE** -- this compile was uncached."
+            else
+              echo "ccache (\`${{ steps.ccache.outputs.mode }}\`): ${{ steps.compile.outputs.ccache_hits }} hits, ${{ steps.compile.outputs.ccache_miss }} misses, ${{ steps.compile.outputs.ccache_rate }}% hit rate"
+            fi
             echo
             for f in build-freecad-gui-weh/bin/FreeCAD.js build-freecad-gui-weh/bin/FreeCAD.wasm \
                      build-freecad-gui-weh/bin/FreeCAD.data; do
