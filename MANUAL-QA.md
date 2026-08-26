@@ -136,6 +136,32 @@ Two things this pass caught that no scripted API test would have:
 Both are fixed and re-verified above. The lesson for future passes: check that a subsystem
 is *alive*, not merely that nothing threw.
 
+## Measured against PRODUCTION -- 2026-08-26, build serving since 25 Aug 01:38
+
+Run with `tools/boot-gate.py --base-url https://freecad.virtastic.app`, which drives the
+live site rather than an artifact. This replaces a recorded pass from 2026-08-16 against
+`build-20260813-eventstack`, an engine from before this port. Everything below is what the
+deployed build does today, measured:
+
+| scenario | live result |
+|---|---|
+| serving contract (`ci/jenkins/smoke-test.sh`) | **ok** -- COOP, COEP, wasm mime, legal.html, LICENSE |
+| boot | **ok** -- Ready in 14-19 s, `Part::Box` volume 6000.0, App.Version 1.1.3 |
+| workflow | **ok** -- pad 10000.0, sketch DoF 0, boolean 216.0, STEP round-trip, survives reload |
+| workbenches | **ok** -- 20 activated, 0 failed |
+| dialogs | **ok** -- the typed value comes back |
+| openUrl | **ok** -- reaches the browser |
+| restore | **FAILS** -- autosave writes `RestoreProbe.FCStd`, and the reload restores nothing (`docs: []`) |
+| imports | **FAILS** -- numpy, matplotlib, PIL, ifcopenshell, pivy.coin, femmesh.gmshtools, Draft all absent |
+| fem | **FAILS** -- `ModuleNotFoundError: No module named 'numpy'` at femmesh/meshtools.py:30 |
+| examples | **FAILS** -- FEMExample.FCStd traps the engine (`RuntimeError: unreachable`) |
+| addons | **FAILS** -- `No module named 'NetworkManager'`; the workbench is not in this build |
+
+So the live site models, sketches, pads, cuts, round-trips STEP and switches workbenches --
+and cannot do FEM, Draft, BIM or Plot, loses work on reload, and crashes on one of its own
+examples. Every one of those has a fix built and waiting on the pending release; none of
+them is new, and none had been measured against production until now.
+
 ## What the gate now checks, so you do not have to
 
 `tools/boot-gate.py --scenario all` runs on every link and covers these lines mechanically,

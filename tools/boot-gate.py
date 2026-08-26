@@ -985,8 +985,37 @@ def scenario_addons(ctx, url, args, fail):
 
 def scenario_fem(ctx, url, args, fail):
     """R1: mesh with gmsh, solve with CalculiX, and check the answer against theory."""
+    # The mesher and the solver are separate wasm modules the shell fetches on demand.
+    # Where they have to exist depends on what is being gated: a directory on disk, or the
+    # origin itself. Asking the filesystem about a deployment is how this crashed with
+    # "expected str, bytes or os.PathLike object, not NoneType" the first time it ran
+    # against production.
     for f in ('gmsh.js', 'gmsh.wasm', 'ccx.js', 'ccx.wasm'):
-        if not os.path.exists(os.path.join(args.directory, f)):
+        if args.base_url:
+            import urllib.request
+            probe = '%s/%s' % (args.base_url.rstrip('/'), f)
+            try:
+                # A ranged GET, not HEAD: this origin answers HEAD with 403, and a HEAD
+                # that fails where GET succeeds would report the mesher missing when the
+                # browser can fetch it perfectly well.
+                # ... and a real User-Agent. The origin sits behind Cloudflare, which
+                # answers Python-urllib's default agent with 403 while curl and the
+                # browser get 200. Probing with an agent nobody else uses measures the
+                # edge's opinion of the prober, not whether the file is served.
+                req = urllib.request.Request(probe, headers={
+                    'Range': 'bytes=0-0',
+                    'User-Agent': 'Mozilla/5.0 (freecad-web boot-gate)',
+                })
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    ok = r.status in (200, 206) and len(r.read(1)) == 1
+            except Exception as e:
+                ok = False
+                probe += ' (%s)' % e
+            if not ok:
+                fail('fem scenario: %s is not served by that origin, so the mesher and '
+                     'solver cannot load' % probe)
+                return Session(ctx, url, args.timeout)
+        elif not os.path.exists(os.path.join(args.directory, f)):
             fail('fem scenario: %s is not in the serve tree, so the mesher and solver '
                  'cannot load. Fetch them alongside the engine rather than skipping the '
                  'scenario -- a gate that quietly does nothing is worse than no gate.' % f)
