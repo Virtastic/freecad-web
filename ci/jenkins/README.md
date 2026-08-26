@@ -3,7 +3,7 @@
 ## Jenkins job (live)
 
 **FreeCAD-Web-Test** on the builder's Jenkins (`http://192.168.1.130:8080`) is a *Pipeline script
-from SCM* job: every build clones latest `main` from `github.com/Virtastic/freecad-web.git`
+from SCM* job: every build clones latest **`dev`** from `github.com/Virtastic/freecad-web.git`
 (credential `github-virtastic`) and runs this repo's `Jenkinsfile` — Fetch release artifacts → GL-patch
 + build image → Deploy to `testapp@192.168.1.131:8084` → Smoke. Click **Build Now**; no manual sync.
 
@@ -42,5 +42,14 @@ ci/jenkins/smoke-test.sh http://192.168.1.131:8084      # (or https://freecad.de
   the Jenkins image.
 - The image is large (~785 MB — the engine and the 341 MB preload FS are baked in). `deploy-test.sh`
   ships it over the LAN with `docker save | ssh docker load`.
-- The public URL (`freecad.dev.virtastic.app`) additionally needs DNS + the ingress route; until then
-  the smoke stage checks the container directly on `192.168.1.131:8084`.
+- `freecad.dev.virtastic.app` is **live** (DEV-ORIGIN-IP-REDACTED, openresty, COOP/COEP set) and is what the
+  smoke stage checks. It falls back to `192.168.1.131:8084` only if the public origin is unreachable.
+- The job tracked `*/main` until 2026-08-26 and now tracks `*/dev`. `main` had been stale for weeks,
+  so the job was rebuilding and redeploying code hundreds of commits behind. Changing the branch is
+  a `config.xml` edit plus a container restart; the previous config is kept as
+  `config.xml.bak-<timestamp>` beside it.
+- **The smoke test now looks inside the payload**, not just at the wrapper. On 2026-08-26 both this
+  origin and production were serving a build whose preload held the Python standard library and
+  nothing else -- numpy, matplotlib, PIL and ifcopenshell all absent, FEM and the Addon Manager and
+  Draft all dead -- while every header, MIME type and asset returned exactly what this file used to
+  check for. The `payload carries its Python packages` line is what catches that.
