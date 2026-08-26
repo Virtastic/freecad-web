@@ -407,7 +407,10 @@ jobs:
             -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O1 -DBOOST_ALL_NO_LIB --use-port=zlib --use-port=icu -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
             -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread -O1 --use-port=zlib --use-port=icu -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
             2>&1 | tee /tmp/fclogs/configure.txt
-          rc=$?
+          # PIPESTATUS[0], not $?. $? here is tee's, which is always 0, so this guard read
+          # correctly and could never fire. The same shape in the link lane reported a
+          # failed link as success and handed on a stale binary that reached production.
+          rc=${PIPESTATUS[0]}
           if [ "$rc" != 0 ]; then
             echo "::error::configure failed"
             echo "--- last 60 lines ---"

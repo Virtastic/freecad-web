@@ -217,6 +217,8 @@ jobs:
       - name: Inventory the GL no-ops
         run: |
           python3 tools/gl-noop-inventory.py | tee /tmp/glinv.txt
+          rc=${PIPESTATUS[0]}
+          [ "$rc" = 0 ] || { echo "::error::the GL no-op inventory failed (exit $rc)"; exit "$rc"; }
           {
             echo '### gl_legacy_stubs.c'
             echo '```'
@@ -244,6 +246,16 @@ jobs:
       # skip-check always false, so it rebuilt LLVM-linked shiboken on every single run.
       - name: Workflow run blocks have no mangled escapes
         run: python3 tools/check-run-block-escapes.py
+
+      # `cmd | tee log` exits with tee's status, and tee always succeeds. A link that died
+      # on `undefined symbol: PyInit_QtSvg` was recorded as "Link: success", handed on the
+      # PREVIOUS bin/FreeCAD.{js,wasm,data}, and that artifact was released and served to
+      # users for two days with no numpy, matplotlib, PIL or ifcopenshell. It booted in
+      # 13 s the whole time. Four more of the same shape were still in the tree when this
+      # check was written, including one that read `rc=$?` right after the pipe -- a guard
+      # that looks correct and can never fire.
+      - name: Build pipelines cannot report success after failing
+        run: python3 tools/check-pipeline-status.py
 
       # A patch that nothing applies is not a fix, however carefully it is written.
       # patches/vtk-expat-wasm-xmlsize.patch sat in the tree for months, named in the deps

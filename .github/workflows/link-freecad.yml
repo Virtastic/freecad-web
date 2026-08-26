@@ -493,7 +493,13 @@ jobs:
         run: |
           set -e
           . emsdk/emsdk_env.sh
+          # A PARTIAL install is what this has to catch. The existing "is there a Mod tree"
+          # check below passes when half the workbenches copied, and the install tree is
+          # what becomes FreeCAD.data -- so a silent partial install is one of the ways a
+          # payload loses its packages.
           ninja -C build-freecad-gui-weh install 2>&1 | tail -20
+          rc=${PIPESTATUS[0]}
+          [ "$rc" = 0 ] || { echo "::error::ninja install failed (exit $rc)"; exit "$rc"; }
           echo "  Mod:   $(find freecad-gui-install/Mod -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l) workbench dirs"
           echo "  Ext:   $(find freecad-gui-install/Ext -type f 2>/dev/null | wc -l) files"
           echo "  share: $(find freecad-gui-install/share -type f 2>/dev/null | wc -l) files"

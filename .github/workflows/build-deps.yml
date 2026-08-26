@@ -397,11 +397,22 @@ jobs:
           # enum-less gl_compat.h, the stager dutifully kept it, and Coin failed on GL_ACCUM
           # again with the fix sitting unused in toolchain/include. Here the tracked copy IS
           # the authority.
+          # PIPESTATUS in both arms: `cmd | tee log` exits with tee's status, so a stager
+          # that died would be invisible and Coin3D would build against whatever headers
+          # happened to already be staged. That exact shape shipped a stale binary to
+          # production on 2026-08-25 from the link lane.
           if [ -e toolchain/include/gl_compat.h ]; then
             FCWEB_FORCE_STAGE_HEADERS=1 bash toolchain/stage-headers.sh 2>&1               | tee /tmp/deplogs/03-headers.txt
+            rc=${PIPESTATUS[0]}
           else
             echo "::warning::gl_compat.h is not tracked -- Coin3D builds in DIAGNOSTIC mode. Capture it with tools/capture-build-machine-headers.sh on the build machine."
             FCWEB_ALLOW_MISSING_GL_COMPAT=1 bash toolchain/stage-headers.sh 2>&1               | tee /tmp/deplogs/03-headers.txt
+            rc=${PIPESTATUS[0]}
+          fi
+          if [ "$rc" != 0 ]; then
+            echo "::error::staging the toolchain headers failed (exit $rc)"
+            tail -40 /tmp/deplogs/03-headers.txt
+            exit "$rc"
           fi
 
       - name: Coin3D
