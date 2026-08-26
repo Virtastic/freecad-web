@@ -36,5 +36,28 @@ has 'legal.html' "$B" && pass "GUI links to the license page" || fail "license l
 [ "$(code "$BASE/FreeCAD.data")" = 200 ] && pass "FreeCAD.data served" || fail "FreeCAD.data" "preload filesystem missing"
 has '^content-type: *application/wasm' "$(hdrs "$BASE/FreeCAD.wasm")" && pass "FreeCAD.wasm is application/wasm" || fail "wasm mime" "wrong Content-Type"
 
+# 4. The payload INSIDE the engine, not just the engine.
+#
+# Everything above passes for a build whose preload holds the Python standard library and
+# nothing else -- which is exactly what freecad.virtastic.app AND freecad.dev.virtastic.app
+# were both serving on 2026-08-26, for two days, while returning 200 for every asset with
+# every header correct. FEM, the Addon Manager and Draft were all dead. The app booted in
+# 13 s and drew a box the whole time.
+if command -v python3 >/dev/null 2>&1; then
+    _js="$(mktemp)"
+    if get -o "$_js" "$BASE/FreeCAD.js" && [ -s "$_js" ]; then
+        if python3 "$(dirname "$0")/../../tools/check-payload-packages.py" "$_js" >/dev/null 2>&1; then
+            pass "payload carries its Python packages"
+        else
+            fail "payload packages" "numpy/matplotlib/PIL/ifcopenshell missing -- FEM, the Addon Manager and Draft cannot start"
+        fi
+    else
+        fail "payload packages" "could not fetch FreeCAD.js to inspect"
+    fi
+    rm -f "$_js"
+else
+    echo "  SKIP  payload package check (no python3 here)"
+fi
+
 echo
 [ "$FAILED" = 0 ] && { echo "==> contract OK"; exit 0; } || { echo "==> $FAILED contract failure(s)"; exit 1; }
