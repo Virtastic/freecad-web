@@ -490,6 +490,46 @@ _s.__stderr__.write("FCSAVEBACK " + repr(_out) + _NL)
 _s.__stderr__.flush()
 '''
 
+# What the browser will tell us about durability, and what the app does when the answer is
+# no. navigator.storage.persist() cannot be granted headlessly -- Chrome ties it to
+# installation and engagement -- so this records the state rather than demanding one, and
+# then checks the branch that a real user on a fresh visit actually gets.
+STORAGE_STATE_JS = r"""() => new Promise((resolve) => {
+  const out = {hasApi: !!(navigator.storage && navigator.storage.persisted)};
+  if (!out.hasApi) { resolve(JSON.stringify(out)); return; }
+  navigator.storage.persisted().then((p) => {
+    out.persisted = p;
+    const est = navigator.storage.estimate ? navigator.storage.estimate() : Promise.resolve({});
+    return est.then((e) => {
+      out.quotaMB = e.quota ? Math.round(e.quota / 1048576) : null;
+      out.usageMB = e.usage ? Math.round(e.usage / 1048576) : null;
+      resolve(JSON.stringify(out));
+    });
+  }).catch((e) => { out.error = String(e); resolve(JSON.stringify(out)); });
+})"""
+
+# Drive the refusal branch directly. fcwebWarnEvictable is what the app calls the moment a
+# user saves real work, and on a browser that has not granted persistence it must say so.
+WARN_EVICTABLE_JS = r"""() => new Promise((resolve) => {
+  const host0 = document.getElementById('fcweb-toasts');
+  const before = host0 ? host0.children.length : 0;
+  if (typeof window.fcwebWarnEvictable !== 'function') {
+    resolve(JSON.stringify({error: 'fcwebWarnEvictable is not defined'})); return;
+  }
+  window.fcwebWarnEvictable();
+  setTimeout(() => {
+    const host = document.getElementById('fcweb-toasts');
+    const kids = host ? Array.from(host.children) : [];
+    resolve(JSON.stringify({
+      before: before,
+      after: kids.length,
+      text: kids.map((k) => (k.textContent || '').trim()).join(' | ').slice(0, 300),
+      buttons: kids.map((k) => Array.from(k.querySelectorAll('button'))
+                                    .map((b) => b.textContent.trim())).flat(),
+    }));
+  }, 1200);
+})"""
+
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
 # fetch is refused however co-operative the remote server is, so everything has to go
@@ -1572,6 +1612,65 @@ def scenario_save(ctx, url, args, fail):
     return s
 
 
+def scenario_storage(ctx, url, args, fail):
+    """Will the browser keep the user's documents, and does the app say so when it will not?
+
+    The PWA install grant needs a human: Chrome ties navigator.storage.persist() to
+    installation and engagement, and a headless visit is never going to earn it. So this
+    does the two things a machine can.
+
+    It RECORDS the durability state -- granted or not, and the quota -- because "we do not
+    know" is the answer this project has had until now.
+
+    And it exercises the branch a real first-time user gets. fcwebWarnEvictable is called
+    the moment someone saves real work; on a browser that has not granted persistence it
+    has to tell them their documents can be cleared, and offer the backup folder. Silence
+    there is the failure mode that loses somebody a day of work, and silence is exactly
+    what a passing test looks like if nobody checks.
+    """
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('storage scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+
+    try:
+        state = json.loads(s.page.evaluate(STORAGE_STATE_JS) or '{}')
+    except Exception as e:
+        fail('storage scenario: could not read the storage state (%s)' % e)
+        return s
+    print('==> storage: %s' % state)
+    if not state.get('hasApi'):
+        fail('storage scenario: navigator.storage is absent, so durability cannot even be '
+             'asked about')
+        return s
+
+    try:
+        warn = json.loads(s.page.evaluate(WARN_EVICTABLE_JS) or '{}')
+    except Exception as e:
+        fail('storage scenario: the evictable warning threw (%s)' % e)
+        return s
+
+    if warn.get('error'):
+        fail('storage scenario: %s -- the app has no way to tell a user their documents '
+             'are evictable' % warn['error'])
+        return s
+
+    if state.get('persisted'):
+        print('==> storage: persistence is GRANTED here, so the warning is correctly silent')
+        return s
+
+    if warn.get('after', 0) <= warn.get('before', 0):
+        fail('storage scenario: storage is NOT persisted and the app said nothing. A user '
+             'would have no idea the browser can clear their documents -- and this is the '
+             'state every first-time visitor is in.')
+        return s
+
+    print('==> storage: not persisted, and the app warns -- %r' % warn.get('text', '')[:160])
+    if warn.get('buttons'):
+        print('==> storage: offered %s' % (warn['buttons'],))
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory', nargs='?', default=None,
@@ -1586,7 +1685,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'addoninstall', 'fem', 'examples', 'workbenches', 'save', 'render', 'upgrade', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'addoninstall', 'fem', 'examples', 'workbenches', 'save', 'storage', 'render', 'upgrade', 'all'))
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
@@ -1746,6 +1845,7 @@ def main():
                 ('workbenches', scenario_workbenches),
                 ('addoninstall', scenario_addoninstall),
                 ('save', scenario_save),
+                ('storage', scenario_storage),
             ):
                 if out_of_time or args.scenario not in (_name, 'all'):
                     continue
