@@ -1362,6 +1362,10 @@ def scenario_render(ctx, url, args, fail):
         base = args.base_url.rstrip('/') + '/?pixelgate=1'
     else:
         base = 'http://127.0.0.1:%d/%s?pixelgate=1' % (args.port, args.page)
+    # Say which page this one opens. Every other scenario uses the URL printed at the top
+    # of the run, which carries ?no3d -- and a rendering gate that appeared to run against
+    # ?no3d would be read, reasonably, as measuring nothing.
+    print('==> render: %s' % base)
     s = Session(ctx, base, args.timeout)
     if not s.load():
         fail('render scenario: never reached Ready (overlay: %s)' % s.phase())
