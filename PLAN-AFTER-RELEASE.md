@@ -85,22 +85,49 @@ that it must move when the thing it measures moves.
 
 ---
 
-## 2. CalculiX threading — a flag and a verification
+## 2. CalculiX threading — ANSWERED, and now re-runnable
 
-`build-ccx.yml` already has a `pthreads` input, described in its own text as "the unverified
-fast path". The reason it is off is specific and good: without `-pthread`, `pthread_create`
-is a stub that fails, ccx never checks the return value, and the matrix came out identically
-zero. A solver that returns zeros is worse than a slow one.
+**This was measured on 2026-08-25 and the answer is recorded in `ROADMAP.md` section 7.**
+Writing it up here as outstanding work was a mistake of the same kind the R7 entry made
+yesterday: the table said "untouched" about something that had already been measured.
 
-**Do.** Dispatch the lane with `pthreads: true`, then solve the gate's own cantilever both
-ways and compare the **CalculiX decks**, not just the exit codes — compile success, module
-size and stub counts all stay green while the answer is wrong.
+What was found: a `-pthread` CalculiX was built and run against the serial one on the same
+decks, through the real browser bridge.
 
-**Done when.** The threaded build reproduces the serial result within tolerance (the gate
-already asserts 0.95–1.05 of the closed form) and is measurably faster on the 8,640-element
-beam. If the matrix is zero again, it stays off and the finding is written down.
+| deck | serial | threaded | threaded, 4 threads configured |
+|---|---|---|---|
+| 1 element | 0.5 s | 0.5 s | — |
+| 1,080 elements | 0.46 s | 0.45 s | — |
+| 8,640 elements | **2.80 s** | 3.09 s | **4.71 s** |
 
-**Size.** One build lane plus an hour of comparison.
+Output was byte-identical — the same 2,008,434-byte `.frd`, the same maximum displacement
+of 0.0199569 mm — so the threaded build is *correct*. It is simply not faster. Unconfigured
+it pays for threading it never uses; given four threads it is 68% slower than serial.
+Thread creation and atomics cost more in wasm than CalculiX's parallel sections save at
+these sizes.
+
+**So threading stays off, and that is a decision with numbers behind it, not a stopgap.**
+
+**What was actually missing** was any way to repeat that. The comparison was done by hand,
+so the next ccx rebuild would have been back to judging by exit code — and an exit code
+cannot see this failure at all. That is what `tools/ccx-compare.js` is for:
+
+    node tools/ccx-compare.js --a play-gui/ccx.js --b <candidate>/ccx.js --repeat 3
+
+It parses both `.frd` files and compares them value by value at 1e-9 relative, because a
+race in parallel assembly shifts a digit rather than crashing. It fails any field that is
+exactly zero in both runs, since two identical zeros is precisely what the failed
+`pthread_create` produced — rc 0, an `.frd` on disk, every number wrong.
+
+Two things it will not do, both learned by running it against itself:
+
+* it will not call a sub-half-second deck a speedup. The same module compared with itself
+  reported "1.39x faster" before an untimed warmup was added; that was V8 compiling the
+  wasm. The five decks in `scratchpad/ccxval` run in about 100 ms and are labelled as
+  untimeable. Speed questions go to the 8,640-element beam.
+* it will not treat a tiny value as a zero. `elas` has an `ERROR` field of magnitude
+  1.7e-14 — a real residual — and the first version of the zero-check failed it. The test
+  is now for exactly zero, which a residual never is and an unassembled matrix always is.
 
 ---
 
@@ -181,11 +208,40 @@ three are recorded as pass or fail with a screenshot.
 
 ---
 
-## Order
+## Where the production list stands
 
-1. Human pass (20 minutes, gates the release's credibility)
-2. Memory ceiling (half a day, largest user-visible win)
-3. CalculiX threading (one lane)
-4. Compiled-addon spike (go/no-go)
+The six items, and what is actually true about each as of 2026-08-26.
 
-These are about a week in total.
+| # | Item | State |
+|---|---|---|
+| 1 | Field visibility — errors and usage | **Done.** `tools/fcweb-events.py` |
+| 2 | The 4 GB heap, and what it costs | **In flight.** Patcher fixed, link building |
+| 3 | Save to disk — the half a machine can test | **Done.** `--scenario save` |
+| 4 | Storage persistence — the half a machine can test | **Done.** `--scenario storage` |
+| 5 | CalculiX threading | **Answered.** Measured 08-25; now re-runnable |
+| 6 | Compiled addons — go/no-go | **No-go**, from the toolchain, above |
+
+**1 — field visibility.** The beacons had been arriving since 2026-08-16 and nobody could
+read them, so the questions were never asked. Now they are: sessions, boots that never
+reached Ready, crashes and aborts by kind, time-to-Ready percentiles, and a per-build
+breakdown. The per-build split is the part that matters — the aggregate said 23% of
+sessions never reach Ready, which reads like a live emergency, and almost all of it was one
+pre-port build that has not been deployed for days. The current build loses 6%; the newest
+loses none. A rate means nothing without the thing it is a rate of.
+
+**3 and 4 — save and storage.** Both are the machine-testable half of an item whose other
+half needs a human (`showSaveFilePicker`, and the persistence grant Chrome ties to
+installation). Both gates assert the thing that actually costs a user something rather than
+the thing that is easy to assert: save reopens the delivered bytes and checks the geometry
+came back, and storage drives the refusal branch to prove the app warns. Save immediately
+earned its keep by catching a wrong-document download in `--scenario all`.
+
+**What is left is item 2, and only its second half.** Growth is enabled, the patcher
+handles the `GROWABLE_HEAP_*()` accessor form, and the link is running. The comparison is
+five boots at 4 GB against the recorded 2 GB baseline of 7, 9, 9, 11, 11 s (median 9) on
+the same machine — and it has to be run rather than assumed, because emscripten warns about
+`-pthread` together with `ALLOW_MEMORY_GROWTH` in this exact toolchain.
+
+Three attempts at a frame-time benchmark failed and were deleted rather than shipped; the
+table above records how each one lied. Boot time is measured against a baseline that
+already exists, which is why it is the number being used.
