@@ -76,6 +76,11 @@ on:
 
 permissions:
   contents: read
+  # actions: write is needed only to DELETE this job's own superseded build-tree caches.
+  # Without it they accumulate at ~421 MB per run against a 10 GB per-repo budget: on
+  # 2026-08-26 there were five, all with the same hash, and the budget stood at 9.30 GB --
+  # close enough to start LRU-evicting the Qt cache (56 minutes to rebuild) and pydeps.
+  actions: write
 
 env:
   DEPS_KEY: v1-emsdk3.1.70-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
@@ -906,3 +911,27 @@ jobs:
             freecad-gui-install
             weh-objs
           key: fcweb-fclink-${{ hashFiles('patches/freecad.patch', 'configure-gui-weh.sh') }}-${{ github.run_id }}
+
+      # The save above writes a NEW ~421 MB entry every run and nothing ever removed one.
+      # Twenty-four runs would be the entire 10 GB repo budget, at which point GitHub
+      # starts evicting the caches that cost hours to rebuild rather than minutes.
+      #
+      # Housekeeping must never fail a two-hour job, hence continue-on-error. Two are kept,
+      # not one: the newest may be from a run that failed before it had anything useful in
+      # it, and the save step's own comment explains why a partial tree is worth keeping.
+      - name: Keep only the two newest build-tree caches
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          before=$(gh cache list --limit 100 --json sizeInBytes                     --jq '[.[].sizeInBytes] | add // 0')
+          ids=$(gh cache list --key fcweb-fclink- --limit 100                   --json id,createdAt --jq 'sort_by(.createdAt) | reverse | .[2:] | .[].id')
+          n=0
+          for id in $ids; do
+            gh cache delete "$id" >/dev/null 2>&1 && n=$((n+1)) || true
+          done
+          after=$(gh cache list --limit 100 --json sizeInBytes                    --jq '[.[].sizeInBytes] | add // 0')
+          echo "  deleted $n superseded build-tree cache(s)"
+          echo "  cache budget: $((before/1048576)) MB -> $((after/1048576)) MB of 10240 MB"
