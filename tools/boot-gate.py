@@ -41,6 +41,7 @@ rendering verdict from here would look like coverage while proving something els
 rendering stays a human check (RELEASE-PLAN.md V6). Pass --with-3d to override.
 """
 import argparse
+import json
 import ast
 import os
 import re
@@ -381,6 +382,66 @@ except Exception as e:
 _s.__stderr__.write("FCADDONPRESENT " + repr(_out) + _NL)
 _s.__stderr__.flush()
 '''
+
+RENDER_PY = r'''
+# Build one box and fit the view, so there is something on screen to measure.
+import sys as _s
+
+_NL = chr(10)
+try:
+    import FreeCAD as App
+    import FreeCADGui as Gui
+
+    doc = App.newDocument("RenderGate")
+    b = doc.addObject("Part::Box", "Box")
+    b.Length, b.Width, b.Height = 40.0, 25.0, 15.0
+    doc.recompute()
+    Gui.activeDocument().activeView().viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+    _s.__stderr__.write("FCRENDER {'built': True}" + _NL)
+except Exception as _e:
+    _s.__stderr__.write("FCRENDER " + repr({'built': False, 'error': repr(_e)}) + _NL)
+_s.__stderr__.flush()
+'''
+
+# Read the frame the viewport actually produced.
+#
+# Coin renders into its OWN offscreen FBO and the C++ blits that into Qt's backing FBO, so
+# the canvas default framebuffer is black by construction -- screenshots, drawImage and
+# readPixels on it all return nothing while the app is drawing perfectly well. ?pixelgate=1
+# keeps the drawing buffer and records each WebGLFramebuffer OBJECT as it is bound (an id
+# cannot be resolved to an object: emscripten's GL map is not exported). Read those.
+READ_FRAME_JS = r"""(() => {
+  const gl = window.__fcPixelGl, all = window.__fcPixelFbos || [];
+  if (!gl) return JSON.stringify({error: 'pixelgate did not install (is ?pixelgate=1 set?)'});
+  const l = document.getElementById('load'); if (l) l.style.display = 'none';
+  const prev = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+  let best = null;
+  for (let i = 0; i < all.length; i++) {
+    try {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, all[i]);
+      const W = 1000, H = 520, buf = new Uint8Array(W * H * 4);
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      const cols = {};
+      for (let p = 0; p < buf.length; p += 4) {
+        const k = buf[p] + ',' + buf[p + 1] + ',' + buf[p + 2];
+        cols[k] = (cols[k] || 0) + 1;
+      }
+      const total = W * H;
+      const bg = cols['247,247,247'] || 0;
+      const rec = {
+        distinct: Object.keys(cols).length,
+        total: total,
+        background: bg,
+        nonBackground: total - bg,
+        top: Object.entries(cols).sort((a, b) => b[1] - a[1]).slice(0, 6),
+      };
+      if (!best || rec.distinct > best.distinct) best = rec;
+    } catch (e) { /* not every framebuffer is readable */ }
+  }
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prev);
+  return JSON.stringify(best || {error: 'no readable framebuffer'});
+})()"""
 
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
@@ -1287,6 +1348,61 @@ def scenario_addoninstall(ctx, url, args, fail):
     return s2
 
 
+def scenario_render(ctx, url, args, fail):
+    """RELEASE-PLAN V6: the viewport draws a shaded solid, not a blank or a silhouette.
+
+    Rendering was unjudgeable for the whole life of this port. It is not: the app issues
+    399 GL calls for one box, and the frame can be read -- from Coin's framebuffer, not the
+    canvas. This asserts the SHAPE of the result rather than an exact image, because an
+    exact image would be a SwiftShader fingerprint and would fail on the first driver
+    change. What it catches is the failure that matters: geometry that stops being drawn,
+    or shading that collapses to one flat colour.
+    """
+    if args.base_url:
+        base = args.base_url.rstrip('/') + '/?pixelgate=1'
+    else:
+        base = 'http://127.0.0.1:%d/%s?pixelgate=1' % (args.port, args.page)
+    s = Session(ctx, base, args.timeout)
+    if not s.load():
+        fail('render scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+    s.run_python(RENDER_PY)
+    if not s.wait_for('FCRENDER', 180):
+        fail('render scenario: the box was never built')
+        return s
+    time.sleep(6)                       # let the view settle and Coin draw the fitted frame
+    try:
+        frame = json.loads(s.page.evaluate(READ_FRAME_JS) or '{}')
+    except Exception as e:
+        fail('render scenario: could not read the frame (%s)' % e)
+        return s
+    if frame.get('error'):
+        fail('render scenario: %s' % frame['error'])
+        return s
+
+    total = frame.get('total', 0) or 1
+    non_bg = frame.get('nonBackground', 0)
+    distinct = frame.get('distinct', 0)
+    frac = 100.0 * non_bg / total
+    print('==> render: %d distinct colours, %.1f%% of the frame is not background, top %s'
+          % (distinct, frac, frame.get('top', [])[:3]))
+
+    # A box fitted to the view fills a good fraction of it. Empty (nothing drawn) and
+    # full (a clear colour with no scene) are both wrong.
+    if frac < 2.0:
+        fail('render: only %.1f%% of the frame is non-background -- the viewport drew '
+             'nothing, or the scene never reached this buffer' % frac)
+    elif frac > 95.0:
+        fail('render: %.1f%% of the frame is non-background -- that is a clear colour, '
+             'not a scene' % frac)
+    # Flat shading, or a silhouette, collapses the colour count. A shaded solid with edges
+    # produced 195 distinct colours when this was written.
+    if distinct < 8:
+        fail('render: only %d distinct colours -- the solid is flat or unlit, which is what '
+             'the nine no-op fixed-function GL calls would look like' % distinct)
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('directory', nargs='?', default=None,
@@ -1301,7 +1417,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=900, help='seconds to reach Ready')
     ap.add_argument('--expect-version', default=None, help='e.g. 1.1.3')
     ap.add_argument('--page', default='index.html')
-    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'addoninstall', 'fem', 'examples', 'workbenches', 'upgrade', 'all'))
+    ap.add_argument('--scenario', default='boot', choices=('boot', 'restore', 'dialog', 'imports', 'network', 'workflow', 'addons', 'addoninstall', 'fem', 'examples', 'workbenches', 'render', 'upgrade', 'all'))
     ap.add_argument('--browser', default='chromium',
                     choices=('chromium', 'firefox', 'webkit'),
                     help='which engine to run in. Chromium is the only one with JSPI today, so firefox/webkit are how the Asyncify fallback gets tested rather than assumed (RELEASE-PLAN 2.7).')
@@ -1435,6 +1551,8 @@ def main():
                 if out_of_time or args.scenario not in (_name, 'all'):
                     continue
                 out_of_time = run_scenario(_name, _fn)
+            if args.scenario == 'render':
+                out_of_time = run_scenario('render', scenario_render)
             if args.scenario == 'upgrade':
                 out_of_time = run_scenario('upgrade', scenario_upgrade)
             ctx.close()
