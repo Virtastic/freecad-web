@@ -468,6 +468,37 @@ _s.__stderr__.write("FCSAVEMAKE " + repr(_out) + _NL)
 _s.__stderr__.flush()
 '''
 
+SAVE_ACTIVATE_PY = r'''
+# Make SaveProbe the active document, immediately before the download.
+#
+# File > Save saves FreeCAD.ActiveDocument, which is correct. What is not obvious is that
+# something else can become active between creating a document and saving it: the app
+# restores the previous session's autosaved document, that restore finishes asynchronously,
+# and it activates what it restored. In --scenario all this raced and lost -- the gate
+# built a 4199 box, hit save, and was handed the 6000 box the boot scenario had left
+# behind. The readback check caught it, which is the reason the readback check exists.
+#
+# So the activation is made explicit here and reported, rather than assumed.
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    import FreeCAD as App
+
+    for _d in App.listDocuments().values():
+        if _d.Label == "SaveProbe":
+            App.setActiveDocument(_d.Name)
+            break
+    _a = App.ActiveDocument
+    _out["active"] = _a.Label if _a else None
+    _out["open"] = sorted(d.Label for d in App.listDocuments().values())
+except Exception as e:
+    _out["error"] = "%s: %s" % (type(e).__name__, str(e)[:120])
+_s.__stderr__.write("FCSAVEACT " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
+
 SAVE_REOPEN_PY = r'''
 # Reopen the bytes the BROWSER was handed, not the copy still in memory. Anything less
 # proves the app can write a file, not that a user can leave with one.
@@ -1555,6 +1586,19 @@ def scenario_save(ctx, url, args, fail):
     if not isinstance(made, dict) or made.get('error') or not made.get('volume'):
         fail('save scenario: the document was not created (%s)' % (made,))
         return s
+
+    s.run_python(SAVE_ACTIVATE_PY)
+    act = s.wait_for('FCSAVEACT', 120)
+    if not isinstance(act, dict) or act.get('error'):
+        fail('save scenario: could not select the document to save (%s)' % (act,))
+        return s
+    if act.get('active') != 'SaveProbe':
+        fail('save scenario: SaveProbe was built but %r is the active document (open: %s). '
+             'File > Save saves the active document, so this user would be handed the '
+             'wrong file.' % (act.get('active'), act.get('open')))
+        return s
+    if len(act.get('open') or []) > 1:
+        print('==> save: %d documents open, saving %s' % (len(act['open']), act['active']))
 
     try:
         with s.page.expect_download(timeout=120_000) as info:
