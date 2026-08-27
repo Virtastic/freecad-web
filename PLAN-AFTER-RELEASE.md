@@ -188,7 +188,9 @@ worth it.
 
 **If someone wants the number anyway,** the spike is: copy `fc-linkcmd-weh.sh` with
 `-sMAIN_MODULE=2`, build one trivial `SIDE_MODULE`, and compare binary size, boot-to-Ready
-and the render gate against the numbers already recorded here. One link cycle, ~90 minutes.
+and the render gate against the numbers already recorded here. One link cycle -- which
+now costs ~45 minutes rather than the ~110 this document was written against, since the
+compile is cached; see V7.
 
 ## 5. First load / payload size — NOT A PRIORITY
 
@@ -245,14 +247,50 @@ clean exit.
   real path can finally be driven; watch whether the window stops painting during the fetch.
 - **R2** — `QEventLoop::exit` on a null function. Not reproducible, including against a 3D
   pipeline now demonstrably drawing. The detector stays in the gate's fatal list.
-- **V7** -- 110 minutes per link (measured, not the ~90 previously recorded): Compile
-  87.9 of it, ending `reached: [1860/1860]`. The ~200 files `patches/apply.sh` rewrites
-  get a fresh mtime and fan out to 1,860 of ~2,700 edges, every run, forever. Fixed with
-  ccache via `EM_COMPILER_WRAPPER` -- content-addressed, so unlike a cached patched tree
-  it has no claim-beside-content that can go stale. Caching the patched tree, and
-  touching mtimes back, are both written down as rejected and why.
-  run. Caching the patched tree would fix it and is exactly the shape that cost this project
-  its boot once. Left alone deliberately; revisit only with a content check, never a stamp.
+- **V7 -- FIXED AND MEASURED.** The compile went from 88 minutes to 22, and the five
+  runs behind that number are worth keeping, because "it feels faster" is how a
+  regression hides:
+
+  | run | compile | cache state |
+  |---|---|---|
+  | 33004112792 | 87.9 min | none |
+  | 33018424389 | 88.5 min | none (second baseline) |
+  | 33042330081 | 88.0 min | cold -- populating, and it cost nothing measurable |
+  | 33061865079 | 22.1 min | warm, 95.66% hits |
+  | 33079363822 | 22.2 min | warm, 95.63% hits |
+
+  Two baselines because one is an anecdote. Two steady-state runs for the same reason,
+  and they agree to a tenth of a minute. The populate run is the honest part: enabling
+  ccache did not make the first build slower in any way the clock could see, which was
+  not guaranteed.
+
+  The cause was never mysterious once measured. The ~200 files `patches/apply.sh`
+  rewrites get a fresh mtime every run and fan out to 1,860 of ~2,700 ninja edges, so
+  the compile ended `reached: [1860/1860]` with a 421 MB build-tree cache restoring
+  perfectly. 1,860 was a deterministic floor, not bad luck: 22.7 CPU-seconds per
+  translation unit, spent reproducing byte-identical objects.
+
+  The remaining 4.4% of misses are the translation units carrying `__DATE__`/`__TIME__`.
+  ccache refuses those by default and `sloppiness` is deliberately empty, so they are
+  recompiled every run. That is the correct answer -- `time_macros` would cache a binary
+  claiming a build date it does not have, which is the same class of lie as a stamp that
+  says "patched" over an unpatched tree.
+
+  Two alternatives are recorded as rejected, so they are not re-proposed as obvious wins:
+  **caching the patched tree** (a claim beside content, the exact shape that once cost
+  this project its boot) and **touching the patched files back to a fixed mtime** (faster
+  than ccache, and wrong in the should-rebuild-but-doesn't direction, which is silent).
+  ccache errs the other way: an unrecognised input is a miss, and a miss is slow, not
+  wrong.
+
+  It is not taken on trust either. A gate after every compile pulls ~15 objects spread
+  across modules, re-runs each one's exact `ninja -t commands` line under
+  `CCACHE_DISABLE=1`, and compares sha256. Two clean runs so far, 3m22s each, which also
+  settles that these wasm objects are bit-reproducible -- an assumption the whole scheme
+  rests on and which was worth confirming rather than believing.
+
+  Link is now the largest single stage at 15.3 minutes. Out of scope; the feedback loop
+  that made this session expensive is fixed.
 
 ---
 
