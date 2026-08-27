@@ -2075,8 +2075,24 @@ window.fcRunPy = fcRunPy;
     // re-fires on every Coin redraw, so camera moves / orbit update the overlay.
     function frameBlit(){
       rafPending=false;
+      // THE NATIVE COMPOSITE OWNS PRESENTATION.
+      //
+      // The scheduling site checks this too, but only when the draw happens. A frame
+      // queued BEFORE the C++ set window.__fcNativeComposite still fires afterwards,
+      // and by then it is reading a framebuffer that belongs to the other path.
+      // Re-check here, and drop the capture so nothing stale is retried.
+      if (window.__fcNativeComposite && !USE_OVERLAY) { capGl=null; capFbo=null; capVP=null; return; }
       if (!capGl || !capVP) return;
-      var gl=capGl, prev=gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+      var gl=capGl;
+      // Qt destroys and recreates its widget FBO (resize, reparent, MDI show), so an
+      // id captured during a draw can be DEAD by the time this rAF fires. Observed in
+      // production on 2026-08-27:
+      //     WebGL: INVALID_OPERATION: bindFramebuffer: attempt to use a deleted object
+      //         at frameBlit ((index):2080)
+      // isFramebuffer() returns false for a deleted object, which is exactly the
+      // question being asked -- and asking it is cheaper than the error it prevents.
+      if (capFbo && !(gl.isFramebuffer && gl.isFramebuffer(capFbo))) { capFbo=null; return; }
+      var prev=gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, capFbo);
       blit(gl, capVP[0], capVP[1], capVP[2], capVP[3]);
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prev);
