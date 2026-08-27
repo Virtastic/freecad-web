@@ -85,8 +85,23 @@ fi
 # meson's python= entry points at the non-.exe symlink deliberately (see the cross-file);
 # fail here with a sentence rather than inside meson's compiler probe.
 HOSTPY="$ROOT/deps/src/cpython/builddir/build/python3-native"
+# Nothing in the tree ever created that name. build-cpython.sh produces `python` (or
+# `python.exe` on macOS), and configure-gui-weh.sh and configure-ifcopenshell-weh.sh both
+# probe for all three spellings -- only this script demanded python3-native and only this
+# script failed. So make the symlink the comment above assumes, rather than telling the
+# user to re-run a script that has already run and cannot produce it.
 if [ ! -e "$HOSTPY" ]; then
-    echo "!! $HOSTPY missing."
+    for c in "$ROOT/deps/src/cpython/builddir/build/python" \
+             "$ROOT/deps/src/cpython/builddir/build/python.exe"; do
+        if [ -x "$c" ]; then
+            ln -sfn "$(basename "$c")" "$HOSTPY"
+            echo "   linked $(basename "$HOSTPY") -> $(basename "$c")"
+            break
+        fi
+    done
+fi
+if [ ! -e "$HOSTPY" ]; then
+    echo "!! $HOSTPY missing, and no python/python.exe beside it to link."
     echo "   numpy's code generators run on the HOST python, which is CPython's own build."
     echo "   Run build-cpython.sh first."
     exit 1
