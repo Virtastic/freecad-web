@@ -106,7 +106,21 @@ for fn in REPS:
         io.open(p, "w", encoding="utf-8", newline="").write(out)
 
 print("PIL imports guarded")
-PYEOF'
+PYEOF
+
+# A second, cruder pass over the same files. It predates the ast-validated block above and
+# is now mostly a no-op -- once those imports are guarded its `old` patterns no longer
+# match and every replace is skipped. Kept rather than deleted because it covers a couple
+# of files the first block does not walk, and a no-op is cheap.
+#
+# It had lost its heredoc opener: the block above closed with `PYEOF'` -- a stray quote --
+# so the shell never terminated the first heredoc and fed these lines to python as part of
+# it, dying with "SyntaxError: unterminated string literal (detected at line 68)". The
+# whole matplotlib lane has been failing on that since it was introduced, silently:
+# build-python-deps.yml runs this lane with continue-on-error, and deps/wasm/lib/mpl-mod
+# is empty on the CI box too. Nothing downstream declares matplotlib REQUIRED, so a
+# FreeCAD that cannot plot has been shipping as a pass.
+python3 - "$MPL/lib/matplotlib" <<'PYEOF'
 import sys, os
 base = sys.argv[1]
 reps = {
