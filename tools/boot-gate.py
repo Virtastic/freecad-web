@@ -740,6 +740,14 @@ DOM_STACK_JS = r"""(() => {
     return (c.id || '(no id)') + ' css=' + Math.round(r.width) + 'x' + Math.round(r.height)
            + ' buf=' + c.width + 'x' + c.height + ' getContext=' + ctx;
   });
+  // Is the Qt shadow root OPEN or CLOSED? walk() can only descend into open roots, so
+  // a closed one means every canvas inside it was invisible to the count above -- and
+  // "there is only one canvas" would be an artefact of the probe, not a fact.
+  out.shadowRoots = Array.from(document.querySelectorAll('*'))
+    .filter(el => el.id || el.tagName === 'DIV')
+    .slice(0, 40)
+    .map(el => (el.id || el.tagName) + '=' + (el.shadowRoot ? 'OPEN' : 'none/closed'))
+    .filter(x => /qt|screen|shadow/i.test(x));
   out.crossOriginIsolated = window.crossOriginIsolated;
   out.hardwareConcurrency = navigator.hardwareConcurrency;
   out.pixelGlSameCanvas = (() => {
@@ -754,6 +762,71 @@ DOM_STACK_JS = r"""(() => {
   })();
   return JSON.stringify(out);
 })"""
+
+GL_RESET_JS = r"""(() => {
+  const gl = window.__fcPixelGl;
+  if (!gl) { return 'no pixelgate gl'; }
+  try {
+    gl.useProgram(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.STENCIL_TEST);
+    gl.depthMask(true);
+    gl.colorMask(true, true, true, true);
+    gl.frontFace(gl.CCW);
+    for (let i = 0; i < 8; i++) { try { gl.disableVertexAttribArray(i); } catch (e) {} }
+    if (gl.bindVertexArray) { try { gl.bindVertexArray(null); } catch (e) {} }
+    let n = 0;
+    while (gl.getError() !== gl.NO_ERROR && n < 64) { n++; }
+    return 'reset done, cleared ' + n + ' latched error(s)';
+  } catch (e) {
+    return 'reset threw: ' + String(e).slice(0, 120);
+  }
+})"""
+
+DRAW_COUNT_INSTALL_JS = r"""(() => {
+  const gl = window.__fcPixelGl;
+  if (!gl) { return 'no pixelgate gl'; }
+  if (window.__fcDrawStats) { return 'already installed'; }
+  const st = {toCoinFbo: 0, toZero: 0, toOther: 0, errors: 0, lastOtherFbo: null};
+  window.__fcDrawStats = st;
+  const wrap = (name) => {
+    const orig = gl[name];
+    if (typeof orig !== 'function') { return; }
+    gl[name] = function (...a) {
+      let fb = null;
+      try { fb = gl.getParameter(gl.FRAMEBUFFER_BINDING); } catch (e) {}
+      const r = orig.apply(gl, a);
+      // A bound framebuffer object is not a number, so compare identity against the one
+      // Coin published rather than trying to read its GL name back.
+      const coin = window.__fcCoinFboObj || null;
+      if (fb === null) { st.toZero++; }
+      else if (coin && fb === coin) { st.toCoinFbo++; }
+      else { st.toOther++; st.lastOtherFbo = String(fb); }
+      try { if (gl.getError() !== gl.NO_ERROR) { st.errors++; } } catch (e) {}
+      return r;
+    };
+  };
+  ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced'].forEach(wrap);
+  // Remember which framebuffer object Coin binds, so its draws can be told apart.
+  const ob = gl.bindFramebuffer;
+  gl.bindFramebuffer = function (t, f) {
+    try { if (f && window.__fcCoinFbo && !window.__fcCoinFboObj) { window.__fcCoinFboObj = f; } }
+    catch (e) {}
+    return ob.call(gl, t, f);
+  };
+  return 'installed';
+})"""
+
+DRAW_COUNT_READ_JS = r"""(() => JSON.stringify(window.__fcDrawStats || {none: true}))"""
 
 PROJECT3D_PY = r'''
 # Open a shipped example that carries PYTHON view providers, and fit it in the view.
@@ -2181,6 +2254,13 @@ def scenario_project3d(ctx, url, args, fail):
     except Exception as e:
         print('==> project3d: before-screenshot failed (%s)' % e)
 
+    if os.environ.get('FCWEB_COUNT_DRAWS'):
+        try:
+            print('==> project3d: draw counter %s'
+                  % s.page.evaluate(DRAW_COUNT_INSTALL_JS))
+        except Exception as e:
+            print('==> project3d: draw counter install failed (%s)' % e)
+
     s.run_python(PROJECT3D_PY)
     r = s.wait_for('FCPROJ3D', 300)
     if not isinstance(r, dict) or r.get('error'):
@@ -2236,6 +2316,7 @@ def scenario_project3d(ctx, url, args, fail):
         print('==> project3d: nativeComposite=%s coinFbo=%s'
               % (st.get('nativeComposite'), st.get('coinFbo')))
         print('==> project3d: at centre of viewport: %s' % (st.get('atCentre'),))
+        print('==> project3d: shadow roots: %s' % (st.get('shadowRoots'),))
         print('==> project3d: crossOriginIsolated=%s cores=%s'
               % (st.get('crossOriginIsolated'), st.get('hardwareConcurrency')))
         print('==> project3d: %s' % st.get('pixelGlSameCanvas'))
@@ -2292,6 +2373,42 @@ def scenario_project3d(ctx, url, args, fail):
                   % os.path.getsize('/tmp/fclogs/project3d-resized.png'))
         except Exception as e:
             print('==> project3d: repaint experiment failed (%s)' % e)
+
+    # Do the C++ fix's job from JavaScript, on this already-broken build.
+    if os.environ.get('FCWEB_TRY_GLRESET'):
+        try:
+            os.makedirs('/tmp/fclogs', exist_ok=True)
+            print('==> project3d: --- resetting GL state from JS ---')
+            print('==> project3d: %s' % s.page.evaluate(GL_RESET_JS))
+            # Give Qt a reason to repaint now that the context is clean. A resize on its
+            # own was already tried and did nothing, so anything that appears here is the
+            # reset's doing, not the resize's.
+            s.page.set_viewport_size({'width': 1180, 'height': 700})
+            time.sleep(4)
+            s.page.set_viewport_size({'width': 1280, 'height': 720})
+            time.sleep(6)
+            c4 = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
+            print('==> project3d: AFTER-GLRESET CANVAS %dx%d, %d distinct colours, '
+                  'dominant %s at %.1f%%'
+                  % (c4.get('w', 0), c4.get('h', 0), c4.get('distinct', 0),
+                     c4.get('dominant'), c4.get('dominantPct', 0)))
+            s.page.screenshot(path='/tmp/fclogs/project3d-glreset.png', full_page=False)
+            print('==> project3d: AFTER-GLRESET screenshot %d bytes'
+                  % os.path.getsize('/tmp/fclogs/project3d-glreset.png'))
+        except Exception as e:
+            print('==> project3d: glreset experiment failed (%s)' % e)
+
+    # WHO IS STILL DRAWING?
+    if os.environ.get('FCWEB_COUNT_DRAWS'):
+        try:
+            d = json.loads(s.page.evaluate(DRAW_COUNT_READ_JS) or '{}')
+            print('==> project3d: draws since instrumentation -- '
+                  'to framebuffer 0: %s, to Coin FBO: %s, to other FBOs: %s, '
+                  'errors after a draw: %s (last other fbo %s)'
+                  % (d.get('toZero'), d.get('toCoinFbo'), d.get('toOther'),
+                     d.get('errors'), d.get('lastOtherFbo')))
+        except Exception as e:
+            print('==> project3d: draw counter read failed (%s)' % e)
 
     shot = None
     try:
