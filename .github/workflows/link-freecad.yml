@@ -83,6 +83,9 @@ permissions:
   actions: write
 
 env:
+  # Outside the workspace on purpose: actions/checkout runs `git clean -ffdx`, which would
+  # otherwise delete the very thing this is meant to preserve.
+  BUILDTREE_STORE: /home/ubuntu/.cache/fcweb-buildtree
   DEPS_KEY: v1-emsdk3.1.70-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
   QT_KEY: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
   PYDEPS_KEY: v1-emsdk3.1.70-cpython3.13.3-numpy2.1.3-mpl3.9.2
@@ -182,18 +185,51 @@ jobs:
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
 
+      # THE BUILD TREE LIVES ON THIS BOX, not in actions/cache.
+      #
+      # It used to be tarred, uploaded to GitHub and downloaded back every run -- roughly
+      # 421 MB compressed each way, for a directory that is produced on this machine and
+      # consumed on this machine and never needed anywhere else. That cost minutes of
+      # transfer per run and 8.16 GB of a 10 GB per-repo cache budget, close enough to
+      # start LRU-evicting the Qt cache (56 minutes to rebuild).
+      #
+      # A rename on the same filesystem is instant, so this is strictly faster as well as
+      # strictly cheaper. It is the same reasoning that already put ccache on local disk.
+      #
+      # Why a move and not a symlink: actions/checkout runs `git clean -ffdx` before this
+      # step, which would delete a symlink (and, following it, risk the target). Moving the
+      # real directory in AFTER checkout and back out at the end sidesteps that entirely.
+      #
+      # The store sits outside the workspace precisely so `git clean` cannot reach it.
       - name: Restore the FreeCAD build and install trees
         id: fccache
         if: ${{ inputs.rebuild != true }}
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            build-freecad-gui-weh
-            freecad-gui-install
-            weh-objs
-          key: fcweb-fclink-${{ hashFiles('patches/freecad.patch', 'configure-gui-weh.sh') }}
-          restore-keys: |
-            fcweb-fclink-
+        run: |
+          set -euo pipefail
+          store="$BUILDTREE_STORE"
+          hit=0
+          for d in build-freecad-gui-weh freecad-gui-install weh-objs; do
+            if [ -d "$store/$d" ]; then
+              rm -rf "./$d"
+              mv "$store/$d" "./$d"
+              hit=1
+              echo "  restored $d"
+            else
+              echo "  $d: not in the store (cold)"
+            fi
+          done
+          echo "cache-hit=$hit" >> "$GITHUB_OUTPUT"
+          df -h . | tail -1
+
+      # rebuild:true means "do not reuse anything". Without this the store would survive a
+      # rebuild request and the request would silently do nothing -- which is the shape of
+      # bug this repo has hit before: a flag that claims to reset state and does not.
+      - name: Drop the stored build tree (rebuild requested)
+        if: ${{ inputs.rebuild == true }}
+        run: |
+          set -euo pipefail
+          rm -rf "$BUILDTREE_STORE"
+          echo "  build-tree store dropped at the user's request"
 
       # Every input the link names comes from another workflow. Say which one is missing and
       # which workflow makes it, rather than failing an hour later inside cmake or wasm-ld.
@@ -971,24 +1007,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 5
 
-      - name: Upload the artifact
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: freecad-wasm
-          path: |
-            build-freecad-gui-weh/bin/FreeCAD.js
-            build-freecad-gui-weh/bin/FreeCAD.wasm
-            build-freecad-gui-weh/bin/FreeCAD.data
-            play-gui/FreeCAD.*
-          if-no-files-found: warn
-          # Three days, not fourteen. This artifact is ~110 MB and every link produces one.
-          # At fourteen days that reached 5 GB of superseded builds and the account hit its
-          # artifact storage quota on 2026-08-26 -- at which point NOTHING could upload,
-          # including the release that was being built at the time, which had to be copied
-          # off the runner by hand. The artifact exists to be deployed from, and that
-          # happens within hours; a release that matters is on the server, not here.
-          retention-days: 3
+      # THE ARTIFACT UPLOAD IS GONE, deliberately.
+      #
+      # It uploaded ~110 MB to GitHub so that `gh run download` could fetch it back --
+      # for a file that is already sitting on this machine, built by this job. The only
+      # consumer was tools/publish-release.sh, and on 2026-08-26 that script learned to
+      # read a local DIRECTORY instead. Which made the round trip pointless, and nobody
+      # removed it.
+      #
+      # It was also actively harmful: this is a PRIVATE repo on a FREE org, so the
+      # Actions artifact allowance is 500 MB. At ~110 MB a run it stayed over quota, and
+      # once over, EVERY upload in the repo was refused -- including the boot-gate shell
+      # and the build logs, which are small and genuinely useful when a gate fails.
+      #
+      # Releases are a different pool entirely and are not affected: 4.09 GB of release
+      # assets publish fine while a 110 MB artifact upload is refused. Both deploy paths
+      # (Jenkins for dev, deploy-ovh.yml for prod) consume the RELEASE, so nothing in the
+      # pipeline ever needed this step.
 
       - name: Upload build logs
         if: always()
@@ -1003,13 +1038,19 @@ jobs:
       # produces on a failing run, because the next round then starts from it.
       - name: Save the FreeCAD build and install trees
         if: always()
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            build-freecad-gui-weh
-            freecad-gui-install
-            weh-objs
-          key: fcweb-fclink-${{ hashFiles('patches/freecad.patch', 'configure-gui-weh.sh') }}-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          store="$BUILDTREE_STORE"
+          mkdir -p "$store"
+          for d in build-freecad-gui-weh freecad-gui-install weh-objs; do
+            if [ -d "./$d" ]; then
+              rm -rf "$store/$d"
+              mv "./$d" "$store/$d"
+              echo "  stored $d"
+            fi
+          done
+          echo "  store: $(du -sh "$store" 2>/dev/null | cut -f1) at $store"
+          df -h "$store" | tail -1
 
       # The save above writes a NEW ~421 MB entry every run and nothing ever removed one.
       # Twenty-four runs would be the entire 10 GB repo budget, at which point GitHub
@@ -1018,7 +1059,7 @@ jobs:
       # Housekeeping must never fail a two-hour job, hence continue-on-error. Two are kept,
       # not one: the newest may be from a run that failed before it had anything useful in
       # it, and the save step's own comment explains why a partial tree is worth keeping.
-      - name: Keep only the two newest build-tree caches
+      - name: Reclaim the now-unused build-tree caches
         if: always()
         continue-on-error: true
         env:
@@ -1026,11 +1067,11 @@ jobs:
         run: |
           set -e
           before=$(gh cache list --limit 100 --json sizeInBytes                     --jq '[.[].sizeInBytes] | add // 0')
-          ids=$(gh cache list --key fcweb-fclink- --limit 100                   --json id,createdAt --jq 'sort_by(.createdAt) | reverse | .[2:] | .[].id')
+          ids=$(gh cache list --key fcweb-fclink- --limit 100                   --json id,createdAt --jq '.[].id')
           n=0
           for id in $ids; do
             gh cache delete "$id" >/dev/null 2>&1 && n=$((n+1)) || true
           done
           after=$(gh cache list --limit 100 --json sizeInBytes                    --jq '[.[].sizeInBytes] | add // 0')
-          echo "  deleted $n superseded build-tree cache(s)"
+          echo "  deleted $n build-tree cache(s) -- the tree now lives on local disk"
           echo "  cache budget: $((before/1048576)) MB -> $((after/1048576)) MB of 10240 MB"
