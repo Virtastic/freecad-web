@@ -201,6 +201,37 @@ jobs:
       # real directory in AFTER checkout and back out at the end sidesteps that entirely.
       #
       # The store sits outside the workspace precisely so `git clean` cannot reach it.
+      # ONE-TIME BRIDGE, safe to delete once it has run.
+      #
+      # The build tree just moved from actions/cache to local disk. On the very first run
+      # after that move the store is empty, so without this the job would rebuild every
+      # edge -- about 25 minutes that the cache sitting in GitHub could have saved. This
+      # restores it once, the save step then writes it to the store, and from then on the
+      # probe finds the store and this is skipped forever.
+      - name: Is the local build-tree store populated?
+        id: store-probe
+        run: |
+          set -euo pipefail
+          if [ -d "$BUILDTREE_STORE/build-freecad-gui-weh" ]; then
+            echo "  store is populated"
+            echo "need_cache=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "  store is empty -- seeding once from actions/cache"
+            echo "need_cache=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Seed the store from the old cache (first run only)
+        if: ${{ inputs.rebuild != true && steps.store-probe.outputs.need_cache == '1' }}
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            build-freecad-gui-weh
+            freecad-gui-install
+            weh-objs
+          key: fcweb-fclink-${{ hashFiles('patches/freecad.patch', 'configure-gui-weh.sh') }}
+          restore-keys: |
+            fcweb-fclink-
+
       - name: Restore the FreeCAD build and install trees
         id: fccache
         if: ${{ inputs.rebuild != true }}
@@ -952,23 +983,6 @@ jobs:
       # comment above it is right that a rendering gate which blocks a release on its first
       # flake gets deleted rather than fixed. Promote it once several consecutive runs pass.
       # Recording the numbers here is what makes "several consecutive runs" checkable.
-      - name: What the gates measured
-        if: always()
-        run: |
-          {
-            echo
-            echo "| gate | result | measured |"
-            echo "|---|---|---|"
-            echo "| boot (all scenarios) | ${{ steps.bootgate.outcome || 'n/a' }} | |"
-            r="$(grep -m1 -oE 'render: [0-9]+ distinct colours, [0-9.]+% of the frame is not background'                   /tmp/fclogs/render.txt 2>/dev/null || true)"
-            echo "| render (advisory) | ${{ steps.render.outcome }} | ${r:-not reached} |"
-            p="$(grep -m1 -oE 'CANVAS [0-9]+x[0-9]+, [0-9]+ distinct colours, dominant [0-9,]+ at [0-9.]+%' \
-                  /tmp/fclogs/project3d.txt 2>/dev/null || true)"
-            echo "| project on canvas (advisory) | ${{ steps.project3d.outcome }} | ${p:-not reached} |"
-            echo
-            echo "Baseline when the render gate was written: 195 distinct colours, 28.1% non-background."
-          } >> "$GITHUB_STEP_SUMMARY"
-
       # DOES A REAL PROJECT REACH THE SCREEN?
       #
       # The rendering gate above reads Coin's OFFSCREEN framebuffer. That is a fair test of
@@ -982,19 +996,46 @@ jobs:
       # reads framebuffer 0 -- the canvas. Three separate faults on that path produced a
       # black viewport in one day with all thirteen ?no3d scenarios green.
       #
-      # continue-on-error while it earns trust, exactly as the rendering gate did. It has
-      # been seen to FAIL on the broken production build and PASS on a good one, which is
-      # more than most gates can say on their first day, but a run history is a run history.
+      # THE CANVAS GATE NOW BLOCKS.
+      #
+      # It went in advisory, as the render gate did, on the principle that a rendering
+      # gate which fails on its first flake gets deleted rather than fixed. It has since
+      # earned the promotion the hard way: it failed on the broken production build, it
+      # failed again on 33086608999, and BOTH failures were real. On that second run a
+      # Playwright screenshot taken beside it independently confirmed the verdict -- the
+      # window is 102 KB of painted UI before a document opens and 4.9 KB of flat black
+      # after.
+      #
+      # Advisory was actively harmful here: the run reported the step as `success`
+      # because continue-on-error rewrites the conclusion, and only `outcome` carried the
+      # truth. A gate whose failure is displayed as success is worse than no gate,
+      # because it is trusted.
       - name: Does a real project actually reach the canvas?
         id: project3d
         timeout-minutes: 25
-        continue-on-error: true
         run: |
           set -o pipefail
           set -e
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
           docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8798 --timeout 900 --scenario project3d --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/project3d.txt
+
+      - name: What the gates measured
+        if: always()
+        run: |
+          {
+            echo
+            echo "| gate | result | measured |"
+            echo "|---|---|---|"
+            echo "| boot (all scenarios) | ${{ steps.bootgate.outcome || 'n/a' }} | |"
+            r="$(grep -m1 -oE 'render: [0-9]+ distinct colours, [0-9.]+% of the frame is not background'                   /tmp/fclogs/render.txt 2>/dev/null || true)"
+            echo "| render (advisory) | ${{ steps.render.outcome }} | ${r:-not reached} |"
+            p="$(grep -m1 -oE 'CANVAS [0-9]+x[0-9]+, [0-9]+ distinct colours, dominant [0-9,]+ at [0-9.]+%' \
+                  /tmp/fclogs/project3d.txt 2>/dev/null || true)"
+            echo "| project on canvas | ${{ steps.project3d.outcome }} | ${p:-not reached} |"
+            echo
+            echo "Baseline when the render gate was written: 195 distinct colours, 28.1% non-background."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the boot-gate serve tree on failure
         if: failure()
@@ -1060,7 +1101,9 @@ jobs:
       # not one: the newest may be from a run that failed before it had anything useful in
       # it, and the save step's own comment explains why a partial tree is worth keeping.
       - name: Reclaim the now-unused build-tree caches
-        if: always()
+        # Not on the run that seeded from them -- delete only once the
+        # store is known good, or a failed first run leaves neither copy.
+        if: always() && steps.store-probe.outputs.need_cache == '0'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

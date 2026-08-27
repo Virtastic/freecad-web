@@ -2084,6 +2084,20 @@ def scenario_project3d(ctx, url, args, fail):
         fail('project3d scenario: never reached Ready (overlay: %s)' % s.phase())
         return s
 
+    # BEFORE the project opens. If this one has a painted window in it and the after-shot
+    # is black, the failure belongs to whatever opening a document does -- not to boot,
+    # not to the compositor in general.
+    try:
+        os.makedirs('/tmp/fclogs', exist_ok=True)
+        s.page.evaluate("() => { const l = document.getElementById('load');"
+                        "        if (l) l.style.display = 'none'; }")
+        time.sleep(2)
+        s.page.screenshot(path='/tmp/fclogs/project3d-before.png', full_page=False)
+        print('==> project3d: BEFORE screenshot %d bytes'
+              % os.path.getsize('/tmp/fclogs/project3d-before.png'))
+    except Exception as e:
+        print('==> project3d: before-screenshot failed (%s)' % e)
+
     s.run_python(PROJECT3D_PY)
     r = s.wait_for('FCPROJ3D', 300)
     if not isinstance(r, dict) or r.get('error'):
@@ -2126,6 +2140,26 @@ def scenario_project3d(ctx, url, args, fail):
     print('==> project3d: CANVAS %dx%d, %d distinct colours, dominant %s at %.1f%%'
           % (canvas.get('w', 0), canvas.get('h', 0), canvas.get('distinct', 0),
              canvas.get('dominant'), canvas.get('dominantPct', 0)))
+
+    # GROUND TRUTH. Everything above reads GL state; this reads the screen.
+    #
+    # A PNG of a single flat colour compresses to almost nothing, so the byte count alone
+    # separates "black rectangle" from "a drawing" without needing an image library in the
+    # container. The file is kept either way -- on a failure it is the single most useful
+    # artefact this gate can hand a human, and it is a few KB.
+    shot = None
+    try:
+        os.makedirs('/tmp/fclogs', exist_ok=True)
+        shot = '/tmp/fclogs/project3d.png'
+        s.page.screenshot(path=shot, full_page=False)
+        size = os.path.getsize(shot)
+        print('==> project3d: SCREENSHOT %s, %d bytes' % (shot, size))
+        # A 1200x700 PNG of one flat colour lands around 5-10 KB. Anything with real
+        # geometry in it is far larger. This is a smell test, not the assertion.
+        if size < 20000:
+            print('==> project3d: that is small enough to be a flat rectangle')
+    except Exception as e:
+        print('==> project3d: screenshot failed (%s)' % e)
 
     if canvas.get('distinct', 0) < 8:
         fail('project3d scenario: the CANVAS has only %d distinct colours after opening %s. '
