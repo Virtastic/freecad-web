@@ -600,11 +600,31 @@ try:
         # THE call. If the bridge is dead this raises RuntimeError.
         vp.addDisplayMode(sep, "Wireframe")
         _out["addDisplayMode"] = "ok"
-        # And read it back, so a silent no-op cannot pass either.
+        # Read it back through a view provider that actually DECLARES the mode.
+        #
+        # An earlier version read listDisplayModes() off a bare App::FeaturePython and got
+        # [] -- which looked like a silent no-op and was carried for hours as an unexplained
+        # loose end. It is not a defect: the default view provider's getDisplayModes()
+        # returns nothing, so the list is empty however well addDisplayMode worked. The
+        # readback is only meaningful against a provider that declares the mode, so this
+        # attaches one and asks it.
         try:
-            _out["modes"] = list(vp.listDisplayModes())
+            class _VP:
+                def __init__(self, o):
+                    o.Proxy = self
+                def attach(self, o):
+                    o.addDisplayMode(coin.SoSeparator(), "FcwebProbe")
+                def getDisplayModes(self, o):
+                    return ["FcwebProbe"]
+                def getDefaultDisplayMode(self):
+                    return "FcwebProbe"
+
+            o2 = doc.addObject("App::FeaturePython", "Probe2")
+            _VP(o2.ViewObject)
+            doc.recompute()
+            _out["modes"] = list(o2.ViewObject.listDisplayModes())
         except Exception as e:
-            _out["modes"] = "unreadable: %s" % e
+            _out["modes"] = "unreadable: %s: %s" % (type(e).__name__, str(e)[:80])
 except Exception as e:
     _out["error"] = "%s: %s" % (type(e).__name__, str(e)[:160])
 _s.__stderr__.write("FCSWIG " + repr(_out) + _NL)

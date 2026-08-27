@@ -926,9 +926,39 @@ jobs:
             echo "| boot (all scenarios) | ${{ steps.bootgate.outcome || 'n/a' }} | |"
             r="$(grep -m1 -oE 'render: [0-9]+ distinct colours, [0-9.]+% of the frame is not background'                   /tmp/fclogs/render.txt 2>/dev/null || true)"
             echo "| render (advisory) | ${{ steps.render.outcome }} | ${r:-not reached} |"
+            p="$(grep -m1 -oE 'CANVAS [0-9]+x[0-9]+, [0-9]+ distinct colours, dominant [0-9,]+ at [0-9.]+%' \
+                  /tmp/fclogs/project3d.txt 2>/dev/null || true)"
+            echo "| project on canvas (advisory) | ${{ steps.project3d.outcome }} | ${p:-not reached} |"
             echo
             echo "Baseline when the render gate was written: 195 distinct colours, 28.1% non-background."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # DOES A REAL PROJECT REACH THE SCREEN?
+      #
+      # The rendering gate above reads Coin's OFFSCREEN framebuffer. That is a fair test of
+      # "did Coin draw", and it is not a statement about what a user sees -- on 2026-08-27
+      # production drew 739 distinct colours into that buffer while the canvas was 100%
+      # black, and the gate passed. The composite from that buffer to the page canvas is a
+      # separate step; it is the step that broke.
+      #
+      # This one opens a shipped example carrying PYTHON view providers (Assembly/Draft),
+      # which is the path that crosses both the SWIG bridge and the compositor, and then
+      # reads framebuffer 0 -- the canvas. Three separate faults on that path produced a
+      # black viewport in one day with all thirteen ?no3d scenarios green.
+      #
+      # continue-on-error while it earns trust, exactly as the rendering gate did. It has
+      # been seen to FAIL on the broken production build and PASS on a good one, which is
+      # more than most gates can say on their first day, but a run history is a run history.
+      - name: Does a real project actually reach the canvas?
+        id: project3d
+        timeout-minutes: 25
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          set -e
+          memgb=$(free -g | awk '/^Mem:/{print $2}')
+          cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8798 --timeout 900 --scenario project3d --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/project3d.txt
 
       - name: Upload the boot-gate serve tree on failure
         if: failure()
