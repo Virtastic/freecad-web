@@ -2920,7 +2920,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +2782,71 @@ void View3DInventorViewer::renderScene()
+@@ -2679,6 +2782,91 @@ void View3DInventorViewer::renderScene()
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -2987,6 +2987,26 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +                blitWarned = true;
 +            }
 +        }
++    }
++    //
++    // RELEASE THE CONTEXT. This pairs the makeCurrent() at the top of renderScene.
++    //
++    // That makeCurrent() had no matching doneCurrent() for the whole life of this
++    // port, and until FreeCAD 1.1.3 it did not matter: the viewer used QtGLWidget
++    // (QGLWidget), where leaving the context current is harmless. 1.1.3 moved to
++    // QOpenGLWidget, whose contract is that its context is current only inside
++    // paintGL. Leaving it current -- with the widget FBO still bound -- outside that
++    // window stops Qt-wasm compositing the top level at all.
++    //
++    // Which is why the symptom was never a black VIEWPORT. It was a black
++    // APPLICATION: menus, toolbars and model tree all vanished the instant a
++    // document opened, while Coin went on rendering a perfectly good frame into its
++    // own FBO. Measured 2026-08-27 by bisecting the published releases through one
++    // headless gate: build-20260813-eventstack (pre-1.1.3) draws 9,483 distinct
++    // colours to the canvas, build-20260824-freecad113 draws 1, and the port was
++    // rebased onto 1.1.3 in between (25fcc80, 2026-08-19).
++    if (auto* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
++        fcGlw->doneCurrent();
 +    }
 +#endif
  }

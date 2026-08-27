@@ -687,6 +687,43 @@ READ_CANVAS_JS = r"""(() => {
   }
 })"""
 
+# WHAT IS ON TOP OF THE PAGE?
+#
+# A screenshot proves the window is black. It does not say why, and the two candidates
+# need completely different fixes: nothing was DRAWN, or something is COVERING it.
+#
+# Qt draws the menus and toolbars, Coin does not -- so a black frame that includes the
+# menus, taken while Coin's own buffer holds 740 distinct colours, is far more consistent
+# with a cover than with a drawing failure.
+DOM_STACK_JS = r"""(() => {
+  const out = {
+    nativeComposite: window.__fcNativeComposite,
+    coinFbo: window.__fcCoinFbo,
+    big: [],
+  };
+  for (const el of document.querySelectorAll('body *')) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 300 || r.height < 200) { continue; }
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') { continue; }
+    out.big.push(el.tagName + (el.id ? '#' + el.id : '')
+                 + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)
+                 + ' pos=' + cs.position + ' z=' + cs.zIndex
+                 + ' op=' + cs.opacity + ' bg=' + cs.backgroundColor);
+  }
+  const cx = Math.round(window.innerWidth / 2), cy = Math.round(window.innerHeight / 2);
+  out.atCentre = (document.elementsFromPoint ? document.elementsFromPoint(cx, cy) : [])
+    .slice(0, 6)
+    .map(el => el.tagName + (el.id ? '#' + el.id : ''));
+  out.canvases = Array.from(document.querySelectorAll('canvas')).map(c => {
+    const r = c.getBoundingClientRect(); const cs = getComputedStyle(c);
+    return (c.id || '(no id)') + ' css=' + Math.round(r.width) + 'x' + Math.round(r.height)
+           + ' buf=' + c.width + 'x' + c.height + ' z=' + cs.zIndex
+           + ' pos=' + cs.position + ' op=' + cs.opacity;
+  });
+  return JSON.stringify(out);
+})"""
+
 PROJECT3D_PY = r'''
 # Open a shipped example that carries PYTHON view providers, and fit it in the view.
 #
@@ -2147,6 +2184,46 @@ def scenario_project3d(ctx, url, args, fail):
     # separates "black rectangle" from "a drawing" without needing an image library in the
     # container. The file is kept either way -- on a failure it is the single most useful
     # artefact this gate can hand a human, and it is a few KB.
+    # Explain the frame, do not just record it.
+    try:
+        st = json.loads(s.page.evaluate(DOM_STACK_JS) or '{}')
+        print('==> project3d: nativeComposite=%s coinFbo=%s'
+              % (st.get('nativeComposite'), st.get('coinFbo')))
+        print('==> project3d: at centre of viewport: %s' % (st.get('atCentre'),))
+        for c in st.get('canvases', []):
+            print('==> project3d: canvas %s' % c)
+        for b in st.get('big', [])[:8]:
+            print('==> project3d: covers %s' % b)
+    except Exception as e:
+        print('==> project3d: DOM probe failed (%s)' % e)
+
+    # EXPERIMENT: hand presentation back to the JS overlay and look again.
+    if os.environ.get('FCWEB_TRY_OVERLAY'):
+        try:
+            print('==> project3d: --- handing presentation to the JS overlay ---')
+            s.page.evaluate("() => { window.__fcNativeComposite = 0; }")
+            # Force Coin to draw a fresh frame so the overlay has something to capture.
+            s.run_python(
+                'import FreeCADGui as Gui, sys as _s' + chr(10)
+                + 'try:' + chr(10)
+                + '    Gui.SendMsgToActiveView("ViewFit")' + chr(10)
+                + '    Gui.activeDocument().activeView().redraw()' + chr(10)
+                + 'except Exception as e:' + chr(10)
+                + '    pass' + chr(10)
+                + '_s.__stderr__.write("FCOVL {}" + chr(10))' + chr(10)
+                + '_s.__stderr__.flush()' + chr(10))
+            s.wait_for('FCOVL', 60)
+            time.sleep(6)
+            c2 = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
+            print('==> project3d: OVERLAY CANVAS %dx%d, %d distinct colours, dominant %s at %.1f%%'
+                  % (c2.get('w', 0), c2.get('h', 0), c2.get('distinct', 0),
+                     c2.get('dominant'), c2.get('dominantPct', 0)))
+            s.page.screenshot(path='/tmp/fclogs/project3d-overlay.png', full_page=False)
+            print('==> project3d: OVERLAY screenshot %d bytes'
+                  % os.path.getsize('/tmp/fclogs/project3d-overlay.png'))
+        except Exception as e:
+            print('==> project3d: overlay experiment failed (%s)' % e)
+
     shot = None
     try:
         os.makedirs('/tmp/fclogs', exist_ok=True)
