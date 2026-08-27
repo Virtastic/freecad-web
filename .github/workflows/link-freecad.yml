@@ -339,8 +339,24 @@ jobs:
         run: |
           set -e
           . emsdk/emsdk_env.sh
-          python3 -m pip install --quiet --break-system-packages pybind11 swig 2>/dev/null \
-            || python3 -m pip install --quiet pybind11 swig
+          # SWIG IS PINNED, and it must match the version that built pivy in
+          # build-python-deps.yml (swig==4.2.1). This is not tidiness.
+          #
+          # FreeCAD compiles a SWIG runtime into itself to convert Python coin nodes
+          # into C++ SoNode*. SWIG publishes its type table in the interpreter under a
+          # VERSION-STAMPED key: swig_runtime_data4 for 4.2.x, swig_runtime_data5 for
+          # 4.4.x. Two different versions in one binary cannot see each other's types.
+          #
+          # Unpinned this resolved to 4.4.1 while pivy stayed on 4.2.1, and the linked
+          # wasm carried BOTH keys -- 2x swig_runtime_data4, 5x swig_runtime_data5.
+          # FreeCAD asked for the table pivy had not registered, every SWIG pointer
+          # conversion failed with "No SWIG wrapped library loaded", and any Python
+          # view provider calling addDisplayMode(coinNode, ...) threw. Opening a
+          # document with Assembly or Draft view providers gave a BLACK VIEWPORT:
+          # the app booted, the geometry loaded, and nothing drew.
+          SWIG_PIN=4.2.1        # keep in step with build-python-deps.yml
+          python3 -m pip install --quiet --break-system-packages pybind11 "swig==$SWIG_PIN" 2>/dev/null \
+            || python3 -m pip install --quiet pybind11 "swig==$SWIG_PIN"
           python3 -c 'import pybind11; print("  pybind11:", pybind11.get_cmake_dir())'
           swig -version | grep -i version | head -1 | sed 's/^/  swig: /'
           embuilder build icu
@@ -703,6 +719,13 @@ jobs:
       # tools/patch-freecad-js.py -- six behavioural GL fixes that live only in the linked
       # JS, are silently lost by every relink, and whose absence is a boot-time storm of
       # "Cannot read properties of null (reading '0')" with newDocument() never returning.
+      # ONE SWIG RUNTIME PER BINARY. Two is a black viewport, and every other gate
+      # passes -- they build geometry through C++ view providers, which never cross the
+      # SWIG bridge. See the tool's header for the whole story.
+      - name: One SWIG runtime, so Python view providers can reach Coin
+        if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
+        run: python3 tools/check-swig-runtime.py build-freecad-gui-weh/bin/FreeCAD.wasm
+
       - name: GL post-patches, and validate the wasm
         if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
         run: |
