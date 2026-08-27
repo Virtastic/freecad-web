@@ -719,12 +719,13 @@ jobs:
       # tools/patch-freecad-js.py -- six behavioural GL fixes that live only in the linked
       # JS, are silently lost by every relink, and whose absence is a boot-time storm of
       # "Cannot read properties of null (reading '0')" with newDocument() never returning.
-      # ONE SWIG RUNTIME PER BINARY. Two is a black viewport, and every other gate
-      # passes -- they build geometry through C++ view providers, which never cross the
-      # SWIG bridge. See the tool's header for the whole story.
-      - name: One SWIG runtime, so Python view providers can reach Coin
+      # FreeCAD and pivy must share a SWIG runtime version, or every Python view
+      # provider throws "No SWIG wrapped library loaded" and the viewport is black --
+      # while every other gate passes, because they build geometry through C++ view
+      # providers that never cross the bridge. See the tool's header.
+      - name: FreeCAD and pivy share a SWIG runtime
         if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
-        run: python3 tools/check-swig-runtime.py build-freecad-gui-weh/bin/FreeCAD.wasm
+        run: python3 tools/check-swig-runtime.py build-freecad-gui-weh deps/wasm
 
       - name: GL post-patches, and validate the wasm
         if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
