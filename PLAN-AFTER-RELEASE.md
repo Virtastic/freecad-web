@@ -254,10 +254,10 @@ clean exit.
   | run | compile | cache state |
   |---|---|---|
   | 33004112792 | 87.9 min | none |
-  | 33018424389 | 88.5 min | none (second baseline) |
-  | 33042330081 | 88.0 min | cold -- populating, and it cost nothing measurable |
-  | 33061865079 | 22.1 min | warm, 95.66% hits |
-  | 33079363822 | 22.2 min | warm, 95.63% hits |
+  | 33016454127 | 88.5 min | none (second baseline) |
+  | 33026503108 | 88.0 min | cold -- populating, and it cost nothing measurable |
+  | 33075218442 | 22.1 min | warm, 95.66% hits (2537/2652) |
+  | 33079363822 | 22.1 min | warm, 95.63% hits (2536/2652) |
 
   Two baselines because one is an anecdote. Two steady-state runs for the same reason,
   and they agree to a tenth of a minute. The populate run is the honest part: enabling
