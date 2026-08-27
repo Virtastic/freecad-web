@@ -611,6 +611,123 @@ _s.__stderr__.write("FCSWIG " + repr(_out) + _NL)
 _s.__stderr__.flush()
 '''
 
+# What does the USER see?
+#
+# READ_FRAME_JS searches window.__fcPixelFbos, and the pixelgate hook only records a
+# framebuffer when `if (fb)` -- i.e. only OFFSCREEN ones. The default framebuffer, which is
+# what Qt composites into and what the page canvas presents, is never in that list.
+#
+# So every rendering gate this project has ever run measured Coin's private buffer. On
+# 2026-08-27 production drew 744 distinct colours into that buffer while users saw a black
+# screen, and the gate passed. Coin was rendering perfectly; the COMPOSITE from its FBO to
+# the canvas was broken by a framebuffer feedback loop. A check that reads the buffer
+# before the broken step cannot see the broken step.
+#
+# This reads framebuffer 0. With ?pixelgate=1 the context is created with
+# preserveDrawingBuffer, so the composited frame is still there to be read.
+READ_CANVAS_JS = r"""(() => {
+  const gl = window.__fcPixelGl;
+  if (!gl) return JSON.stringify({error: 'pixelgate did not install (is ?pixelgate=1 set?)'});
+  const l = document.getElementById('load'); if (l) l.style.display = 'none';
+  const prev = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+  try {
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);        // THE DEFAULT FRAMEBUFFER
+    const W = Math.min(gl.drawingBufferWidth || 0, 1200);
+    const H = Math.min(gl.drawingBufferHeight || 0, 700);
+    if (!W || !H) return JSON.stringify({error: 'canvas has no drawing buffer'});
+    const buf = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    const cols = {};
+    let opaque = 0;
+    for (let p = 0; p < buf.length; p += 4) {
+      if (buf[p + 3] > 8) { opaque++; }
+      const k = buf[p] + ',' + buf[p + 1] + ',' + buf[p + 2];
+      cols[k] = (cols[k] || 0) + 1;
+    }
+    const keys = Object.keys(cols);
+    keys.sort((a, b) => cols[b] - cols[a]);
+    const total = W * H;
+    // "Black" here means literally the dominant colour is near-black and almost nothing
+    // else is present -- which is the reported symptom, not a proxy for it.
+    const domCount = cols[keys[0]] || 0;
+    const dom = keys[0].split(',').map(Number);
+    return JSON.stringify({
+      w: W, h: H, total: total,
+      distinct: keys.length,
+      dominant: keys[0],
+      dominantPct: Math.round(1000 * domCount / total) / 10,
+      dominantIsDark: (dom[0] + dom[1] + dom[2]) < 60,
+      opaquePct: Math.round(1000 * opaque / total) / 10,
+      top: keys.slice(0, 3).map(k => k + ' x' + cols[k]),
+    });
+  } catch (e) {
+    return JSON.stringify({error: String(e).slice(0, 140)});
+  } finally {
+    try { gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prev); } catch (e) {}
+  }
+})"""
+
+PROJECT3D_PY = r'''
+# Open a shipped example that carries PYTHON view providers, and fit it in the view.
+#
+# Assembly and Draft objects build their scene graph from Python: a view provider makes a
+# pivy coin node and hands it to C++. That path crosses FreeCAD's SWIG bridge and, on the
+# way to the screen, the native composite. Every OTHER scenario builds geometry through
+# C++ view providers (Part::Box, PartDesign, the FEM mesh), which touch neither -- which is
+# exactly why three separate rendering faults shipped on 2026-08-27 with all thirteen
+# scenarios green:
+#
+#   1. FreeCAD and pivy built against different SWIG runtimes, so every
+#      addDisplayMode(coinNode, ...) threw "No SWIG wrapped library loaded"
+#   2. the legacy overlay's state was declared in a scope that had closed, so blit threw
+#      ReferenceError into its own catch, every frame, silently
+#   3. fcTex left bound while Coin rendered into the FBO it is attached to -- a framebuffer
+#      feedback loop, undefined behaviour, and it drew nothing
+#
+# All three produced a black viewport and none was visible to a gate.
+import os
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    import FreeCAD as App
+    import FreeCADGui as Gui
+
+    d = "/freecad/share/examples"
+    # Prefer a file that carries Python view providers. ArchDetail and BIMExample are Draft
+    # /Arch; AssemblyExample is Assembly. Fall back to whatever is there.
+    prefer = ["AssemblyExample.FCStd", "ArchDetail.FCStd", "BIMExample.FCStd"]
+    names = sorted(f for f in os.listdir(d) if f.endswith(".FCStd"))
+    pick = next((p for p in prefer if p in names), names[0] if names else None)
+    if not pick:
+        _out["error"] = "no examples on disk"
+    else:
+        _out["file"] = pick
+        doc = App.openDocument(os.path.join(d, pick))
+        doc.recompute()
+        _out["objects"] = len(doc.Objects)
+        # How many objects actually got a scene graph? A view provider that threw leaves
+        # the object present and invisible, which is the failure being hunted.
+        vis = 0
+        for o in doc.Objects:
+            try:
+                if o.ViewObject is not None and o.ViewObject.Visibility:
+                    vis += 1
+            except Exception:
+                pass
+        _out["visible"] = vis
+        try:
+            Gui.activeDocument().activeView().viewAxonometric()
+            Gui.SendMsgToActiveView("ViewFit")
+        except Exception as e:
+            _out["view"] = "%s: %s" % (type(e).__name__, str(e)[:80])
+except Exception as e:
+    _out["error"] = "%s: %s" % (type(e).__name__, str(e)[:140])
+_s.__stderr__.write("FCPROJ3D " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
+
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
 # fetch is refused however co-operative the remote server is, so everything has to go
@@ -1879,6 +1996,86 @@ def scenario_swigbridge(ctx, url, args, fail):
     return s
 
 
+def scenario_project3d(ctx, url, args, fail):
+    """Open a real project with the 3D pipeline on, and check the viewport DREW something.
+
+    This is the gate whose absence let three rendering faults reach users on the same day.
+    Each of them produced a black viewport; each was invisible to every existing scenario,
+    because they all build geometry through C++ view providers that never cross the SWIG
+    bridge or the compositor.
+
+    It asserts two things a black frame cannot satisfy: the document's objects came back
+    visible (so their Python view providers built a scene graph at all), and the frame
+    carries real content rather than one flat colour.
+
+    Like the render scenario it runs against ?pixelgate=1, and like that one it reports a
+    SHAPE rather than an exact image -- an exact image would be a driver fingerprint.
+    """
+    if args.base_url:
+        base = args.base_url.rstrip('/') + '/?pixelgate=1'
+    else:
+        base = 'http://127.0.0.1:%d/%s?pixelgate=1' % (args.port, args.page)
+    print('==> project3d: %s' % base)
+    s = Session(ctx, base, args.timeout)
+    if not s.load():
+        fail('project3d scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+
+    s.run_python(PROJECT3D_PY)
+    r = s.wait_for('FCPROJ3D', 300)
+    if not isinstance(r, dict) or r.get('error'):
+        fail('project3d scenario: the project would not open (%s)' % (r,))
+        return s
+    print('==> project3d: %s -- %s objects, %s visible'
+          % (r.get('file'), r.get('objects'), r.get('visible')))
+    if not r.get('visible'):
+        fail('project3d scenario: %s opened with %s objects and NONE visible -- their view '
+             'providers did not build a scene graph, which is what a dead SWIG bridge looks '
+             'like from here' % (r.get('file'), r.get('objects')))
+        return s
+
+    time.sleep(6)                      # let Coin draw the fitted frame
+    try:
+        frame = json.loads(s.page.evaluate(READ_FRAME_JS) or '{}')
+    except Exception as e:
+        fail('project3d scenario: could not read the frame (%s)' % e)
+        return s
+    if frame.get('error'):
+        fail('project3d scenario: %s' % frame['error'])
+        return s
+
+    print('==> project3d: offscreen buffer has %d distinct colours, %.1f%% non-background'
+          % (frame.get('distinct', 0),
+             100.0 * frame.get('nonBackground', 0) / (frame.get('total', 0) or 1)))
+
+    # THE ONE THAT MATTERS. The frame above is Coin's private FBO -- it can be perfect while
+    # the user sees black, because the composite from that FBO to the canvas is a separate
+    # step and that is the step that broke. Read the default framebuffer.
+    try:
+        canvas = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
+    except Exception as e:
+        fail('project3d scenario: could not read the canvas (%s)' % e)
+        return s
+    if canvas.get('error'):
+        fail('project3d scenario: canvas read failed -- %s' % canvas['error'])
+        return s
+
+    print('==> project3d: CANVAS %dx%d, %d distinct colours, dominant %s at %.1f%%'
+          % (canvas.get('w', 0), canvas.get('h', 0), canvas.get('distinct', 0),
+             canvas.get('dominant'), canvas.get('dominantPct', 0)))
+
+    if canvas.get('distinct', 0) < 8:
+        fail('project3d scenario: the CANVAS has only %d distinct colours after opening %s. '
+             'Coin may have rendered fine into its own buffer -- what reaches the user is '
+             'blank. Look for "Feedback loop formed between Framebuffer and active Texture".'
+             % (canvas.get('distinct', 0), r.get('file')))
+    elif canvas.get('dominantIsDark') and canvas.get('dominantPct', 0) > 90:
+        fail('project3d scenario: %.1f%% of the CANVAS is the near-black colour %s after '
+             'opening %s. This is the black-viewport failure exactly.'
+             % (canvas.get('dominantPct'), canvas.get('dominant'), r.get('file')))
+    return s
+
+
 # Every scenario, once. An entry supplies its argparse choice, its dispatch order,
 # whether "all" includes it, and the sentence the pass line prints.
 #
@@ -1922,6 +2119,8 @@ SCENARIOS = (
      'knows whether the browser will keep the documents, and warns when it will not'),
     ('swigbridge',    scenario_swigbridge,    True,
      'lets a Python view provider hand its scene graph to Coin'),
+    ('project3d',     scenario_project3d,     False,
+     'opens a real project with 3D on and actually draws it'),
     ('render',        scenario_render,        False,
      'draws a shaded solid in the 3D viewport'),
     ('upgrade',       scenario_upgrade,       False,
