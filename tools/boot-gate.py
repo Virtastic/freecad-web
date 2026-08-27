@@ -1334,8 +1334,36 @@ def scenario_restore(ctx, url, args, fail):
     if not s2.wait_for('restored', 120):
         fail('pass 2 did not report restoring the previous session -- a returning user '
              'would find their work gone')
-    s2.run_python(COUNT_DOCS_PY)
-    r = s2.wait_for('FCDOCS', 120)
+    # ASK AGAIN UNTIL IT ANSWERS, rather than once at the earliest possible moment.
+    #
+    # "restored" is logged by the shell when it hands the autosaved files back to the
+    # engine. Opening them is asynchronous and happens AFTER that line. So the old
+    # single-shot query raced the restore it was checking, and on 2026-08-27 (run
+    # 33079363822) it lost: the page logged "restored 1 document(s) from your last
+    # session", the very next query returned docs=[], and the gate blocked a release
+    # over a document that was seconds from being there. It had passed on the two
+    # previous links, which is the signature of a race, not a product bug.
+    #
+    # The assertion is unchanged in substance -- a returning user's work must come back --
+    # only the deadline is now explicit instead of accidental. A document that never
+    # arrives still fails, and takes 90s to do it.
+    #
+    # Each attempt gets its OWN marker because wait_for() rescans the whole log from the
+    # start and returns the FIRST match: reusing 'FCDOCS' would hand back the first,
+    # empty answer forever no matter how many times the probe was re-run.
+    r = None
+    deadline = time.time() + 90
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        tag = 'FCDOCS%d' % attempt
+        s2.run_python(COUNT_DOCS_PY.replace('FCDOCS', tag))
+        r = s2.wait_for(tag, 20)
+        if isinstance(r, dict) and r.get('docs'):
+            break
+        time.sleep(3)
+    if attempt > 1:
+        print('==> restore: the document list took %d attempt(s) to populate' % attempt)
     if not isinstance(r, dict):
         fail('could not read the restored document list')
     else:
