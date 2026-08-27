@@ -2816,7 +2816,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      printDimension();
  
      for (auto it : this->graphicsItems) {
-@@ -2522,6 +2560,47 @@ void View3DInventorViewer::renderScene()
+@@ -2522,6 +2560,58 @@ void View3DInventorViewer::renderScene()
      const SbViewportRegion vp = this->getSoRenderManager()->getViewportRegion();
      SbVec2s origin = vp.getViewportOriginPixels();
      SbVec2s size = vp.getViewportSizePixels();
@@ -2852,6 +2852,17 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +            glBindFramebuffer(GL_FRAMEBUFFER, fcFbo);
 +            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fcTex, 0);
 +            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fcDepth);
++            // UNBIND IT. fcTex is attached to fcFbo as COLOR_ATTACHMENT0, and Coin is
++            // about to render the whole scene into fcFbo. Leaving fcTex bound to a
++            // texture unit at that moment is a framebuffer feedback loop, and WebGL
++            // says so on every single draw call:
++            //     GL_INVALID_OPERATION: glDrawArrays: Feedback loop formed between
++            //     Framebuffer and active Texture
++            // Seen in production 2026-08-27, hundreds per frame until Chrome stops
++            // reporting, with a black viewport. A feedback loop is undefined: the spec
++            // lets the driver produce anything, and it produced nothing.
++            glBindTexture(GL_TEXTURE_2D, 0);
++            glBindRenderbuffer(GL_RENDERBUFFER, 0);
 +            fcW = fcVw; fcH = fcVh;
 +        }
 +        glBindFramebuffer(GL_FRAMEBUFFER, fcFbo);
