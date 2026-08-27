@@ -1316,6 +1316,32 @@ window.fcRunPy = fcRunPy;
        if (__fromCache) { __setBoot('Loading from local cache…'); }
        else { __setBoot('Downloading… ' + pct + '%'); }
      };
+     // DROP EVERY OTHER BUILD'S ENTRIES FIRST, before a byte of the new one is fetched.
+     //
+     // This used to run AFTER both fetches, which meant a version change peaked at roughly
+     // 800 MB in Cache Storage -- the outgoing build plus the incoming one -- and only then
+     // freed the old. If the browser refused the quota at that peak, the c.put() failed,
+     // the failure was swallowed (a broken cache must never be fatal), and the user
+     // silently got NO caching at all: a ~400 MB download on every single visit, with no
+     // way to tell from the page that anything was wrong. Pruning first halves the peak.
+     //
+     // Entries are keyed by the stamped URL (FreeCAD.wasm?v=<md5>), so "not one of this
+     // build's URLs" is exactly "belongs to a build that is no longer served".
+     async function __pruneEngineCache(keep) {
+       try {
+         const c = await __engineCache();
+         if (!c) { return 0; }
+         const want = keep.map(u => new URL(u, location.href).href);
+         let n = 0;
+         for (const req of await c.keys()) {
+           if (want.indexOf(req.url) < 0) { await c.delete(req); n++; }
+         }
+         if (n) { append('dropped ' + n + ' cached asset(s) from a previous build'); }
+         return n;
+       } catch(e){ append('engine cache prune failed: ' + e); return 0; }
+     }
+     await __pruneEngineCache([WASM_URL, DATA_URL]);
+
      // Fetch the wasm bytes up front so the PyEM_CountArgs parser (pre-gui.js)
      // can read Module.wasmBinary and force CPython's direct-call trampoline
      // (no JS frame) — required for JSPI to suspend across CPython frames.
@@ -1330,13 +1356,6 @@ window.fcRunPy = fcRunPy;
        __fcDataBytes = await __engineFetch(DATA_URL, 'data', (n,_t,cached) => {
          __dataGot = n; if (!cached) __fromCache = false; __report(); });
      } catch(e){ append('engine prefetch failed: '+e,'err'); }
-     // Drop any build's entries but this one's, so the cache does not accumulate a
-     // 400 MB engine per release.
-     try {
-       const c = await __engineCache();
-       if (c) { const keep = [WASM_URL, DATA_URL].map(u => new URL(u, location.href).href);
-         for (const req of await c.keys()) { if (keep.indexOf(req.url) < 0) { await c.delete(req); } } }
-     } catch(e){}
      const instance = window.fcInstance = await qtLoad({
        wasmBinary: __fcWasmBytes,
        // Hand emscripten the package we already fetched (and cached). Returning null
