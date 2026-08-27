@@ -955,6 +955,79 @@ class Session:
         return None
 
 
+# Does the heap ACTUALLY grow?
+#
+# Two wrong answers preceded this one, and both are worth keeping written down.
+#
+# The first asked `!!(Module.wasmMemory && Module.wasmMemory.grow)`. Memory.prototype.grow
+# exists on EVERY WebAssembly.Memory, growable or not, and under -pthread emscripten does
+# not hang wasmMemory off Module at all -- so it was false for a growable build and false
+# for a fixed one. It printed `growable=False` against a build linked with
+# ALLOW_MEMORY_GROWTH=1 whose loader is full of GROWABLE_HEAP_*() accessors. A check that
+# gives the same answer whatever it is pointed at is not a check.
+#
+# The second tried to force growth by allocating until the heap moved. On a FIXED heap that
+# is a malloc storm that runs until allocation fails -- slow, and hostile to a shared box.
+#
+# This one asks the memory itself. Find the WebAssembly.Memory wherever this build exposes
+# it, then call grow(1): one 64 KB page, instantly, and it either succeeds or throws
+# RangeError because the memory is at its maximum. Harmless either way, and it is the
+# capability itself being tested rather than a proxy for it.
+GROWTH_JS = r"""() => {
+  const m = window.fcInstance;
+  const out = {};
+  if (!m) { out.error = 'no module'; return JSON.stringify(out); }
+  out.beforeMB = m.HEAPU8 ? Math.round(m.HEAPU8.length / 1048576) : null;
+
+  // Emscripten has moved this between releases, so look in all the places rather than
+  // assuming one -- assuming one is what produced the first wrong answer.
+  let mem = null;
+  for (const get of [
+      () => m.wasmMemory,
+      () => m.asm && m.asm.memory,
+      () => m.wasmExports && m.wasmExports.memory,
+      () => m.HEAP8 && m.HEAP8.buffer && m.HEAP8.buffer.__memory,
+  ]) {
+    try { const c = get(); if (c && typeof c.grow === 'function') { mem = c; break; } }
+    catch (e) { /* keep looking */ }
+  }
+  if (!mem) {
+    // The loader keeps wasmMemory in a closure and only ever READS Module["wasmMemory"],
+    // so on this build there is no Memory object to reach. The backing buffer answers the
+    // same question though: a growable WebAssembly.Memory hands out a growable
+    // SharedArrayBuffer (or a resizable ArrayBuffer without -pthread), and that carries
+    // maxByteLength -- which is the ceiling itself, not a proxy for it.
+    try {
+      const b = m.HEAPU8 && m.HEAPU8.buffer;
+      if (b && (b.growable === true || b.resizable === true)) {
+        out.maxMB = b.maxByteLength ? Math.round(b.maxByteLength / 1048576) : null;
+        out.verdict = 'GROWABLE, ceiling ' + (out.maxMB ? out.maxMB + ' MB' : 'unknown');
+        return JSON.stringify(out);
+      }
+      if (b && (b.growable === false || b.resizable === false)) {
+        out.verdict = 'FIXED (buffer is not growable)';
+        return JSON.stringify(out);
+      }
+    } catch (e) { out.error = String(e).slice(0, 100); }
+    out.verdict = 'cannot tell -- no Memory object and the buffer does not say';
+    return JSON.stringify(out);
+  }
+
+  try {
+    const pagesBefore = mem.buffer.byteLength / 65536;
+    mem.grow(1);                       // one page, 64 KB
+    const pagesAfter = mem.buffer.byteLength / 65536;
+    out.afterMB = Math.round(mem.buffer.byteLength / 1048576);
+    out.verdict = pagesAfter > pagesBefore
+      ? 'GROWABLE (grew by ' + (pagesAfter - pagesBefore) + ' page)'
+      : 'fixed (grow() returned but the buffer did not move)';
+  } catch (e) {
+    // RangeError is what a memory at its maximum throws.
+    out.verdict = 'FIXED (' + String(e && e.name || e) + ' -- at its maximum)';
+  }
+  return JSON.stringify(out);
+}"""
+
 def scenario_boot(ctx, url, args, fail):
     s = Session(ctx, url, args.timeout)
     if not s.load():
@@ -989,13 +1062,15 @@ def scenario_boot(ctx, url, args, fail):
             heap = s.page.evaluate(
                 "() => { const m = window.fcInstance;"
                 " return m && m.HEAPU8 ? Math.round(m.HEAPU8.length / 1048576) : -1; }")
-            grows = s.page.evaluate(
-                "() => { const m = window.fcInstance;"
-                " try { return !!(m && m.wasmMemory && m.wasmMemory.buffer"
-                " && m.wasmMemory.grow); } catch (e) { return false; } }")
-            # 2 GB, not growable, is the deliberate configuration: memory growth
-            # changes emscripten's codegen and breaks the GL patch table (ROADMAP 6).
-            print('==> heap: %s MB, growable=%s' % (heap, grows))
+            grows = json.loads(s.page.evaluate(GROWTH_JS) or '{}')
+            print('==> heap: %s MB initially, growth: %s'
+                  % (heap, grows.get('verdict', 'unknown')))
+            if grows.get('afterMB'):
+                print('==> heap: memory reports %s MB after the probe page' % grows['afterMB'])
+            if grows.get('maxMB'):
+                print('==> heap: ceiling is %s MB' % grows['maxMB'])
+            if grows.get('error'):
+                print('==> heap: growth probe could not run (%s)' % grows['error'])
         except Exception:
             pass
         for f in s.fatals():

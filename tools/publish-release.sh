@@ -71,6 +71,10 @@ done
 }
 
 echo "== carry over gmsh/ccx from the current latest release"
+# gh infers the repo from the git remote. Run from a rescued directory outside a checkout
+# -- which is exactly what the --dir path above is for -- and it dies with
+# "fatal: not a git repository". Name the repo explicitly so both paths work.
+export GH_REPO="${GH_REPO:-Virtastic/freecad-web}"
 PREV="$(gh release view --json tagName -q .tagName)"
 echo "   previous latest: $PREV"
 for f in gmsh.js gmsh.wasm ccx.js ccx.wasm; do
