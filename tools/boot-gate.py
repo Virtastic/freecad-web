@@ -715,12 +715,43 @@ DOM_STACK_JS = r"""(() => {
   out.atCentre = (document.elementsFromPoint ? document.elementsFromPoint(cx, cy) : [])
     .slice(0, 6)
     .map(el => el.tagName + (el.id ? '#' + el.id : ''));
-  out.canvases = Array.from(document.querySelectorAll('canvas')).map(c => {
-    const r = c.getBoundingClientRect(); const cs = getComputedStyle(c);
+  // Collect canvases from the document AND from every open shadow root -- Qt 6.9 keeps
+  // its own canvas inside #qt-shadow-container, where querySelectorAll cannot reach.
+  const cans = [];
+  const walk = (root) => {
+    for (const c of root.querySelectorAll('canvas')) { cans.push(c); }
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) { walk(el.shadowRoot); }
+    }
+  };
+  walk(document);
+  out.canvases = cans.map(c => {
+    const r = c.getBoundingClientRect();
+    // THE QUESTION: has this canvas been handed to a worker? Once
+    // transferControlToOffscreen has been called, getContext throws on this thread --
+    // which is exactly what "Qt renders somewhere else" looks like from here.
+    let ctx = 'none';
+    try {
+      const g = c.getContext('webgl2', {}) || c.getContext('webgl', {});
+      ctx = g ? 'webgl-live' : 'null';
+    } catch (e) {
+      ctx = 'THROWS: ' + String(e && e.name || e).slice(0, 40);
+    }
     return (c.id || '(no id)') + ' css=' + Math.round(r.width) + 'x' + Math.round(r.height)
-           + ' buf=' + c.width + 'x' + c.height + ' z=' + cs.zIndex
-           + ' pos=' + cs.position + ' op=' + cs.opacity;
+           + ' buf=' + c.width + 'x' + c.height + ' getContext=' + ctx;
   });
+  out.crossOriginIsolated = window.crossOriginIsolated;
+  out.hardwareConcurrency = navigator.hardwareConcurrency;
+  out.pixelGlSameCanvas = (() => {
+    try {
+      const g = window.__fcPixelGl;
+      if (!g || !g.canvas) { return 'no pixelgate gl'; }
+      return cans.indexOf(g.canvas) >= 0
+        ? 'pixelgate gl IS one of the page canvases (index '
+          + cans.indexOf(g.canvas) + ' of ' + cans.length + ')'
+        : 'pixelgate gl canvas is NOT among the page canvases';
+    } catch (e) { return 'err ' + e; }
+  })();
   return JSON.stringify(out);
 })"""
 
@@ -1877,6 +1908,21 @@ def scenario_render(ctx, url, args, fail):
     except Exception as e:
         fail('render scenario: could not read the frame (%s)' % e)
         return s
+    if True:
+        # DIAGNOSTIC, not an assertion: what does the CANVAS hold after a plain Coin
+        # render with no document involved?
+        try:
+            import os as _os
+            rc = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
+            print('==> render: CANVAS %dx%d, %d distinct colours, dominant %s at %.1f%%'
+                  % (rc.get('w', 0), rc.get('h', 0), rc.get('distinct', 0),
+                     rc.get('dominant'), rc.get('dominantPct', 0)))
+            _os.makedirs('/tmp/fclogs', exist_ok=True)
+            s.page.screenshot(path='/tmp/fclogs/render-canvas.png', full_page=False)
+            print('==> render: screenshot %d bytes'
+                  % _os.path.getsize('/tmp/fclogs/render-canvas.png'))
+        except Exception as e:
+            print('==> render: canvas diagnostic failed (%s)' % e)
     if frame.get('error'):
         fail('render scenario: %s' % frame['error'])
         return s
@@ -2190,6 +2236,9 @@ def scenario_project3d(ctx, url, args, fail):
         print('==> project3d: nativeComposite=%s coinFbo=%s'
               % (st.get('nativeComposite'), st.get('coinFbo')))
         print('==> project3d: at centre of viewport: %s' % (st.get('atCentre'),))
+        print('==> project3d: crossOriginIsolated=%s cores=%s'
+              % (st.get('crossOriginIsolated'), st.get('hardwareConcurrency')))
+        print('==> project3d: %s' % st.get('pixelGlSameCanvas'))
         for c in st.get('canvases', []):
             print('==> project3d: canvas %s' % c)
         for b in st.get('big', [])[:8]:
@@ -2223,6 +2272,26 @@ def scenario_project3d(ctx, url, args, fail):
                   % os.path.getsize('/tmp/fclogs/project3d-overlay.png'))
         except Exception as e:
             print('==> project3d: overlay experiment failed (%s)' % e)
+
+    # Force a repaint and look again.
+    if os.environ.get('FCWEB_TRY_REPAINT'):
+        try:
+            os.makedirs('/tmp/fclogs', exist_ok=True)
+            print('==> project3d: --- forcing a resize to make Qt repaint ---')
+            s.page.set_viewport_size({'width': 1180, 'height': 700})
+            time.sleep(4)
+            s.page.set_viewport_size({'width': 1280, 'height': 720})
+            time.sleep(6)
+            c3 = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
+            print('==> project3d: AFTER-RESIZE CANVAS %dx%d, %d distinct colours, '
+                  'dominant %s at %.1f%%'
+                  % (c3.get('w', 0), c3.get('h', 0), c3.get('distinct', 0),
+                     c3.get('dominant'), c3.get('dominantPct', 0)))
+            s.page.screenshot(path='/tmp/fclogs/project3d-resized.png', full_page=False)
+            print('==> project3d: AFTER-RESIZE screenshot %d bytes'
+                  % os.path.getsize('/tmp/fclogs/project3d-resized.png'))
+        except Exception as e:
+            print('==> project3d: repaint experiment failed (%s)' % e)
 
     shot = None
     try:

@@ -2920,7 +2920,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +2782,91 @@ void View3DInventorViewer::renderScene()
+@@ -2679,6 +2782,137 @@ void View3DInventorViewer::renderScene()
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -2988,6 +2988,52 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +            }
 +        }
 +    }
++    //
++    // FCWEB GL STATE RESET -- hand Qt back a context it recognises.
++    //
++    // Measured 2026-08-27: ANY Coin render blackens the entire Qt window, not just
++    // the viewport. The render scenario builds one Part::Box, with no document and
++    // no MDI involvement, and its canvas comes back with a single colour while
++    // Coin's own FBO holds 94. Menus and toolbars go with it, and Qt draws those.
++    // So this is not a compositing bug in the viewport -- it is Coin leaving the
++    // shared context in a state Qt cannot render through.
++    //
++    // It began when Qt was built threaded on 2026-08-19 (07da58e, -feature-thread,
++    // QT_KEY -v1 -> -mt-v2). The last release with a single-threaded Qt,
++    // build-20260813-eventstack, draws this same scene to the canvas with 9,485
++    // distinct colours and ZERO WebGL warnings; every build since draws 1 colour
++    // and logs 60+ "uniform1i: location is not from the associated program".
++    //
++    // glPushAttrib(GL_ALL_ATTRIB_BITS)/glPopAttrib() used to bracket the composite
++    // and were never protection: they are fixed-function calls handled by
++    // emscripten's LEGACY_GL_EMULATION, which tracks its OWN immediate-mode state
++    // and does not restore the real GL state that Qt's shader pipeline depends on.
++    //
++    // Reset only real, WebGL2-level state. Nothing here is fixed-function, so none
++    // of it goes through the emulation.
++    glUseProgram(0);
++    glBindBuffer(GL_ARRAY_BUFFER, 0);
++    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
++    glActiveTexture(GL_TEXTURE0);
++    glBindTexture(GL_TEXTURE_2D, 0);
++    glBindRenderbuffer(GL_RENDERBUFFER, 0);
++    glDisable(GL_DEPTH_TEST);
++    glDisable(GL_BLEND);
++    glDisable(GL_CULL_FACE);
++    glDisable(GL_SCISSOR_TEST);
++    glDisable(GL_STENCIL_TEST);
++    glDepthMask(GL_TRUE);
++    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
++    glFrontFace(GL_CCW);
++    // Coin enables attribute arrays for its own vertex layout and does not turn
++    // them off. Qt binds its own, but a stale enabled array pointing at a buffer
++    // that no longer exists is enough to make a draw call fail.
++    for (GLuint fcAttr = 0; fcAttr < 8; ++fcAttr) {
++        glDisableVertexAttribArray(fcAttr);
++    }
++    // Leave no error latched: Qt checks glGetError in places and treats a stuck
++    // error as a failed frame.
++    while (glGetError() != GL_NO_ERROR) { }
 +    //
 +    // RELEASE THE CONTEXT. This pairs the makeCurrent() at the top of renderScene.
 +    //
