@@ -1984,6 +1984,24 @@ window.fcRunPy = fcRunPy;
     // Closing or hiding the tab: force a save. pagehide is the one that fires on reload.
     document.addEventListener('visibilitychange', function(){ if(document.hidden) runPy(AUTOSAVE_FORCE); });
     window.addEventListener('pagehide', function(){ runPy(AUTOSAVE_FORCE); });
+    // Overlay state. These belong WITH the three functions below.
+    //
+    // They used to be declared inside the compositor IIFE further up, which closes at
+    // "})();  // end compositor" -- roughly 240 lines before ensureOverlay/blit/frameBlit
+    // are defined. So all three referenced variables that were not in scope, and every
+    // frame the legacy overlay actually ran threw, straight into its own try/catch:
+    //
+    //     [overlay] ReferenceError: buf is not defined
+    //         at blit ((index):2002)
+    //         at frameBlit ((index):2063)
+    //
+    // Observed in production on 2026-08-27. The catch swallowed it, so the overlay simply
+    // painted nothing and the failure was invisible except in the console.
+    //
+    // This path is inert whenever the C++ native composite is running
+    // (window.__fcNativeComposite), so it only bites before the first renderScene or when
+    // ?overlay=1 forces the legacy path -- which is exactly when it is being relied on.
+    var ov, ovctx, buf, imgData, lastW = 0, lastH = 0;
     function ensureOverlay(){
       if (ov) return;
       var screen = document.getElementById('screen');

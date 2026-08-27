@@ -561,6 +561,56 @@ WARN_EVICTABLE_JS = r"""() => new Promise((resolve) => {
   }, 1200);
 })"""
 
+SWIGBRIDGE_PY = r'''
+# The exact call that produced a black viewport, in isolation.
+#
+# Every existing scenario builds geometry through C++ view providers, which never cross
+# FreeCAD's SWIG bridge -- which is why a build where the bridge was dead passed all
+# thirteen of them and still drew nothing when a user opened a project. The failing path is
+# a PYTHON view provider handing a pivy coin node to C++:
+#
+#     File "/freecad/Mod/Assembly/JointObject.py", line 1070, in attach
+#         vobj.addDisplayMode(self.display_mode, "Wireframe")
+#     RuntimeError: No SWIG wrapped library loaded
+#
+# FreeCAD converts that coin node with Base::Interpreter().createSWIGPointerObj, which walks
+# the SWIG runtimes compiled into the binary. SWIG stamps its type table with a
+# version-specific key, so a FreeCAD built against one SWIG and a pivy built against another
+# never see each other and every conversion throws.
+#
+# This does the conversion and nothing else.
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    import FreeCAD as App
+    import FreeCADGui as Gui
+    from pivy import coin
+
+    _out["pivy"] = "ok"
+    doc = App.newDocument("SwigProbe")
+    obj = doc.addObject("App::FeaturePython", "Probe")
+    vp = obj.ViewObject
+    if vp is None:
+        _out["error"] = "no ViewObject (is the GUI up?)"
+    else:
+        sep = coin.SoSeparator()
+        sep.addChild(coin.SoSphere())
+        # THE call. If the bridge is dead this raises RuntimeError.
+        vp.addDisplayMode(sep, "Wireframe")
+        _out["addDisplayMode"] = "ok"
+        # And read it back, so a silent no-op cannot pass either.
+        try:
+            _out["modes"] = list(vp.listDisplayModes())
+        except Exception as e:
+            _out["modes"] = "unreadable: %s" % e
+except Exception as e:
+    _out["error"] = "%s: %s" % (type(e).__name__, str(e)[:160])
+_s.__stderr__.write("FCSWIG " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
+
 NETWORK_PY = r'''
 # Can the application reach the web at all? Under COEP:require-corp a direct cross-origin
 # fetch is refused however co-operative the remote server is, so everything has to go
@@ -1793,6 +1843,42 @@ def scenario_storage(ctx, url, args, fail):
     return s
 
 
+def scenario_swigbridge(ctx, url, args, fail):
+    """Can a Python view provider hand a coin node to C++?
+
+    This is the gate that did not exist when a black viewport shipped. Every other scenario
+    builds geometry through C++ view providers, which never touch FreeCAD's SWIG bridge, so
+    all thirteen passed against a build whose bridge was completely dead -- and any user
+    opening a project with an Assembly or Draft view provider got a black screen and a wall
+    of "No SWIG wrapped library loaded".
+
+    It asserts the conversion works, and then reads the display mode back, so a version that
+    silently does nothing cannot pass either.
+    """
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('swigbridge scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+
+    s.run_python(SWIGBRIDGE_PY)
+    r = s.wait_for('FCSWIG', 240)
+    if not isinstance(r, dict):
+        fail('swigbridge scenario: the probe returned nothing (%s)' % (r,))
+        return s
+    if r.get('error'):
+        fail('swigbridge scenario: %s -- a Python view provider cannot give Coin its scene '
+             'graph, so any document carrying one (Assembly, Draft) opens to a BLACK '
+             'VIEWPORT. Check that FreeCAD and pivy were built with the same SWIG: '
+             'tools/check-swig-runtime.py' % r['error'])
+        return s
+    if r.get('addDisplayMode') != 'ok':
+        fail('swigbridge scenario: addDisplayMode did not report success (%s)' % (r,))
+        return s
+    print('==> swigbridge: pivy %s, addDisplayMode ok, modes=%s'
+          % (r.get('pivy'), r.get('modes')))
+    return s
+
+
 # Every scenario, once. An entry supplies its argparse choice, its dispatch order,
 # whether "all" includes it, and the sentence the pass line prints.
 #
@@ -1834,6 +1920,8 @@ SCENARIOS = (
      'hands the user a real .FCStd whose bytes reopen to the same geometry'),
     ('storage',       scenario_storage,       True,
      'knows whether the browser will keep the documents, and warns when it will not'),
+    ('swigbridge',    scenario_swigbridge,    True,
+     'lets a Python view provider hand its scene graph to Coin'),
     ('render',        scenario_render,        False,
      'draws a shaded solid in the 3D viewport'),
     ('upgrade',       scenario_upgrade,       False,
