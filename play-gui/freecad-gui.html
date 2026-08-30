@@ -2377,12 +2377,17 @@ window.fcRunPy = fcRunPy;
           var widget = null, k, e;
           for (k in REG) { e = REG[k];
             if (e.tex && e.blitTo && (!widget || e.blitTo > widget.blitTo)) widget = e; }
+          if (widget && widget.gl && !widget.gl.isTexture(widget.tex)) { widget.tex = null; widget = null; }
           var gl = widget && widget.gl;
           if (!gl) { for (k in REG) { if (REG[k].gl) { gl = REG[k].gl; break; } } }
           if (!gl) { inPresent = false; return; }
           // The raster UI: newest canvas-sized uploaded texture.
           var ui = null, i, t;
-          for (i = 0; i < UPL.length; i++) { t = UPL[i];
+          for (i = UPL.length - 1; i >= 0; i--) { t = UPL[i];
+            // Qt deletes and recreates its backingstore textures (resize, DPR
+            // change, post-crash teardown). Binding a deleted one raises
+            // INVALID_OPERATION and the UI layer draws garbage -- prune instead.
+            if (!gl.isTexture(t)) { UPL.splice(i, 1); continue; }
             if (t.__fcSz && t.__fcSz[0] === gl.drawingBufferWidth
                          && t.__fcSz[1] === gl.drawingBufferHeight
                          && (!ui || (t.__fcUpl || 0) > (ui.__fcUpl || 0))) ui = t; }

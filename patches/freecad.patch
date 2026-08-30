@@ -1018,6 +1018,23 @@ diff -ruNp a/src/Gui/Application.cpp b/src/Gui/Application.cpp
      mw.setProperty("QuitOnClosed", true);
  
      // https://forum.freecad.org/viewtopic.php?f=3&t=15540
+@@ -2830,6 +2830,16 @@ void Application::checkForPreviousCrashes()
+ }
+ 
+ void Application::checkForPreviousCrashes()
+ {
++#if defined(__EMSCRIPTEN__)
++    // wasm: the recovery DIALOG cannot exist here. Whether shown or skipped, its
++    // teardown path (~DocumentRecovery -> ~QDialog -> hide -> QDialogPrivate::
++    // setVisible -> QEventLoop::exit) trips a null indirect call and kills the
++    // instance during MainWindow::delayedStartup -- observed live on 2026-08-30
++    // the first time a real user booted with recovery records in IDBFS. Recovery
++    // itself is covered by the page: its autosave observer restores the previous
++    // session's documents without any modal UI.
++    return;
++#endif
+     try {
+         Gui::Dialog::DocumentRecoveryFinder finder;
 diff -ruNp a/src/Gui/Assistant.cpp b/src/Gui/Assistant.cpp
 --- a/src/Gui/Assistant.cpp
 +++ b/src/Gui/Assistant.cpp
