@@ -2371,7 +2371,15 @@ window.fcRunPy = fcRunPy;
         // renderScene there is nothing of ours to present and Qt's raster path shows
         // the UI on its own.
         if (!window.__fcNativeComposite) return;
-        if (performance.now() - lastForeignPresent < 500) return;   // Qt presents; stand down
+        // STAND-DOWN REMOVED. It parked this pass whenever anything else drew to
+        // framebuffer 0 -- meant to defer to a Qt whose present works. But FreeCAD's
+        // own interaction overlays (GLPainter rubber-band etc.) scribble small direct
+        // FB0 draws during every mouse action, which read as 'Qt presents' and
+        // blanked the screen for the whole drag -- black while moving, back when
+        // idle, exactly as reported on 2026-08-30. Presenting unconditionally is
+        // safe everywhere: on builds where Qt's present does work we repaint the
+        // same composed content one extra time per frame, visually identical.
+        void lastForeignPresent;
         inPresent = true;
         try {
           // The widget FBO: the one the C++ blit writes into most recently.
