@@ -2920,7 +2920,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +2782,160 @@ void View3DInventorViewer::renderScene()
+@@ -2679,6 +2782,163 @@ void View3DInventorViewer::renderScene()
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -3007,7 +3007,10 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    if (auto* fcGlw2 = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
 +        const qreal fcDpr = fcGlw2->devicePixelRatio();
 +        const QPoint fcTl = fcGlw2->mapTo(fcGlw2->window(), QPoint(0, 0));
-+        EM_ASM({ window.__fcWidgetRect = [$0, $1, $2, $3]; },
++        // No commas inside the JS block: the C preprocessor splits EM_ASM macro
++        // arguments on commas and only parentheses group -- an array literal
++        // there fails to compile with "use of undeclared identifier $1".
++        EM_ASM({ window.__fcWidgetRect = [$0].concat($1).concat($2).concat($3); },
 +               (int)(fcTl.x() * fcDpr), (int)(fcTl.y() * fcDpr),
 +               (int)(fcGlw2->width() * fcDpr), (int)(fcGlw2->height() * fcDpr));
 +    }
