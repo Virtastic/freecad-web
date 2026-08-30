@@ -11,7 +11,7 @@ pipeline {
     TAG       = 'freecad:test'
     NAME      = 'freecad-test'
     PORT      = '8084'
-    TEST_HOST = 'testapp@192.168.1.131'
+    TEST_HOST = 'testapp@192.168.1.137'
     SSH_KEY   = '/var/jenkins_home/.ssh/id_ed25519'   // the container's test-server deploy key
     REPO      = 'Virtastic/freecad-web'
     SMOKE_URL = 'https://freecad.dev.virtastic.app'
@@ -36,7 +36,7 @@ pipeline {
             ci/jenkins/smoke-test.sh "$SMOKE_URL"
           else
             echo "public origin not reachable yet; smoke-testing the container directly"
-            ci/jenkins/smoke-test.sh "http://192.168.1.131:$PORT"
+            ci/jenkins/smoke-test.sh "http://192.168.1.137:$PORT"
           fi
         '''
       }
