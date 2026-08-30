@@ -2732,7 +2732,12 @@ window.fcRunPy = fcRunPy;
     if(ext){ var acc={}; acc['application/octet-stream']=[ext];
       opts.types=[{description:ext.slice(1).toUpperCase()+' file', accept:acc}]; }
     try{
-      return window.showSaveFilePicker(opts).catch(function(){ return 'cancelled'; });
+      // Only a real user cancel is 'cancelled' (AbortError). Any other rejection --
+      // no transient activation, permission policy, iframe sandbox -- must fall back
+      // to a plain download, or the save is silently dropped.
+      return window.showSaveFilePicker(opts).catch(function(e){
+        return (e && e.name==='AbortError') ? 'cancelled' : null;
+      });
     }catch(e){ return null; }
   }
   function registerSave(path){
@@ -2746,13 +2751,21 @@ window.fcRunPy = fcRunPy;
     if(!(path in saveTargets)) saveTargets[path]=pickSaveTarget(path);
     ensureSaveWatcher();
   }
+  function downloadBytes(path, bytes){
+    var name=path.replace(/^.*\//,'');
+    var blob=new Blob([bytes],{type:'application/octet-stream'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(a.href);},15000);
+  }
   // Write bytes to the user's chosen file; falls back to a download when the picker is
   // unavailable (non-Chromium). Returns true if handled, false to use the download path.
   function writeToTarget(path, bytes){
     var t=saveTargets[path];
     if(!t) return false;
     t.then(function(h){
-      if(!h || h==='cancelled') return;            // user cancelled -> don't write anywhere
+      if(h==='cancelled') return;                  // user cancelled -> don't write anywhere
+      if(!h){ downloadBytes(path, bytes); return; } // picker unusable -> plain download
       return Promise.resolve(h.queryPermission && h.queryPermission({mode:'readwrite'}))
         .then(function(st){ return (st && st!=='granted' && h.requestPermission)
           ? h.requestPermission({mode:'readwrite'}) : st; })
@@ -2784,11 +2797,7 @@ window.fcRunPy = fcRunPy;
           // Preferred: write straight into the file the user picked in the OS save dialog.
           if(writeToTarget(p, bytes)) return;
           // Fallback (no File System Access API): download it.
-          var name=p.replace(/^.*\//,'');
-          var blob=new Blob([bytes],{type:'application/octet-stream'});
-          var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
-          document.body.appendChild(a); a.click(); a.remove();
-          setTimeout(function(){URL.revokeObjectURL(a.href);},15000);
+          downloadBytes(p, bytes);
         })(path,st.size);
       }
     },400);
