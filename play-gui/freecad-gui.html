@@ -2701,11 +2701,13 @@ window.fcRunPy = fcRunPy;
       } else if(ext==='svg'||ext==='dxf'){
         py("import FreeCAD, FreeCADGui as Gui, importSVG, importDXF\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\n(importSVG if "+JSON.stringify(ext)+"=='svg' else importDXF).insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass"+DROP_UPLOAD(path));
       } else {
-        // Generic import: Gui.insert dispatches by FreeCAD's registered
-        // extension map (Mesh for stl/obj/ply, ImportGui for step/iges, ...).
-        // The old Part.insert fallback only knew the BREP family and threw
-        // "Unknown extension" the first time someone opened an STL (2026-08-30).
-        py("import FreeCAD, FreeCADGui as Gui\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\nGui.insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass"+DROP_UPLOAD(path));
+        // Generic import: FreeCAD.loadFile dispatches through the REAL extension map
+        // (App.getImportType -> module.insert). Gui.insert looked like the generic
+        // importer but is not: FileHandler::openInternal only knows editors, .iv,
+        // VRML, python and images, and answers everything else with "File type not
+        // supported" -- which is exactly what a user opening an STL got even though
+        // the map itself listed stl -> Mesh the whole time (2026-08-30).
+        py("import FreeCAD, FreeCADGui as Gui\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\nFreeCAD.loadFile("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass"+DROP_UPLOAD(path));
       }
       } finally { inp.remove(); }
     };
