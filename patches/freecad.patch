@@ -2833,7 +2833,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      printDimension();
  
      for (auto it : this->graphicsItems) {
-@@ -2522,6 +2560,58 @@ void View3DInventorViewer::renderScene()
+@@ -2522,6 +2560,61 @@ void View3DInventorViewer::renderScene()
      const SbViewportRegion vp = this->getSoRenderManager()->getViewportRegion();
      SbVec2s origin = vp.getViewportOriginPixels();
      SbVec2s size = vp.getViewportSizePixels();
@@ -2865,7 +2865,10 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 +            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 +            glBindRenderbuffer(GL_RENDERBUFFER, fcDepth);
-+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, fcVw, fcVh);
++            // 24-bit, not 16: desktop FreeCAD gets a 24-bit depth buffer and real
++            // scenes z-fight visibly at 16 -- surfaces flicker in and out with the
++            // camera angle. WebGL2 guarantees DEPTH_COMPONENT24 support.
++            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, fcVw, fcVh);
 +            glBindFramebuffer(GL_FRAMEBUFFER, fcFbo);
 +            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fcTex, 0);
 +            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fcDepth);

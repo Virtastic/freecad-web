@@ -2155,8 +2155,22 @@ window.fcRunPy = fcRunPy;
         // vanishes (renders once, then blank). The Coin background quad (count=4,
         // depth-test OFF, big viewport) is always the FIRST draw of a frame on the
         // real target — clear depth right after it, on whatever FBO is truly bound.
+        // ONLY on the FIRST such draw of each animation frame per FBO. The original
+        // form cleared depth after EVERY 4-vertex depth-off big-viewport draw, and
+        // Coin's transparency pass and overlay quads match that signature MID-SCENE:
+        // a mid-frame depth wipe makes everything drawn before it lose the depth
+        // test, so objects vanished or read as transparent depending on draw order
+        // -- which shifts with the camera, hence "disappear and come back when we
+        // rotate" (reported 2026-08-30). The background quad this was written for
+        // is the frame's first draw, so first-of-frame keeps the fix and drops the
+        // damage.
         if (nm==='drawArrays' && arguments[2]===4 && fbo && vp && vp[2]>=300 && !shDepth(this)) {
-          this.clearDepth(1); this.clear(this.DEPTH_BUFFER_BIT);
+          if (!window.__fcDepthFrameTick) { window.__fcDepthFrameTick = 1;
+            (function tick(){ window.__fcDepthFrame = (window.__fcDepthFrame||0)+1; requestAnimationFrame(tick); })(); }
+          if (fbo.__fcDepthClearedAt !== window.__fcDepthFrame) {
+            fbo.__fcDepthClearedAt = window.__fcDepthFrame;
+            this.clearDepth(1); this.clear(this.DEPTH_BUFFER_BIT);
+          }
         }
         // Coin renders into a DEDICATED offscreen FBO (window.__fcCoinFbo, set by
         // View3DInventorViewer::renderScene); Qt's UI draws go to the default
