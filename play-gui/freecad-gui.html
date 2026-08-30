@@ -2344,10 +2344,10 @@ window.fcRunPy = fcRunPy;
 
       function progFor(gl) {
         if (gl.__fcPresProg) return gl.__fcPresProg;
-        var vsrc = '#version 300 es\nout vec2 uv;\nvoid main(){\n'
+        var vsrc = '#version 300 es\nout vec2 uv;\nuniform float uFlip;\nvoid main(){\n'
           + 'vec2 p = vec2(gl_VertexID==1||gl_VertexID==2||gl_VertexID==4 ? 1.0 : -1.0,\n'
           + '              gl_VertexID==2||gl_VertexID==4||gl_VertexID==5 ? 1.0 : -1.0);\n'
-          + 'uv = p*0.5+0.5;\n'
+          + 'uv = vec2(p.x*0.5+0.5, mix(p.y*0.5+0.5, 0.5-p.y*0.5, uFlip));\n'
           + 'gl_Position = vec4(p.x, -p.y, 0.0, 1.0);\n}';   // composed image is y-down
         var fsrc = '#version 300 es\nprecision mediump float;\nin vec2 uv;\n'
           + 'uniform sampler2D t;\nout vec4 c;\nvoid main(){ c = texture(t, uv); }';
@@ -2359,6 +2359,7 @@ window.fcRunPy = fcRunPy;
         gl.attachShader(pr, vs); gl.attachShader(pr, fs); gl.linkProgram(pr);
         if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) return null;
         gl.__fcPresProg = { pr: pr, loc: gl.getUniformLocation(pr, 't'),
+                            flip: gl.getUniformLocation(pr, 'uFlip'),
                             vao: gl.createVertexArray() };
         return gl.__fcPresProg;
       }
@@ -2412,12 +2413,15 @@ window.fcRunPy = fcRunPy;
           var W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
           if (ui) {
             gl.viewport(0, 0, W, H);
+            gl.uniform1f(p.flip, 0.0);   // QImage upload: already top-left origin
             gl.bindTexture(gl.TEXTURE_2D, ui);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
           }
           if (widget && window.__fcWidgetRect) {
             var r = window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
             gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
+            gl.uniform1f(p.flip, 1.0);   // GL-rendered y-up: invert sampling so the nav
+            // cube sits top-right, top faces shade light, and labels read forward
             gl.bindTexture(gl.TEXTURE_2D, widget.tex);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
           }
