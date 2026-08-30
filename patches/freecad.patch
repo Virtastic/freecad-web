@@ -1314,7 +1314,7 @@ diff -ruNp a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
  
  using namespace Gui;
  
-@@ -285,6 +294,22 @@ QString FileDialog::getSaveFileName(
+@@ -285,6 +294,39 @@ QString FileDialog::getSaveFileName(
      // NOTE: We must not change the specified file name afterwards as we may return the name of an
      // already existing file. Hence we must extract the first matching suffix from the filter list
      // and append it before showing the file dialog.
@@ -1326,6 +1326,23 @@ diff -ruNp a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
 +        QString base = QFileInfo(dirName).fileName();
 +        if (base.isEmpty()) {
 +            base = QStringLiteral("document");
++        }
++        if (!base.contains(QLatin1Char('.'))) {
++            // Export hands a directory or bare name; the format lives only in the
++            // filter string ("STL Mesh (*.stl);;..."). Without a suffix the export
++            // machinery cannot pick a writer and silently writes NOTHING -- File >
++            // Export did nothing at all until 2026-08-30. Take the selected
++            // filter's first pattern, falling back to the filter list's first.
++            const QString& pick = (selectedFilter && !selectedFilter->isEmpty())
++                                    ? *selectedFilter : filter;
++            for (const QString* src : { &pick, &filter }) {
++                int star = src->indexOf(QStringLiteral("*."));
++                if (star >= 0) {
++                    int i = star + 2, j = i;
++                    while (j < src->size() && src->at(j).isLetterOrNumber()) ++j;
++                    if (j > i) { base += QLatin1Char('.') + src->mid(i, j - i).toLower(); break; }
++                }
++            }
 +        }
 +        QString outPath = QStringLiteral("/home/web_user/_dl/") + base;
 +        QByteArray op = outPath.toUtf8();

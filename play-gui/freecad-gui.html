@@ -2657,7 +2657,9 @@ window.fcRunPy = fcRunPy;
   function openFile(filter){
     if(!ready()){ return; }
     var inp=document.createElement('input'); inp.type='file';
-    inp.accept='.FCStd,.fcstd,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.FCMacro,.py,.svg,.dxf,.zip';
+    // .ply/.3mf via Mesh, .ifc via the compiled-in ifcopenshell -- everything the
+    // engine's import map registers should be pickable here.
+    inp.accept='.FCStd,.fcstd,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.3mf,.ifc,.FCMacro,.py,.svg,.dxf,.zip';
     inp.style.cssText='position:fixed;left:-9999px;'; document.body.appendChild(inp);
     inp.onchange=async function(){
       try{
