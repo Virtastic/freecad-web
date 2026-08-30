@@ -180,7 +180,7 @@ PATCHES = [
     (
         'glNormal3f outside begin/end',
         'var _glNormal3f=(x,y,z)=>{GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
-        'var _glNormal3f=(x,y,z)=>{if(GLImmediate.mode<0){GLEmulation.__curNormal=[x,y,z];return}GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+        'var _glNormal3f=(x,y,z)=>{if(GLImmediate.mode<0){GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
     ),
     (
         'init immediate mode on context switch (FCWEBMCC)',
@@ -188,6 +188,100 @@ PATCHES = [
         'GLImmediate.init());(function(){var _mcc=GL.makeContextCurrent;GL.makeContextCurrent=function(ctx){var r=_mcc.call(GL,ctx);try{if(GL.currentContext&&typeof GLctx!=="undefined"&&GLctx){if(!GLImmediate.initted){Browser.useWebGL=true;GLImmediate.init()}if(!GL.currentContext.tempVertexBuffers1){GL.generateTempBuffers(true,GL.currentContext)}}}catch(e){}return r}})();/*FCWEBMCC*/GLEmulation.init();for(var i=0;i<32;++i)',
     ),
 ]
+
+
+# ---- a begin/end batch may be larger than 2 MB -------------------------------------
+#
+# Importing an STL killed the page: "Cannot read properties of undefined (reading
+# 'undefined')" out of getTempVertexBuffer <- Renderer.prepare <- flush <- glEnd.
+# Measured on the live build with a 51,200-triangle mesh: ONE glBegin(GL_TRIANGLES)
+# block of 153,600 vertices at stride 28 = 4,300,800 bytes, with the line-merge
+# accumulator provably uninvolved (mode 4, merged 0, pending false).
+#
+# emscripten sizes the whole immediate path off GL.MAX_TEMP_BUFFER_SIZE = 2 MB:
+#
+#   * GLImmediate.tempData is Float32Array(2MB>>2). Vertex writes are
+#     `vertexData[vertexCounter++] = x` with NO bounds check, and a JS typed array
+#     DISCARDS an out-of-range store -- so past 524,288 floats the mesh is silently
+#     truncated. That is the quieter half of this bug and the reason a crash guard
+#     alone would not have been a fix.
+#   * GL.generateTempBuffers only builds ring slots up to log2ceil(2MB) = 21, so
+#     getTempVertexBuffer(4300800) reads tempVertexBuffers1[23] -> undefined, then
+#     indexes it with an undefined counter. That is the crash.
+#
+# Why grow rather than switch meshes to VBOs: Coin's VBO path is disabled on wasm
+# deliberately and with measurements recorded in patches/coin3d (a 626-solid STEP
+# assembly stays responsive at 245 s in immediate mode and never became responsive
+# within 600 s with VBOs, scene-build uploads 7.3 -> 36.7 MB). Immediate mode is the
+# fast path here; it just has to stop lying about capacity.
+#
+# Growth doubles, is confined to the begin/end buffer (the glDrawArrays/glDrawElements
+# paths point vertexData at a heap subarray -- never ours to reallocate), and stops at
+# a ceiling so a runaway cannot take the tab out. Each writer reserves a whole vertex
+# of headroom rather than its own component count, so the check is one compare.
+GROWABLE_IMMEDIATE = [
+    (
+        'growable immediate vertex buffer',
+        'GLImmediate.tempData=new Float32Array(GL.MAX_TEMP_BUFFER_SIZE>>2);GLImmediate.indexData=new Uint16Array(GL.MAX_TEMP_BUFFER_SIZE>>1);GLImmediate.vertexDataU8=new Uint8Array(GLImmediate.tempData.buffer);',
+        # The replacement must NOT contain the anchor verbatim: apply() runs three passes,
+        # and an anchor that survives its own replacement is re-inserted on every one of
+        # them (this definition landed three times before the parentheses were added).
+        'GLImmediate.tempData=new Float32Array(GL.MAX_TEMP_BUFFER_SIZE>>2);GLImmediate.indexData=new Uint16Array(GL.MAX_TEMP_BUFFER_SIZE>>1);GLImmediate.vertexDataU8=new Uint8Array((GLImmediate.tempData).buffer);'
+        'GLImmediate.__growMax=268435456;'
+        'GLImmediate.__grow=function(){'
+        'var d=GLImmediate.vertexData;'
+        'if(d!==GLImmediate.tempData)return;'
+        'if(GLImmediate.vertexCounter+16<=d.length)return;'
+        'var n=d.length*2;'
+        'while(GLImmediate.vertexCounter+16>n&&n<GLImmediate.__growMax>>2)n*=2;'
+        'if(n>GLImmediate.__growMax>>2)n=GLImmediate.__growMax>>2;'
+        'if(n<=d.length)return;'
+        'var g=new Float32Array(n);g.set(d);'
+        'GLImmediate.tempData=GLImmediate.vertexData=g;'
+        'GLImmediate.vertexDataU8=new Uint8Array(g.buffer);'
+        'GLImmediate.__grew=(GLImmediate.__grew||0)+1};',
+    ),
+    (
+        'growable immediate: glVertex2f',
+        'var _glVertex2f=(x,y)=>{GLImmediate.vertexData',
+        'var _glVertex2f=(x,y)=>{GLImmediate.__grow();GLImmediate.vertexData',
+    ),
+    (
+        'growable immediate: glVertex3f',
+        'var _glVertex3f=(x,y,z)=>{GLImmediate.vertexData',
+        'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();GLImmediate.vertexData',
+    ),
+    (
+        'growable immediate: glVertex4f',
+        'var _glVertex4f=(x,y,z,w)=>{GLImmediate.vertexData',
+        'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();GLImmediate.vertexData',
+    ),
+    (
+        'growable immediate: glTexCoord2i',
+        'var _glTexCoord2i=(u,v)=>{GLImmediate.vertexData',
+        'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();GLImmediate.vertexData',
+    ),
+    (
+        # glColor4f writes PACKED BYTES through vertexDataU8, a view on the same buffer,
+        # so it advances vertexCounter too and must reserve headroom like the rest --
+        # and the view has to be rebuilt after a reallocation, which __grow does.
+        'growable immediate: glColor4f',
+        'if(GLImmediate.mode>=0){var start=GLImmediate.vertexCounter<<2;GLImmediate.vertexDataU8[start+0]=r*255;',
+        'if(GLImmediate.mode>=0){GLImmediate.__grow();var start=GLImmediate.vertexCounter<<2;GLImmediate.vertexDataU8[start+0]=r*255;',
+    ),
+    (
+        # The GPU-side ring only has slots for sizes up to MAX_TEMP_BUFFER_SIZE. Give an
+        # oversize request its own single-slot ring: one buffer per size class, reused
+        # every frame, instead of 64 multi-megabyte buffers or an undefined dereference.
+        'oversize temp vertex buffer ring',
+        'getTempVertexBuffer:sizeBytes=>{var idx=GL.log2ceilLookup(sizeBytes);var ringbuffer=GL.currentContext.tempVertexBuffers1[idx];',
+        'getTempVertexBuffer:sizeBytes=>{var idx=GL.log2ceilLookup(sizeBytes);'
+        'if(!GL.currentContext.tempVertexBuffers1[idx]){GL.currentContext.tempVertexBuffers1[idx]=[null];GL.currentContext.tempVertexBufferCounters1[idx]=0}'
+        'else if(GL.currentContext.tempVertexBuffers1[idx].length===1){GL.currentContext.tempVertexBufferCounters1[idx]=0}'
+        'var ringbuffer=GL.currentContext.tempVertexBuffers1[idx];',
+    ),
+]
+PATCHES += GROWABLE_IMMEDIATE
 
 # Coin exercises corners of the fixed-function API that emscripten implements by
 # THROWING. A throw from inside a GL call unwinds through Coin's render traversal and
@@ -370,6 +464,21 @@ def check_postconditions(text):
             bad.append((t, 'Coin calls this; a throw here kills the viewport', n))
     if '__flushMerged' not in text:
         bad.append(('immediate-mode line batching', 'absent -- the heavy-scene draw-call reduction is not in this build', 1))
+    # Every vertex writer must reserve headroom before it stores. A missing guard is not
+    # visible as an error: the typed array discards the out-of-range write and the mesh
+    # comes out truncated, so count the call sites rather than trust the per-patch status.
+    ngrow = text.count('__grow=function')
+    if ngrow != 1:
+        bad.append(('growable immediate vertex buffer',
+                    'expected exactly 1 definition, found %d (0 = absent, >1 = anchor '
+                    'survived its own replacement and was re-inserted per pass)' % ngrow,
+                    ngrow))
+    else:
+        n = text.count('GLImmediate.__grow()')
+        if n != 6:
+            bad.append(('growable immediate guards', 'expected 6 vertex-writer guards, found %d' % n, n))
+    if 'tempVertexBuffers1[idx]=[null]' not in text:
+        bad.append(('oversize temp vertex buffer ring', 'absent -- an oversize batch dereferences undefined', 1))
     # A growable build is no longer rejected: _apply_once derives the growable form of each
     # anchor mechanically (see `growable`). The invariant that mattered is the one above --
     # none of the nine throw sites may survive -- and it holds for either form, because
