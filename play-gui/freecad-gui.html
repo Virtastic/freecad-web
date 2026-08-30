@@ -2245,6 +2245,192 @@ window.fcRunPy = fcRunPy;
     })();
 
 
+
+    // ---- present pass: the frame Qt composes but never shows -------------------------
+    //
+    // On a Qt built with -feature-thread, the widget compositor RECORDS the window
+    // compose every frame (qt.qpa.backingstore logs it faithfully) but the recorded
+    // command buffer never executes: measured on 2026-08-30, zero draw calls and zero
+    // blits ever reach the canvas default framebuffer, so the window is black while
+    // every INPUT to the compose exists and is current -- the raster UI is uploaded as
+    // a canvas-sized texture each frame, and the QOpenGLWidget's backing FBO holds
+    // Coin's frame via the C++ blit in renderScene. Single-threaded Qt executes the
+    // same compose fine (14 present draws/frame on framebuffer 0, verified), which is
+    // how this shipped unnoticed: the pre-threading builds presented, the threaded
+    // ones recorded and stopped.
+    //
+    // So the page does the last step itself: each animation frame, draw the newest
+    // canvas-sized uploaded texture (the raster UI) full-screen, then the widget
+    // texture at the rect renderScene publishes as window.__fcWidgetRect. Both
+    // textures are found by observation, not by id: ids are private to emscripten's
+    // GL wrapper, but every createFramebuffer/texImage2D/blitFramebuffer passes
+    // through these prototypes.
+    //
+    // STAND-DOWN: if anything else draws to framebuffer 0 (a Qt whose present works --
+    // a single-threaded build, or a future Qt with the bug fixed), this pass sees the
+    // foreign draw and goes dormant, so it cannot double-present or fight a working
+    // compositor. ?nojspresent=1 disables it outright.
+    (function () {
+      if (qp.has('no3d') || qp.has('nojspresent')) return;
+      var P2 = WebGL2RenderingContext.prototype;
+      var fbSerial = 0;
+      var REG = {};                       // framebuffer serial -> {fb, gl, tex, blitTo}
+      var UPL = [];                       // textures receiving raster uploads
+      var lastForeignPresent = 0;
+      var inPresent = false;
+
+      var oCreateFb = P2.createFramebuffer;
+      P2.createFramebuffer = function () {
+        var r = oCreateFb.apply(this, arguments);
+        if (r) { r.__fcId = ++fbSerial; REG[r.__fcId] = { fb: r, gl: this }; }
+        return r;
+      };
+      var oFbTex = P2.framebufferTexture2D;
+      P2.framebufferTexture2D = function (t, att, tt, tex, lvl) {
+        try {
+          var fb = this.getParameter(this.DRAW_FRAMEBUFFER_BINDING)
+                || this.getParameter(this.FRAMEBUFFER_BINDING);
+          if (fb && fb.__fcId && att === this.COLOR_ATTACHMENT0 && REG[fb.__fcId])
+            REG[fb.__fcId].tex = tex;
+        } catch (e) {}
+        return oFbTex.call(this, t, att, tt, tex, lvl);
+      };
+      var oTexImg = P2.texImage2D;
+      P2.texImage2D = function () {
+        try {
+          var t = this.getParameter(this.TEXTURE_BINDING_2D);
+          if (t && arguments.length >= 6 && typeof arguments[3] === 'number')
+            t.__fcSz = [arguments[3], arguments[4]];
+        } catch (e) {}
+        return oTexImg.apply(this, arguments);
+      };
+      var oTexStore = P2.texStorage2D;
+      P2.texStorage2D = function (target, levels, ifmt, w, h) {
+        try {
+          var t = this.getParameter(this.TEXTURE_BINDING_2D);
+          if (t) t.__fcSz = [w, h];
+        } catch (e) {}
+        return oTexStore.call(this, target, levels, ifmt, w, h);
+      };
+      var oTexSub = P2.texSubImage2D;
+      P2.texSubImage2D = function () {
+        try {
+          var t = this.getParameter(this.TEXTURE_BINDING_2D);
+          if (t) { t.__fcUpl = performance.now(); if (UPL.indexOf(t) < 0) UPL.push(t); }
+        } catch (e) {}
+        return oTexSub.apply(this, arguments);
+      };
+      var oBlitFb = P2.blitFramebuffer;
+      P2.blitFramebuffer = function () {
+        try {
+          var db = this.getParameter(this.DRAW_FRAMEBUFFER_BINDING);
+          if (db && db.__fcId && REG[db.__fcId]) REG[db.__fcId].blitTo = performance.now();
+        } catch (e) {}
+        return oBlitFb.apply(this, arguments);
+      };
+      // Foreign framebuffer-0 draws mean a working native present: stand down.
+      ['drawArrays', 'drawElements'].forEach(function (nm) {
+        var o = P2[nm];
+        P2[nm] = function () {
+          if (!inPresent) {
+            try {
+              if (!this.getParameter(this.DRAW_FRAMEBUFFER_BINDING))
+                lastForeignPresent = performance.now();
+            } catch (e) {}
+          }
+          return o.apply(this, arguments);
+        };
+      });
+
+      function progFor(gl) {
+        if (gl.__fcPresProg) return gl.__fcPresProg;
+        var vsrc = '#version 300 es\nout vec2 uv;\nvoid main(){\n'
+          + 'vec2 p = vec2(gl_VertexID==1||gl_VertexID==2||gl_VertexID==4 ? 1.0 : -1.0,\n'
+          + '              gl_VertexID==2||gl_VertexID==4||gl_VertexID==5 ? 1.0 : -1.0);\n'
+          + 'uv = p*0.5+0.5;\n'
+          + 'gl_Position = vec4(p.x, -p.y, 0.0, 1.0);\n}';   // composed image is y-down
+        var fsrc = '#version 300 es\nprecision mediump float;\nin vec2 uv;\n'
+          + 'uniform sampler2D t;\nout vec4 c;\nvoid main(){ c = texture(t, uv); }';
+        var vs = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vs, vsrc); gl.compileShader(vs);
+        var fs = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fs, fsrc); gl.compileShader(fs);
+        var pr = gl.createProgram();
+        gl.attachShader(pr, vs); gl.attachShader(pr, fs); gl.linkProgram(pr);
+        if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) return null;
+        gl.__fcPresProg = { pr: pr, loc: gl.getUniformLocation(pr, 't'),
+                            vao: gl.createVertexArray() };
+        return gl.__fcPresProg;
+      }
+
+      function present() {
+        requestAnimationFrame(present);
+        if (inPresent) return;
+        // The native composite flag doubles as "3D pipeline live": before the first
+        // renderScene there is nothing of ours to present and Qt's raster path shows
+        // the UI on its own.
+        if (!window.__fcNativeComposite) return;
+        if (performance.now() - lastForeignPresent < 500) return;   // Qt presents; stand down
+        inPresent = true;
+        try {
+          // The widget FBO: the one the C++ blit writes into most recently.
+          var widget = null, k, e;
+          for (k in REG) { e = REG[k];
+            if (e.tex && e.blitTo && (!widget || e.blitTo > widget.blitTo)) widget = e; }
+          var gl = widget && widget.gl;
+          if (!gl) { for (k in REG) { if (REG[k].gl) { gl = REG[k].gl; break; } } }
+          if (!gl) { inPresent = false; return; }
+          // The raster UI: newest canvas-sized uploaded texture.
+          var ui = null, i, t;
+          for (i = 0; i < UPL.length; i++) { t = UPL[i];
+            if (t.__fcSz && t.__fcSz[0] === gl.drawingBufferWidth
+                         && t.__fcSz[1] === gl.drawingBufferHeight
+                         && (!ui || (t.__fcUpl || 0) > (ui.__fcUpl || 0))) ui = t; }
+          if (!ui && !widget) { inPresent = false; return; }
+          var p = progFor(gl);
+          if (!p) { inPresent = false; return; }
+          var sProg = gl.getParameter(gl.CURRENT_PROGRAM);
+          var sVao  = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+          var sTex  = gl.getParameter(gl.TEXTURE_BINDING_2D);
+          var sAct  = gl.getParameter(gl.ACTIVE_TEXTURE);
+          var sDraw = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+          var sVp   = gl.getParameter(gl.VIEWPORT);
+          var sScis = gl.isEnabled(gl.SCISSOR_TEST);
+          var sDep  = gl.isEnabled(gl.DEPTH_TEST);
+          var sBl   = gl.isEnabled(gl.BLEND);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+          gl.disable(gl.SCISSOR_TEST); gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+          gl.useProgram(p.pr);
+          gl.bindVertexArray(p.vao);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.uniform1i(p.loc, 0);
+          var W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+          if (ui) {
+            gl.viewport(0, 0, W, H);
+            gl.bindTexture(gl.TEXTURE_2D, ui);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+          }
+          if (widget && window.__fcWidgetRect) {
+            var r = window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
+            gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
+            gl.bindTexture(gl.TEXTURE_2D, widget.tex);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+          }
+          gl.useProgram(sProg); gl.bindVertexArray(sVao);
+          gl.activeTexture(sAct); gl.bindTexture(gl.TEXTURE_2D, sTex);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, sDraw);
+          gl.viewport(sVp[0], sVp[1], sVp[2], sVp[3]);
+          if (sScis) gl.enable(gl.SCISSOR_TEST);
+          if (sDep) gl.enable(gl.DEPTH_TEST);
+          if (sBl) gl.enable(gl.BLEND);
+          window.__fcPresented = (window.__fcPresented || 0) + 1;
+        } catch (ex) { window.__fcPresentErr = String(ex); }
+        inPresent = false;
+      }
+      requestAnimationFrame(present);
+      console.log('[fcweb] page present pass armed (threaded-Qt compose never executes its present)');
+    })();
+
     // --- Readable window decorations -------------------------------------------------
     // Qt-wasm draws each top-level window's frame as DOM inside #qt-shadow-container's
     // shadow root (.qt-decorated-window > .title-bar > .window-name), styled by Qt's own
