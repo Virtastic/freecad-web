@@ -42,8 +42,21 @@ RUN gzip -6 -k /usr/share/nginx/html/FreeCAD.data \
 RUN apk add --no-cache brotli \
  && brotli -q 5 -k /usr/share/nginx/html/FreeCAD.data \
  && test -s /usr/share/nginx/html/FreeCAD.data.br \
+ && brotli -q 5 -k /usr/share/nginx/html/FreeCAD.wasm \
+ && test -s /usr/share/nginx/html/FreeCAD.wasm.br \
  && apk del brotli \
  && ls -l /usr/share/nginx/html/FreeCAD.data.gz /usr/share/nginx/html/FreeCAD.data.br
+# ...and the same for the WASM, which the comment above assumed Cloudflare handled.
+# MEASURED 2026-08-31 against the dev host: FreeCAD.wasm came down with NO
+# Content-Encoding at all -- 183,335,809 bytes raw, the single largest thing a visitor
+# waits for, larger than the compressed .data. Whatever the edge does for the public
+# origin, an origin without it (dev, or any direct hit) served it uncompressed, so the
+# copies are baked here like the .data ones rather than assumed. Wasm is ~4:1 on this
+# payload. gzip too, for anything that somehow lacks br.
+RUN gzip -6 -k /usr/share/nginx/html/FreeCAD.wasm \
+ && test -s /usr/share/nginx/html/FreeCAD.wasm.gz \
+ && ls -l /usr/share/nginx/html/FreeCAD.wasm /usr/share/nginx/html/FreeCAD.wasm.gz \
+          /usr/share/nginx/html/FreeCAD.wasm.br
 # Tie the data URL to the data's CONTENT. The page requests FreeCAD.data.gz?v=... and that
 # response is Cache-Control: immutable for a year, so a hand-written version is a trap:
 # ship new data under the old ?v= and every returning visitor keeps the stale copy until
