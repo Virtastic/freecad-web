@@ -5323,3 +5323,28 @@ diff --git a/src/Mod/Fem/femtools/objecttools.py b/src/Mod/Fem/femtools/objectto
              return self.process.waitForFinished(-1)
          return None
  
+diff -ruNp a/src/Gui/Quarter/QuarterWidgetP.cpp b/src/Gui/Quarter/QuarterWidgetP.cpp
+--- a/src/Gui/Quarter/QuarterWidgetP.cpp
++++ b/src/Gui/Quarter/QuarterWidgetP.cpp
+@@ -141,6 +141,21 @@
+     // FIXME: static memory leak
+     cachecontext_list = new SbList <QuarterWidgetP_cachecontext*>;
+   }
++#if defined(__EMSCRIPTEN__)
++  // Qt-wasm draws every widget into ONE canvas -- one real WebGL context -- so a
++  // unique cache context per viewer is a lie Coin acts on: its lazy elements track
++  // "state I already sent" PER CACHE CONTEXT, and with several viewers over the one
++  // real context each view skips resends the other view invalidated. Symptom: an
++  // unselected mesh drawn with the OTHER view's black line material (luminance 65
++  // with a second document open, 236 without -- measured 2026-08-31). Sharing one
++  // cache context makes Coin's bookkeeping match reality; the share-group teardown
++  // below already handles multiple widgets per context.
++  if (cachecontext_list->getLength() > 0) {
++    QuarterWidgetP_cachecontext * cachecontext = (*cachecontext_list)[0];
++    cachecontext->widgetlist.append(static_cast<const QOpenGLWidget*>(widget->viewport()));
++    return cachecontext;
++  }
++#endif
+   for (int i = 0; i < cachecontext_list->getLength(); i++) {
+     QuarterWidgetP_cachecontext * cachecontext = (*cachecontext_list)[i];
+ 

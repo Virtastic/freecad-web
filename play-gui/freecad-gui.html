@@ -1808,6 +1808,17 @@ window.fcRunPy = fcRunPy;
     var AUTOSAVE_MARKER = "/tmp/.fcweb_saver_installed";
     var AUTOSAVE_INSTALL = [
       "import FreeCAD as _App, os as _os",
+      // NO THUMBNAILS. Every save renders the document into an offscreen FBO for the
+      // .FCStd preview image (Thumbnail::SaveDocFile -> renderToFramebuffer), and under
+      // the GL emulation that render corrupts the LIVE viewport's material state: with a
+      // second document open, an unselected mesh then draws with the thumbnail pass's
+      // black 50%-alpha material (screen luminance 65 vs 236, stack-traced to
+      // SoBoxSelectionRenderAction inside Thumbnail::SaveDocFile, and the darkness
+      // vanishes the moment SaveThumbnail is false -- all measured 2026-08-31). The
+      // thumbnails only feed desktop file-manager previews, which the web app has no
+      // use for; autosave also gets cheaper. If previews are ever wanted, fix the
+      // offscreen render's state isolation first.
+      "_App.ParamGet('User parameter:BaseApp/Preferences/Document').SetBool('SaveThumbnail', False)",
       "if not getattr(_App, '_fcweb_saver', None):",
       "    class _FcwebSaver(object):",
       "        DIR = '" + AUTOSAVE_DIR + "'",

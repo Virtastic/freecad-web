@@ -180,7 +180,10 @@ PATCHES = [
     (
         'glNormal3f outside begin/end',
         'var _glNormal3f=(x,y,z)=>{GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
-        'var _glNormal3f=(x,y,z)=>{if(GLImmediate.mode<0){GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+        'var _glNormal3f=(x,y,z)=>{if(GLImmediate.mode<0){GLEmulation.__curNormal=[x,y,z];return}GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+        # detect stops BEFORE the point where the growable-normal patch inserts
+        # __grow(), so that later patch cannot break this one's detection
+        'var _glNormal3f=(x,y,z)=>{if(GLImmediate.mode<0){GLEmulation.__curNormal=[x,y,z];return}',
     ),
     (
         'init immediate mode on context switch (FCWEBMCC)',
@@ -257,6 +260,14 @@ GROWABLE_IMMEDIATE = [
         'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();GLImmediate.vertexData',
     ),
     (
+        # glNormal3f's writer is created by the 'glNormal3f outside begin/end' patch
+        # above, so this anchors on that patch's OUTPUT (also what a released artifact
+        # contains) -- never on the fresh form.
+        'growable immediate: glNormal3f',
+        'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+        'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+    ),
+    (
         'growable immediate: glTexCoord2i',
         'var _glTexCoord2i=(u,v)=>{GLImmediate.vertexData',
         'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();GLImmediate.vertexData',
@@ -282,6 +293,101 @@ GROWABLE_IMMEDIATE = [
     ),
 ]
 PATCHES += GROWABLE_IMMEDIATE
+
+
+# ---- polygon mode: Flat Lines drew the mesh as solid black --------------------------
+#
+# An unselected STL rendered nearly black while the same mesh under the selection
+# highlight looked fine. Snooping the uniforms at the 21,600-vertex draws showed the
+# mesh drawn TWICE per frame: once lit with the correct grey (diffuse 0.969), then the
+# same triangles again with diffuse (0,0,0) -- the "Flat Lines" wireframe overlay.
+# Coin renders that overlay by re-emitting the triangles under
+# glPolygonMode(GL_FRONT_AND_BACK, GL_LINE) (SoGLDrawStyleElement.cpp:116); emscripten
+# implements _glPolygonMode as ()=>{}  -- so the "wireframe" rasterised as filled black
+# triangles on top of the shaded mesh. Same for POINT mode.
+#
+# Fix, two tiers:
+#   * where the browser has the real WEBGL_polygon_mode extension (emscripten already
+#     carries the binding as glPolygonModeWEBGL), forward to it -- true wireframe,
+#     desktop parity;
+#   * otherwise remember the requested mode and have GLImmediate.flush drop
+#     triangle-family draws while it is LINE/POINT. The overlay simply doesn't appear;
+#     the mesh underneath stays correctly shaded. Line/point primitives themselves
+#     (real edges, vertices) are unaffected -- only triangles-in-line-mode are dropped.
+# ponytail: no software triangle->line conversion; if wireframe-everywhere ever
+# matters, that is the upgrade path.
+# The installer is folded into the polygon-mode patch below (both are new in the same
+# release cycle): anchoring a separate patch on the FCWEBMCC marker would sit inside
+# that patch's already-applied detection string and break re-application on an
+# already-patched release artifact -- the freecad-web-dev #12 failure class.
+_CTX_STATE_INSTALLER = (
+    '(function(){var m2=GL.makeContextCurrent;'
+    'var FV=["materialAmbient","materialDiffuse","materialSpecular","materialEmission","materialShininess","lightModelAmbient"];'
+    'var LV=["lightAmbient","lightDiffuse","lightSpecular","lightPosition"];'
+    'function snap(){var s={lm2:GLEmulation.lightModelTwoSide,le:GLEmulation.lightingEnabled,'
+    'en:(GLEmulation.lightEnabled||[]).slice()};'
+    'for(var i=0;i<FV.length;i++){var v=GLEmulation[FV[i]];s[FV[i]]=v?Array.from(v):null}'
+    'for(var j=0;j<LV.length;j++){s[LV[j]]=(GLEmulation[LV[j]]||[]).map(function(a){return a?Array.from(a):a})}'
+    'return s}'
+    'function rest(s){GLEmulation.lightModelTwoSide=s.lm2;GLEmulation.lightingEnabled=s.le;'
+    'if(GLEmulation.lightEnabled&&s.en)for(var k=0;k<s.en.length;k++)GLEmulation.lightEnabled[k]=s.en[k];'
+    'for(var i=0;i<FV.length;i++){var v=GLEmulation[FV[i]];if(v&&s[FV[i]])v.set(s[FV[i]])}'
+    'for(var j=0;j<LV.length;j++){var d=GLEmulation[LV[j]],x=s[LV[j]];'
+    'if(d&&x)for(var m=0;m<x.length;m++){if(x[m]&&d[m])d[m].set(x[m]);else if(x[m])d[m]=new Float32Array(x[m])}}'
+    'GLImmediate.currentRenderer=null}'
+    'GL.makeContextCurrent=function(ctx){var prev=GL.currentContext;'
+    'try{if(prev&&typeof GLEmulation!=="undefined"&&GLEmulation.lightEnabled)prev.__fcEmu=snap()}catch(e){}'
+    'var r=m2.apply(GL,arguments);'
+    'try{var c=GL.currentContext;if(c&&c!==prev&&c.__fcEmu&&typeof GLEmulation!=="undefined")rest(c.__fcEmu)}catch(e){}'
+    'return r}})();'
+)
+
+POLYGON_MODE = [
+    (
+        'glPolygonMode records the mode (and uses WEBGL_polygon_mode when real)',
+        'var _glPolygonMode=()=>{};',
+        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;'
+        'try{if(GLctx.webglPolygonMode)GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};'
+        + _CTX_STATE_INSTALLER,
+    ),
+    (
+        # Anchored on flush()'s DRAW TAIL, which no other patch rewrites -- the head is
+        # owned by the lighting patch and inserting there broke its already-applied
+        # detection. The replacement is restructured (numIndexes>0) so it does not
+        # contain the anchor contiguously (3-pass re-insertion trap).
+        'flush drops triangle draws in LINE/POINT polygon mode',
+        'if(numIndexes){GLctx.drawElements(GLImmediate.mode,numIndexes,GLctx.UNSIGNED_SHORT,ptr)}'
+        'else{GLctx.drawArrays(GLImmediate.mode,startIndex,numVertices)}',
+        'if(!(GLEmulation.__polyMode===6913||GLEmulation.__polyMode===6912)'
+        '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){'
+        'if(numIndexes>0){GLctx.drawElements(GLImmediate.mode,numIndexes,GLctx.UNSIGNED_SHORT,ptr)}'
+        'else{GLctx.drawArrays(GLImmediate.mode,startIndex,numVertices)}}',
+    ),
+]
+PATCHES += POLYGON_MODE
+
+
+# ---- per-context material/light state ----------------------------------------------
+#
+# An unselected mesh rendered nearly black WHENEVER ANOTHER 3D VIEW EXISTED (lum 65
+# with a second document open, 236 the moment it is closed -- measured both ways).
+# The uniform snoop showed the mesh's own draw uploading diffuse (0,0,0,0.5): not its
+# material, the OTHER view's last-sent line material.
+#
+# Mechanism: every 3D view is its own GL context, and Coin's lazy elements cache
+# "what I last sent" PER CONTEXT -- but emscripten's GLEmulation keeps materials and
+# lights in one GLOBAL singleton. View A uploads black into the global; view B's Coin
+# correctly believes its grey is still current in ITS context and skips the resend;
+# view B's next flush uploads A's black. Nothing is wrong in either view alone, which
+# is why every single-document test passed.
+#
+# Fix: on the context switch we already hook (FCWEBMCC), snapshot the mutable
+# lighting/material fields into the outgoing context and restore the incoming
+# context's snapshot, so the global singleton always mirrors what Coin believes about
+# the CURRENT context. currentRenderer is dropped because renderer selection keys on
+# lighting state. Anchored AFTER the FCWEBMCC marker so this composes as a separate
+# patch (rewriting the FCWEBMCC patch itself would break re-application on an
+# already-patched release artifact -- the freecad-web-dev #12 failure).
 
 # Coin exercises corners of the fixed-function API that emscripten implements by
 # THROWING. A throw from inside a GL call unwinds through Coin's render traversal and
@@ -479,6 +585,8 @@ def check_postconditions(text):
             bad.append(('growable immediate guards', 'expected 6 vertex-writer guards, found %d' % n, n))
     if 'tempVertexBuffers1[idx]=[null]' not in text:
         bad.append(('oversize temp vertex buffer ring', 'absent -- an oversize batch dereferences undefined', 1))
+    if text.count('__polyMode') < 2:
+        bad.append(('polygon mode', 'absent -- Flat Lines overlays draw as solid black triangles', 1))
     # A growable build is no longer rejected: _apply_once derives the growable form of each
     # anchor mechanically (see `growable`). The invariant that mattered is the one above --
     # none of the nine throw sites may survive -- and it holds for either form, because
