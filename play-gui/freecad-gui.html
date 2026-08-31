@@ -2304,6 +2304,71 @@ window.fcRunPy = fcRunPy;
       var lastForeignPresent = 0;
       var inPresent = false;
 
+      // ---- shadow GL state, so presenting never has to ASK the driver ----------------
+      //
+      // Restoring the caller's state used to mean nine getParameter/isEnabled calls per
+      // frame, plus an isTexture per candidate texture. Those are synchronous: each one
+      // blocks until the GPU process answers and flushes everything queued. A CPU profile
+      // of a rotating mesh (2026-08-31) put isTexture alone at 6.4% of samples, with
+      // getParameter and friends adding ~4% -- on a renderer whose actual GL work was
+      // 0.07 ms/frame.
+      //
+      // Every setter that can change the state we touch is wrapped below, so the shadow is
+      // authoritative once seeded. It is seeded lazily, ONCE per context, from the driver
+      // (correct even though the app has been running and setting state before we look).
+      // deleteTexture marks its texture dead, which replaces the isTexture probing.
+      var __shadow = new WeakMap();
+      function shadowFor(gl) {
+        var s = __shadow.get(gl);
+        if (!s) {
+          s = { prog: gl.getParameter(gl.CURRENT_PROGRAM),
+                vao:  gl.getParameter(gl.VERTEX_ARRAY_BINDING),
+                tex:  gl.getParameter(gl.TEXTURE_BINDING_2D),
+                act:  gl.getParameter(gl.ACTIVE_TEXTURE),
+                draw: gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING),
+                vp:   Array.prototype.slice.call(gl.getParameter(gl.VIEWPORT)),
+                scissor: gl.isEnabled(gl.SCISSOR_TEST),
+                depth:   gl.isEnabled(gl.DEPTH_TEST),
+                blend:   gl.isEnabled(gl.BLEND) };
+          __shadow.set(gl, s);
+        }
+        return s;
+      }
+      // Wrap a setter so it updates the shadow, but ONLY when the call comes from the app
+      // -- the present pass sets state deliberately and must not overwrite what it saved.
+      function track(name, fn) {
+        var orig = P2[name];
+        P2[name] = function () {
+          if (!inPresent) { try { fn(shadowFor(this), arguments); } catch (e) {} }
+          return orig.apply(this, arguments);
+        };
+      }
+      track('useProgram',      function (s, a) { s.prog = a[0]; });
+      track('bindVertexArray', function (s, a) { s.vao  = a[0]; });
+      track('activeTexture',   function (s, a) { s.act  = a[0]; });
+      track('viewport',        function (s, a) { s.vp   = [a[0], a[1], a[2], a[3]]; });
+      track('bindTexture',     function (s, a) { if (a[0] === 3553) s.tex = a[1]; });
+      track('bindFramebuffer', function (s, a) {
+        // DRAW_FRAMEBUFFER (36009) and FRAMEBUFFER (36160) both set the draw binding.
+        if (a[0] === 36009 || a[0] === 36160) s.draw = a[1];
+      });
+      track('enable',  function (s, a) {
+        if (a[0] === 3089) s.scissor = true; else if (a[0] === 2929) s.depth = true;
+        else if (a[0] === 3042) s.blend = true;
+      });
+      track('disable', function (s, a) {
+        if (a[0] === 3089) s.scissor = false; else if (a[0] === 2929) s.depth = false;
+        else if (a[0] === 3042) s.blend = false;
+      });
+      var oDelTex = P2.deleteTexture;
+      P2.deleteTexture = function (t) {
+        // Marking beats probing: Qt deletes and recreates its backingstore textures on
+        // resize/DPR change, and binding a dead one raises INVALID_OPERATION and draws
+        // garbage. The mark is what the present pass filters on now.
+        if (t) { try { t.__fcDead = true; } catch (e) {} }
+        return oDelTex.apply(this, arguments);
+      };
+
       var oCreateFb = P2.createFramebuffer;
       P2.createFramebuffer = function () {
         var r = oCreateFb.apply(this, arguments);
@@ -2313,8 +2378,7 @@ window.fcRunPy = fcRunPy;
       var oFbTex = P2.framebufferTexture2D;
       P2.framebufferTexture2D = function (t, att, tt, tex, lvl) {
         try {
-          var fb = this.getParameter(this.DRAW_FRAMEBUFFER_BINDING)
-                || this.getParameter(this.FRAMEBUFFER_BINDING);
+          var fb = shadowFor(this).draw;
           if (fb && fb.__fcId && att === this.COLOR_ATTACHMENT0 && REG[fb.__fcId])
             REG[fb.__fcId].tex = tex;
         } catch (e) {}
@@ -2323,7 +2387,7 @@ window.fcRunPy = fcRunPy;
       var oTexImg = P2.texImage2D;
       P2.texImage2D = function () {
         try {
-          var t = this.getParameter(this.TEXTURE_BINDING_2D);
+          var t = shadowFor(this).tex;
           if (t && arguments.length >= 6 && typeof arguments[3] === 'number')
             t.__fcSz = [arguments[3], arguments[4]];
         } catch (e) {}
@@ -2332,7 +2396,7 @@ window.fcRunPy = fcRunPy;
       var oTexStore = P2.texStorage2D;
       P2.texStorage2D = function (target, levels, ifmt, w, h) {
         try {
-          var t = this.getParameter(this.TEXTURE_BINDING_2D);
+          var t = shadowFor(this).tex;
           if (t) t.__fcSz = [w, h];
         } catch (e) {}
         return oTexStore.call(this, target, levels, ifmt, w, h);
@@ -2340,7 +2404,7 @@ window.fcRunPy = fcRunPy;
       var oTexSub = P2.texSubImage2D;
       P2.texSubImage2D = function () {
         try {
-          var t = this.getParameter(this.TEXTURE_BINDING_2D);
+          var t = shadowFor(this).tex;
           if (t) { t.__fcUpl = performance.now(); if (UPL.indexOf(t) < 0) UPL.push(t); }
         } catch (e) {}
         return oTexSub.apply(this, arguments);
@@ -2348,24 +2412,19 @@ window.fcRunPy = fcRunPy;
       var oBlitFb = P2.blitFramebuffer;
       P2.blitFramebuffer = function () {
         try {
-          var db = this.getParameter(this.DRAW_FRAMEBUFFER_BINDING);
+          var db = shadowFor(this).draw;
           if (db && db.__fcId && REG[db.__fcId]) REG[db.__fcId].blitTo = performance.now();
         } catch (e) {}
         return oBlitFb.apply(this, arguments);
       };
-      // Foreign framebuffer-0 draws mean a working native present: stand down.
-      ['drawArrays', 'drawElements'].forEach(function (nm) {
-        var o = P2[nm];
-        P2[nm] = function () {
-          if (!inPresent) {
-            try {
-              if (!this.getParameter(this.DRAW_FRAMEBUFFER_BINDING))
-                lastForeignPresent = performance.now();
-            } catch (e) {}
-          }
-          return o.apply(this, arguments);
-        };
-      });
+      // NO WRAPPER ON drawArrays/drawElements. There used to be one, recording whether
+      // anything else drew to framebuffer 0 so the present pass could stand down. That
+      // heuristic was removed when it parked the pass on FreeCAD's own FB0 scribbles and
+      // blacked out the viewport mid-drag -- but the wrapper stayed, and it ran a
+      // SYNCHRONOUS getParameter(DRAW_FRAMEBUFFER_BINDING) on every draw to compute a
+      // value nothing read. At ~40 draws/frame that is 40 command-buffer flushes per
+      // frame for nothing; the draw path is the hottest in the renderer and now has no
+      // wrapper on it at all.
 
       function progFor(gl) {
         if (gl.__fcPresProg) return gl.__fcPresProg;
@@ -2411,7 +2470,7 @@ window.fcRunPy = fcRunPy;
           var widget = null, k, e;
           for (k in REG) { e = REG[k];
             if (e.tex && e.blitTo && (!widget || e.blitTo > widget.blitTo)) widget = e; }
-          if (widget && widget.gl && !widget.gl.isTexture(widget.tex)) { widget.tex = null; widget = null; }
+          if (widget && widget.tex && widget.tex.__fcDead) { widget.tex = null; widget = null; }
           var gl = widget && widget.gl;
           if (!gl) { for (k in REG) { if (REG[k].gl) { gl = REG[k].gl; break; } } }
           if (!gl) { inPresent = false; return; }
@@ -2421,22 +2480,23 @@ window.fcRunPy = fcRunPy;
             // Qt deletes and recreates its backingstore textures (resize, DPR
             // change, post-crash teardown). Binding a deleted one raises
             // INVALID_OPERATION and the UI layer draws garbage -- prune instead.
-            if (!gl.isTexture(t)) { UPL.splice(i, 1); continue; }
+            if (t.__fcDead) { UPL.splice(i, 1); continue; }
             if (t.__fcSz && t.__fcSz[0] === gl.drawingBufferWidth
                          && t.__fcSz[1] === gl.drawingBufferHeight
                          && (!ui || (t.__fcUpl || 0) > (ui.__fcUpl || 0))) ui = t; }
           if (!ui && !widget) { inPresent = false; return; }
           var p = progFor(gl);
           if (!p) { inPresent = false; return; }
-          var sProg = gl.getParameter(gl.CURRENT_PROGRAM);
-          var sVao  = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
-          var sTex  = gl.getParameter(gl.TEXTURE_BINDING_2D);
-          var sAct  = gl.getParameter(gl.ACTIVE_TEXTURE);
-          var sDraw = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
-          var sVp   = gl.getParameter(gl.VIEWPORT);
-          var sScis = gl.isEnabled(gl.SCISSOR_TEST);
-          var sDep  = gl.isEnabled(gl.DEPTH_TEST);
-          var sBl   = gl.isEnabled(gl.BLEND);
+          // Read the state to restore from the SHADOW, never from the driver. A CPU
+          // profile of a rotating mesh put isTexture at 6.4% of samples with
+          // getParameter/getError/get-buffer another 4% -- every one of those is a
+          // synchronous round-trip that flushes the command buffer and stalls the
+          // frame. The shadow is maintained by the wrappers below, so this costs
+          // nothing; it is seeded once from the driver on the first frame.
+          var S = shadowFor(gl);
+          var sProg = S.prog, sVao = S.vao, sTex = S.tex, sAct = S.act,
+              sDraw = S.draw, sVp = S.vp,
+              sScis = S.scissor, sDep = S.depth, sBl = S.blend;
           gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
           gl.disable(gl.SCISSOR_TEST); gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
           gl.useProgram(p.pr);
