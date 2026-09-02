@@ -1074,11 +1074,11 @@ window.fcwebNotify = function (text, kind, actions) {
     (window.FCWEB_BUILD ? ' quoting build ' + window.FCWEB_BUILD + '.' : '.')],
    [/doesn't contain expected phrase/i,
     'The configured solver binary did not respond as expected, so the solve was skipped.'],
-   // Out of wasm memory. The heap is a FIXED 2 GB (growth is deliberately off -- see
-   // scratchpad/linkcmds/fc-linkcmd-weh-grow.sh and the note in BUILD-WEH.md), so a big
-   // enough model aborts. Say so in words instead of dying silently.
+   // Out of wasm memory. The heap grows to a 4 GB ceiling (the wasm32 maximum; see the
+   // memory-pressure block below and BUILD-WEH.md), so a big enough model still aborts.
+   // Say so in words instead of dying silently.
    [/Cannot enlarge memory|OOM|out of memory|Aborted\(OOM\)|memory allocation failed/i,
-    'This model needs more memory than the browser build has (the limit is 2 GB). ' +
+    'This model needs more memory than the browser build has (the limit is 4 GB). ' +
     'Try simplifying it, meshing more coarsely, or closing other documents. ' +
     'Your open work has been autosaved.'],
    // pre-gui.js emits this when FS.syncfs fails -- browser storage full, evicted, or
@@ -1400,7 +1400,7 @@ window.fcRunPy = fcRunPy;
            if (/memory|OOM/i.test(String(w))) {
              window.fcwebNotify && window.fcwebNotify(
                'Out of memory: this model is larger than the browser build can hold ' +
-               '(2 GB limit). Your work has been autosaved — reload to get it back.', 'error');
+               '(4 GB limit). Your work has been autosaved — reload to get it back.', 'error');
            } else if (window.fcwebCrash) { window.fcwebCrash('wasm abort', w); }
            // Only the KIND, never the message -- an abort string can contain paths.
            try { window.fcwebEvent('abort', /memory|OOM/i.test(String(w)) ? 'oom' : 'other'); } catch(e){}
@@ -1902,8 +1902,9 @@ window.fcRunPy = fcRunPy;
       ""
     ].join("\n");
     // ---- memory pressure ------------------------------------------------------
-    // The heap is a FIXED 2 GB, so a big enough model aborts the instance. Until now the
-    // only signal was the abort itself -- the user got a message after losing the session.
+    // The heap grows to a 4 GB ceiling, and a big enough model still aborts the instance.
+    // Until now the only signal was the abort itself -- the user got a message after
+    // losing the session.
     // _emscripten_get_sbrk_ptr is exported (see the link command), so the used portion is
     // a plain memory read: no Python, no round trip, and it still works while the
     // interpreter is busy -- which is exactly when memory is being consumed.
@@ -1918,32 +1919,53 @@ window.fcRunPy = fcRunPy;
     var __memState = 0;
     function memWarnAt(){ return +window.__fcwebMemWarn || 0.80; }
     function memCritAt(){ return +window.__fcwebMemCrit || 0.92; }
+    // The heap GROWS now (linked with ALLOW_MEMORY_GROWTH, initial 1 GB, maximum 4 GB --
+    // the live FreeCAD.js reads `new WebAssembly.Memory({initial:1GB, maximum:65536 pages})`).
+    // The ceiling is NOT the buffer's byteLength: that is the CURRENT size, 1 GB at boot.
+    // Dividing by it made this warn "nearly full, cannot grow past 2 GB" at ~800 MB used
+    // and force-save before the heap had grown once (reported 2026-09-02 as "the app is
+    // limited to 2 GB"). Nor is it the buffer's maxByteLength: on a wasm shared memory
+    // that just mirrors byteLength (measured: 1073741824 both), because wasm growth swaps
+    // the buffer object rather than growing it JS-side. The Memory object that knows the
+    // maximum is closure-private to the emscripten glue (Module.wasmMemory is not set in
+    // this build), so the ceiling is a build constant, kept in step with -sMAXIMUM_MEMORY
+    // in the link command. max() with byteLength so a build with a larger heap than this
+    // constant can never report a fraction above 1.
+    var FCWEB_HEAP_MAX_BYTES = 4294967296;   // -sMAXIMUM_MEMORY=4294967296
+    function heapCapBytes(m){
+      return Math.max(FCWEB_HEAP_MAX_BYTES, m.HEAPU8.buffer.byteLength || 0);
+    }
+    function heapCapMB(){
+      try { return Math.round(heapCapBytes(window.fcInstance) / 1048576); } catch (e) { return 0; }
+    }
     function heapUsedFraction(){
       try {
         var m = window.fcInstance;
         if (!m || typeof m._emscripten_get_sbrk_ptr !== 'function') return -1;
         var used = m.HEAPU32[m._emscripten_get_sbrk_ptr() >> 2];
-        var cap = m.HEAPU8.buffer.byteLength;
+        var cap = heapCapBytes(m);
         return cap > 0 ? used / cap : -1;
       } catch (e) { return -1; }
     }
     function checkMemoryPressure(){
       var f = heapUsedFraction();
       if (f < 0) return;
-      var mb = Math.round(f * 2048);
+      var capMB = heapCapMB();
+      var mb = Math.round(f * capMB);
+      var capGB = (capMB / 1024).toFixed(capMB % 1024 ? 1 : 0);
       if (f >= memCritAt() && __memState < 2) {
         __memState = 2;
         try { py(AUTOSAVE_FORCE); } catch (e) {}
         if (typeof window.fcwebNotify === 'function') {
-          window.fcwebNotify('Memory is nearly full (' + mb + ' MB of 2048 MB). Your work has '
+          window.fcwebNotify('Memory is nearly full (' + mb + ' MB of ' + capMB + ' MB). Your work has '
             + 'been saved. Save a copy with File \u2192 Save and close documents you are not '
-            + 'using -- the browser build cannot grow past 2 GB.', 'warn');
+            + 'using -- the browser build cannot grow past ' + capGB + ' GB.', 'warn');
         }
       } else if (f >= memWarnAt() && __memState < 1) {
         __memState = 1;
         try { py(AUTOSAVE_FORCE); } catch (e) {}
         if (typeof window.fcwebNotify === 'function') {
-          window.fcwebNotify('This model is using ' + mb + ' MB of the 2 GB the browser build '
+          window.fcwebNotify('This model is using ' + mb + ' MB of the ' + capGB + ' GB the browser build '
             + 'has. Your work has been saved. Consider simplifying it or closing documents you '
             + 'are not using.', 'warn');
         }
@@ -1953,8 +1975,9 @@ window.fcRunPy = fcRunPy;
     }
     setInterval(checkMemoryPressure, 5000);
     window.fcwebHeapUsedMB = function(){
-      var f = heapUsedFraction(); return f < 0 ? -1 : Math.round(f * 2048);
+      var f = heapUsedFraction(); return f < 0 ? -1 : Math.round(f * heapCapMB());
     };
+    window.fcwebHeapCapMB = heapCapMB;
 
     var AUTOSAVE_PY = "import FreeCAD as _App\n" +
       "try: _App._fcweb_saver.save()\n" +

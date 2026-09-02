@@ -834,7 +834,24 @@ CAD workflows), `guidrive.js` (menus and toolbars through Qt input), `datasafety
 (work survives a reload), `ccxe2e/run-prod.js` (FEM end to end), `prodcheck.js` (boot,
 storage, bridges).
 
-## Memory: the heap is a fixed 2 GB, deliberately
+## Memory: the heap grows to 4 GB (superseding the fixed-2 GB decision below)
+
+**Status 2026-09-02:** the shipped link is `-sINITIAL_MEMORY=1073741824
+-sMAXIMUM_MEMORY=4294967296 -sALLOW_MEMORY_GROWTH=1` (see
+`scratchpad/linkcmds/fc-linkcmd-weh.sh`); the live `FreeCAD.js` constructs
+`WebAssembly.Memory({initial: 1 GB, maximum: 65536 pages})`, i.e. a 4 GB ceiling. The
+patch table in `tools/patch-freecad-js.py` was re-derived for the `GROWABLE_HEAP_*()`
+accessor form, which is what the section below said had to happen first.
+
+One consequence that bit: the page's memory-pressure monitor divided by
+`HEAPU8.buffer.byteLength`, which on a growable heap is the *current* size (1 GB at
+boot), not the ceiling -- so it warned "nearly full, cannot grow past 2 GB" at ~800 MB
+used and force-saved before the first grow. It now divides by `maxByteLength`. Anything
+else that treats `byteLength` as the ceiling has the same bug.
+
+The original reasoning is kept for the record:
+
+### (historical) Memory: the heap is a fixed 2 GB, deliberately
 
 `-sINITIAL_MEMORY=2147483648 -sALLOW_MEMORY_GROWTH=0`. Growth was built and measured
 (`scratchpad/linkcmds/fc-linkcmd-weh-grow.sh`, initial 1 GB / maximum 4 GB) and **not
