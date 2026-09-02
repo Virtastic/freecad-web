@@ -362,6 +362,11 @@ POLYGON_MODE = [
         '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){'
         'if(numIndexes>0){GLctx.drawElements(GLImmediate.mode,numIndexes,GLctx.UNSIGNED_SHORT,ptr)}'
         'else{GLctx.drawArrays(GLImmediate.mode,startIndex,numVertices)}}',
+        # 4th field: the index-type patch below rewrites the drawElements call inside this
+        # replacement, so `new` no longer appears whole once both are in. Detect on the
+        # mode test instead, which nothing else touches.
+        'if(!(GLEmulation.__polyMode===6913||GLEmulation.__polyMode===6912)'
+        '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){',
     ),
 ]
 PATCHES += POLYGON_MODE
@@ -543,6 +548,68 @@ MERGE_PATCHES += [('line batching drain: ' + o.split('=')[0].replace('var _gl', 
 PATCHES += MERGE_PATCHES
 
 
+# ---- glDrawElements index type: a 32-bit-indexed mesh drew as half a mesh ------------
+#
+# emscripten's client-attribute glDrawElements path (GLImmediate.flush) ignores the
+# `type` argument entirely: it scans and uploads client indices as Uint16 and always
+# issues drawElements(..., UNSIGNED_SHORT, ...) -- also when the indices come from a
+# bound ELEMENT_ARRAY_BUFFER. FreeCAD's mesh nodes draw with GL_UNSIGNED_INT
+# (SoFCIndexedFaceSet.cpp MeshRenderer::renderGLArray under VBO, SoFCMeshObject.cpp
+# renderFacesGLArray with client arrays). Each 32-bit index is then read as two 16-bit
+# halves, [k, 0], and only the first half of the index data is consumed: a sphere
+# rendered as a hemisphere, an STL as a burst of triangles fanning into vertex 0.
+# Measured 2026-09-02 on dev: Mesh.createSphere(50, 200) with VBOs on renders as the
+# lower half only; with ?vbo=0 (Coin's immediate path, which builds its own 16-bit
+# indices) it is whole. VBOs on by default is what routed meshes here.
+#
+# Fix: remember the type at the glDrawElements entry, honour it in the three places
+# flush() assumes 16 bits. The immediate-mode paths (glBegin/glEnd quads etc.) build
+# their own Uint16 indices and pass numProvidedIndexes=0, so they keep UNSIGNED_SHORT.
+INDEX_TYPE = [
+    (
+        # After the fast path's `return}` so the line-batching drain's marker
+        # (`=>{GLImmediate.__mf();if(...`) stays intact.
+        'glDrawElements records its index type',
+        'GLctx.drawElements(mode,count,type,indices);return}GLImmediate.prepareClientAttributes(count,false);',
+        'GLctx.drawElements(mode,count,type,indices);return}GLImmediate.__idxType=type;GLImmediate.prepareClientAttributes(count,false);',
+    ),
+    (
+        'flush scans 32-bit client indices as 32-bit',
+        'for(var i=0;i<numProvidedIndexes;i++){var currIndex=HEAPU16[ptr+i*2>>1];',
+        'var __u32=GLImmediate.__idxType===5125;'
+        'for(var i=0;i<numProvidedIndexes;i++){var currIndex=__u32?HEAPU32[ptr+i*4>>2]:HEAPU16[ptr+i*2>>1];',
+    ),
+    (
+        # The anchor stops BEFORE the Uint16 heap expression (`.subarray` is not a bracket
+        # access, so the mechanical growable derivation cannot reach it), and the 32-bit
+        # branch views wasmMemory.buffer directly rather than naming a heap accessor: a
+        # literal GROWABLE_HEAP_ in this table would flag the selftest corpus as growable
+        # and break every classic anchor in it. The original Uint16 expression stays as
+        # the else-branch, untouched.
+        'flush uploads 32-bit client indices as 32-bit',
+        'var indexBuffer=GL.getTempIndexBuffer(numProvidedIndexes<<1);'
+        'GLctx.bindBuffer(GLctx.ELEMENT_ARRAY_BUFFER,indexBuffer);'
+        'GLctx.bufferSubData(GLctx.ELEMENT_ARRAY_BUFFER,0,',
+        'var __u32b=GLImmediate.__idxType===5125;'
+        'var indexBuffer=GL.getTempIndexBuffer(numProvidedIndexes<<(__u32b?2:1));'
+        'GLctx.bindBuffer(GLctx.ELEMENT_ARRAY_BUFFER,indexBuffer);'
+        'GLctx.bufferSubData(GLctx.ELEMENT_ARRAY_BUFFER,0,'
+        '__u32b?new Uint8Array(wasmMemory.buffer,ptr,numProvidedIndexes<<2):',
+    ),
+    (
+        # Anchored on the polygon-mode patch's OUTPUT (numIndexes>0), which is also what
+        # a released artifact contains.
+        'flush draws with the recorded index type',
+        'if(numIndexes>0){GLctx.drawElements(GLImmediate.mode,numIndexes,GLctx.UNSIGNED_SHORT,ptr)}'
+        'else{GLctx.drawArrays(GLImmediate.mode,startIndex,numVertices)}',
+        'if(numIndexes>0){GLctx.drawElements(GLImmediate.mode,numIndexes,'
+        '(numProvidedIndexes&&GLImmediate.__idxType===5125)?GLctx.UNSIGNED_INT:GLctx.UNSIGNED_SHORT,ptr)}'
+        'else{GLctx.drawArrays(GLImmediate.mode,startIndex,numVertices)}',
+    ),
+]
+PATCHES += INDEX_TYPE
+
+
 # Invariants a correctly patched file must satisfy, checked AFTER everything runs.
 #
 # The per-patch status cannot be trusted on its own. Every throw-removal patch replaces
@@ -587,6 +654,14 @@ def check_postconditions(text):
         bad.append(('oversize temp vertex buffer ring', 'absent -- an oversize batch dereferences undefined', 1))
     if text.count('__polyMode') < 2:
         bad.append(('polygon mode', 'absent -- Flat Lines overlays draw as solid black triangles', 1))
+    # The index type must be recorded once and honoured at all three 16-bit assumptions;
+    # a partial application draws 32-bit-indexed meshes as half a mesh with no error.
+    n = text.count('GLImmediate.__idxType=type')
+    if n != 1:
+        bad.append(('glDrawElements index type recorded', 'expected exactly 1, found %d' % n, n))
+    n = text.count('GLImmediate.__idxType===5125')
+    if n != 3:
+        bad.append(('glDrawElements index type honoured', 'expected 3 uses (scan, upload, draw), found %d' % n, n))
     # A growable build is no longer rejected: _apply_once derives the growable form of each
     # anchor mechanically (see `growable`). The invariant that mattered is the one above --
     # none of the nine throw sites may survive -- and it holds for either form, because
@@ -794,8 +869,12 @@ def selftest():
     bad = [(n, st) for n, st in status if st == 'NOT FOUND']
     assert not bad, bad
     for e in PATCHES:
-        name, old, new = e[0], e[1], e[2]
-        assert new in out, name
+        # An entry whose output a LATER patch rewrites carries a 4th field naming the
+        # text that proves it is in effect; `new` itself is then legitimately absent
+        # (glNormal3f outside begin/end -> growable glNormal3f; polygon-mode draw tail
+        # -> index-type draw). Assert on what apply() itself detects on.
+        name, marker = e[0], (e[3] if len(e) > 3 else e[2])
+        assert marker in out, name
 
     # idempotent: a second pass must change nothing
     out2, status2 = apply(out, counting=False)
