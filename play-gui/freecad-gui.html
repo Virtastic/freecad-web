@@ -2377,6 +2377,9 @@ window.fcRunPy = fcRunPy;
       var inPresent = false;
       var lastUi = null;                  // last good canvas-sized UI texture
       var keepTex = null, keepFbo = null, keepSz = [0, 0]; // page-owned composite of the last frame
+      var PLOG = /[?&]presentlog=1/.test(location.search) ? (window.__fcPresentLog = []) : null;
+      var hadWidget = false, holdFrames = 0;   // see the 3D-layer hold in present()
+      var HOLD_MAX = 20;                       // ~0.3s at 60Hz, then let the UI through anyway
 
       // ---- shadow GL state, so presenting never has to ASK the driver ----------------
       //
@@ -2679,13 +2682,39 @@ window.fcRunPy = fcRunPy;
             keepSz = [W, H];
             if (useKeep) { useKeep = false; }   // freshly sized: nothing kept yet
           }
-          if (ui) {
+          // A composite without the 3D layer is a frame with a HOLE in it.
+          //
+          // The guard above covers "no UI texture". This is the other half, and it is what
+          // was left after it: on a click Qt re-rasterises the window and uploads a fresh
+          // UI texture, but the widget framebuffer has not been blitted yet that frame. So
+          // `ui` is live, `widget` is not, and the compose below paints the raster UI over
+          // the whole canvas -- including the region the 3D view owns, where the raster
+          // layer has nothing. One or two frames of that is a 5-10 ms black flash in the
+          // viewport on every click (reported 2026-09-02, after the full-window version of
+          // the same bug was fixed by holding the last UI texture).
+          //
+          // So when a 3D layer is expected and missing, re-present the last COMPLETE frame
+          // rather than publishing an incomplete one. Bounded by HOLD_MAX: a viewport that
+          // is legitimately gone (last document closed) must not freeze the UI forever, so
+          // after ~0.3s the UI-only compose goes through.
+          var wUsable = !!(widget && (widget.rect || window.__fcWidgetRect));
+          if (wUsable) { hadWidget = true; holdFrames = 0; }
+          var holdThisFrame = (ui && !wUsable && hadWidget && !useKeep &&
+                               keepTex && keepSz[0] === W && keepSz[1] === H &&
+                               holdFrames < HOLD_MAX);
+          if (holdThisFrame) { holdFrames++; }
+          // ?presentlog=1: one entry per frame, so a frame that came out wrong can be
+          // identified instead of guessed at. A bad frame is 8-16 ms -- long enough to see
+          // as a flash, far too short to screenshot.
+          if (PLOG) { PLOG.push({ t: Math.round(performance.now()), ui: !!ui, keep: !!useKeep,
+                                  widget: wUsable, hold: holdThisFrame }); if (PLOG.length > 600) PLOG.shift(); }
+          if (ui && !holdThisFrame) {
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, keepFbo);
             gl.viewport(0, 0, W, H);
             gl.uniform1f(p.flip, 0.0);   // QImage upload: already top-left origin
             gl.bindTexture(gl.TEXTURE_2D, ui);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
-            if (widget && (widget.rect || window.__fcWidgetRect)) {
+            if (wUsable) {
               var r = widget.rect || window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
               gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
               gl.uniform1f(p.flip, 1.0);   // GL-rendered y-up: invert sampling so the nav
@@ -2694,7 +2723,7 @@ window.fcRunPy = fcRunPy;
               gl.drawArrays(gl.TRIANGLES, 0, 6);
             }
           }
-          if (ui || useKeep) {
+          if (ui || useKeep || holdThisFrame) {
             // Textured quad, not glBlitFramebuffer: the canvas default framebuffer is
             // multisampled (antialias), and a blit INTO a multisampled buffer is
             // INVALID_OPERATION -- silent, and the whole window went black (2026-09-02).
