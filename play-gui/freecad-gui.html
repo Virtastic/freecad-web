@@ -2372,7 +2372,7 @@ window.fcRunPy = fcRunPy;
       var lastForeignPresent = 0;
       var inPresent = false;
       var lastUi = null;                  // last good canvas-sized UI texture
-      var keepTex = null, keepSz = [0, 0]; // page-owned copy of the last complete frame
+      var keepTex = null, keepFbo = null, keepSz = [0, 0]; // page-owned composite of the last frame
 
       // ---- shadow GL state, so presenting never has to ASK the driver ----------------
       //
@@ -2480,13 +2480,28 @@ window.fcRunPy = fcRunPy;
         return oTexSub.apply(this, arguments);
       };
       var oBlitFb = P2.blitFramebuffer;
+      var lastBlit = null;                 // the REG entry the C++ composite blitted into last
       P2.blitFramebuffer = function () {
         try {
           var db = shadowFor(this).draw;
-          if (db && db.__fcId && REG[db.__fcId]) REG[db.__fcId].blitTo = performance.now();
+          if (db && db.__fcId && REG[db.__fcId]) { REG[db.__fcId].blitTo = performance.now(); lastBlit = REG[db.__fcId]; }
         } catch (e) {}
         return oBlitFb.apply(this, arguments);
       };
+      // renderScene publishes the widget rect right AFTER its blit, so a rect belongs to
+      // whichever framebuffer was blitted last. Keep them together: every 3D view renders
+      // on a selection change -- including the hidden MDI views of the other open
+      // documents, whose widgets sit at Qt's 600x450 default and were never laid out --
+      // and a single global rect meant the last hidden view to finish got composed at
+      // its bogus centred box while the real view went black (2026-09-02).
+      var __rectVal = window.__fcWidgetRect || null;
+      try {
+        Object.defineProperty(window, '__fcWidgetRect', {
+          configurable: true,
+          get: function () { return __rectVal; },
+          set: function (v) { __rectVal = v; if (lastBlit) lastBlit.rect = v; }
+        });
+      } catch (e) {}
       // NO WRAPPER ON drawArrays/drawElements. There used to be one, recording whether
       // anything else drew to framebuffer 0 so the present pass could stand down. That
       // heuristic was removed when it parked the pass on FreeCAD's own FB0 scribbles and
@@ -2539,7 +2554,16 @@ window.fcRunPy = fcRunPy;
           // The widget FBO: the one the C++ blit writes into most recently.
           var widget = null, k, e;
           for (k in REG) { e = REG[k];
-            if (e.tex && e.blitTo && (!widget || e.blitTo > widget.blitTo)) widget = e; }
+            // The ACTIVE view is the largest recently-blitted framebuffer, not the most
+            // recently blitted one: hidden MDI views of other documents also render
+            // (600x450 default widgets) and can finish last. Ties/no recent blit fall
+            // back to recency.
+            if (!e.tex || !e.blitTo) continue;
+            var eA = e.tex.__fcSz ? e.tex.__fcSz[0] * e.tex.__fcSz[1] : 0;
+            var wA = widget && widget.tex.__fcSz ? widget.tex.__fcSz[0] * widget.tex.__fcSz[1] : 0;
+            var eRecent = performance.now() - e.blitTo < 1500;
+            var wRecent = widget && performance.now() - widget.blitTo < 1500;
+            if (!widget || (eRecent && !wRecent) || (eRecent === wRecent && (eA > wA || (eA === wA && e.blitTo > widget.blitTo)))) widget = e; }
           if (widget && widget.tex && widget.tex.__fcDead) { widget.tex = null; widget = null; }
           var gl = widget && widget.gl;
           if (!gl) { for (k in REG) { if (REG[k].gl) { gl = REG[k].gl; break; } } }
@@ -2550,7 +2574,7 @@ window.fcRunPy = fcRunPy;
             // Qt deletes and recreates its backingstore textures (resize, DPR
             // change, post-crash teardown). Binding a deleted one raises
             // INVALID_OPERATION and the UI layer draws garbage -- prune instead.
-            if (t.__fcDead) { UPL.splice(i, 1); continue; }
+            if (t.__fcDead || t.__fcPage) { UPL.splice(i, 1); continue; }
             if (t.__fcSz && t.__fcSz[0] === gl.drawingBufferWidth
                          && t.__fcSz[1] === gl.drawingBufferHeight
                          && (!ui || (t.__fcUpl || 0) > (ui.__fcUpl || 0))) ui = t; }
@@ -2597,48 +2621,54 @@ window.fcRunPy = fcRunPy;
           gl.activeTexture(gl.TEXTURE0);
           gl.uniform1i(p.loc, 0);
           var W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
-          if (useKeep) {
-            gl.viewport(0, 0, W, H);
-            gl.uniform1f(p.flip, 1.0);   // copied from the GL default framebuffer: y-up
-            gl.bindTexture(gl.TEXTURE_2D, keepTex);
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
+          // Compose into a PAGE-OWNED framebuffer, then blit it to the canvas. Copying
+          // the canvas back after drawing (the first attempt) captured whatever else had
+          // landed in framebuffer 0 that frame -- FreeCAD's GLPainter overlays and Qt's
+          // own partial draws -- and replayed that half-frame during stalls (the
+          // "everything black except a shrunken 3D view" screen with a context menu
+          // open, 2026-09-02). This framebuffer only ever holds our own composite.
+          if (!keepFbo || keepSz[0] !== W || keepSz[1] !== H) {
+            if (!keepTex) {
+              keepTex = gl.createTexture(); keepTex.__fcPage = true;
+              gl.bindTexture(gl.TEXTURE_2D, keepTex);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            } else {
+              gl.bindTexture(gl.TEXTURE_2D, keepTex);
+            }
+            oTexImg.call(gl, gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+            if (!keepFbo) { keepFbo = oCreateFb.call(gl); keepFbo.__fcPage = true; }
+            gl.bindFramebuffer(gl.FRAMEBUFFER, keepFbo);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, keepTex, 0);
+            keepSz = [W, H];
+            if (useKeep) { useKeep = false; }   // freshly sized: nothing kept yet
           }
           if (ui) {
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, keepFbo);
             gl.viewport(0, 0, W, H);
             gl.uniform1f(p.flip, 0.0);   // QImage upload: already top-left origin
             gl.bindTexture(gl.TEXTURE_2D, ui);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
+            if (widget && (widget.rect || window.__fcWidgetRect)) {
+              var r = widget.rect || window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
+              gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
+              gl.uniform1f(p.flip, 1.0);   // GL-rendered y-up: invert sampling so the nav
+              // cube sits top-right, top faces shade light, and labels read forward
+              gl.bindTexture(gl.TEXTURE_2D, widget.tex);
+              gl.drawArrays(gl.TRIANGLES, 0, 6);
+            }
           }
-          if (ui && widget && window.__fcWidgetRect) {
-            var r = window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
-            gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
-            gl.uniform1f(p.flip, 1.0);   // GL-rendered y-up: invert sampling so the nav
-            // cube sits top-right, top faces shade light, and labels read forward
-            gl.bindTexture(gl.TEXTURE_2D, widget.tex);
+          if (ui || useKeep) {
+            // Textured quad, not glBlitFramebuffer: the canvas default framebuffer is
+            // multisampled (antialias), and a blit INTO a multisampled buffer is
+            // INVALID_OPERATION -- silent, and the whole window went black (2026-09-02).
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+            gl.viewport(0, 0, W, H);
+            gl.uniform1f(p.flip, 1.0);   // our composite is GL-rendered: y-up
+            gl.bindTexture(gl.TEXTURE_2D, keepTex);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
-          }
-          // Snapshot the frame just composed into a texture Qt can never delete. One
-          // GPU-side copy of the canvas per present; it is what paints during a stall.
-          if (ui) {
-            try {
-              if (!keepTex) {
-                keepTex = gl.createTexture();
-                gl.bindTexture(gl.TEXTURE_2D, keepTex);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-              } else {
-                gl.bindTexture(gl.TEXTURE_2D, keepTex);
-              }
-              gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
-              if (keepSz[0] !== W || keepSz[1] !== H) {
-                gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, W, H, 0);
-                keepSz = [W, H];
-              } else {
-                gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, W, H);
-              }
-            } catch (e) { keepTex = null; keepSz = [0, 0]; }
           }
           gl.useProgram(sProg); gl.bindVertexArray(sVao);
           gl.activeTexture(sAct); gl.bindTexture(gl.TEXTURE_2D, sTex);

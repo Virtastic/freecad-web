@@ -3007,7 +3007,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // the emulated fixed-function path is involved. MAX_WEBGL_VERSION=2 is set at
 +    // link time and the context is genuinely WebGL2 -- READ_FRAMEBUFFER binding,
 +    // which is WebGL2-only, already works from the page.
-+    if (fcFbo != 0) {
++    if (fcFbo != 0 && this->getGLWidget() && this->getGLWidget()->isVisible()) {   // hidden MDI views: no composite, no rect
 +        GLuint widgetFbo = 0;
 +        if (auto* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
 +            widgetFbo = (GLuint)fcGlw->defaultFramebufferObject();
@@ -3056,7 +3056,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // Proven before it was written: injecting the same present pass as a browser
 +    // init script against the black build brought the complete window back --
 +    // menus, toolbars, model tree, tabs, and the 3D scene with the nav cube.
-+    if (auto* fcGlw2 = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
++    if (auto* fcGlw2 = qobject_cast<QOpenGLWidget*>(this->getGLWidget()); fcGlw2 && fcGlw2->isVisible()) {
 +        const qreal fcDpr = fcGlw2->devicePixelRatio();
 +        const QPoint fcTl = fcGlw2->mapTo(fcGlw2->window(), QPoint(0, 0));
 +        // No commas inside the JS block: the C preprocessor splits EM_ASM macro
