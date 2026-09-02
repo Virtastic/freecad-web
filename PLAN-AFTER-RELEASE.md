@@ -7,7 +7,25 @@ Ordered by value per hour, not by how interesting it is.
 
 ---
 
-## 1. The 2 GB memory ceiling — 4 GB is one afternoon, and the blocker is named
+## 1. The 2 GB memory ceiling — DONE, and the last of it was a reporting bug
+
+**Status 2026-09-02: shipped.** The link carries `ALLOW_MEMORY_GROWTH=1`,
+`INITIAL_MEMORY=1 GB`, `MAXIMUM_MEMORY=4 GB`, and `tools/patch-freecad-js.py` was
+re-derived for the `GROWABLE_HEAP_*()` accessor form — which is what the section below
+says has to happen first. Measured on the live build: `malloc` grew the heap 1 → 1.9 →
+3.0 → 3.58 GB.
+
+The tail of it was not the link at all. The page's pressure monitor divided the used
+bytes by `HEAPU8.buffer.byteLength` — the heap's CURRENT size, 1 GB at boot, not its
+ceiling — so it warned "nearly full … cannot grow past 2 GB" at ~800 MB and force-saved
+before the heap had grown once. `maxByteLength` is no better on a wasm shared memory
+(it mirrors `byteLength`, because growth swaps the buffer), so the ceiling is now a build
+constant kept in step with the link flag. Anything else reading `byteLength` as a ceiling
+has the same bug.
+
+The reasoning that got it here is kept below.
+
+### (historical) 4 GB is one afternoon, and the blocker is named
 
 **Why this is still open, precisely.** It is not a wasm limit and never was. wasm32 addresses
 4 GB, `scratchpad/linkcmds/fc-linkcmd-weh-grow.sh` already exists and already carries

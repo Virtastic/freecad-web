@@ -13,6 +13,18 @@ PATCHES="$PWD/patches"
 # why no patch in this directory has ever been applied in CI -- including freecad.patch,
 # without which there is no point building FreeCAD at all. Both layouts are handled now:
 # git apply where there is an index to be careful about, plain patch(1) where there is not.
+# git apply against a plain directory, with any enclosing repository neutralised.
+# See the long comment at the git-apply fallback in apply_one for why this exists and why
+# the ceiling matters. Paths are resolved absolutely because GIT_CEILING_DIRECTORIES is
+# only honoured for absolute, symlink-free entries.
+_fcweb_git_apply() {
+  local tree="$1" patch="$2"; shift 2
+  local abs parent
+  abs="$(cd "$tree" && pwd -P)" || return 1
+  parent="$(dirname "$abs")"
+  GIT_CEILING_DIRECTORIES="$parent" git -C "$abs" apply "$@" "$patch" 2>/dev/null
+}
+
 apply_one() {
   local tree="deps/src/$1" patch="$PATCHES/$2" marker="${3:-}"
   # Optional third argument: "<path-in-tree>::<string>". If that string is present, the
@@ -92,6 +104,30 @@ apply_one() {
     echo "  == $1: already applied (skip, tarball)"; [ -n "$want" ] && echo "$want" > "$stamp"
   elif patch -d "$tree" -p1 -F0 --dry-run --force --silent < "$patch" >/dev/null 2>&1; then
     patch -d "$tree" -p1 -F0 --silent < "$patch"; echo "  ++ $1: applied ${2} (tarball)"; [ -n "$want" ] && echo "$want" > "$stamp"
+  # patch(1) at -F0 is stricter than the diff it is reading. freecad.patch carries a hunk
+  # (src/Gui/Application.cpp, the wasm crash-recovery guard) whose six context lines match
+  # the pristine 1.1.3 tarball BYTE FOR BYTE at the target line, which was verified one
+  # line at a time -- and patch still rejects it, while `git apply` places it at the right
+  # offset and `patch -F2` needs two lines of fuzz to agree. So a from-scratch build could
+  # not apply the FreeCAD patch at all; it only ever worked because the runner reuses an
+  # already-patched deps/src/freecad between runs (measured 2026-09-02).
+  #
+  # The fallback is `git apply`, NOT fuzz. Fuzz is how a hunk lands in a plausible but
+  # wrong scope while the exit status says success -- this project has been bitten by
+  # exactly that. git apply matches context exactly and only tolerates a line OFFSET,
+  # which is the thing that is genuinely fine here.
+  #
+  # GIT_CEILING_DIRECTORIES is what makes it safe to use on a tree nested inside this
+  # repository: it stops git's upward search at the tree's parent, so no enclosing .git is
+  # found and no index semantics apply -- the concern the comment above records. Verified
+  # both ways on the builder: without the ceiling git resolves the outer repo, with it the
+  # only complaint left is a file the tarball genuinely does not carry.
+  elif _fcweb_git_apply "$tree" "$patch" --check; then
+    _fcweb_git_apply "$tree" "$patch"
+    echo "  ++ $1: applied ${2} (tarball, git apply -- patch(1) refused a hunk it should not have)"
+    [ -n "$want" ] && echo "$want" > "$stamp"
+  elif _fcweb_git_apply "$tree" "$patch" --reverse --check; then
+    echo "  == $1: already applied (skip, tarball, git apply)"; [ -n "$want" ] && echo "$want" > "$stamp"
   else
     # "does not apply cleanly" with nothing else is a message that costs an hour. Re-run
     # WITHOUT --silent and show what actually rejected, plus enough about the two inputs to

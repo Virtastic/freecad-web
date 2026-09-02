@@ -383,7 +383,11 @@ window.fcwebColor = function(title, initialRgb){
   return new Promise(function(resolve){
     try{
       var hex='#'+('000000'+((initialRgb>>>0)&0xffffff).toString(16)).slice(-6);
-      var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
+      // Escapes '>' as well, matching the other two esc() helpers below. Not a hole as it
+      // stood -- these titles land in element TEXT, where an unescaped '>' cannot open a
+      // tag -- but three copies of an escaper that disagree is how the fourth one gets
+      // copied from the weakest.
+      var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');};
       var ov=document.createElement('div');
       ov.style.cssText='position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font-family:-apple-system,Segoe UI,Roboto,sans-serif';
       var box=document.createElement('div');
@@ -2435,7 +2439,19 @@ window.fcRunPy = fcRunPy;
         // Marking beats probing: Qt deletes and recreates its backingstore textures on
         // resize/DPR change, and binding a dead one raises INVALID_OPERATION and draws
         // garbage. The mark is what the present pass filters on now.
-        if (t) { try { t.__fcDead = true; } catch (e) {} }
+        if (t) {
+          try { t.__fcDead = true; } catch (e) {}
+          // Drop it from the upload list here rather than waiting for present() to
+          // notice. present() only runs while the tab is VISIBLE (it is driven by
+          // requestAnimationFrame), so a background tab pruned nothing: measured
+          // 2026-09-02, eight document open/close cycles in a hidden tab grew UPL from
+          // 6 to 54, all but 6 of them deleted textures. UPL is searched with indexOf on
+          // every raster upload, so that growth is on the hot path.
+          try {
+            var ui = UPL.indexOf(t);
+            if (ui >= 0) { UPL.splice(ui, 1); }
+          } catch (e) {}
+        }
         return oDelTex.apply(this, arguments);
       };
 
@@ -2444,6 +2460,24 @@ window.fcRunPy = fcRunPy;
         var r = oCreateFb.apply(this, arguments);
         if (r) { r.__fcId = ++fbSerial; REG[r.__fcId] = { fb: r, gl: this }; }
         return r;
+      };
+      // ...and drop it again when the app deletes it. Without this REG only ever grew:
+      // every 3D view creates framebuffers and closing its document deletes them, so a
+      // session that opens and closes documents accumulated dead entries forever --
+      // measured 2026-09-02 on the live build, 6 per document open/close cycle, each
+      // holding a reference to a deleted framebuffer and its texture. present() walks
+      // this map once per frame, so the cost of a frame grew with the number of
+      // documents the session had ever opened. (The page's own compose framebuffer is
+      // created with oCreateFb below, so it is never in REG and never at risk here.)
+      var oDelFb = P2.deleteFramebuffer;
+      P2.deleteFramebuffer = function (fb) {
+        try {
+          if (fb && fb.__fcId) {
+            if (lastBlit && REG[fb.__fcId] === lastBlit) { lastBlit = null; }
+            delete REG[fb.__fcId];
+          }
+        } catch (e) {}
+        return oDelFb.apply(this, arguments);
       };
       var oFbTex = P2.framebufferTexture2D;
       P2.framebufferTexture2D = function (t, att, tt, tex, lvl) {
@@ -2681,6 +2715,14 @@ window.fcRunPy = fcRunPy;
         } catch (ex) { window.__fcPresentErr = String(ex); }
         inPresent = false;
       }
+      // Both registries are closure-private, so a leak in them is unobservable from
+      // outside -- which is how the REG one survived. One accessor makes it checkable:
+      // open and close documents, call this, and the numbers must come back down.
+      window.__fcPresentStats = function () {
+        var n = 0, k;
+        for (k in REG) { n++; }
+        return { reg: n, upl: UPL.length, presented: window.__fcPresented || 0 };
+      };
       requestAnimationFrame(present);
       console.log('[fcweb] page present pass armed (threaded-Qt compose never executes its present)');
     })();

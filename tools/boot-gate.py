@@ -407,6 +407,56 @@ except Exception as _e:
 _s.__stderr__.flush()
 '''
 
+# Does NEAR geometry hide FAR geometry? -- the assertion the colour histogram cannot make.
+#
+# On 2026-09-02 every building in the BIM example rendered see-through from the second
+# frame on: the frame-end GL state reset disabled GL_DEPTH_TEST behind Coin's back and
+# Coin's lazy cache never re-enabled it, so interiors drew over facades. The render gate
+# above passed the whole time -- a depth-less scene still fills a healthy fraction of the
+# frame with plenty of distinct colours, which is all it checks.
+#
+# So: a SMALL RED box sitting completely inside the silhouette of a LARGE GREEN box behind
+# it, green added second so it draws second. With depth working, red survives. With depth
+# off, green paints over it and red vanishes. Colours are compared by hue dominance rather
+# than exact RGB, because the shaded pixel value is a lighting and rasteriser detail.
+OCCLUDE_PY = r'''
+# Two boxes, one behind the other, to prove that depth testing is on.
+import sys as _s
+
+_NL = chr(10)
+try:
+    import FreeCAD as App
+    import FreeCADGui as Gui
+
+    doc = App.newDocument("DepthGate")
+    # Sized so the near box is a LARGE share of the far box's silhouette (40x40 inside
+    # 90x90, so ~25% of the visible green when depth works). The first version used a
+    # 10x10 near box, whose ~1.2% share sat below the gate's own threshold and failed on
+    # a build that was rendering correctly -- the check has to have room between "visible"
+    # and "hidden", not just a non-zero count.
+    near = doc.addObject("Part::Box", "Near")
+    near.Length, near.Width, near.Height = 40.0, 40.0, 10.0
+    near.Placement.Base = App.Vector(15.0, 15.0, 60.0)
+    near.ViewObject.ShapeColor = (1.0, 0.0, 0.0)
+
+    # Added second, so Coin traverses (and draws) it second. Big enough that its
+    # silhouette swallows the near box from this viewpoint.
+    far = doc.addObject("Part::Box", "Far")
+    far.Length, far.Width, far.Height = 90.0, 90.0, 10.0
+    far.Placement.Base = App.Vector(-20.0, -20.0, -40.0)
+    far.ViewObject.ShapeColor = (0.0, 1.0, 0.0)
+
+    doc.recompute()
+    v = Gui.activeDocument().activeView()
+    v.setCameraType("Orthographic")     # no perspective foreshortening to reason about
+    v.viewTop()                         # look straight down: near is directly over far
+    Gui.SendMsgToActiveView("ViewFit")
+    _s.__stderr__.write("FCDEPTH {'built': True}" + _NL)
+except Exception as _e:
+    _s.__stderr__.write("FCDEPTH " + repr({'built': False, 'error': repr(_e)}) + _NL)
+_s.__stderr__.flush()
+'''
+
 # Read the frame the viewport actually produced.
 #
 # Coin renders into its OWN offscreen FBO and the C++ blits that into Qt's backing FBO, so
@@ -432,11 +482,22 @@ READ_FRAME_JS = r"""(() => {
       }
       const total = W * H;
       const bg = cols['247,247,247'] || 0;
+      // Hue dominance, for the occlusion check: which of two coloured solids reached the
+      // frame. Compared as "clearly redder than green" rather than an exact RGB, because
+      // the shaded value depends on lighting and on the rasteriser.
+      let reddish = 0, greenish = 0;
+      for (let p = 0; p < buf.length; p += 4) {
+        const r = buf[p], g = buf[p + 1], b2 = buf[p + 2];
+        if (r > g + 40 && r > b2 + 40) reddish++;
+        else if (g > r + 40 && g > b2 + 40) greenish++;
+      }
       const rec = {
         distinct: Object.keys(cols).length,
         total: total,
         background: bg,
         nonBackground: total - bg,
+        reddish: reddish,
+        greenish: greenish,
         top: Object.entries(cols).sort((a, b) => b[1] - a[1]).slice(0, 6),
       };
       if (!best || rec.distinct > best.distinct) best = rec;
@@ -2020,6 +2081,31 @@ def scenario_render(ctx, url, args, fail):
     if distinct < 8:
         fail('render: only %d distinct colours -- the solid is flat or unlit, which is what '
              'the nine no-op fixed-function GL calls would look like' % distinct)
+
+    # ---- and does near geometry actually HIDE far geometry? -------------------------
+    # Everything above is satisfied by a scene with no depth testing at all, which is
+    # precisely what shipped on 2026-09-02. See OCCLUDE_PY.
+    s.run_python(OCCLUDE_PY)
+    if not s.wait_for('FCDEPTH', 180):
+        print('==> render: depth sub-check skipped -- the two-box scene never built')
+        return s
+    time.sleep(6)
+    try:
+        d = json.loads(s.page.evaluate(READ_FRAME_JS) or '{}')
+    except Exception as e:
+        print('==> render: depth sub-check could not read the frame (%s)' % e)
+        return s
+    red, green = d.get('reddish', 0), d.get('greenish', 0)
+    print('==> render: depth -- %d reddish px (near box), %d greenish px (far box)'
+          % (red, green))
+    if green < 1000:
+        # The far box is the big one; if it is not on screen the scene is not what this
+        # check assumes and the red count would mean nothing either way.
+        print('==> render: depth sub-check inconclusive -- the far box did not render')
+    elif red < green * 0.05:      # nominal is ~0.25; depth-off drops it to ~0
+        fail('render: the near box is hidden by the box BEHIND it (%d reddish px against '
+             '%d greenish). Geometry is being drawn without depth testing -- solids render '
+             'see-through and interiors show through exteriors.' % (red, green))
     return s
 
 
