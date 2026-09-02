@@ -5363,3 +5363,52 @@ diff -ruNp a/src/Gui/Quarter/QuarterWidgetP.cpp b/src/Gui/Quarter/QuarterWidgetP
    for (int i = 0; i < cachecontext_list->getLength(); i++) {
      QuarterWidgetP_cachecontext * cachecontext = (*cachecontext_list)[i];
  
+diff -ruNp a/src/Mod/Mesh/Gui/SoFCIndexedFaceSet.cpp b/src/Mod/Mesh/Gui/SoFCIndexedFaceSet.cpp
+--- a/src/Mod/Mesh/Gui/SoFCIndexedFaceSet.cpp
++++ b/src/Mod/Mesh/Gui/SoFCIndexedFaceSet.cpp
+@@ -514,6 +514,37 @@ void SoFCIndexedFaceSet::GLRender(SoGLRe
+     }
+ 
+     // use VBO for fast rendering if possible
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: a mesh must NEVER reach drawFaces() here. Under the JS GL emulation the
++    // immediate-mode fallback replays every vertex through a JavaScript call per
++    // glVertex3f/glNormal3f: a 443k-triangle mesh measured 668-993 ms per frame that
++    // way, against 6 ms as one indexed VBO draw (2026-09-02, RTX 4080, Chrome). So on
++    // wasm: if the context can do VBOs at all, take the array path unconditionally --
++    // and when the material bookkeeping does not match what the arrays were built
++    // with, rebuild the arrays (MeshRenderer carries per-face colours as
++    // GL_C4F_N3F_V3F) instead of falling back. The rebuild is a one-off per material
++    // change, milliseconds; the fallback was a per-frame second.
++    if (render.canRenderGLArray(action)) {
++        useVBO = true;
++    }
++    if (useVBO) {
++        if (updateGLArray.getValue()) {
++            updateGLArray.setValue(false);
++            render.update();
++            generateGLArrays(action);
++        }
++        else if (render.needUpdate(action) || !render.matchMaterial(state)) {
++            render.update();
++            generateGLArrays(action);
++        }
++        SoMaterialBundle mb(action);
++        mb.sendFirst();
++        render.renderFacesGLArray(action);
++    }
++    else {
++        drawFaces(action);
++    }
++#else
+     if (useVBO) {
+         if (updateGLArray.getValue()) {
+             updateGLArray.setValue(false);
+@@ -536,6 +567,7 @@ void SoFCIndexedFaceSet::GLRender(SoGLRe
+     else {
+         drawFaces(action);
+     }
++#endif
+ #else
+     drawFaces(action);
+ #endif
