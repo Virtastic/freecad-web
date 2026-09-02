@@ -78,6 +78,16 @@ export GH_REPO="${GH_REPO:-Virtastic/freecad-web}"
 PREV="$(gh release view --json tagName -q .tagName)"
 echo "   previous latest: $PREV"
 for f in gmsh.js gmsh.wasm ccx.js ccx.wasm; do
+    # Reuse a copy already sitting in the staging directory. `gh release download`
+    # has no overwrite, so a present file made this step FAIL outright -- and on a
+    # flaky link (measured 2026-08-31: repeated i/o timeouts to
+    # release-assets.githubusercontent.com) re-fetching 30 MB of unchanged modules
+    # is the step most likely to lose a publish. These four are byte-identical
+    # across releases by definition: they are carried over, never rebuilt here.
+    if [ -s "$BIN/$f" ]; then
+        echo "   reusing staged $f ($(stat -c%s "$BIN/$f") bytes)"
+        continue
+    fi
     gh release download "$PREV" -p "$f" -D "$BIN"
     [ -s "$BIN/$f" ] || { echo "!! could not fetch $f from $PREV" >&2; exit 1; }
 done

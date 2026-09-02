@@ -1819,6 +1819,10 @@ window.fcRunPy = fcRunPy;
       // use for; autosave also gets cheaper. If previews are ever wanted, fix the
       // offscreen render's state isolation first.
       "_App.ParamGet('User parameter:BaseApp/Preferences/Document').SetBool('SaveThumbnail', False)",
+      // VBOs on by default, matching FCWEB_VBO in pre-gui.js -- both gates must agree or
+      // Coin nulls glBindBuffer and the pref silently does nothing. ?vbo=0 flips both off.
+      "_App.ParamGet('User parameter:BaseApp/Preferences/View').SetBool('UseVBO', " +
+        (new URLSearchParams(location.search).get('vbo') === '0' ? 'False' : 'True') + ")",
       "if not getattr(_App, '_fcweb_saver', None):",
       "    class _FcwebSaver(object):",
       "        DIR = '" + AUTOSAVE_DIR + "'",
@@ -2303,6 +2307,7 @@ window.fcRunPy = fcRunPy;
       var UPL = [];                       // textures receiving raster uploads
       var lastForeignPresent = 0;
       var inPresent = false;
+      var lastUi = null;                  // last good canvas-sized UI texture
 
       // ---- shadow GL state, so presenting never has to ASK the driver ----------------
       //
@@ -2484,7 +2489,20 @@ window.fcRunPy = fcRunPy;
             if (t.__fcSz && t.__fcSz[0] === gl.drawingBufferWidth
                          && t.__fcSz[1] === gl.drawingBufferHeight
                          && (!ui || (t.__fcUpl || 0) > (ui.__fcUpl || 0))) ui = t; }
-          if (!ui && !widget) { inPresent = false; return; }
+          // A frame with no UI layer must NOT be presented. Qt deletes and recreates
+          // its backingstore texture during interaction (repaint churn, resize, DPR
+          // change); between the delete and the first upload into the replacement there
+          // is no canvas-sized texture. Presenting the widget alone paints the 3D view
+          // onto a framebuffer Qt has just cleared, so every other pixel goes black for
+          // a frame -- the "screen flashes black while moving" report. Hold the last
+          // good UI texture across that gap, and if even that is gone, skip the frame
+          // entirely: leaving the previous complete frame on screen is always better
+          // than showing half of this one.
+          if (ui) { lastUi = ui; }
+          else if (lastUi && !lastUi.__fcDead
+                   && lastUi.__fcSz && lastUi.__fcSz[0] === gl.drawingBufferWidth
+                   && lastUi.__fcSz[1] === gl.drawingBufferHeight) { ui = lastUi; }
+          if (!ui) { inPresent = false; return; }
           var p = progFor(gl);
           if (!p) { inPresent = false; return; }
           // Read the state to restore from the SHADOW, never from the driver. A CPU

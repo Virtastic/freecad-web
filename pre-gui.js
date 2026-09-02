@@ -23,6 +23,11 @@ Module['preRun'].push(function () {
       if (!qs.has('no3d'))     { ENV.FCWEB_ENABLE_3D = '1'; ENV.FCWEB_NO_FBO0 = '1'; }
       if (qs.has('nofbo0'))    { ENV.FCWEB_NO_FBO0 = '1'; }
       if (qs.has('debug'))     { ENV.FCWEB_DEBUG = '1'; }
+      // VBOs are ON by default (2026-09: verified rendering identical to the immediate
+      // path on the BIM example, correct on a 51k-tri mesh, and the 626-solid STEP
+      // pathology in patches/coin3d.patch predates the validation-gate fix). ?vbo=0
+      // opts back into immediate mode for A/B and as the escape hatch.
+      if (qs.get('vbo') !== '0') { ENV.FCWEB_VBO = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');

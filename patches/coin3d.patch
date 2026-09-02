@@ -1,8 +1,7 @@
 diff --git a/src/glue/gl.cpp b/src/glue/gl.cpp
-index 66273c2..9de4199 100644
 --- a/src/glue/gl.cpp
 +++ b/src/glue/gl.cpp
-@@ -610,6 +610,23 @@ cc_glglue_getprocaddress(const cc_glglue * glue, const char * symname)
+@@ -580,6 +580,23 @@
  {
    void * ptr = NULL;
  
@@ -26,7 +25,7 @@ index 66273c2..9de4199 100644
    // FIXME: also supply 'glue' to coin_[x]gl_getprocaddress()
    ptr = coin_wgl_getprocaddress(glue, symname);
    if (ptr) goto returnpoint;
-@@ -691,6 +708,7 @@ glglue_set_glVersion(cc_glglue * w)
+@@ -654,6 +671,7 @@
  {
    char buffer[256];
    char * dotptr;
@@ -34,7 +33,7 @@ index 66273c2..9de4199 100644
  
    /* NB: if you are getting a crash here, it's because an attempt at
     * setting up a cc_glglue instance was made when there is no current
-@@ -706,10 +724,17 @@ glglue_set_glVersion(cc_glglue * w)
+@@ -669,10 +687,17 @@
  
    (void)strncpy(buffer, (const char *)w->versionstr, 255);
    buffer[255] = '\0'; /* strncpy() will not null-terminate if strlen > 255 */
@@ -54,7 +53,7 @@ index 66273c2..9de4199 100644
      *dotptr = '\0';
      w->version.major = atoi(start);
      start = ++dotptr;
-@@ -1369,6 +1394,19 @@ glglue_resolve_symbols(cc_glglue * w)
+@@ -1332,6 +1357,28 @@
      if (env && (atoi(env) > 0)) { w->glBindBuffer = NULL; }
    }
  
@@ -67,14 +66,52 @@ index 66273c2..9de4199 100644
 +     optimised for this workload, whereas Coin's VBO path allocates a buffer per scene node
 +     across hundreds of solids. Nulling glBindBuffer makes cc_glglue_has_vertex_buffer_object()
 +     return FALSE, which is exactly the pre-existing (fast) behaviour -- while everything else,
-+     notably glActiveTexture, now resolves properly. */
-+  w->glBindBuffer = NULL;
++     notably glActiveTexture, now resolves properly.
++
++     Runtime-selectable since 2026-08-31: the measurement above is about Coin's per-NODE
++     buffers across hundreds of solids, which says nothing about a single imported mesh --
++     one node, one buffer, and the whole point of a VBO is that its vertices stop crossing
++     the wasm/JS boundary every frame. FCWEB_VBO=1 (the page sets it from ?vbo=1) opts in.
++     The DEFAULT IS UNCHANGED: absent or 0 leaves glBindBuffer NULL, exactly as measured. */
++  {
++    const char * fcvbo = coin_getenv("FCWEB_VBO");
++    if (!(fcvbo && atoi(fcvbo) > 0)) { w->glBindBuffer = NULL; }
++  }
 +#endif
 +
    /*
      Sylvain Carette reported problems with some old 3DLabs drivers and VBO rendering.
      The drivers were from 2006, so we disable VBO rendering if 3DLabs and that driver
-@@ -2958,6 +2996,16 @@ void
+@@ -1354,11 +1401,26 @@
+         !w->glIsBuffer ||
+         !w->glBufferData ||
+         !w->glBufferSubData ||
++#if !defined(__EMSCRIPTEN__)
++        /* WebGL has no client-side buffer mapping and no buffer readback, so these four
++           NEVER resolve in wasm: glGetBufferSubData, glMapBuffer, glUnmapBuffer and
++           glGetBufferPointerv are absent from emscripten's GL entirely (verified against
++           the linked FreeCAD.js, 2026-08-31). Requiring them here nulled glBindBuffer and
++           forced immediate mode for everything -- meaning a mesh's every vertex crossed
++           the wasm/JS boundary on every single frame (measured: 59,345 vertices/frame and
++           26.8 fps rotating a 51,200-triangle STL).
++           They are safe to drop because NOTHING CALLS THEM: neither Coin's SoVBO nor
++           FreeCAD's Gui::OpenGLBuffer references map/unmap/readback anywhere -- grepped,
++           not assumed. The six that remain below (gen/delete/is/data/subdata/parameteriv)
++           are all present and are exactly what creating, filling and drawing a VBO needs.
++           This only ever runs when FCWEB_VBO=1 has already un-nulled glBindBuffer above;
++           without the opt-in the whole block is skipped and behaviour is unchanged. */
+         !w->glGetBufferSubData ||
+         !w->glMapBuffer ||
+         !w->glUnmapBuffer ||
+-        !w->glGetBufferParameteriv ||
+-        !w->glGetBufferPointerv) {
++        !w->glGetBufferPointerv ||
++#endif
++        !w->glGetBufferParameteriv) {
+       w->glBindBuffer = NULL; /* so that cc_glglue_has_vertex_buffer_object() will return FALSE */
+       if (COIN_DEBUG || coin_glglue_debug()) {
+         cc_debugerror_postwarning("glglue_init",
+@@ -2863,6 +2925,16 @@
  cc_glglue_glActiveTexture(const cc_glglue * w,
                            GLenum texture)
  {
