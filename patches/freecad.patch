@@ -5412,3 +5412,251 @@ diff -ruNp a/src/Mod/Mesh/Gui/SoFCIndexedFaceSet.cpp b/src/Mod/Mesh/Gui/SoFCInde
  #else
      drawFaces(action);
  #endif
+diff -ruNp a/src/Mod/Mesh/Gui/ViewProviderMeshFaceSet.h b/src/Mod/Mesh/Gui/ViewProviderMeshFaceSet.h
+--- a/src/Mod/Mesh/Gui/ViewProviderMeshFaceSet.h
++++ b/src/Mod/Mesh/Gui/ViewProviderMeshFaceSet.h
+@@ -1,82 +1,84 @@
+-// SPDX-License-Identifier: LGPL-2.1-or-later
+-
+-/***************************************************************************
+- *   Copyright (c) 2006 Werner Mayer <wmayer[at]users.sourceforge.net>     *
+- *                                                                         *
+- *   This file is part of the FreeCAD CAx development system.              *
+- *                                                                         *
+- *   This library is free software; you can redistribute it and/or         *
+- *   modify it under the terms of the GNU Library General Public           *
+- *   License as published by the Free Software Foundation; either          *
+- *   version 2 of the License, or (at your option) any later version.      *
+- *                                                                         *
+- *   This library  is distributed in the hope that it will be useful,      *
+- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+- *   GNU Library General Public License for more details.                  *
+- *                                                                         *
+- *   You should have received a copy of the GNU Library General Public     *
+- *   License along with this library; see the file COPYING.LIB. If not,    *
+- *   write to the Free Software Foundation, Inc., 59 Temple Place,         *
+- *   Suite 330, Boston, MA  02111-1307, USA                                *
+- *                                                                         *
+- ***************************************************************************/
+-
+-#ifndef MESHGUI_VIEWPROVIDERMESHFACESET_H
+-#define MESHGUI_VIEWPROVIDERMESHFACESET_H
+-
+-#include <Mod/Mesh/Gui/ViewProvider.h>
+-
+-namespace MeshGui
+-{
+-class SoFCIndexedFaceSet;
+-
+-/**
+- * The ViewProviderMeshFaceSet class creates nodes for representing the mesh
+- * data structure. Depending on the size of the mesh it uses two ways to
+- * render it:
+- * - For huge meshes it renders directly the data structure. Rendering directly
+- *   the data structure has the advantage to save memory by not creating the
+- *   according OpenInventor nodes which would more or less duplicate the
+- *   memory for a mesh. Especially for huge with several hundred thousands or
+- *   even millions of triangles, the amount of saved memory is considerable.
+- * - For all other meshes it uses the appropriate OpenInventor nodes. Although
+- *   this needs more memory its usage is much more flexible. It offers several
+- *   nice features like a smooth-shaded appearance of a mesh whereas the
+- *   OpenInventor nodes are already capable to do everything automatically,
+- *   or the usage with textures.
+- *
+- * For more details @see SoFCMeshNode and SoFCMeshFaceSet.
+- * @author Werner Mayer
+- */
+-class MeshGuiExport ViewProviderMeshFaceSet: public ViewProviderMesh
+-{
+-    PROPERTY_HEADER_WITH_OVERRIDE(MeshGui::ViewProviderMeshFaceSet);
+-
+-public:
+-    ViewProviderMeshFaceSet();
+-    ~ViewProviderMeshFaceSet() override;
+-
+-    void attach(App::DocumentObject* obj) override;
+-    void updateData(const App::Property* prop) override;
+-
+-protected:
+-    void showOpenEdges(bool show) override;
+-    SoShape* getShapeNode() const override;
+-    SoNode* getCoordNode() const override;
+-
+-private:
+-    bool directRendering;
+-    unsigned long triangleCount;
+-    SoCoordinate3* pcMeshCoord;
+-    SoFCIndexedFaceSet* pcMeshFaces;
+-    SoFCMeshObjectNode* pcMeshNode;
+-    SoFCMeshObjectShape* pcMeshShape;
+-
+-    FC_DISABLE_COPY_MOVE(ViewProviderMeshFaceSet)
+-};
+-
+-}  // namespace MeshGui
+-
+-
+-#endif  // MESHGUI_VIEWPROVIDERMESHFACESET_H
++// SPDX-License-Identifier: LGPL-2.1-or-later
++
++/***************************************************************************
++ *   Copyright (c) 2006 Werner Mayer <wmayer[at]users.sourceforge.net>     *
++ *                                                                         *
++ *   This file is part of the FreeCAD CAx development system.              *
++ *                                                                         *
++ *   This library is free software; you can redistribute it and/or         *
++ *   modify it under the terms of the GNU Library General Public           *
++ *   License as published by the Free Software Foundation; either          *
++ *   version 2 of the License, or (at your option) any later version.      *
++ *                                                                         *
++ *   This library  is distributed in the hope that it will be useful,      *
++ *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
++ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
++ *   GNU Library General Public License for more details.                  *
++ *                                                                         *
++ *   You should have received a copy of the GNU Library General Public     *
++ *   License along with this library; see the file COPYING.LIB. If not,    *
++ *   write to the Free Software Foundation, Inc., 59 Temple Place,         *
++ *   Suite 330, Boston, MA  02111-1307, USA                                *
++ *                                                                         *
++ ***************************************************************************/
++
++#ifndef MESHGUI_VIEWPROVIDERMESHFACESET_H
++#define MESHGUI_VIEWPROVIDERMESHFACESET_H
++
++#include <Mod/Mesh/Gui/ViewProvider.h>
++
++namespace MeshGui
++{
++class SoFCIndexedFaceSet;
++
++/**
++ * The ViewProviderMeshFaceSet class creates nodes for representing the mesh
++ * data structure. Depending on the size of the mesh it uses two ways to
++ * render it:
++ * - For huge meshes it renders directly the data structure. Rendering directly
++ *   the data structure has the advantage to save memory by not creating the
++ *   according OpenInventor nodes which would more or less duplicate the
++ *   memory for a mesh. Especially for huge with several hundred thousands or
++ *   even millions of triangles, the amount of saved memory is considerable.
++ * - For all other meshes it uses the appropriate OpenInventor nodes. Although
++ *   this needs more memory its usage is much more flexible. It offers several
++ *   nice features like a smooth-shaded appearance of a mesh whereas the
++ *   OpenInventor nodes are already capable to do everything automatically,
++ *   or the usage with textures.
++ *
++ * For more details @see SoFCMeshNode and SoFCMeshFaceSet.
++ * @author Werner Mayer
++ */
++class MeshGuiExport ViewProviderMeshFaceSet: public ViewProviderMesh
++{
++    PROPERTY_HEADER_WITH_OVERRIDE(MeshGui::ViewProviderMeshFaceSet);
++
++public:
++    ViewProviderMeshFaceSet();
++    ~ViewProviderMeshFaceSet() override;
++
++    void attach(App::DocumentObject* obj) override;
++    void updateData(const App::Property* prop) override;
++
++protected:
++    void showOpenEdges(bool show) override;
++    SoShape* getShapeNode() const override;
++    SoNode* getCoordNode() const override;
++
++private:
++    bool directRendering;
++    unsigned long triangleCount;
++    SoCoordinate3* pcMeshCoord;
++    SoFCIndexedFaceSet* pcMeshFaces;
++    SoFCMeshObjectNode* pcMeshNode;
++    SoFCMeshObjectShape* pcMeshShape;
++    // FCWEB (wasm): grid-accelerated picking for the VBO-rendered mesh, see the .cpp
++    SoFCMeshPickNode* pcMeshPick {nullptr};
++
++    FC_DISABLE_COPY_MOVE(ViewProviderMeshFaceSet)
++};
++
++}  // namespace MeshGui
++
++
++#endif  // MESHGUI_VIEWPROVIDERMESHFACESET_H
+diff -ruNp a/src/Mod/Mesh/Gui/ViewProviderMeshFaceSet.cpp b/src/Mod/Mesh/Gui/ViewProviderMeshFaceSet.cpp
+--- a/src/Mod/Mesh/Gui/ViewProviderMeshFaceSet.cpp
++++ b/src/Mod/Mesh/Gui/ViewProviderMeshFaceSet.cpp
+@@ -26,6 +26,7 @@
+ 
+ #include <Inventor/nodes/SoBaseColor.h>
+ #include <Inventor/nodes/SoCoordinate3.h>
++#include <Inventor/nodes/SoPickStyle.h>
+ #include <Inventor/nodes/SoDrawStyle.h>
+ #include <Inventor/nodes/SoIndexedLineSet.h>
+ #include <Inventor/nodes/SoMaterial.h>
+@@ -61,6 +62,10 @@ ViewProviderMeshFaceSet::ViewProviderMes
+     pcMeshCoord->ref();
+     pcMeshFaces = new SoFCIndexedFaceSet;
+     pcMeshFaces->ref();
++#if defined(__EMSCRIPTEN__)
++    pcMeshPick = new SoFCMeshPickNode;
++    pcMeshPick->ref();
++#endif
+ 
+     // setup engine to notify 'pcMeshFaces' node about material changes.
+     // When the affected nodes are deleted the engine will be deleted, too.
+@@ -76,12 +81,31 @@ ViewProviderMeshFaceSet::~ViewProviderMe
+     pcMeshShape->unref();
+     pcMeshCoord->unref();
+     pcMeshFaces->unref();
++#if defined(__EMSCRIPTEN__)
++    if (pcMeshPick) {
++        pcMeshPick->unref();
++    }
++#endif
+ }
+ 
+ void ViewProviderMeshFaceSet::attach(App::DocumentObject* obj)
+ {
+     ViewProviderMesh::attach(obj);
+ 
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: pick through the MeshFacetGrid, not through Coin's SoIndexedFaceSet::rayPick.
++    // The generic pick tests every triangle: 170 ms per pick on a 443k-triangle mesh in
++    // wasm, and a click issues several (preselection on every mouse move, the release
++    // pick) -- measured 2026-09-02 as ~1 s of main-thread stalls per click. The Mesh module
++    // already has SoFCMeshPickNode (NearestFacetOnRay over a facet grid, microseconds);
++    // it is only wired into the direct-rendering graph, which RENDER_GL_VAO compiles out.
++    // Put it first in the shape group and make the face set itself unpickable, so a ray
++    // pick resolves against the grid and still carries a SoFaceDetail for element names.
++    pcShapeGroup->addChild(pcMeshPick);
++    auto* fcwebPickStyle = new SoPickStyle;
++    fcwebPickStyle->style = SoPickStyle::UNPICKABLE;
++    pcShapeGroup->addChild(fcwebPickStyle);
++#endif
+     pcShapeGroup->addChild(pcMeshCoord);
+     pcShapeGroup->addChild(pcMeshFaces);
+ 
+@@ -115,6 +139,10 @@ void ViewProviderMeshFaceSet::updateData
+             ViewProviderMeshBuilder builder;
+             builder.createMesh(prop, pcMeshCoord, pcMeshFaces);
+             pcMeshFaces->invalidate();
++#if defined(__EMSCRIPTEN__)
++            // rebuilds the facet grid (SoFCMeshPickNode::notify)
++            pcMeshPick->mesh.setValue(mesh);
++#endif
+         }
+ 
+         if (direct != directRendering) {
+diff -ruNp a/src/Mod/Mesh/Gui/SoFCMeshObject.cpp b/src/Mod/Mesh/Gui/SoFCMeshObject.cpp
+--- a/src/Mod/Mesh/Gui/SoFCMeshObject.cpp
++++ b/src/Mod/Mesh/Gui/SoFCMeshObject.cpp
+@@ -397,6 +397,9 @@ void SoFCMeshPickNode::pick(SoPickAction
+     raypick->setObjectSpace();
+ 
+     const Mesh::MeshObject* meshObject = mesh.getValue();
++    if (!meshObject || !meshGrid) {
++        return;  // FCWEB: the node can sit in a graph before its mesh is set
++    }
+     MeshCore::MeshAlgorithm alg(meshObject->getKernel());
+ 
+     const SbLine& line = raypick->getLine();
