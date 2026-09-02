@@ -2939,7 +2939,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          glra->apply(this->backgroundroot);
      }
  
-@@ -2555,6 +2647,17 @@ void View3DInventorViewer::renderScene()
+@@ -2555,6 +2647,32 @@ void View3DInventorViewer::renderScene()
      }
  
      try {
@@ -2953,6 +2953,21 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +        // on the first frame only, then goes invisible. Clear depth here, right
 +        // before the scene traversal.
 +        glClear(GL_DEPTH_BUFFER_BIT);
++        // REASSERT the state Coin believes it owns. The FCWEB GL STATE RESET at
++        // the bottom of this function hands Qt a clean context by disabling
++        // GL_DEPTH_TEST and GL_BLEND after every frame -- but Coin's per-context
++        // lazy caches (SoGLDepthBufferElement / SoGLLazyElement) still think the
++        // state is whatever Coin last set, so Coin never re-enables them. From
++        // frame 2 on the whole scene drew depth-off and blend-on: buildings
++        // rendered see-through, interiors visible through facades (measured
++        // 2026-09-02: BIM example, and a lone Part::Box showing its own back
++        // faces; GL snaps at the mesh draws read depthTest:false blend:true).
++        // Forcing the actual GL state back to Coin's defaults keeps the caches
++        // coherent: Coin thinks depth is on -- now it really is.
++        glEnable(GL_DEPTH_TEST);
++        glDepthMask(GL_TRUE);
++        glDepthFunc(GL_LESS);
++        glDisable(GL_BLEND);
 +#endif
          // Render normal scenegraph.
          inherited::actualRedraw();
