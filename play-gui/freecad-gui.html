@@ -1838,7 +1838,24 @@ window.fcRunPy = fcRunPy;
       "        def _touch(self, *a):",
       "            self.dirty = True",
       "            self.last = _time.time()",
-      "        slotChangedObject = _touch",
+      // Big meshes highlight as a bounding box, not as the mesh. Selecting a mesh makes
+      // the unified selection re-render it through its OWN SoGLRenderAction, whose fresh
+      // state never had the viewer's VBO flag set -- so the mesh node falls back to
+      // Coin's immediate-mode render, 1.33M vertices through the JS emulation per frame.
+      // Measured 2026-09-02 (443k triangles, RTX 4080): selected 685 ms/frame, deselected
+      // 7.8 ms/frame. Every import leaves the new object selected. A box highlight keeps
+      // the selection pass off the mesh entirely; freecad.patch closes the C++ side too.
+      "        BIG_MESH = 50000",
+      "        def _meshStyle(self, o):",
+      "            try:",
+      "                m = getattr(o, 'Mesh', None)",
+      "                if m is not None and m.CountFacets > self.BIG_MESH and o.ViewObject.SelectionStyle != 'BoundBox':",
+      "                    o.ViewObject.SelectionStyle = 'BoundBox'",
+      "            except Exception:",
+      "                pass",
+      "        def slotChangedObject(self, o, prop=None):",
+      "            self._touch()",
+      "            if prop in (None, 'Mesh'): self._meshStyle(o)",
       "        slotCreatedObject = _touch",
       "        slotDeletedObject = _touch",
       "        slotCreatedDocument = _touch",
