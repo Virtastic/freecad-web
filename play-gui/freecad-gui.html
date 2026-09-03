@@ -2756,6 +2756,21 @@ window.fcRunPy = fcRunPy;
             }
             keepValid = true;             // this frame is complete and safe to re-present
           }
+          // ?presentlog=1 only: what did this frame's composite actually LOOK like? Draw
+          // counts cannot see a frame that is drawn correctly from a texture Qt has not
+          // filled yet -- that frame is published, and it is black. Sample our own
+          // composite (never the canvas: no preserveDrawingBuffer) and record the mean
+          // luminance so a black frame is a number rather than a report.
+          if (PLOG && keepValid && PLOG.length) {
+            try {
+              gl.bindFramebuffer(gl.READ_FRAMEBUFFER, keepFbo);
+              var __px = new Uint8Array(64);
+              gl.readPixels((W >> 1) - 2, (H >> 1) - 2, 4, 4, gl.RGBA, gl.UNSIGNED_BYTE, __px);
+              var __s = 0;
+              for (var __q = 0; __q < 64; __q += 4) { __s += __px[__q] + __px[__q+1] + __px[__q+2]; }
+              PLOG[PLOG.length - 1].lum = Math.round(__s / 16 / 3);
+            } catch (e) { PLOG[PLOG.length - 1].lum = -1; }
+          }
           // Present whenever we hold a complete frame -- which, after the first one, is
           // every frame. The canvas is alpha:false + preserveDrawingBuffer:false, so a
           // frame that draws NOTHING is composited as solid black; there is never a good
