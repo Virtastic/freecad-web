@@ -1110,6 +1110,15 @@ try:
 
     _url = 'https://raw.githubusercontent.com/FreeCAD/Addons/main/Data/Index.json'
     _out['rewritten'] = NetworkManager.fcweb_proxy_url(_url)
+    # The catalogue is only half of it. On open the workbench also pings
+    # addons.freecad.org/status and posts usage stats there. That host was missing
+    # from FCWEB_PROXY_HOSTS, so the request was never rewritten, went cross-origin,
+    # and COEP:require-corp dropped it -- reported to the user as 'got HTTP status
+    # code 0' / 'No data received', followed by a modal raised from the network
+    # callback, which is not a promising stack and killed the page with a
+    # SuspendError. Reported 2026-09-03 from the dev origin.
+    _out['status_rewritten'] = NetworkManager.fcweb_proxy_url(
+        'https://addons.freecad.org/status')
 
     NetworkManager.InitializeNetworkManager()
 
@@ -1733,6 +1742,8 @@ def scenario_addons(ctx, url, args, fail):
         fail('the Addon Manager could not reach its catalogue: %s -- the workbench would be installed and useless' % r['error'])
     elif not str(r.get('rewritten', '')).startswith('/proxy/raw/'):
         fail('the catalogue URL was not rewritten through the proxy (got %r), so it would be refused by COEP' % r.get('rewritten'))
+    elif not str(r.get('status_rewritten', '')).startswith('/proxy/addons/'):
+        fail('addons.freecad.org is not rewritten onto the proxy (got %r) -- the Addon Manager pings it on open, COEP refuses it cross-origin, and the modal it raises from the network callback takes the page down' % r.get('status_rewritten'))
     elif r.get('bytes', 0) < 1000 or r.get('addons', 0) < 10:
         fail('the catalogue came back as %r bytes / %r entries, which is not a real index' % (r.get('bytes'), r.get('addons')))
     return s
