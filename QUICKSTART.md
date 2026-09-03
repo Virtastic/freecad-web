@@ -53,7 +53,12 @@ job needing ~100 GB of disk and 16+ GB of RAM, and it is documented in
 |---|---|---|
 | `--port 9000` | `FCWEB_PORT` | `8080` |
 | `--tag v1.0.0` | `FCWEB_RELEASE` | `v1.0.0` |
+| `--ref dev` | — | same as `--tag` |
 | `--build` / `--pull` | — | pull, with fallback to build |
+
+`--tag` is the release whose engine artifacts and image get installed. `--ref` is the
+source tree (branch or tag) the Dockerfile and compose file come from. They are the same
+thing unless you are deliberately mixing a newer installer with an older engine.
 
 ---
 
