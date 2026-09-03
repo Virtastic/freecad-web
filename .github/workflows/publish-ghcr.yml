@@ -123,6 +123,28 @@ jobs:
           docker push "${IMAGE}:latest"
           echo "pushed ${IMAGE}:${TAG}, :${bare}, :latest"
 
+      # The package a GITHUB_TOKEN creates is PRIVATE, even on a public repo, and there is
+      # no API to change that -- only the web UI. So the whole install story silently
+      # degrades to a 15-minute local build until somebody remembers to flip it. Checking
+      # anonymously turns that piece of lore into a signal on every publish. Never fatal:
+      # on a first publish "private" is the correct and expected state.
+      - name: Is the package actually pullable by strangers?
+        id: vis
+        if: always()
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -u
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          if docker manifest inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
+            echo "public=yes" >> "$GITHUB_OUTPUT"
+            echo "anonymous pull works -- setup.sh will take the fast path"
+          else
+            echo "public=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::${IMAGE} is not public, so setup.sh cannot pull it and will fall back to a ~15 min local build. Fix once, by hand: https://github.com/orgs/Virtastic/packages/container/freecad-web/settings -> Danger Zone -> Change visibility -> Public"
+          fi
+
       - name: Summary
         if: always()
         env:
@@ -137,4 +159,9 @@ jobs:
             echo "| release | \`${TAG}\` |"
             echo "| image | \`${IMAGE}:${TAG}\` |"
             echo "| install | \`docker pull ${IMAGE}:${TAG}\` |"
+            if [ "${{ steps.vis.outputs.public }}" = "yes" ]; then
+              echo "| anonymous pull | works |"
+            else
+              echo "| anonymous pull | **NO -- package is private.** Flip it at [package settings](https://github.com/orgs/Virtastic/packages/container/freecad-web/settings) -> Danger Zone -> Change visibility -> Public. Until then \`setup.sh\` builds locally. |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
