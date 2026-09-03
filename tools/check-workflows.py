@@ -37,6 +37,18 @@ def _mapping(loader, node, deep=False):
 
 NoDuplicates.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
 
+# Scripts a workflow runs that are deliberately NOT build inputs, so not triggering a
+# rebuild when they change is correct rather than a bug. Keep this tiny and always say why:
+# the check exists to stop a stale build shipping, and anything that can affect the built
+# artifact does not belong here.
+NOT_A_BUILD_INPUT = {
+    # Runs after the build with `|| true`, reads deps/src, and writes deps-versions.txt for
+    # the artifact upload. It cannot change a single compiled byte, so making an edit to it
+    # trigger the ~2.2 hour dependency rebuild would be a pure waste.
+    'tools/capture-dep-versions.sh',
+}
+
+
 def scripts_vs_paths(path, doc, text):
     """A workflow that runs a script but does not watch it will not rerun when it changes.
 
@@ -64,6 +76,8 @@ def scripts_vs_paths(path, doc, text):
         while t.startswith('../'):
             t = t[3:]
             forms.add(t)
+        if forms & NOT_A_BUILD_INPUT:
+            continue
         if any(fnmatch.fnmatch(f, pat.strip("'\"")) for f in forms for pat in watched):
             continue
         missing.append(s)

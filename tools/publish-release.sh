@@ -70,6 +70,29 @@ done
     exit 1
 }
 
+# Is the JS about to be uploaded in a state the deploys can consume?
+#
+# The asset is normally ALREADY PATCHED, and that is correct: link-freecad.yml runs
+# tools/patch-freecad-js.py over bin/FreeCAD.js in place, there is no artifact upload
+# any more (see the comment in that workflow), so a release cut from the runner's bin/
+# -- or from play-gui/, which tools/sync-play-artifacts.sh patches -- carries the patch
+# table baked in. Both consumers know this: deploy-ovh.yml and ci/jenkins/build-image.sh
+# re-run the tool as a deliberate no-op-plus-delta, which is what lets a patch-table
+# change reach production without a ~9 min relink.
+#
+# So do NOT assert "unpatched" here -- a rescued pristine directory is legitimate too.
+# Assert the invariant that holds on BOTH paths: every patch site is still findable and
+# the postconditions hold. --check computes the result in memory and writes nothing, so
+# this cannot itself patch the file it is guarding. It fails on the thing that actually
+# bites -- emscripten's generated glue moved and a site is NOT FOUND -- and it fails
+# HERE, before "latest" moves, rather than in the deploy that consumes it.
+echo "== is FreeCAD.js in a state the deploys can patch?"
+"$PY_BIN" tools/patch-freecad-js.py "$BIN/FreeCAD.js" --check || {
+    echo "!! refusing to publish: the GL patch table does not resolve against this JS." >&2
+    echo "!! The deploy runs the same check and would fail after this became latest." >&2
+    exit 1
+}
+
 echo "== carry over gmsh/ccx from the current latest release"
 # gh infers the repo from the git remote. Run from a rescued directory outside a checkout
 # -- which is exactly what the --dir path above is for -- and it dies with

@@ -43,6 +43,11 @@ on:
       - 'patches/numpy.patch'
       - 'patches/vtk-expat-wasm-xmlsize.patch'
       - 'configure-*-weh.sh'
+      # Named without the -weh suffix every other configure script carries, so the
+      # glob above misses it -- but the lane really does run it. Listed explicitly
+      # rather than widening the glob to configure-*.sh, which would drag in the
+      # native-build variants this lane never touches.
+      - 'configure-hdf5.sh'
       - 'build-*-weh.sh'
       - 'build-cpython*.sh'
       - 'toolchain/**'
