@@ -419,6 +419,37 @@ _s.__stderr__.flush()
 # it, green added second so it draws second. With depth working, red survives. With depth
 # off, green paints over it and red vanishes. Colours are compared by hue dominance rather
 # than exact RGB, because the shaded pixel value is a lighting and rasteriser detail.
+# Do the page's own GL registries still grow without bound?
+#
+# The present pass keeps a framebuffer registry (REG) and an upload list (UPL), and it
+# walks REG once per FRAME. Until 2026-09-02 neither was pruned on delete: every 3D view
+# a session ever opened left ~6 dead framebuffer entries behind, so the per-frame scan
+# grew with the number of documents ever opened and the page bound deleted framebuffers
+# (the staged build's gate log was full of "bindFramebuffer: attempt to use a deleted
+# object"). None of that is visible from outside a closure, which is how it survived, so
+# the page exposes window.__fcPresentStats() and this asserts on it.
+LEAK_PY = r'''
+# Open and close documents, each of which builds and tears down a 3D view.
+import sys as _s
+
+_NL = chr(10)
+try:
+    import FreeCAD as App
+    import FreeCADGui as Gui
+
+    for _i in range(8):
+        _d = App.newDocument("LeakProbe%d" % _i)
+        _d.addObject("Part::Box", "B")
+        _d.recompute()
+        Gui.updateGui()
+        App.closeDocument(_d.Name)
+        Gui.updateGui()
+    _s.__stderr__.write("FCLEAK {'cycled': True}" + _NL)
+except Exception as _e:
+    _s.__stderr__.write("FCLEAK " + repr({'cycled': False, 'error': repr(_e)}) + _NL)
+_s.__stderr__.flush()
+'''
+
 OCCLUDE_PY = r'''
 # Two boxes, one behind the other, to prove that depth testing is on.
 import sys as _s
@@ -2106,6 +2137,33 @@ def scenario_render(ctx, url, args, fail):
         fail('render: the near box is hidden by the box BEHIND it (%d reddish px against '
              '%d greenish). Geometry is being drawn without depth testing -- solids render '
              'see-through and interiors show through exteriors.' % (red, green))
+
+    # ---- and do the page's GL registries stay bounded? ------------------------------
+    raw_before = s.page.evaluate('() => window.__fcPresentStats ? '
+                                 'JSON.stringify(window.__fcPresentStats()) : null')
+    if not raw_before:
+        print('==> render: leak sub-check skipped -- page predates __fcPresentStats')
+        return s
+    before = json.loads(raw_before)
+    s.run_python(LEAK_PY)
+    if not s.wait_for('FCLEAK', 240):
+        print('==> render: leak sub-check skipped -- the document cycle never finished')
+        return s
+    time.sleep(4)
+    after = json.loads(s.page.evaluate('() => JSON.stringify(window.__fcPresentStats())'))
+    print('==> render: registries before %s after %s (8 document open/close cycles)'
+          % (before, after))
+    # Six framebuffers per cycle were retained before the delete hooks existed, so eight
+    # cycles moved this by ~48. A little slack absorbs what the last view legitimately
+    # still holds; anything growing per-cycle blows straight past it.
+    if after.get('reg', 0) > before.get('reg', 0) + 8:
+        fail('render: the framebuffer registry grew from %d to %d over 8 document '
+             'open/close cycles -- entries are not dropped on delete, and present() walks '
+             'this map every frame' % (before.get('reg'), after.get('reg')))
+    if after.get('upl', 0) > before.get('upl', 0) + 16:
+        fail('render: the texture upload list grew from %d to %d over 8 document '
+             'open/close cycles -- dead textures are not pruned, and indexOf on this list '
+             'is on the upload path' % (before.get('upl'), after.get('upl')))
     return s
 
 
