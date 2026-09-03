@@ -21,7 +21,18 @@ param(
     [string] $Image   = $(if ($env:FCWEB_IMAGE) { $env:FCWEB_IMAGE } else { 'ghcr.io/virtastic/freecad-web:1.0.0' })
 )
 
-$ErrorActionPreference = 'Stop'
+# NOT 'Stop': under Stop, PowerShell 5.1 turns anything a native .exe writes to stderr
+# into a terminating error, even when the command succeeded. `docker pull` against a
+# package that is not public yet writes to stderr and returns non-zero -- precisely the
+# case this script recovers from by building locally, and under 'Stop' it died instead.
+# Every native call below checks $LASTEXITCODE explicitly; cmdlets whose failure must be
+# caught carry -ErrorAction Stop at the call site.
+$ErrorActionPreference = 'Continue'
+
+# Must be captured at script scope: inside a function $MyInvocation describes the
+# function, so .MyCommand.Path is null there and Join-Path throws.
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $DockerUrl = 'https://docs.docker.com/get-started/get-docker/'
 $Assets = @('FreeCAD.js','FreeCAD.wasm','FreeCAD.data','gmsh.js','gmsh.wasm','ccx.js','ccx.wasm')
 
@@ -112,9 +123,8 @@ only $freeGiB GiB free on $($drive.Name):.
 # 2. Source tree: use the checkout this script sits in, else fetch the tag tarball (~3.4 MB).
 # ---------------------------------------------------------------------------------------
 function Resolve-Tree {
-    $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-    if (-not $here) { $here = $PSScriptRoot }
-    if ((Test-Path (Join-Path $here 'infra\Dockerfile')) -and
+    $here = $ScriptDir
+    if ($here -and (Test-Path (Join-Path $here 'infra\Dockerfile')) -and
         (Test-Path (Join-Path $here 'docker-compose.yml'))) {
         Step "Using the checkout at $here"
         return $here
@@ -130,13 +140,13 @@ function Resolve-Tree {
     Get-Remote "https://github.com/$Repo/archive/refs/tags/$Tag.zip" $zip
     $stage = Join-Path $env:TEMP "fcweb-extract-$PID"
     if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-    Expand-Archive -Path $zip -DestinationPath $stage -Force
+    Expand-Archive -Path $zip -DestinationPath $stage -Force -ErrorAction Stop
     # The GitHub archive wraps everything in a single top-level directory whose name
     # depends on how the tag is spelled; take whatever it is rather than guessing.
     $inner = Get-ChildItem $stage -Directory | Select-Object -First 1
     if (-not $inner) { Die "the downloaded archive was empty" }
     if (Test-Path $tree) { Remove-Item -Recurse -Force $tree }
-    Move-Item $inner.FullName $tree
+    Move-Item $inner.FullName $tree -ErrorAction Stop
     Remove-Item -Recurse -Force $stage, $zip -ErrorAction SilentlyContinue
     if (-not (Test-Path (Join-Path $tree 'infra\Dockerfile'))) {
         Die "the downloaded archive is missing infra/Dockerfile"
@@ -151,7 +161,7 @@ function Get-Remote($url, $dest) {
         & curl.exe -fL --retry 3 -C - -# -o $dest $url
         if ($LASTEXITCODE -ne 0) { throw "download failed: $url" }
     } else {
-        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
     }
 }
 
@@ -173,7 +183,7 @@ function Get-Assets($tree) {
         if ((Test-Path $out) -and ((Get-Item $out).Length -gt 0)) {
             $want = $null
             try {
-                $head = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 30
+                $head = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
                 $want = [int64](Get-Header $head 'Content-Length')
             } catch { }
             if (-not $want) { Say "  have    $name (could not confirm size)"; continue }
@@ -236,7 +246,7 @@ function Test-Deployment {
     # -UseBasicParsing is mandatory on 5.1: without it this goes through the IE parsing
     # engine and throws outright on a machine where IE was never initialised.
     try {
-        $r = Invoke-WebRequest -Uri "$base/" -UseBasicParsing -TimeoutSec 30
+        $r = Invoke-WebRequest -Uri "$base/" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
     } catch {
         Die "no HTTP response from $base/ -- $($_.Exception.Message)"
     }
@@ -253,7 +263,7 @@ function Test-Deployment {
     foreach ($a in @('FreeCAD.js','FreeCAD.wasm','FreeCAD.data','legal.html','LICENSE')) {
         # HEAD, not GET: FreeCAD.data is 237 MB and Invoke-WebRequest buffers the body.
         try {
-            $h = Invoke-WebRequest -Uri "$base/$a" -Method Head -UseBasicParsing -TimeoutSec 60
+            $h = Invoke-WebRequest -Uri "$base/$a" -Method Head -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
             if ($h.StatusCode -ne 200) { $ok = $false; Say "  FAIL  $a returned $($h.StatusCode)" }
         } catch {
             $ok = $false; Say "  FAIL  $a is not being served"

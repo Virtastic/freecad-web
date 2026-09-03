@@ -18,15 +18,22 @@
 [CmdletBinding()]
 param(
     [string] $Dir  = '',
+    # What to check out, which is not always what to download.
+    [string] $Ref  = '',
     [string] $Tag  = $(if ($env:FCWEB_RELEASE) { $env:FCWEB_RELEASE } else { 'v1.0.0' }),
     [string] $Repo = $(if ($env:FCWEB_REPO) { $env:FCWEB_REPO } else { 'Virtastic/freecad-web' }),
     [int]    $Port = $(if ($env:FCWEB_PORT) { $env:FCWEB_PORT } else { 8080 })
 )
 
-$ErrorActionPreference = 'Stop'
+# NOT 'Stop': PowerShell 5.1 promotes anything a native .exe writes to stderr into a
+# terminating error. `git clone` writes its progress to stderr on a SUCCESSFUL clone,
+# so 'Stop' fails the script precisely when the clone worked. Exit codes are checked
+# explicitly below instead.
+$ErrorActionPreference = 'Continue'
 function Die($m) { Write-Host ''; Write-Host "FATAL: $m" -ForegroundColor Red; exit 1 }
 
 if (-not $Dir) { $Dir = Join-Path (Get-Location) 'freecad-web' }
+if (-not $Ref) { $Ref = $Tag }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Die @"
@@ -38,13 +45,18 @@ git is not installed.
 
 if (Test-Path (Join-Path $Dir '.git')) {
     Write-Host ''; Write-Host "==> Reusing the existing clone at $Dir" -ForegroundColor Cyan
-    & git -C $Dir fetch --depth 1 origin "refs/tags/${Tag}:refs/tags/${Tag}" 2>$null
-    & git -C $Dir checkout -q $Tag
-    if ($LASTEXITCODE -ne 0) { Die "could not check out $Tag in $Dir" }
+    & git -C $Dir fetch --depth 1 origin $Ref 2>$null
+    & git -C $Dir checkout -q FETCH_HEAD
+    if ($LASTEXITCODE -ne 0) { & git -C $Dir checkout -q $Ref }
+    if ($LASTEXITCODE -ne 0) { Die "could not check out $Ref in $Dir" }
 } else {
-    Write-Host ''; Write-Host "==> Cloning $Repo at $Tag into $Dir" -ForegroundColor Cyan
-    & git clone --depth 1 --branch $Tag "https://github.com/$Repo.git" $Dir
-    if ($LASTEXITCODE -ne 0) { Die "clone failed. Check the tag $Tag exists and that you have network access." }
+    Write-Host ''; Write-Host "==> Cloning $Repo at $Ref into $Dir" -ForegroundColor Cyan
+    & git clone --depth 1 --branch $Ref "https://github.com/$Repo.git" $Dir
+    if ($LASTEXITCODE -ne 0) { Die "clone failed. Check that $Ref exists and that you have network access." }
+}
+
+if (-not (Test-Path (Join-Path $Dir 'setup.ps1'))) {
+    Die "$Ref does not contain setup.ps1. Use -Ref with a newer branch or tag."
 }
 
 # -Build, not the default pull: the point of this script is to build from the clone.
