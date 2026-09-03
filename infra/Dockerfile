@@ -6,6 +6,22 @@
 # Build context is the REPO ROOT (needs infra/nginx.conf + play-gui/). The large build
 # artifacts (FreeCAD.wasm/.data/.js) are gitignored; CI downloads them into play-gui/ from a
 # GitHub Release before building (see .github/workflows/deploy-ovh.yml).
+
+# The ~33 hand-derived fixes to emscripten's generated GL glue (tools/patch-freecad-js.py).
+# EVERY relink silently drops them and without them the 3D viewport never comes up. This
+# used to run on the build host, which forced a working python3 onto every machine that
+# builds this image -- on Windows that is routinely the Store app-execution alias, which
+# resolves and then prints an advert. The script is stdlib-only and takes one file in /
+# one file out, so it runs here instead and Docker becomes the only host requirement.
+# The host's play-gui/FreeCAD.js is never modified. This stage is discarded; the final
+# image is unchanged in size.
+FROM python:3.12-alpine AS glpatch
+COPY tools/patch-freecad-js.py /patch.py
+COPY play-gui/FreeCAD.js /FreeCAD.js
+RUN python /patch.py --selftest \
+ && python /patch.py /FreeCAD.js \
+ && python /patch.py /FreeCAD.js --check
+
 FROM nginx:1.27-alpine
 
 # Drop the base image's stock pages along with its config. /index.html was serving nginx's
@@ -27,7 +43,11 @@ COPY LICENSES /usr/share/nginx/html/LICENSES/
 # storage without a prompt, which is what protects a user's documents from eviction.
 COPY play-gui/manifest.webmanifest play-gui/sw.js play-gui/icon-192.png play-gui/icon-512.png /usr/share/nginx/html/
 # Build artifacts (fetched into play-gui/ by CI from the release).
-COPY play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data /usr/share/nginx/html/
+# FreeCAD.js comes from the glpatch stage above, already GL-patched. Splitting it out of
+# the artifact COPY is what lets that happen; it must stay ABOVE the md5 ?v= stamping
+# below, because patching changes the file's bytes and therefore its stamp.
+COPY --from=glpatch /FreeCAD.js /usr/share/nginx/html/FreeCAD.js
+COPY play-gui/FreeCAD.wasm play-gui/FreeCAD.data /usr/share/nginx/html/
 # FreeCAD.data is 341 MB and gzips to 83 MB. Cloudflare does not compress it (wrong
 # content type) so it used to go over the wire raw -- 84% of a first-time visitor's
 # download. nginx serves this copy to anything that accepts gzip; see infra/nginx.conf.
@@ -111,6 +131,15 @@ RUN sed -i "s|__FCWEB_BUILD__|${FCWEB_BUILD}|g" /usr/share/nginx/html/freecad-gu
 # if the directory is absent. Creating it here keeps the image runnable on its own -- which
 # the pre-switch canary requires, since it starts the image with no volumes attached. In
 # production the named volume mounts over this and the logs persist across deploys.
+# COPY preserves the source file's mode, so the image inherits whatever umask the
+# machine doing the build happened to have. On a clone where LICENSE, NOTICE,
+# legal.html, the PWA icons, sw.js and the manifest are 0600, nginx's unprivileged
+# worker cannot read them and every one of those URLs answers 403 -- a half-broken
+# site that still passes a health check on freecad-gui.html. Measured on a real
+# checkout: 2 smoke-test contract failures. Normalise instead of trusting the host.
+# a+rX, not a+r: capital X sets +x on directories only, leaving files non-executable.
+RUN chmod -R a+rX /usr/share/nginx/html
+
 RUN mkdir -p /var/log/fcweb
 
 EXPOSE 80

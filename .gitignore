@@ -107,3 +107,6 @@ ci/jenkins/config.env
 # inside the repository. Twenty-seven pip cache blobs got committed that way once.
 
 */AppData/Local/Temp/
+
+# Local run overrides (FCWEB_PORT / FCWEB_IMAGE) read by docker-compose.yml.
+.env

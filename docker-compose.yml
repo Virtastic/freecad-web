@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
+#
+# Local single-user run. Prefer ./setup.sh (or setup.ps1) over driving this by hand --
+# it preflights Docker, fetches what is missing and verifies the result.
+#
+# Open http://localhost:8080/ -- the URL must be localhost or 127.0.0.1, NOT this
+# machine's LAN IP. Cross-origin isolation needs a secure context and plain http is only
+# a secure context on loopback; on a LAN IP the page loads and the engine never boots.
+#
+# Port: set FCWEB_PORT in a .env file next to this one, or FCWEB_PORT=9000 docker compose up -d
+#
+# NOTE: this is NOT docker-compose.prod.yml. That one is the OVH production deployment --
+# it publishes no ports and joins an external network that exists only on that box.
+services:
+  freecad:
+    # Both image: and build: are present on purpose, and setup.sh picks between them
+    # explicitly with --no-build (pull) or --build (local). Compose's own default when
+    # both keys are set is to build, so never rely on the implicit behaviour.
+    image: ${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.0}
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    container_name: freecad-web
+    ports:
+      - "${FCWEB_PORT:-8080}:80"
+    # So it comes back after a reboot, which is what a locally installed app should do.
+    restart: unless-stopped
+    # No volume for /var/log/fcweb: that path exists only for the anonymous usage counter
+    # on the public origin, nothing here reads it, and the image already creates the dir.

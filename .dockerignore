@@ -1,0 +1,15 @@
+# Allowlist, not a denylist. infra/Dockerfile COPYs exactly the paths un-ignored below;
+# everything else in the repo root is build scratch (deps/, emsdk/, qt-src/, build-*/ --
+# tens of GB on a build machine) that would otherwise be shipped to the Docker daemon as
+# build context on every single build.
+#
+# A denylist loses this race: it has to be updated every time someone adds a new scratch
+# directory, and the cost of missing one is silent and invisible. Here the failure mode is
+# inverted -- add a COPY without adding it below and the build fails immediately, loudly.
+*
+!infra/nginx.conf
+!play-gui
+!LICENSE
+!NOTICE
+!LICENSES
+!tools/patch-freecad-js.py
