@@ -42,7 +42,7 @@ ci/jenkins/smoke-test.sh http://192.168.1.131:8084      # (or https://freecad.de
   the Jenkins image.
 - The image is large (~785 MB — the engine and the 341 MB preload FS are baked in). `deploy-test.sh`
   ships it over the LAN with `docker save | ssh docker load`.
-- `freecad.dev.virtastic.app` is **live** (DEV-ORIGIN-IP-REDACTED, openresty, COOP/COEP set) and is what the
+- `freecad.dev.virtastic.app` is **live** (openresty, COOP/COEP set) and is what the
   smoke stage checks. It falls back to `192.168.1.131:8084` only if the public origin is unreachable.
 - The job was renamed `FreeCAD-Web-Test` -> `freecad-web-dev` on 2026-08-26, matching the
   `*-web-dev` convention the other jobs on this Jenkins now use.

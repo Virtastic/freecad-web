@@ -280,13 +280,13 @@ jobs:
           fi
           echo "OK"
 
-      - name: No origin IP in tracked files
-        run: |
-          if git grep -nE '\b135\.148\.33\.60\b' -- $(git ls-files) ; then
-            echo "::error::the origin address belongs in the ORIGIN_IP variable, not the tree"
-            exit 1
-          fi
-          echo "OK"
+      # Was a grep for one hardcoded address, which is a record of past incidents rather
+      # than a gate: it caught the OVH origin it was written for while ci/jenkins/README.md
+      # sat in HEAD carrying the DEV origin's public IP, which it had never been told
+      # about. Now any routable IPv4 literal fails; RFC1918 is still allowed, because this
+      # repository documents its own LAN deliberately.
+      - name: No routable IP in tracked files
+        run: python3 tools/check-no-public-ip.py
 
       - name: No tracked-but-ignored files
         run: |
