@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
+name: publish-ghcr
+
+# Publishes the runnable container to GitHub Container Registry so setup.sh can install
+# freecad-web with a single `docker pull` instead of a 445 MB asset download plus a local
+# build. That is the difference between a ~3 minute install and a ~15 minute one.
+#
+# SAFETY: this runs on a GitHub-hosted runner, NOT the Virtastic OVH runner. That box is
+# production -- it hosts every live container -- and a publish job has no business on it.
+# The trade is ~445 MB of download per run on someone else's hardware, which is free.
+#
+# Only semver tags (v1.0.0) publish. The rolling build-YYYYMMDD-* engineering releases are
+# cut several times a week and are not what a stranger should be installing; publishing
+# each one would also push a 1.1 GB image per release for no one's benefit.
+#
+# NOTE FOR THE FIRST RUN: a package created by GITHUB_TOKEN starts PRIVATE even on a public
+# repo, and there is no API to change that at creation time. After the first successful
+# push, set the package to public once by hand:
+#   https://github.com/orgs/Virtastic/packages -> freecad-web -> Package settings -> Change
+#   visibility -> Public.
+# Until that is done setup.sh cannot pull it and silently falls back to a local build.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "release tag to build and push (e.g. v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    # Skip the engineering releases. github.event.inputs is empty on a release event and
+    # github.event.release is empty on a dispatch, so this covers both entry points.
+    if: >-
+      github.repository == 'Virtastic/freecad-web' &&
+      startsWith(github.event.release.tag_name || github.event.inputs.release_tag, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Resolve the release tag
+        id: rel
+        env:
+          FROM_RELEASE: ${{ github.event.release.tag_name }}
+          FROM_INPUT: ${{ github.event.inputs.release_tag }}
+        run: |
+          tag="${FROM_RELEASE:-$FROM_INPUT}"
+          [ -n "$tag" ] || { echo "::error::no release tag"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # ghcr.io rejects an uppercase path, and the org is spelled 'Virtastic'.
+          echo "image=ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
+          echo "building $tag"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.rel.outputs.tag }}
+
+      - name: Fetch the engine artifacts from the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -eu
+          for name in FreeCAD.js FreeCAD.wasm FreeCAD.data gmsh.js gmsh.wasm ccx.js ccx.wasm; do
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$name" -D play-gui --clobber
+            [ -s "play-gui/$name" ] || { echo "::error::$name is missing or empty"; exit 1; }
+          done
+          ls -l play-gui/ | sed 's/^/  /'
+
+      # No docker/build-push-action: the plain CLI needs no new third-party action pinned,
+      # and the GL patch that used to run here now lives inside infra/Dockerfile.
+      - name: Build the image
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          IMAGE: ${{ steps.rel.outputs.image }}
+        run: |
+          set -eu
+          DOCKER_BUILDKIT=1 docker build \
+            --build-arg "FCWEB_BUILD=${TAG}+ghcr" \
+            -t "${IMAGE}:${TAG}" \
+            -f infra/Dockerfile .
+          docker image inspect "${IMAGE}:${TAG}" --format '  built {{.Id}} {{.Size}} bytes'
+
+      # Prove the image serves correctly BEFORE it is pushed. A broken image that nobody
+      # can install is recoverable; a broken image thousands of people pull is not.
+      - name: Verify the image before pushing
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -eu
+          docker run -d --name verify -p 8099:80 "${IMAGE}:${TAG}"
+          for i in $(seq 1 45); do
+            if curl -fsS -o /dev/null http://localhost:8099/freecad-gui.html; then break; fi
+            [ "$i" = 45 ] && { docker logs verify; echo "::error::container never came up"; exit 1; }
+            sleep 2
+          done
+          ci/jenkins/smoke-test.sh http://localhost:8099
+          docker rm -f verify
+
+      - name: Push
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          TAG: ${{ steps.rel.outputs.tag }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          echo "$TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker push "${IMAGE}:${TAG}"
+          # v1.0.0 also publishes as 1.0.0 and latest, which is what setup.sh and
+          # docker-compose.yml name by default.
+          bare="${TAG#v}"
+          docker tag "${IMAGE}:${TAG}" "${IMAGE}:${bare}"
+          docker push "${IMAGE}:${bare}"
+          docker tag "${IMAGE}:${TAG}" "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
+          echo "pushed ${IMAGE}:${TAG}, :${bare}, :latest"
+
+      - name: Summary
+        if: always()
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          {
+            echo "### publish-ghcr"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| release | \`${TAG}\` |"
+            echo "| image | \`${IMAGE}:${TAG}\` |"
+            echo "| install | \`docker pull ${IMAGE}:${TAG}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -14,6 +14,34 @@ Python workbenches, and the same solvers.
 > Not affiliated with or endorsed by the FreeCAD project. Please report problems here,
 > not to FreeCAD upstream.
 
+## Run it locally
+
+Docker is the only thing you need. No Python, no Node, no build tools.
+
+```bash
+curl -fsSLO https://github.com/Virtastic/freecad-web/releases/download/v1.0.0/setup.sh
+sh setup.sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://github.com/Virtastic/freecad-web/releases/download/v1.0.0/setup.ps1 -OutFile setup.ps1
+.\setup.ps1
+```
+
+Then open **<http://localhost:8080/>** in Chrome or Edge 137+.
+
+The script checks that Docker is installed, running, recent enough and in Linux-container
+mode — and tells you exactly what to fix if not. It then pulls the prebuilt image, starts
+it, and verifies the running site actually serves correctly before saying it worked.
+
+- `sh setup.sh --build` — build the image locally from the release artifacts (~445 MB)
+  instead of pulling it.
+- `sh full-build.sh` — clone the repository at a tag and build from that.
+- `sh setup.sh --port 9000` — serve somewhere other than 8080.
+
+**[QUICKSTART.md](QUICKSTART.md)** covers troubleshooting, updating and uninstalling.
+
 ## What works
 
 Verified under real mouse and keyboard input against production, not just scripted API calls:
@@ -41,7 +69,7 @@ These are real constraints, stated up front rather than discovered:
 |---|---|
 | **Browser** | Chrome or Edge 137+. Firefox and Safari lack JSPI; they are refused up front having downloaded nothing. |
 | **First load** | ~115 MB. Return visits fetch nothing — the engine is held in Cache Storage and reaches Ready in seconds. |
-| **Memory** | A fixed 2 GB heap — roughly 20,000 simple solids. The app force-saves your documents and warns before it runs out. |
+| **Memory** | A 4 GB heap ceiling. The app force-saves your documents and warns before it runs out. |
 | **AddonManager** | Absent (it needs `git` and real sockets). A `.zip` / GitHub workbench installer covers the same use case. |
 | **CalculiX** | Single-threaded, so large FEM jobs are slower than desktop. |
 
@@ -52,12 +80,18 @@ These are real constraints, stated up front rather than discovered:
 - **[MANUAL-QA.md](MANUAL-QA.md)** — the 20-minute human pass, scoped to the three things
   automation is structurally blind to.
 - **[AGENTS.md](AGENTS.md)** — the working agreements this project is developed under.
+- **[QUICKSTART.md](QUICKSTART.md)** — running it yourself with Docker: the three
+  install paths, troubleshooting, updating, uninstalling.
 - **[infra/README.md](infra/README.md)** — serving and deployment.
 
 ## Building
 
-The full build is a multi-hour, multi-gigabyte cross-compile of FreeCAD and its entire
-dependency stack. [BUILD-WEH.md](BUILD-WEH.md) is the authority; start there.
+To build the *container* from a clone, use `full-build.sh` (or `full-build.ps1`) — that
+takes about 15 minutes and needs only git and Docker.
+
+Building the *engine* is a different thing entirely: a multi-hour, multi-gigabyte
+cross-compile of FreeCAD and its whole dependency stack.
+[BUILD-WEH.md](BUILD-WEH.md) is the authority; start there.
 
 The vendored source trees (`deps/`), toolchains (`emsdk/`, `qt/`) and build outputs are
 gitignored. What this repository holds is everything needed to *recreate* them: the patch set

@@ -46,16 +46,22 @@ LINE = re.compile(
 
 # The box, and the key that reaches it. Both overridable, because hardcoding one person's
 # key path is how a tool becomes "works on my machine".
-SSH_HOST = 'ubuntu@ORIGIN-IP-REDACTED'
+#
+# The origin address is deliberately NOT in the tree. Cloudflare proxies the hostname
+# precisely so the origin stays private, and this repository is public -- a literal here
+# would hand anyone a way around the proxy. See AGENTS.md, "Repository rules"; CI enforces
+# it in the `hygiene` job. Set FCWEB_SSH_HOST (the ORIGIN_IP repository variable holds the
+# same value for CI and Terraform), or pass --host.
+SSH_HOST = os.environ.get('FCWEB_SSH_HOST', '')
 SSH_KEY = '~/Documents/SSH/ovh_nostalgia'
 REMOTE_LOG = 'docker exec freecad cat /var/log/fcweb/events.log'
 
 
-def ssh_cmd(key):
+def ssh_cmd(key, host):
     cmd = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20']
     if key:
         cmd += ['-i', os.path.expanduser(key)]
-    return cmd + [SSH_HOST, REMOTE_LOG]
+    return cmd + [host, REMOTE_LOG]
 
 
 def parse(path):
@@ -84,6 +90,9 @@ def main():
     ap.add_argument('logfile', nargs='?', default=None)
     ap.add_argument('--ssh', action='store_true',
                     help='pull the log from production first')
+    ap.add_argument('--host', default=SSH_HOST,
+                    help='ssh destination for --ssh, e.g. user@host. '
+                         'Defaults to $FCWEB_SSH_HOST.')
     ap.add_argument('--key', default=SSH_KEY,
                     help='ssh identity for the box (default: %(default)s)')
     ap.add_argument('--days', type=int, default=0, help='only the last N days')
@@ -93,17 +102,26 @@ def main():
 
     path = args.logfile
     if args.ssh:
+        # Fail with the fix rather than with an ssh error about an empty destination.
+        if not args.host:
+            raise SystemExit(
+                '--ssh needs the origin address, which is deliberately not in the tree.\n'
+                'Set it for this shell:  export FCWEB_SSH_HOST=ubuntu@<origin-ipv4>\n'
+                'or pass it directly:    --host ubuntu@<origin-ipv4>\n'
+                'The value is the ORIGIN_IP repository variable '
+                '(gh variable get ORIGIN_IP --repo Virtastic/freecad-web).')
         path = path or 'events.log'
         try:
-            data = subprocess.check_output(ssh_cmd(args.key), stderr=subprocess.PIPE)
+            data = subprocess.check_output(ssh_cmd(args.key, args.host),
+                                           stderr=subprocess.PIPE)
         except subprocess.CalledProcessError as e:
             raise SystemExit('could not read the log from %s: %s'
-                             % (SSH_HOST, e.stderr.decode('utf-8', 'replace').strip()))
+                             % (args.host, e.stderr.decode('utf-8', 'replace').strip()))
         except FileNotFoundError:
             raise SystemExit('no ssh on PATH')
         with io.open(path, 'wb') as fh:
             fh.write(data)
-        print('pulled %d bytes from %s to %s' % (len(data), SSH_HOST, path))
+        print('pulled %d bytes from %s to %s' % (len(data), args.host, path))
     if not path:
         raise SystemExit('give a log file, or --ssh to fetch one')
 

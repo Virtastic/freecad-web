@@ -30,7 +30,7 @@ trap 'rm -rf "$WORK"' EXIT
 # overwrites. Yesterday that was solved by copying the files off the box by hand and then
 # having no way to feed them to this script. Now there is one:
 #
-#     scp -i ~/Documents/SSH/ovh_nostalgia #         'ubuntu@ORIGIN-IP-REDACTED:/home/ubuntu/actions-runner-virtastic/_work/freecad-web/freecad-web/build-freecad-gui-weh/bin/FreeCAD.*' ./rescued/
+#     scp -i ~/Documents/SSH/ovh_nostalgia #         'ubuntu@$ORIGIN_IP:/home/ubuntu/actions-runner-virtastic/_work/freecad-web/freecad-web/build-freecad-gui-weh/bin/FreeCAD.*' ./rescued/
 #     bash tools/publish-release.sh ./rescued build-20260826-something
 #
 # A release must never be cut from a directory nobody has gated. That is true of the
@@ -92,13 +92,21 @@ for f in gmsh.js gmsh.wasm ccx.js ccx.wasm; do
     [ -s "$BIN/$f" ] || { echo "!! could not fetch $f from $PREV" >&2; exit 1; }
 done
 
+# setup.sh / setup.ps1 are the one-command installers (see QUICKSTART.md). They are
+# attached to every release because setup.sh pins the tag it shipped with, so the copy
+# on a given release must be the copy that installs that release.
+for f in setup.sh setup.ps1; do
+    [ -s "$f" ] || { echo "!! $f is missing" >&2; exit 1; }
+done
+
 echo "== create release $TAG (as latest)"
 gh release create "$TAG" \
     --title "$TAG" \
     --notes "FreeCAD 1.1.3 wasm build from run $RUN. GL patch table applied; wasm name section kept (--profiling-funcs) so error reports carry function names. gmsh/ccx carried over from $PREV." \
     --latest \
     "$BIN/FreeCAD.js" "$BIN/FreeCAD.wasm" "$BIN/FreeCAD.data" \
-    "$BIN/gmsh.js" "$BIN/gmsh.wasm" "$BIN/ccx.js" "$BIN/ccx.wasm"
+    "$BIN/gmsh.js" "$BIN/gmsh.wasm" "$BIN/ccx.js" "$BIN/ccx.wasm" \
+    "setup.sh" "setup.ps1"
 
 echo "== done. Next:"
 echo "   1. Jenkins: Build Now on FreeCAD-Web-Test (or the curl trigger via the builder)"
