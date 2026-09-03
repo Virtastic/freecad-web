@@ -1882,6 +1882,7 @@ window.fcRunPy = fcRunPy;
       // Autosave copies are throwaway recovery files: write them uncompressed. Same
       // document, measured: zip level 3 = 0.53 s / 7.1 MB, level 0 = 0.15 s / 13 MB.
       // The browser's storage takes 6 MB more per document; the UI stalls 3.5x less.
+      "            _failed = 0",
       "            _g = _App.ParamGet('User parameter:BaseApp/Preferences/Document')",
       "            _lvl = _g.GetInt('CompressionLevel', 3)",
       "            _g.SetInt('CompressionLevel', 0)",
@@ -1894,7 +1895,7 @@ window.fcRunPy = fcRunPy;
       "                    try:",
       "                        d.saveCopy(_os.path.join(self.DIR, d.Name + '.FCStd'))",
       "                    except Exception:",
-      "                        pass",
+      "                        _failed += 1",
       "            finally:",
       "                _g.SetInt('CompressionLevel', _lvl)",
       "            if getattr(_App, '_fcweb_restored', False):",
@@ -1904,6 +1905,21 @@ window.fcRunPy = fcRunPy;
       "                            _os.remove(_os.path.join(self.DIR, f))",
       "                        except Exception:",
       "                            pass",
+      "            if _failed:",
+      // A save that fails silently is the worst outcome this class can produce: the
+      // user believes their work is being kept and it is not. Leave `dirty` set so the
+      // next tick retries, and drop a sentinel the page polls (it already reads the FS
+      // every 5s for memory pressure) so the failure reaches a human instead of the
+      // console. Removed as soon as a save succeeds again.
+      "                try:",
+      "                    open(self.DIR + '/.failed', 'w').write(str(_failed))",
+      "                except Exception:",
+      "                    pass",
+      "                return",
+      "            try:",
+      "                _os.remove(self.DIR + '/.failed')",
+      "            except Exception:",
+      "                pass",
       "            self.dirty = False",
       "    _App._fcweb_saver = _FcwebSaver()",
       "    _App.addDocumentObserver(_App._fcweb_saver)",
@@ -1992,7 +2008,31 @@ window.fcRunPy = fcRunPy;
         return cap > 0 ? used / cap : -1;
       } catch (e) { return -1; }
     }
+    // Autosave failures must reach a human. The saver drops a sentinel when saveCopy
+    // threw for every open document (storage full, quota revoked, a corrupt document);
+    // before this, that failed silently while `dirty` was cleared, so the user believed
+    // their work was being kept and it was not. Checked here because this poll already
+    // runs every 5 s and already touches the FS -- no extra timer, no Python round trip.
+    var __saveFailWarned = false;
+    function checkAutosaveHealth(){
+      try {
+        var m = window.fcInstance;
+        if (!m || !m.FS) return;
+        var bad = m.FS.analyzePath(AUTOSAVE_DIR + '/.failed').exists;
+        if (bad && !__saveFailWarned) {
+          __saveFailWarned = true;
+          if (typeof window.fcwebNotify === 'function') {
+            window.fcwebNotify('Autosave is FAILING, so your work is not being saved in '
+              + 'the background. Use File → Save to keep a copy now. This usually '
+              + 'means browser storage is full.', 'error');
+          }
+        } else if (!bad && __saveFailWarned) {
+          __saveFailWarned = false;      // recovered; allow a fresh warning later
+        }
+      } catch (e) {}
+    }
     function checkMemoryPressure(){
+      checkAutosaveHealth();
       var f = heapUsedFraction();
       if (f < 0) return;
       var capMB = heapCapMB();
