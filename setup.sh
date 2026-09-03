@@ -9,6 +9,7 @@
 #   ./setup.sh              pull the prebuilt image (fast), falling back to a local build
 #   ./setup.sh --build      always build locally from the release artifacts (~445 MB)
 #   ./setup.sh --port 9000  serve on a different port
+#   ./setup.sh --ref dev    take the source tree from a branch, not the release tag
 #
 # POSIX sh on purpose: this is the first thing a stranger runs, and it must not depend on
 # bash being present or on any particular bash version (macOS still ships 3.2).
@@ -20,6 +21,10 @@ RELEASE="${FCWEB_RELEASE:-v1.0.0}"
 IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.0}"
 PORT="${FCWEB_PORT:-8080}"
 MODE=auto
+# Which source tree to fetch, which is not always the release being installed. They
+# differ when running a newer installer against an older engine release -- and they had
+# to differ to test the standalone path before the first release that contains it.
+REF=""
 
 ASSETS="FreeCAD.js FreeCAD.wasm FreeCAD.data gmsh.js gmsh.wasm ccx.js ccx.wasm"
 DOCKER_URL="https://docs.docker.com/get-started/get-docker/"
@@ -30,7 +35,7 @@ warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf '\nFATAL: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '5,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '5,13p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -40,6 +45,7 @@ while [ $# -gt 0 ]; do
         --pull)       MODE=pull ;;
         --port)       PORT="${2:?--port needs a number}"; shift ;;
         --tag)        RELEASE="${2:?--tag needs a release tag}"; shift ;;
+        --ref)        REF="${2:?--ref needs a branch or tag}"; shift ;;
         -h|--help)    usage ;;
         *)            die "unknown option: $1  (try --help)" ;;
     esac
@@ -139,17 +145,29 @@ resolve_tree() {
         step "Using the checkout at $TREE"
         return
     fi
-    TREE="$PWD/freecad-web-${RELEASE}"
-    step "Fetching the freecad-web $RELEASE source (~3.4 MB) into $TREE"
+    [ -n "$REF" ] || REF="$RELEASE"
+    TREE="$PWD/freecad-web-${REF}"
+    step "Fetching the freecad-web $REF source (~3.4 MB) into $TREE"
     if [ -f "$TREE/infra/Dockerfile" ]; then
         say "  already present, reusing it"
         return
     fi
     mkdir -p "$TREE"
-    url="https://github.com/$REPO/archive/refs/tags/$RELEASE.tar.gz"
-    curl -fL --retry 3 "$url" 2>/dev/null | tar xz --strip-components=1 -C "$TREE" \
-        || die "could not download $url
-       Check the release tag exists and that you have network access."
+    url="https://github.com/$REPO/archive/$REF.tar.gz"
+    if ! curl -fL --retry 3 "$url" 2>/dev/null | tar xz --strip-components=1 -C "$TREE"; then
+        # Same private-repo fallback as the assets below: gh can reach a tarball that
+        # anonymous curl cannot. Not a path an end user takes.
+        if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+            say "  (public download failed; retrying via authenticated gh)"
+            gh api "/repos/$REPO/tarball/$REF" 2>/dev/null \
+                | tar xz --strip-components=1 -C "$TREE" \
+                || die "could not download the $REF source via gh either"
+        else
+            die "could not download $url
+       Check the release tag exists and that you have network access.
+       If the repository is not public yet, install the GitHub CLI and run 'gh auth login'."
+        fi
+    fi
     [ -f "$TREE/infra/Dockerfile" ] || die "the downloaded archive is missing infra/Dockerfile"
 }
 

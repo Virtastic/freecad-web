@@ -21,7 +21,10 @@ services:
     build:
       context: .
       dockerfile: infra/Dockerfile
-    container_name: freecad-web
+    # No container_name on purpose. A fixed name is global to the daemon, so a second
+    # copy -- a colleague's checkout, a second port, a test alongside a real install --
+    # fails with "container name already in use" instead of just working. Compose names
+    # it <directory>-freecad-1, and every command below is project-scoped anyway.
     ports:
       - "${FCWEB_PORT:-8080}:80"
     # So it comes back after a reboot, which is what a locally installed app should do.
