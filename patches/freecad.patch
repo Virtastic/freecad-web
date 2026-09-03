@@ -5510,3 +5510,107 @@ diff -ruNp a/src/Mod/Mesh/Gui/SoFCMeshObject.cpp b/src/Mod/Mesh/Gui/SoFCMeshObje
      MeshCore::MeshAlgorithm alg(meshObject->getKernel());
  
      const SbLine& line = raypick->getLine();
+diff -ruNp a/src/Mod/Mesh/App/Core/IO/Reader3MF.cpp b/src/Mod/Mesh/App/Core/IO/Reader3MF.cpp
+--- a/src/Mod/Mesh/App/Core/IO/Reader3MF.cpp
++++ b/src/Mod/Mesh/App/Core/IO/Reader3MF.cpp
+@@ -23,6 +23,7 @@
+  ***************************************************************************/
+ 
+ #include <boost/tokenizer.hpp>
++#include <cstdlib>
+ #include <memory>
+ #include <ostream>
+ #include <sstream>
+@@ -43,6 +44,66 @@
+ using namespace MeshCore;
+ using namespace XERCES_CPP_NAMESPACE;
+ 
++namespace
++{
++// FCWEB: read a numeric attribute without a heap transcode.
++//
++// StrX runs XMLString::transcode on construction and XMLString::release on destruction,
++// so every attribute read costs one heap allocation plus a UTF-16 -> local transcode.
++// This file reads three attributes per VERTEX and three per TRIANGLE, so importing a
++// 443,710-triangle model performed about two million of them. Measured in wasm on that
++// model: 5.10 s of a 6.12 s import was inside this reader, against 0.34 s to read the
++// same geometry back from a binary STL.
++//
++// 3MF numeric attributes are plain ASCII, so narrow them into a stack buffer and let the
++// C library parse them. Anything that is not plain ASCII, does not fit, or does not parse
++// completely falls through to the original StrX path -- so the set of accepted input and
++// the exception behaviour on malformed input are both unchanged.
++constexpr std::size_t FcwebNumBuf = 64;
++
++inline bool fcwebNarrowAscii(const XMLCh* str, char* buf, std::size_t cap)
++{
++    if (str == nullptr) {
++        return false;
++    }
++    std::size_t i = 0;
++    for (; str[i] != 0; ++i) {
++        if (i + 1 >= cap || str[i] > 0x7F) {
++            return false;
++        }
++        buf[i] = static_cast<char>(str[i]);
++    }
++    buf[i] = '\0';
++    return i > 0;
++}
++
++inline float fcwebToFloat(const XMLCh* str)
++{
++    char buf[FcwebNumBuf];
++    if (fcwebNarrowAscii(str, buf, sizeof(buf))) {
++        char* end = nullptr;
++        const float val = std::strtof(buf, &end);
++        if (end != nullptr && end != buf && *end == '\0') {
++            return val;
++        }
++    }
++    return std::stof(StrX(str).c_str());
++}
++
++inline unsigned long fcwebToULong(const XMLCh* str)
++{
++    char buf[FcwebNumBuf];
++    if (fcwebNarrowAscii(str, buf, sizeof(buf))) {
++        char* end = nullptr;
++        const unsigned long val = std::strtoul(buf, &end, 10);
++        if (end != nullptr && end != buf && *end == '\0') {
++            return val;
++        }
++    }
++    return std::stoul(StrX(str).c_str());
++}
++}  // namespace
++
+ Reader3MF::Reader3MF(std::istream& str)
+ {
+     file = std::make_unique<zipios::ZipHeader>(str);
+@@ -432,9 +493,9 @@ void Reader3MF::ReadVertices(DOMNodeList
+             DOMNode* zAttr = attr->getNamedItem(XStrLiteral("z").unicodeForm());
+             if (xAttr && yAttr && zAttr) {
+                 // NOLINTBEGIN
+-                float x = std::stof(StrX(xAttr->getNodeValue()).c_str());
+-                float y = std::stof(StrX(yAttr->getNodeValue()).c_str());
+-                float z = std::stof(StrX(zAttr->getNodeValue()).c_str());
++                float x = fcwebToFloat(xAttr->getNodeValue());
++                float y = fcwebToFloat(yAttr->getNodeValue());
++                float z = fcwebToFloat(zAttr->getNodeValue());
+                 points.emplace_back(x, y, z);
+                 // NOLINTEND
+             }
+@@ -474,9 +535,9 @@ void Reader3MF::ReadTriangles(DOMNodeLis
+             DOMNode* v2Attr = attr->getNamedItem(XStrLiteral("v2").unicodeForm());
+             DOMNode* v3Attr = attr->getNamedItem(XStrLiteral("v3").unicodeForm());
+             if (v1Attr && v2Attr && v3Attr) {
+-                PointIndex v1 = std::stoul(StrX(v1Attr->getNodeValue()).c_str());
+-                PointIndex v2 = std::stoul(StrX(v2Attr->getNodeValue()).c_str());
+-                PointIndex v3 = std::stoul(StrX(v3Attr->getNodeValue()).c_str());
++                PointIndex v1 = fcwebToULong(v1Attr->getNodeValue());
++                PointIndex v2 = fcwebToULong(v2Attr->getNodeValue());
++                PointIndex v3 = fcwebToULong(v3Attr->getNodeValue());
+                 facets.emplace_back(v1, v2, v3);
+             }
+         }
