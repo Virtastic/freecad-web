@@ -283,6 +283,15 @@ jobs:
       - name: Every emscripten-invoking script uses the pinned toolchain
         run: python3 tools/check-toolchain-env.py
 
+      # A shell line continuation cannot span a comment: the command ends at the comment
+      # and the next line is run as a command of its own. `bash -n` passes -- the text is
+      # valid, it just means something else -- so this went unnoticed until a VTK configure
+      # died with "-DCMAKE_CXX_FLAGS: command not found" and exit 127. The same check then
+      # found two more, in the ccx and gmsh link commands, where the heap-ceiling flag was
+      # being silently dropped from the link.
+      - name: No comments inside shell line continuations
+        run: python3 tools/check-line-continuations.py
+
       # A patch that nothing applies is not a fix, however carefully it is written.
       # patches/vtk-expat-wasm-xmlsize.patch sat in the tree for months, named in the deps
       # cache key so a change to it would rebuild VTK, with a comment describing exactly

@@ -26,8 +26,19 @@ export EMCC_CFLAGS="${EMCC_CFLAGS:-} -DPY_CALL_TRAMPOLINE=1"
 echo "=== stage 2: emscripten cross build ==="
 mkdir -p builddir/emscripten
 cd builddir/emscripten
+# --disable-test-modules: CPython builds its test-only extensions as SHARED objects,
+# and at wasm64 wasm-ld refuses them --
+#   relocation R_WASM_MEMORY_ADDR_SLEB64 cannot be used against symbol
+#   `_testimportmultiple`; recompile with -fPIC
+# which killed the build on Modules/_testimportmultiple. The 64-bit relocation forms are
+# the tell; the same objects relocate fine at wasm32.
+# configure.ac:7621 already sets TEST_MODULES=no for Emscripten/browser -- but this build
+# passes --with-emscripten-target=node, so it never qualified for that. Nothing here ships
+# or imports the test modules, so ask for the supported behaviour explicitly rather than
+# compiling all of CPython -fPIC to satisfy them.
 CONFIG_SITE="$ROOT/toolchain/config.site-wasm64-emscripten" \
 emconfigure ../../configure -C \
+  --disable-test-modules \
   --host=wasm64-unknown-emscripten \
   --build="$($SRC/config.guess)" \
   --with-emscripten-target=node \

@@ -51,6 +51,9 @@ CFLAGS="-fwasm-exceptions -O2 -DINTEGER_STAR_8 -I$PREFIX/include -I$CCX
   -DNETWORKOUT -w"
 
 # ccx's main() becomes a callable entry point
+# 16 GiB, matching the engine. This is a separate wasm module with its own heap, so
+# without an explicit ceiling it would default to 2 GB and gain nothing from wasm64 --
+# which for ccx is exactly the workload the extra address space is for.
 emcc $CFLAGS -Dmain=fcweb_ccx_main -c "$CCX/ccx_2.22.c" -o "$OBJ/ccx_main.o"
 emcc $CFLAGS -c "$ROOT/ccx_wasm_main.c" -o "$OBJ/wrapper.o"
 
@@ -67,9 +70,6 @@ emcc -fwasm-exceptions -O2 "$OBJ/ccx_main.o" "$OBJ/wrapper.o" \
   -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
   -sINITIAL_MEMORY=268435456 \
-  # 16 GiB, matching the engine. This is a separate wasm module with its own heap, so
-  # without an explicit ceiling it would default to 2 GB and gain nothing from wasm64 --
-  # which for ccx is exactly the workload the extra address space is for.
   -sMAXIMUM_MEMORY=17179869184 \
   -sSTACK_SIZE=16MB \
   -sEXIT_RUNTIME=0 \

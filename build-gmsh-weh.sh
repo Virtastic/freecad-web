@@ -24,6 +24,9 @@ for L in TKDESTEP TKDEIGES TKXSBase TKOffset TKFeat TKFillet TKBool TKMesh TKHLR
   OCC_LIBS="$OCC_LIBS $PREFIX/lib/lib$L.a"
 done
 
+# 16 GiB, matching the engine. This is a separate wasm module with its own heap, so
+# without an explicit ceiling it would default to 2 GB and gain nothing from wasm64 --
+# which for gmsh is exactly the workload the extra address space is for.
 em++ -fwasm-exceptions -O2 \
   -I"$ROOT/deps/src/gmsh/api" \
   "$ROOT/gmsh_wasm_main.cpp" \
@@ -37,9 +40,6 @@ em++ -fwasm-exceptions -O2 \
   -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
   -sINITIAL_MEMORY=268435456 \
-  # 16 GiB, matching the engine. This is a separate wasm module with its own heap, so
-  # without an explicit ceiling it would default to 2 GB and gain nothing from wasm64 --
-  # which for gmsh is exactly the workload the extra address space is for.
   -sMAXIMUM_MEMORY=17179869184 \
   -sSTACK_SIZE=8MB \
   -sEXIT_RUNTIME=0 \
