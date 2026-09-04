@@ -98,10 +98,6 @@ jobs:
           cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
           . ./emsdk_env.sh && emcc --version | head -1
 
-          else
-            echo "::error::no .emscripten at $cfg"; exit 1
-          fi
-
       # Everything below logs to /tmp/qtlogs and is uploaded as an ARTIFACT. GitHub's job-log
       # API has returned 404 for this repo for the whole session, so the normal way of finding
       # out why a step failed is unavailable -- but the artifacts API works. Routing the

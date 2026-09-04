@@ -292,6 +292,14 @@ jobs:
       - name: No comments inside shell line continuations
         run: python3 tools/check-line-continuations.py
 
+      # A run block is a shell script nothing parses until the runner executes it. Break
+      # one and the YAML is still valid, the push still succeeds, the job still starts --
+      # and then dies on "syntax error near unexpected token" after minutes of checkout,
+      # cache restore and toolchain install. That happened in the Qt lane: removing a block
+      # cut at the first `fi`, which belonged to a nested if, and left a dangling else.
+      - name: Every workflow run block is valid shell
+        run: python3 tools/check-workflow-shell.py
+
       # A patch that nothing applies is not a fix, however carefully it is written.
       # patches/vtk-expat-wasm-xmlsize.patch sat in the tree for months, named in the deps
       # cache key so a change to it would rebuild VTK, with a comment describing exactly
