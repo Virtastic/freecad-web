@@ -3047,7 +3047,7 @@ window.fcRunPy = fcRunPy;
   //
   // These are plain files under play-gui/am/ COPYed into the image, so changing one is an
   // image rebuild (seconds) rather than a relink (~2 h).
-  var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_boot.py'];
+  var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_install.py', 'fcweb_am_boot.py'];
   var amOverlayDone = false;
   async function installAmOverlay(){
     if(amOverlayDone || !ready()) return;

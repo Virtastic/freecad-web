@@ -225,6 +225,26 @@ def _patch_modal_launch():
     return "AddonManager.ui opens non-modally (exec would suspend illegally)"
 
 
+def _stash_command():
+    """Record the live command object as AddonManager._fcweb_cmd.
+
+    The registered Std_AddonMgr instance is otherwise unreachable from Python -- FreeCAD
+    keeps it in the C++ command registry -- and both the boot gate and any support probe
+    need a handle on the running Addon Manager to inspect its model or its workers.
+    """
+    import AddonManager
+
+    cls = AddonManager.CommandAddonManager
+    orig_launch = cls.launch
+
+    def launch(self):
+        AddonManager._fcweb_cmd = self
+        return orig_launch(self)
+
+    cls.launch = launch
+    return "command object exposed as AddonManager._fcweb_cmd"
+
+
 def _install_now():
     """Applied the first time an Addon Manager module is importable."""
     notes = []
@@ -237,6 +257,15 @@ def _install_now():
         notes.append(_patch_connection_checker())
     except Exception as e:
         notes.append("connection-checker patch FAILED %r" % (e,))
+    try:
+        import fcweb_am_install
+        notes.extend(fcweb_am_install.install())
+    except Exception as e:
+        notes.append("install patches FAILED %r" % (e,))
+    try:
+        notes.append(_stash_command())
+    except Exception as e:
+        notes.append("command stash FAILED %r" % (e,))
     try:
         notes.append(_patch_modal_launch())
     except Exception as e:
