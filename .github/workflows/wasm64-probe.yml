@@ -29,6 +29,14 @@ name: probe - does the wasm64 toolchain actually work?
 # in one run, not to stop at the first one that fails.
 on:
   workflow_dispatch:
+  # Also fires on a push to the wasm64-probe branch. workflow_dispatch is only offered for
+  # workflows that already exist on the DEFAULT branch, and this one does not -- a push
+  # trigger carries no such restriction, so the probe can run without putting anything on
+  # main. That matters here: ci.yml and dns.yml are the only two workflows bound to main,
+  # and dns.yml writes a Cloudflare A-record. Every other workflow names an explicit branch
+  # (freecad-1.1.3 / ovhcloud), so pushing this branch starts this job and nothing else.
+  push:
+    branches: [wasm64-probe]
 
 permissions:
   contents: read
