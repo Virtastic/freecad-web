@@ -11,6 +11,7 @@ until the workbench is activated, and importing them at boot would both slow sta
 drag Qt network machinery in before the GUI exists. install() only registers a hook.
 """
 
+import os
 import sys
 
 _installed = False
@@ -296,29 +297,43 @@ def install():
     except ImportError:
         from PySide6 import QtCore
 
-    # Poll until the workbench has been activated and its modules are importable, then
-    # apply the class patches once. Cheap: a 2 s timer that stops after it succeeds.
-    state = {"timer": None, "tries": 0}
+    state = {"timer": None, "tries": 0, "done": False}
 
-    def _try():
-        state["tries"] += 1
+    def _apply():
+        """Apply the patches if the Addon Manager is importable yet. True when done."""
+        if state["done"]:
+            return True
+        # FreeCAD registers Std_AddonMgr at startup, so the package is usually importable
+        # already; adding its directory covers the case where it is not.
+        for d in ("/freecad/Mod/AddonManager",):
+            if os.path.isdir(d) and d not in sys.path:
+                sys.path.append(d)
         try:
             import Widgets.addonmanager_utility_dialogs  # noqa: F401
         except Exception:
-            if state["tries"] > 900:          # ~30 min, then give up quietly
-                state["timer"].stop()
-            return
-        state["timer"].stop()
+            return False
+        state["done"] = True
         for note in _install_now():
             print("[fcweb] addon-manager: %s" % note)
         sys.stdout.flush()
+        return True
 
-    t = QtCore.QTimer()
-    t.timeout.connect(_try)
-    t.start(2000)
-    state["timer"] = t
-    # Held on the module so the QTimer is not garbage-collected with this frame.
-    globals()["_hook_timer"] = t
+    # Try RIGHT NOW, before any timer. Std_AddonMgr is registered at startup and a user
+    # can click it immediately; waiting even one 2 s tick leaves a window in which the
+    # command runs against the shipped QThread workers and aborts the engine. The boot
+    # gate hit exactly that window, which is how this was found.
+    if not _apply():
+        def _try():
+            state["tries"] += 1
+            if _apply() or state["tries"] > 900:   # ~30 min, then give up quietly
+                state["timer"].stop()
+
+        t = QtCore.QTimer()
+        t.timeout.connect(_try)
+        t.start(2000)
+        state["timer"] = t
+        # Held on the module so the QTimer is not garbage-collected with this frame.
+        globals()["_hook_timer"] = t
 
 
 def probe_modal_from_callback():

@@ -1475,6 +1475,134 @@ GROWTH_JS = r"""(async () => {
   return JSON.stringify(out);
 })"""
 
+ADDONMGR_OPEN_PY = r'''
+# Open the Addon Manager the way the Start page does, then wait for its startup sequence
+# to finish. Everything is signal-driven, so the result is reported from a timer rather
+# than by blocking -- blocking here would starve the very event loop being tested.
+import sys as _s
+import addonmanager_freecad_interface as fci
+
+# The first-run consent dialog is a real modal waiting for a human click. It is not what
+# is under test, and a headless gate has no way to answer it.
+fci.Preferences().set("readWarning2022", True)
+
+import FreeCADGui as Gui
+try:
+    from PySideWrapper import QtCore
+except ImportError:
+    from PySide6 import QtCore
+
+_out = {}
+_state = {"ticks": 0}
+
+
+def _report():
+    _s.__stderr__.write("FCADDONMGR " + repr(_out) + chr(10))
+    _s.__stderr__.flush()
+
+
+def _tick():
+    _state["ticks"] += 1
+    try:
+        import AddonManager
+        cmd = getattr(AddonManager, "_fcweb_cmd", None)
+        if cmd is not None:
+            _out["addons"] = len(cmd.item_model.repos)
+            _out["phasesLeft"] = len(cmd.startup_sequence)
+            if _out["addons"] >= 100 and not cmd.startup_sequence:
+                _timer.stop()
+                _report()
+                return
+    except Exception as _e:
+        _out["error"] = repr(_e)
+        _timer.stop()
+        _report()
+        return
+    if _state["ticks"] > 150:
+        _out["error"] = "the startup sequence never finished"
+        _timer.stop()
+        _report()
+
+
+try:
+    Gui.runCommand("Std_AddonMgr")
+except BaseException as _e:
+    _out["error"] = "runCommand failed: " + repr(_e)
+    _report()
+else:
+    _timer = QtCore.QTimer()
+    _timer.timeout.connect(_tick)
+    _timer.start(1000)
+    globals()["_fcam_gate_timer"] = _timer
+'''
+
+ADDONMGR_INSTALL_PY = r'''
+# Install and then remove a theme through the Addon Manager's own slots -- cmd.update is
+# exactly what the Install button is wired to, so the dependency GUI and the progress
+# dialog are exercised, not bypassed.
+import sys as _s
+import os
+import AddonManager
+import addonmanager_freecad_interface as fci
+try:
+    from PySideWrapper import QtCore
+except ImportError:
+    from PySide6 import QtCore
+
+_out = {}
+_state = {"ticks": 0}
+
+
+def _report():
+    _s.__stderr__.write("FCAMINSTALL " + repr(_out) + chr(10))
+    _s.__stderr__.flush()
+
+
+_cmd = AddonManager._fcweb_cmd
+_target = None
+for _r in _cmd.item_model.repos:
+    if "theme" in (getattr(_r, "name", "") or "").lower():
+        _target = _r
+        break
+
+if _target is None:
+    _out["error"] = "no theme addon in the catalogue"
+    _report()
+else:
+    _out["addon"] = _target.name
+    _dir = os.path.join(fci.DataPaths().mod_dir, _target.name)
+
+    def _remove():
+        from addonmanager_uninstaller import AddonUninstaller
+        _un = AddonUninstaller(_target)
+        globals()["_fcam_uninstaller"] = _un
+
+        def _removed():
+            _out["removed"] = not os.path.isdir(_dir)
+            _report()
+
+        _un.finished.connect(_removed)
+        _un.run()
+
+    def _tick():
+        _state["ticks"] += 1
+        if os.path.isdir(_dir):
+            _timer.stop()
+            _out["installed"] = len(os.listdir(_dir))
+            _remove()
+        elif _state["ticks"] > 120:
+            _timer.stop()
+            _out["error"] = "the addon never appeared in Mod/"
+            _report()
+
+    _cmd.update(_target)
+    _timer = QtCore.QTimer()
+    _timer.timeout.connect(_tick)
+    _timer.start(1000)
+    globals()["_fcam_install_timer"] = _timer
+'''
+
+
 def scenario_boot(ctx, url, args, fail):
     s = Session(ctx, url, args.timeout)
     if not s.load():
@@ -2050,6 +2178,60 @@ def scenario_addoninstall(ctx, url, args, fail):
         print('==> addon survived the reload: %s (%d .py files)'
               % (r2.get('mods'), r2['pyFiles']))
     return s2
+
+
+def scenario_addonmgr(ctx, url, args, fail):
+    """The Addon Manager workbench itself: open it, list, install, uninstall.
+
+    The `addons` scenario drives NetworkManager directly and `addoninstall` unpacks an
+    archive itself, so both kept passing while clicking Addon Manager killed the engine
+    outright (CPython aborting in PyGILState_Release). Only the real command exercises the
+    workbench's own workers, its modal dialogs and its threading.
+    """
+    s = Session(ctx, url, args.timeout)
+    if not s.load():
+        fail('addonmgr: never reached Ready (overlay: %s)' % s.phase())
+        return s
+
+    s.run_python(ADDONMGR_OPEN_PY)
+    r = s.wait_for('FCADDONMGR', 240)
+    if not isinstance(r, dict):
+        fail('the Addon Manager never reported: it opened and then stopped responding, '
+             'which is what an engine abort looks like from here')
+        return s
+    print('==> addon manager: %s' % r)
+    if r.get('error'):
+        fail('the Addon Manager could not start up: %s' % r['error'])
+        return s
+    if r.get('addons', 0) < 100:
+        fail('the catalogue listed %r addons; the real index has hundreds, so the '
+             'workbench is open and empty' % r.get('addons'))
+        return s
+    if r.get('phasesLeft'):
+        fail('%r startup phases never ran -- the sequence stalled partway, which leaves '
+             'the progress bar up forever' % r.get('phasesLeft'))
+        return s
+
+    s.run_python(ADDONMGR_INSTALL_PY)
+    ri = s.wait_for('FCAMINSTALL', 240)
+    if not isinstance(ri, dict):
+        fail('installing through the Addon Manager produced no result')
+        return s
+    print('==> addon manager install: %s' % ri)
+    if ri.get('error'):
+        fail('installing through the Addon Manager failed: %s' % ri['error'])
+    elif not ri.get('installed'):
+        fail('the addon reported installed but its directory is empty')
+    elif not ri.get('removed'):
+        fail('uninstalling left the addon directory behind')
+
+    # An abort does not always stop the log arriving, so prove the engine still runs.
+    s.run_python('import sys as _s; _s.__stderr__.write("FCAMALIVE {}" + chr(10)); '
+                 '_s.__stderr__.flush()')
+    if not isinstance(s.wait_for('FCAMALIVE', 60), dict):
+        fail('the engine was dead after using the Addon Manager, even though the '
+             'catalogue had loaded -- the abort just came later')
+    return s
 
 
 def scenario_render(ctx, url, args, fail):
@@ -2628,6 +2810,8 @@ SCENARIOS = (
      'activates every workbench it ships'),
     ('addoninstall',  scenario_addoninstall,  True,
      'installs an addon from the real catalogue and still has it after a reload'),
+    ('addonmgr',      scenario_addonmgr,      True,
+     'opens the Addon Manager, lists the catalogue, installs and removes an addon'),
     ('save',          scenario_save,          True,
      'hands the user a real .FCStd whose bytes reopen to the same geometry'),
     ('storage',       scenario_storage,       True,
