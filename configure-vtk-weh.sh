@@ -70,7 +70,15 @@ emcmake cmake -S "$SRC" -B "$BUILD" -G Ninja \
   -DVTK_MODULE_ENABLE_VTK_IOXMLParser=YES \
   -DCMAKE_INSTALL_PREFIX="$DW" \
   -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread -O2" \
-  -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O2" \
+  # -DFMT_USE_CHAR8_T=0: VTK 9.3.1 vendors an old fmt whose basic_string_view<char8_t>
+  # instantiates std::char_traits<fmt::char8_t>. The libc++ in emsdk 6.0.9 no longer
+  # provides a char_traits primary template to instantiate, so ThirdParty/diy2 fails with
+  #   note: in instantiation of member function fmt::basic_string_view<fmt::char8_t>
+  #   note: template is declared here -- struct char_traits;
+  # fmt gates the whole char8_t path on this macro, so turning it off skips the
+  # specialisation. It is a toolchain incompatibility, not a wasm64 one: the same VTK
+  # against the same libc++ fails identically at wasm32.
+  -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O2 -DFMT_USE_CHAR8_T=0" \
   -DCMAKE_CROSSCOMPILING_EMULATOR="$FCWEB_NODE"
 
 echo "=== VTK configure done; building ==="

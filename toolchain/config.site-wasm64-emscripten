@@ -120,3 +120,14 @@ ac_cv_func_faccessat=no
 
 # alarm signal is not delivered, may need a callback into the event loop?
 ac_cv_func_alarm=no
+
+# xxlimited / xxlimited_35 are CPython's own limited-API DEMO modules. They exist to
+# exercise the stable ABI in CPython's test suite and nothing imports them. They build as
+# SHARED extensions, and at wasm64 that fails the link outright:
+#   wasm-ld: error: relocation R_WASM_MEMORY_ADDR_LEB64 cannot be used against symbol
+#   `Null_Type_slots`; recompile with -fPIC
+# The 64-bit relocation forms are the tell -- the same objects relocate fine at wasm32.
+# Disabling them is preferable to compiling all of CPython -fPIC to satisfy two modules
+# this build does not ship and cannot dlopen anyway.
+py_cv_module_xxlimited=n/a
+py_cv_module_xxlimited_35=n/a
