@@ -1536,6 +1536,65 @@ else:
     globals()["_fcam_gate_timer"] = _timer
 '''
 
+ADDONMGR_MACRO_PY = r'''
+# Install a macro through the Addon Manager. Macros need two round trips to the wiki (the
+# page, then the rawcodeurl inside it) and finish with a toolbar-button prompt, so this
+# covers ground the theme install does not touch.
+import sys as _s
+import os
+import AddonManager
+import addonmanager_freecad_interface as fci
+from Addon import Addon
+try:
+    from PySideWrapper import QtCore
+except ImportError:
+    from PySide6 import QtCore
+
+_out = {}
+_state = {"ticks": 0}
+
+
+def _report():
+    _s.__stderr__.write("FCAMMACRO " + repr(_out) + chr(10))
+    _s.__stderr__.flush()
+
+
+_cmd = AddonManager._fcweb_cmd
+_macros = [r for r in _cmd.item_model.repos
+           if getattr(r, "repo_type", None) == Addon.Kind.MACRO]
+_out["macrosInCatalogue"] = len(_macros)
+
+if not _macros:
+    _out["error"] = "the catalogue listed no macros at all"
+    _report()
+else:
+    _target = _macros[0]
+    _out["macro"] = _target.name
+    _dir = fci.DataPaths().macro_dir
+    _before = set(os.listdir(_dir)) if os.path.isdir(_dir) else set()
+
+    def _tick():
+        _state["ticks"] += 1
+        _now = set(os.listdir(_dir)) if os.path.isdir(_dir) else set()
+        _new = sorted(_now - _before)
+        if _new:
+            _timer.stop()
+            _out["newFiles"] = _new
+            _out["status"] = str(_target.status())
+            _report()
+        elif _state["ticks"] > 120:
+            _timer.stop()
+            _out["error"] = "the macro never appeared in the macro directory"
+            _report()
+
+    _cmd.update(_target)
+    _timer = QtCore.QTimer()
+    _timer.timeout.connect(_tick)
+    _timer.start(1000)
+    globals()["_fcam_macro_timer"] = _timer
+'''
+
+
 ADDONMGR_INSTALL_PY = r'''
 # Install and then remove a theme through the Addon Manager's own slots -- cmd.update is
 # exactly what the Install button is wired to, so the dependency GUI and the progress
@@ -2225,6 +2284,18 @@ def scenario_addonmgr(ctx, url, args, fail):
     elif not ri.get('removed'):
         fail('uninstalling left the addon directory behind')
 
+    s.run_python(ADDONMGR_MACRO_PY)
+    rm = s.wait_for('FCAMMACRO', 240)
+    if not isinstance(rm, dict):
+        fail('installing a macro produced no result -- the macro path ends in a modal '
+             'toolbar prompt, and a modal from a callback takes the engine down')
+        return s
+    print('==> addon manager macro: %s' % rm)
+    if rm.get('error'):
+        fail('installing a macro through the Addon Manager failed: %s' % rm['error'])
+    elif not rm.get('newFiles'):
+        fail('the macro installed nothing into the macro directory')
+
     # An abort does not always stop the log arriving, so prove the engine still runs.
     s.run_python('import sys as _s; _s.__stderr__.write("FCAMALIVE {}" + chr(10)); '
                  '_s.__stderr__.flush()')
@@ -2811,7 +2882,7 @@ SCENARIOS = (
     ('addoninstall',  scenario_addoninstall,  True,
      'installs an addon from the real catalogue and still has it after a reload'),
     ('addonmgr',      scenario_addonmgr,      True,
-     'opens the Addon Manager, lists the catalogue, installs and removes an addon'),
+     'opens the Addon Manager, lists the catalogue, installs an addon and a macro'),
     ('save',          scenario_save,          True,
      'hands the user a real .FCStd whose bytes reopen to the same geometry'),
     ('storage',       scenario_storage,       True,

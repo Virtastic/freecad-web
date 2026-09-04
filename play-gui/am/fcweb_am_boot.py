@@ -43,21 +43,32 @@ def _patch_blocking_dialogs():
     except Exception as e:  # not importable until the workbench is active
         return "MessageDialog unavailable (%r)" % (e,)
 
-    def _show_modal(self, *_a, **_k):
-        title = getattr(self, "windowTitle", lambda: "FreeCAD")()
-        text = ""
-        for attr in ("text", "message", "detailedText"):
-            try:
-                v = getattr(self, attr)
-                text = v() if callable(v) else v
-                if text:
-                    break
-            except Exception:
-                continue
-        notify(title or "Addon Manager", text or "")
-        return None
+    try:
+        from PySideWrapper import QtWidgets
+    except ImportError:
+        from PySide6 import QtWidgets
 
-    MessageDialog.show_modal = _show_modal
+    # Dialogs whose answer decides whether an installation continues. There is no way to
+    # ask the user from a callback here -- the modal that would ask is the thing that
+    # crashes -- so these answer Yes, which is what the text offers ("Continue with addon
+    # installation anyway?") and the only answer that leaves the addon installed. Both are
+    # reached because pip cannot exist in this build, not because anything went wrong.
+    #
+    # Keyed on object_name, which upstream marks DO NOT TRANSLATE precisely so it can be
+    # matched. Everything else gets the neutral answer, so a question this list does not
+    # know about can never be auto-confirmed into a destructive action.
+    CONTINUE_ANYWAY = {
+        "AddonManager_CannotExecutePipDialog",
+        "AddonManager_PackageInstallationFailedDialog",
+    }
+
+    def _show_modal(dialog_type, object_name, title, message, *args, **kwargs):
+        notify(title or "Addon Manager", message or "")
+        if object_name in CONTINUE_ANYWAY:
+            return QtWidgets.QMessageBox.Yes
+        return QtWidgets.QMessageBox.Ok
+
+    MessageDialog.show_modal = staticmethod(_show_modal)
     return "MessageDialog.show_modal -> non-blocking"
 
 

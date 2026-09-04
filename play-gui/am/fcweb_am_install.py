@@ -168,10 +168,147 @@ def _patch_allowed_packages():
     )
 
 
+def _patch_verify_pip():
+    """Fail the pip check cleanly instead of raising out of the dependency installer.
+
+    _verify_pip shells out to pip through subprocess. There is no subprocess in this
+    build, and the exception it raises is not the CalledProcessError upstream catches, so
+    it propagated out of DependencyInstaller.run() and the installation died with no
+    explanation. Emitting no_pip is the path upstream already has for "pip is missing",
+    and it ends in a dialog offering to continue without the Python packages.
+
+    This is a hard ceiling, not a bug: Python-package dependencies can never be installed
+    here. An addon that only wants them for optional features still installs and works.
+    """
+    import addonmanager_dependency_installer as dep
+
+    def verify_pip(self):
+        call = "pip (unavailable in the browser build)"
+        try:
+            import addonmanager_utilities as utils
+            call = " ".join(utils.create_pip_call([]))
+        except Exception:
+            pass
+        fci.Console.PrintWarning(
+            "Python packages cannot be installed in the browser build; "
+            "continuing without them\n"
+        )
+        self.no_pip.emit(call)
+        return False
+
+    dep.DependencyInstaller._verify_pip = verify_pip
+    return "pip check fails cleanly (no subprocess in this build)"
+
+
+def _patch_macro_fetch():
+    """Let wiki macros install without blocking, by replaying them against a cache.
+
+    Macro.install() and fill_details_from_wiki() reach the network through
+    Macro.blocking_get, a class attribute captured at import time -- so it is patched
+    rather than shadowed, which reaches every module that already imported the class.
+
+    The replacement never blocks: a cache hit returns the bytes, a miss starts an
+    async_get and returns None. Upstream already treats None as "could not fetch" and
+    warns instead of raising, so a miss is safe -- it just yields an incomplete macro.
+
+    That is what the replay is for. A wiki macro needs two round trips (the wiki page,
+    then the rawcodeurl found inside it), so the operation is simply run again each time
+    the outstanding fetches settle, and each pass gets one step further. Two rounds is the
+    normal case; the cap stops a macro whose URLs never resolve from retrying forever.
+    """
+    from addonmanager_macro import Macro
+    import addonmanager_installer as inst
+
+    cache = {}
+    pending = {}
+
+    def cached_get(url, *_args, **_kwargs):
+        if url in cache:
+            return cache[url]
+        if url not in pending:
+            pending[url] = True
+
+            def arrived(ok, data, u=url):
+                pending.pop(u, None)
+                cache[u] = data if (ok and data) else None
+
+            async_get(url, arrived, timeout_ms=60000)
+        return None
+
+    Macro.blocking_get = cached_get
+
+    orig_run = inst.MacroInstaller.run
+    MAX_ROUNDS = 6
+
+    def run(self, *args, **kwargs):
+        rounds = getattr(self, "_fcweb_rounds", 0)
+        macro = self.addon_to_install.macro
+
+        # Warm the cache by asking for what this macro needs, then let the fetches land.
+        # The pass below produces no side effects the GUI can see: it only populates the
+        # macro object, which upstream's run() does anyway.
+        if not getattr(macro, "code", None) and rounds < MAX_ROUNDS:
+            try:
+                macro.fill_details_from_wiki(macro.url)
+            except Exception as e:
+                fci.Console.PrintLog("Macro detail fetch round %d: %r\n" % (rounds, e))
+            if not getattr(macro, "code", None):
+                self._fcweb_rounds = rounds + 1
+                _when_settled(pending, lambda: run(self, *args, **kwargs))
+                return False
+
+        return orig_run(self, *args, **kwargs)
+
+    inst.MacroInstaller.run = run
+    return "wiki macros fetch without blocking (replayed, max %d rounds)" % MAX_ROUNDS
+
+
+def _patch_macro_toolbar_prompt():
+    """Do not ask, from a callback, whether to add a toolbar button for a macro.
+
+    _ask_to_install_toolbar_button runs from _base_installation_success -- a signal
+    handler -- and its own comment calls it a "Synchronous set of modals". Those exec()
+    calls suspend through JSPI on a stack that may not suspend, so the macro finished
+    installing and then took the engine down with it: the files were on disk and the tab
+    was dead.
+
+    The macro is fully installed and runnable from the Macro menu without a toolbar
+    button, so the prompt is dropped and the user is told where to add one by hand.
+    """
+    import addonmanager_installer_gui as gui
+    from addonmanager_fcweb_async import notify
+
+    def ask(self):
+        try:
+            name = self.addon_to_install.macro.name
+        except Exception:
+            name = "The macro"
+        notify(
+            "Macro installed",
+            "%s is installed and available from the Macro menu. To put it on a "
+            "toolbar, use Tools then Customize." % name,
+        )
+
+    gui.MacroInstallerGUI._ask_to_install_toolbar_button = ask
+    return "macro toolbar prompt replaced with a non-blocking note"
+
+
+def _when_settled(pending, then, tries=0):
+    """Call then() once no fetches are outstanding. Polls; never blocks."""
+    from addonmanager_fcweb_async import defer
+
+    if not pending or tries > 120:
+        then()
+        return
+    defer(500, lambda: _when_settled(pending, then, tries + 1))
+
+
 def install():
     """Apply the patches. Returns notes for the caller to log."""
     notes = []
-    for fn in (_patch_move_to_thread, _patch_allowed_packages, _patch_zip_install):
+    for fn in (_patch_move_to_thread, _patch_allowed_packages, _patch_verify_pip,
+               _patch_zip_install, _patch_macro_fetch,
+               _patch_macro_toolbar_prompt):
         try:
             notes.append(fn())
         except Exception as e:
