@@ -98,31 +98,6 @@ jobs:
           cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
           . ./emsdk_env.sh && emcc --version | head -1
 
-          # Rewrite EMSCRIPTEN_ROOT into the exact shape Qt parses.
-          #
-          # QtPublicWasmToolchainHelpers.cmake regex-extracts the QUOTED value out of
-          # .emscripten and appends it to $EMSDK:
-          #     set(EXECUTE_COMMANDPATH "$ENV{EMSDK}/${emroot_path}/emcc")
-          # so the value has to be the SUFFIX "/upstream/emscripten" and nothing else.
-          #
-          # emsdk 6.0.9 writes it as '$CFGDIR/upstream/emscripten', a placeholder emcc expands
-          # itself. Qt does not expand it, so it built $EMSDK/$CFGDIR/... and failed. Making
-          # the value ABSOLUTE fails differently -- Qt still prepends $EMSDK and you get the
-          # path doubled, which is what the second attempt produced. Only the bare suffix
-          # satisfies the way Qt joins them.
-          #
-          # emcc does not need this value: it locates its own root from its file path. The
-          # emcc --version below is the proof, and it runs BEFORE Qt configure so a wrong
-          # guess here fails in seconds rather than after a Qt build.
-          cfg="$PWD/.emscripten"
-          if [ -f "$cfg" ]; then
-            sed -i "s|^EMSCRIPTEN_ROOT.*|EMSCRIPTEN_ROOT = '/upstream/emscripten'|" "$cfg"
-            echo "  .emscripten now says: $(grep EMSCRIPTEN_ROOT "$cfg")"
-            if emcc --version | head -1; then
-              echo "  emcc still works with the rewritten config"
-            else
-              echo "::error::emcc broke after rewriting EMSCRIPTEN_ROOT"; exit 1
-            fi
           else
             echo "::error::no .emscripten at $cfg"; exit 1
           fi
@@ -212,6 +187,28 @@ jobs:
       - name: Configure for wasm
         run: |
           . ./toolchain/env.sh
+
+          # Rewrite EMSCRIPTEN_ROOT here, in THIS step, immediately before configure.
+          #
+          # QtPublicWasmToolchainHelpers.cmake regex-extracts the quoted value out of
+          # .emscripten and appends it to $EMSDK:
+          #     set(EXECUTE_COMMANDPATH "$ENV{EMSDK}/${emroot_path}/emcc")
+          # so it has to be the bare SUFFIX "/upstream/emscripten". emsdk 6.0.9 writes
+          # '$CFGDIR/upstream/emscripten' (Qt does not expand $CFGDIR), and an absolute path
+          # makes Qt build the path DOUBLED. Only the suffix works.
+          #
+          # It has to be done HERE and not in the emsdk install step: sourcing
+          # emsdk_env.sh regenerates .emscripten with absolute paths, so a fixup applied
+          # in an earlier step is silently reverted by the next `. ./toolchain/env.sh`.
+          # That is exactly what happened -- the rewrite logged "now says /upstream/..."
+          # and Qt still saw the doubled path one step later.
+          #
+          # emcc does not need the value (it finds its own root from its file path); the
+          # version check below proves that before Qt is allowed to start.
+          sed -i "s|^EMSCRIPTEN_ROOT.*|EMSCRIPTEN_ROOT = '/upstream/emscripten'|" "$EMSDK/.emscripten"
+          echo "  .emscripten: $(grep EMSCRIPTEN_ROOT "$EMSDK/.emscripten")"
+          emcc --version | head -1 | sed "s/^/  emcc still OK: /"
+
           mkdir -p qt-build && cd qt-build
           rc=0
           ../qt-src/configure \
