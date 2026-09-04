@@ -159,11 +159,35 @@ jobs:
           }
           CEOF
           GLFLAGS="-sLEGACY_GL_EMULATION=1 -sMAX_WEBGL_VERSION=2 -sGL_UNSAFE_OPTS=0"
-          echo "--- wasm32 reference glue ---"
-          emcc $GLFLAGS /tmp/w64/gl.c -o /tmp/w64/gl32.js
+          # env -u EMCC_CFLAGS, NOT just omitting the variable. emcc reads EMCC_CFLAGS from
+          # the ENVIRONMENT and appends it to every invocation, so a reference build that
+          # merely leaves it off the command line still gets -m64 from toolchain/env.sh. The
+          # first run of this probe did exactly that and produced two byte-identical files
+          # differing only in the .wasm filename -- a "no change needed" answer that was
+          # entirely an artefact of the harness.
+          echo "--- wasm32 reference glue (EMCC_CFLAGS explicitly cleared) ---"
+          env -u EMCC_CFLAGS emcc $GLFLAGS /tmp/w64/gl.c -o /tmp/w64/gl32.js
           echo "--- wasm64 glue ---"
           emcc $EMCC_CFLAGS $GLFLAGS /tmp/w64/gl.c -o /tmp/w64/gl64.js
           echo "  BOTH LINKED -- LEGACY_GL_EMULATION is not rejected at wasm64"
+
+          # Prove the two builds really are different targets before drawing any conclusion
+          # from comparing them.
+          if grep -q memory64 /tmp/w64/gl64.wasm 2>/dev/null || [ "$(stat -c%s /tmp/w64/gl32.wasm)" != "$(stat -c%s /tmp/w64/gl64.wasm)" ]; then
+            echo "  targets confirmed distinct: gl32.wasm=$(stat -c%s /tmp/w64/gl32.wasm)B gl64.wasm=$(stat -c%s /tmp/w64/gl64.wasm)B"
+          else
+            echo "  FATAL: the two .wasm files are the same size -- the reference build was NOT wasm32." >&2
+            echo "  Comparing them would measure nothing. Check EMCC_CFLAGS leakage." >&2
+            exit 1
+          fi
+          echo
+          echo "--- JS glue diff (excluding the .wasm filename line) ---"
+          d=$(diff /tmp/w64/gl32.js /tmp/w64/gl64.js | grep -c "^[<>]" || true)
+          echo "  differing lines: $d"
+          if [ "$d" -le 2 ]; then
+            echo "  NOTE: the GL glue is essentially unchanged between the two targets."
+            echo "  If that holds, patch-freecad-js.py may need far less rework than assumed."
+          fi
           echo
           echo "--- the patterns tools/patch-freecad-js.py anchors on ---"
           for f in /tmp/w64/gl32.js /tmp/w64/gl64.js; do
