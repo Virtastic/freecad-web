@@ -25,11 +25,10 @@ handling and the status updates are all still upstream's.
 
 import os
 import sys
-import tempfile
 
 import addonmanager_freecad_interface as fci
 
-from addonmanager_fcweb_async import async_get
+from addonmanager_fcweb_async import async_get, download_with_progress
 
 
 def _no_move_to_thread(self, _thread):
@@ -64,8 +63,8 @@ def _patch_zip_install():
     orig_run = inst.AddonInstaller.run
 
     def run(self, *args, **kwargs):
-        # Second entry: the bytes are here, so upstream's path is fully local and safe.
-        if getattr(self, "_fcweb_zip", None) is not None:
+        # Second entry: the archive is on disk, so upstream's path is fully local.
+        if getattr(self, "_fcweb_zip_file", None) is not None:
             return orig_run(self, *args, **kwargs)
 
         try:
@@ -76,8 +75,18 @@ def _patch_zip_install():
             # A local path needs no download; upstream handles it without blocking.
             return orig_run(self, *args, **kwargs)
 
-        def arrived(ok, data):
-            if not ok or not data:
+        def progressed(bytes_read, total):
+            # Forwarded to the GUI's progress bar. In practice this never fires: Qt
+            # for WebAssembly does not emit downloadProgress, so the bar stays at zero
+            # regardless (measured -- see MonitoredFetch). Wired anyway because it is
+            # free and correct the day the backend supports it.
+            try:
+                self.progress_update.emit(bytes_read, total)
+            except RuntimeError:
+                pass
+
+        def arrived(ok, filename):
+            if not ok or not filename:
                 self.failure.emit(
                     self.addon_to_install,
                     fci.translate(
@@ -88,31 +97,32 @@ def _patch_zip_install():
                 # the GUI's close path spins waiting for a worker that already gave up.
                 self.finished.emit()
                 return
-            self._fcweb_zip = data
+            # NetworkManager streamed it to disk, which is all _finalize_zip_installation
+            # ever wanted. No in-memory copy of a multi-megabyte archive.
+            self._fcweb_zip_file = str(filename)
             run(self, *args, **kwargs)
 
-        fci.Console.PrintLog("Fetching %s without blocking the event loop\n" % zip_url)
-        async_get(zip_url, arrived, timeout_ms=120000, attempts=2)
+        fci.Console.PrintLog("Downloading %s with progress\n" % zip_url)
+        download_with_progress(zip_url, progressed, arrived, timeout_ms=180000)
         return False   # not finished yet; arrived() re-enters run()
 
     orig_install_by_zip = inst.AddonInstaller._install_by_zip
 
     def _install_by_zip(self):
         """Upstream's version, minus the download it can no longer do here."""
-        data = getattr(self, "_fcweb_zip", None)
-        if data is None:
+        path = getattr(self, "_fcweb_zip_file", None)
+        if path is None:
             # A local path: upstream's version does no network work on that branch, so
             # let it run rather than failing. run() only pre-fetches remote URLs.
             return orig_install_by_zip(self)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as f:
-            name = f.name
-            f.write(data)
         try:
-            self._finalize_zip_installation(name)
+            self._finalize_zip_installation(path)
         finally:
-            self._fcweb_zip = None
+            self._fcweb_zip_file = None
+            # NetworkManager owns the cache file; removing it keeps a browser filesystem
+            # from filling up with archives nobody reads again.
             try:
-                os.unlink(name)
+                os.unlink(path)
             except OSError:
                 pass
         return True

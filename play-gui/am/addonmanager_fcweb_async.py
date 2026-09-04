@@ -149,6 +149,101 @@ def async_get(url, callback, parent=None, **kwargs):
     return f.start()
 
 
+class MonitoredFetch(QtCore.QObject):
+    """A download that reports progress, for anything big enough that silence looks hung.
+
+    Fetch uses submit_unmonitored_get, which keeps everything in memory and says nothing
+    until it is done -- right for a 64-byte hash, wrong for a multi-megabyte addon where
+    the user is watching a progress bar that never moves.
+
+    submit_monitored_get streams to a FILE instead, which is why this exists: a
+    multi-megabyte addon archive never has to sit in memory, and
+    _finalize_zip_installation only ever wanted a path on disk anyway.
+
+    HARD CEILING -- progress does not actually arrive. Qt for WebAssembly's QNetworkReply
+    never emits downloadProgress, so NetworkManager.progress_made never fires. MEASURED
+    2026-09-04 against NetworkManager directly, no installer involved: a multi-MB download
+    completed with progress_events=0. The sslErrors guard was necessary (its
+    AttributeError landed mid-method and skipped the readyRead/downloadProgress connects)
+    but could never have been sufficient. The progress signal below is kept because it
+    costs nothing and would start working if the Qt backend ever gains it; do not read its
+    silence as a bug in this class.
+
+    Emits done(ok, filename) exactly once. filename is the path NetworkManager wrote to.
+    """
+
+    progress = QtCore.Signal(int, int)      # bytes read, total (0 when unknown)
+    done = QtCore.Signal(bool, object)      # ok, filename or None
+
+    def __init__(self, url, timeout_ms=120000, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.timeout_ms = timeout_ms
+        self._index = None
+        self._finished = False
+        NetworkManager.InitializeNetworkManager()
+        self._nm = NetworkManager.AM_NETWORK_MANAGER
+
+    def start(self):
+        self._nm.progress_made.connect(self._progress)
+        self._nm.progress_complete.connect(self._complete)
+        self._index = self._nm.submit_monitored_get(self.url, timeout_ms=self.timeout_ms)
+        # Watchdog: a request the browser drops without answering would otherwise leave
+        # the progress dialog up forever with no way out.
+        defer(self.timeout_ms + 5000, self._timed_out)
+        return self
+
+    def _progress(self, index, bytes_read, total):
+        if not self._finished and index == self._index:
+            self.progress.emit(int(bytes_read), int(total or 0))
+
+    def _complete(self, index, code, filename):
+        if self._finished or index != self._index:
+            return
+        if code == 200:
+            self._emit(True, filename)
+        else:
+            fci.Console.PrintWarning(
+                "Addon Manager: HTTP %s downloading %s\n" % (code, self.url)
+            )
+            self._emit(False, None)
+
+    def _timed_out(self):
+        if self._finished:
+            return
+        try:
+            self._nm.abort(self._index)
+        except Exception:
+            pass
+        fci.Console.PrintWarning("Addon Manager: timed out downloading %s\n" % self.url)
+        self._emit(False, None)
+
+    def _emit(self, ok, filename):
+        if self._finished:
+            return
+        self._finished = True
+        for sig, slot in ((self._nm.progress_made, self._progress),
+                          (self._nm.progress_complete, self._complete)):
+            try:
+                sig.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        _in_flight.discard(self)
+        try:
+            self.done.emit(ok, filename)
+        except RuntimeError:
+            pass
+
+
+def download_with_progress(url, on_progress, on_done, timeout_ms=120000):
+    """Fire and forget a monitored download. Kept alive via _in_flight, like async_get."""
+    f = MonitoredFetch(url, timeout_ms=timeout_ms)
+    _in_flight.add(f)
+    f.progress.connect(on_progress)
+    f.done.connect(on_done)
+    return f.start()
+
+
 class AsyncWorker(QtCore.QObject):
     """Stands in for a QThread worker in AddonManager.py's startup sequence.
 

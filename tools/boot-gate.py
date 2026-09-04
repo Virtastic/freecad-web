@@ -1595,6 +1595,94 @@ else:
 '''
 
 
+ADDONMGR_HEALTH_PY = r'''
+# Catalogue health: are addon READMEs reachable, and did the download stats arrive?
+#
+# READMEs are sampled across the whole catalogue via the Addon Manager's own
+# get_readme_url, so this exercises the real URL shapes (github /raw/, gitlab /-/blob/,
+# raw.githubusercontent, the wiki) rather than one hand-picked addon.
+#
+# A few 404s are EXPECTED and not a failure: some addons point their metadata at a branch
+# that no longer exists (CatppuccinFC does). What matters is the rate -- a proxy or header
+# regression takes the whole population down at once, which is what this catches.
+import sys as _s
+import json
+import AddonManager
+import addonmanager_utilities as utils
+from addonmanager_fcweb_async import async_get
+
+_out = {"checked": 0, "ok": 0, "notFound": 0, "failed": 0, "examples": []}
+_cmd = AddonManager._fcweb_cmd
+_repos = [r for r in _cmd.item_model.repos if getattr(r, "url", None)]
+
+# Spread the sample over the catalogue instead of taking the first N, which would all be
+# the same kind of addon from the same host.
+_N = 24
+_step = max(1, len(_repos) // _N)
+_sample = _repos[::_step][:_N]
+_state = {"left": len(_sample)}
+
+
+def _report():
+    _s.__stderr__.write("FCAMHEALTH " + repr(_out) + chr(10))
+    _s.__stderr__.flush()
+
+
+def _stats_then_report():
+    """The download counts the Addon Manager sorts by. Blocked as mixed content until now."""
+    def arrived(ok, data):
+        _out["statsOk"] = bool(ok and data)
+        _out["statsBytes"] = len(data) if data else 0
+        try:
+            parsed = json.loads(bytes(data).decode("utf8")) if data else None
+            _out["statsEntries"] = len(parsed) if isinstance(parsed, (dict, list)) else -1
+        except Exception as _e:
+            _out["statsEntries"] = -1
+            _out["statsError"] = repr(_e)
+        _report()
+
+    import addonmanager_freecad_interface as fci
+    # "AddonsStatsURL", not addon_stats_url -- guessing the key would have made this
+    # check silently fetch nothing and pass.
+    async_get(fci.Preferences().get("AddonsStatsURL"), arrived, timeout_ms=60000)
+
+
+def _make_cb(name):
+    def _cb(ok, data):
+        _out["checked"] += 1
+        if ok and data:
+            _out["ok"] += 1
+        else:
+            # async_get reports any non-200 as a failure; record a couple by name so a
+            # regression is identifiable from the gate output alone.
+            _out["notFound"] += 1
+            if len(_out["examples"]) < 4:
+                _out["examples"].append(name)
+        _state["left"] -= 1
+        if _state["left"] <= 0:
+            _stats_then_report()
+
+    return _cb
+
+
+if not _sample:
+    _out["error"] = "catalogue was empty"
+    _report()
+else:
+    for _r in _sample:
+        try:
+            _u = utils.get_readme_url(_r)
+        except Exception:
+            _u = None
+        if not _u:
+            _state["left"] -= 1
+            continue
+        async_get(_u, _make_cb(_r.name), timeout_ms=45000)
+    if _state["left"] <= 0:
+        _stats_then_report()
+'''
+
+
 ADDONMGR_INSTALL_PY = r'''
 # Install and then remove a theme through the Addon Manager's own slots -- cmd.update is
 # exactly what the Install button is wired to, so the dependency GUI and the progress
@@ -2296,6 +2384,31 @@ def scenario_addonmgr(ctx, url, args, fail):
     elif not rm.get('newFiles'):
         fail('the macro installed nothing into the macro directory')
 
+    s.run_python(ADDONMGR_HEALTH_PY)
+    rh = s.wait_for('FCAMHEALTH', 300)
+    if not isinstance(rh, dict):
+        fail('the catalogue health probe produced no result')
+        return s
+    print('==> addon manager health: %s' % rh)
+    if rh.get('error'):
+        fail('catalogue health check failed: %s' % rh['error'])
+    else:
+        checked, good = rh.get('checked', 0), rh.get('ok', 0)
+        # A handful of addons genuinely point at dead branches; a proxy regression takes
+        # the whole population out at once. Two thirds is well clear of both.
+        if checked < 10:
+            fail('only %d addon READMEs were checked -- the sample never ran' % checked)
+        elif good * 3 < checked * 2:
+            fail('only %d of %d addon READMEs loaded (%s) -- that is a proxy or header '
+                 'regression, not bad addon metadata'
+                 % (good, checked, ', '.join(rh.get('examples', []))))
+        if not rh.get('statsOk'):
+            fail('addon_stats.json did not arrive -- the download counts and the '
+                 '"sort by downloads" ordering are silently empty')
+        elif rh.get('statsEntries', 0) < 10:
+            fail('addon_stats.json parsed to %r entries, which is not real data'
+                 % rh.get('statsEntries'))
+
     # An abort does not always stop the log arriving, so prove the engine still runs.
     s.run_python('import sys as _s; _s.__stderr__.write("FCAMALIVE {}" + chr(10)); '
                  '_s.__stderr__.flush()')
@@ -2882,7 +2995,7 @@ SCENARIOS = (
     ('addoninstall',  scenario_addoninstall,  True,
      'installs an addon from the real catalogue and still has it after a reload'),
     ('addonmgr',      scenario_addonmgr,      True,
-     'opens the Addon Manager, lists the catalogue, installs an addon and a macro'),
+     'opens the Addon Manager, lists it, installs an addon and a macro, and keeps READMEs and download stats reachable'),
     ('save',          scenario_save,          True,
      'hands the user a real .FCStd whose bytes reopen to the same geometry'),
     ('storage',       scenario_storage,       True,
