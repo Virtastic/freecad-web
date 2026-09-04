@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Cross-compile matplotlib 3.9.2 C extensions to wasm32-emscripten and harvest
+# Cross-compile matplotlib 3.9.2 C extensions to wasm64-emscripten and harvest
 # them into deps/wasm/lib/mpl-mod/ for the FreeCAD monolith link.
 #
 # Prerequisites: numpy already built (deps/src/numpy + build-numpy generated
@@ -20,7 +20,7 @@ ROOT="$PWD"
 DW="$ROOT/deps/wasm"
 MPL="$ROOT/deps/src/matplotlib"
 source .qtvenv/bin/activate
-source emsdk/emsdk_env.sh >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 export SETUPTOOLS_SCM_PRETEND_VERSION=3.9.2
 
 # 0. source patches (idempotent) so a fresh matplotlib extract builds for wasm.

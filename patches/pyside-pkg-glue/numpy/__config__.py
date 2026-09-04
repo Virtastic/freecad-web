@@ -57,8 +57,8 @@ CONFIG = _cleanup(
         },
         "Machine Information": {
             "host": {
-                "cpu": "wasm32",
-                "family": "wasm32",
+                "cpu": "wasm64",
+                "family": "wasm64",
                 "endian": "little",
                 "system": "emscripten",
             },

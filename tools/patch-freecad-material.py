@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Apply the glMaterialfv ambient/diffuse/emission patch to a linked FreeCAD.js.
 
 stage-jspi.sh does this, but its regex only matches an else-branch of `{0}`. This link

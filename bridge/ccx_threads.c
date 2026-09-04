@@ -20,7 +20,14 @@
  */
 #include <stdio.h>
 
-typedef unsigned long fcweb_thread_t;
+/* emscripten's pthread_t is a pointer (struct __pthread *), so this must be
+ * pointer-width. It was `unsigned long`, which is 4 bytes on wasm32 and 8 on wasm64 --
+ * right on both by luck rather than by construction. --wrap requires the wrapper and the
+ * real symbol to agree on wasm parameter types, and a width mismatch there is a link
+ * error at best and a wild pointer at worst. void* is correct by definition on any
+ * target, and needs no <pthread.h> in a module that is deliberately built without
+ * -pthread. */
+typedef void *fcweb_thread_t;
 
 int __wrap_pthread_create(fcweb_thread_t *thread, const void *attr,
                           void *(*start_routine)(void *), void *arg)

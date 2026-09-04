@@ -74,7 +74,7 @@ MODULES = {
 # (Qt feature, [type entries], [wrapper sources], why)
 #
 # Measured, not guessed: every entry here was reported absent by shiboken against the
-# 6.9.0 Qt-for-wasm build. EMSCRIPTEN is checked alongside the feature so the guard does
+# 6.11.2 Qt-for-wasm build. EMSCRIPTEN is checked alongside the feature so the guard does
 # not hinge on the feature name appearing in QT_DISABLED_PUBLIC_FEATURES.
 DROPS = {'QtCore': [
     ('process',

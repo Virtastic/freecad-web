@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Spike (c) prerequisite: cross-build CPython 3.13 for wasm32-emscripten (node
+# Spike (c) prerequisite: cross-build CPython 3.13 for wasm64-emscripten (node
 # target = threads + direct FS). Produces libpython3.13.a + pyconfig.h to embed.
 set -e
 cd "$(dirname "$0")"
@@ -26,9 +26,9 @@ export EMCC_CFLAGS="${EMCC_CFLAGS:-} -DPY_CALL_TRAMPOLINE=1"
 echo "=== stage 2: emscripten cross build ==="
 mkdir -p builddir/emscripten
 cd builddir/emscripten
-CONFIG_SITE="$SRC/Tools/wasm/config.site-wasm32-emscripten" \
+CONFIG_SITE="$ROOT/toolchain/config.site-wasm64-emscripten" \
 emconfigure ../../configure -C \
-  --host=wasm32-unknown-emscripten \
+  --host=wasm64-unknown-emscripten \
   --build="$($SRC/config.guess)" \
   --with-emscripten-target=node \
   --with-build-python="$BUILD_PY"

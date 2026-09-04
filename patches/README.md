@@ -73,7 +73,7 @@ routing in `Gui/FileDialog.cpp`.
   dialog-trap guard in `Gui/Application.cpp::activateWorkbench`,
   `ToolBarManager` dtor change, etc.
 - **pyside-setup.patch** — `PySideModules.cmake`: the `EMSCRIPTEN` cross-compile
-  branch (`--compiler-path=em++`, `--target=wasm32-unknown-emscripten`).
+  branch (`--compiler-path=em++`, `--target=wasm64-unknown-emscripten`).
 - **occt.patch** — one wasm build fix in `StdPrs_BRepFont`.
 
 ## Python-package glue (`pyside-pkg-glue/`)
@@ -98,7 +98,7 @@ cp pyside-pkg-glue/include-shiboken/sbkversion.h  deps/wasm/include/shiboken/sbk
   `pivy/__init__.py` on top afterward.
 - **`deps/wasm/pyside-pkg/Arch_rc.py`** (14 MB Qt resource for Draft):
   ```bash
-  qt/6.9.0/macos/libexec/rcc -g python \
+  qt/6.11.2/macos/libexec/rcc -g python \
     -o deps/wasm/pyside-pkg/Arch_rc.py \
     deps/src/freecad/src/Mod/BIM/Resources/Arch.qrc
   ```

@@ -355,6 +355,10 @@ def _patch_preference_pack_rescan():
 
     def finalize(self, filename):
         result = orig_finalize(self, filename)
+        try:
+            _make_addon_importable(self.addon_to_install)
+        except Exception as e:
+            fci.Console.PrintLog("Could not extend sys.path after install: %r\n" % (e,))
         new = _rescan_preference_packs()
         if new:
             try:
@@ -367,6 +371,16 @@ def _patch_preference_pack_rescan():
                 "Edit then Preferences, General, Theme -- no reload needed."
                 % (name, len(new), ", ".join(new)),
             )
+        # A workbench registers its menu from InitGui.py at startup, so unlike a theme or
+        # a document's Python objects it genuinely cannot appear until the page reloads.
+        # Say so, with a button that works, rather than leaving the user to guess.
+        try:
+            if self.addon_to_install.contains_workbench():
+                _request_reload(
+                    "%s is installed. Reload to finish enabling it."
+                    % self.addon_to_install.display_name)
+        except Exception:
+            pass
         return result
 
     inst.AddonInstaller._finalize_zip_installation = finalize
@@ -422,6 +436,72 @@ def _patch_user_agent_header():
     return "requests built without a User-Agent header"
 
 
+RELOAD_SENTINEL = "/tmp/.fcweb_reload_request"
+
+
+def _make_addon_importable(addon):
+    """Put a freshly installed addon on sys.path NOW, not at the next start.
+
+    FreeCAD adds each Mod/<Addon> directory to sys.path when it STARTS, so anything
+    installed mid-session is invisible until a restart -- in a browser, a page reload.
+    That is what made installing A2plus look like it had failed: the document still
+    refused to restore its a2p_* objects, because upstream's isAllowedModule() asks
+    importlib.util.find_spec(), and find_spec cannot see a directory that is not on the
+    path yet.
+
+    Appending it -- and invalidating the import caches, or an earlier failed lookup stays
+    cached -- makes the addon's modules importable immediately, which covers the case that
+    actually matters: opening a document that needs the addon just installed.
+
+    A WORKBENCH still needs a reload, because its InitGui.py runs at startup to register
+    the menu. That case is announced by _request_reload instead of pretending otherwise.
+    """
+    import importlib
+    import addonmanager_freecad_interface as fci
+
+    try:
+        name = addon.name
+    except Exception:
+        return None
+    path = os.path.join(fci.DataPaths().mod_dir, name)
+    if not os.path.isdir(path):
+        return None
+    if path not in sys.path:
+        sys.path.append(path)
+    importlib.invalidate_caches()
+    fci.Console.PrintLog(
+        "Added %s to sys.path; its modules are importable now\n" % path)
+    return path
+
+
+def _request_reload(reason):
+    """Ask the page to offer a reload, via a file the shell already watches for.
+
+    Upstream's path here is utils.restart_freecad(), which calls QProcess.startDetached --
+    meaningless in a browser, so its "Restart Now" button silently did nothing. The page
+    polls the filesystem for autosave markers already, so a sentinel is the established
+    channel from Python to the shell.
+    """
+    import addonmanager_freecad_interface as fci
+
+    try:
+        with open(RELOAD_SENTINEL, "w", encoding="utf-8") as f:
+            f.write(reason or "")
+    except OSError as e:
+        fci.Console.PrintLog("Could not request a reload: %r\n" % (e,))
+
+
+def _patch_restart_prompt():
+    """Make upstream's restart path mean "reload the page" instead of doing nothing."""
+    import addonmanager_utilities as utils
+
+    def restart_freecad():
+        _request_reload("FreeCAD needs to reload to finish enabling the new addon.")
+
+    utils.restart_freecad = restart_freecad
+    return "restart -> page reload request"
+
+
 def _when_settled(pending, then, tries=0):
     """Call then() once no fetches are outstanding. Polls; never blocks."""
     from addonmanager_fcweb_async import defer
@@ -438,7 +518,7 @@ def install():
     for fn in (_patch_move_to_thread, _patch_allowed_packages, _patch_verify_pip,
                _patch_zip_install, _patch_macro_fetch,
                _patch_macro_toolbar_prompt, _patch_preference_pack_rescan,
-               _patch_user_agent_header):
+               _patch_user_agent_header, _patch_restart_prompt):
         try:
             notes.append(fn())
         except Exception as e:

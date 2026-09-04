@@ -86,9 +86,9 @@ env:
   # Outside the workspace on purpose: actions/checkout runs `git clean -ffdx`, which would
   # otherwise delete the very thing this is meant to preserve.
   BUILDTREE_STORE: /home/ubuntu/.cache/fcweb-buildtree
-  DEPS_KEY: v1-emsdk3.1.70-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
-  QT_KEY: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
-  PYDEPS_KEY: v1-emsdk3.1.70-cpython3.13.3-numpy2.1.3-mpl3.9.2
+  DEPS_KEY: v2-wasm64-emsdk6.0.9-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
+  QT_KEY: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v1
+  PYDEPS_KEY: v2-wasm64-emsdk6.0.9-cpython3.13.3-numpy2.1.3-mpl3.9.2
 
 jobs:
   link:
@@ -137,11 +137,11 @@ jobs:
           restore-keys: |
             fcweb-deps-${{ env.DEPS_KEY }}-
 
-      - name: Restore Qt 6.9.0 for wasm
+      - name: Restore Qt 6.11.2 for wasm
         id: qtcache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: qt/6.9.0/wasm_mt_weh
+          path: qt/6.11.2/wasm_mt_weh
           key: ${{ env.QT_KEY }}
 
       # This list must stay BYTE-IDENTICAL to the save list in build-python-deps.yml.
@@ -276,7 +276,7 @@ jobs:
           need deps/wasm/lib/libCoin.a                             "Coin3D"              build-deps.yml
           need deps/wasm/lib/libxerces-c.a                         "Xerces"              build-deps.yml
           need deps/wasm/lib/libvtkCommonCore-9.3.a                "VTK"                 build-deps.yml
-          need qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6                  "Qt 6.9.0 for wasm"   build-qt-wasm.yml
+          need qt/6.11.2/wasm_mt_weh/lib/cmake/Qt6                  "Qt 6.11.2 for wasm"   build-qt-wasm.yml
           need deps/src/cpython/builddir/emscripten-mt/libpython3.13.a "CPython (wasm/mt)" build-python-deps.yml
           need deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a  "numpy"               build-python-deps.yml
           need deps/wasm/lib/mpl-mod/libfreetype.a                 "freetype (via mpl)"  build-python-deps.yml
@@ -317,14 +317,14 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: emsdk
-          key: emsdk-3.1.70-shims-v1
+          key: emsdk-6.0.9-wasm64-shims-v1
 
-      - name: Install emsdk 3.1.70
+      - name: Install emsdk 6.0.9
         if: steps.emsdk-cache.outputs.cache-hit != 'true'
         run: |
           set -e
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git
-          cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+          cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
 
       # THE COMPILE CACHE.
       #
@@ -385,19 +385,19 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Host Qt 6.9.0 (native tools only)
+      - name: Host Qt 6.11.2 (native tools only)
         id: hostqt
         run: |
           set -e
-          if [ -d qt-host/6.9.0/gcc_64/bin ]; then
+          if [ -d qt-host/6.11.2/gcc_64/bin ]; then
             echo "  host Qt already present"
           else
             python3 -m pip install --quiet --break-system-packages aqtinstall 2>/dev/null \
               || python3 -m pip install --quiet aqtinstall
-            python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 \
+            python3 -m aqt install-qt linux desktop 6.11.2 linux_gcc_64 \
               -m qtshadertools -O "$PWD/qt-host"
           fi
-          host="$PWD/qt-host/6.9.0/gcc_64"
+          host="$PWD/qt-host/6.11.2/gcc_64"
           [ -x "$host/libexec/moc" ] || [ -x "$host/bin/moc" ] || {
             echo "::error::no moc under $host"; find qt-host -name moc | head; exit 1; }
           echo "  QT_HOST_PATH=$host"
@@ -629,7 +629,7 @@ jobs:
           #
           # compiler_check=content is NOT optional. The default (mtime) identifies the
           # compiler by path+size+mtime, and the emsdk here is restored from a cache whose
-          # key is a hand-written string (emsdk-3.1.70-shims-v1) with tar-restored mtimes:
+          # key is a hand-written string (emsdk-6.0.9-wasm64-shims-v1) with tar-restored mtimes:
           # an emsdk change that did not change that string would hand ccache a new clang
           # wearing the old identity.
           #
@@ -816,6 +816,13 @@ jobs:
             if(!WebAssembly.validate(b)){console.error("::error::FreeCAD.wasm does not validate");process.exit(1);}
             console.log("  FreeCAD.wasm VALID, "+(b.length/1048576).toFixed(1)+" MB");
           '
+          # wasm64 NOTE: these numbers were measured on the wasm32 build. 64-bit pointers make the
+          # module bigger -- expect the correct link to land somewhere above 152 MB, and the
+          # skipped-wasm-opt case to move up with it. The 200 MB threshold is kept unchanged on
+          # purpose: it is a discriminator between "optimised" and "wasm-opt never ran", not a
+          # budget, and guessing a new value before a single wasm64 link has been measured would
+          # either mask the failure it exists to catch or fail a good build. RE-BASELINE IT from the
+          # first green wasm64 link: set it a little above the real size, not to a round number.
           # A correct link lands near 152 MB. ~234 MB means wasm-opt did not run (or was
           # killed mid-link, leaving the un-optimized intermediate looking finished), which
           # is a large silent performance regression -- the same check

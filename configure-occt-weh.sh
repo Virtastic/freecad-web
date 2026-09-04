@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Phase 1: OCCT 7.8.1 static cross-compile for wasm32-emscripten.
+# Phase 1: OCCT 7.8.1 static cross-compile for wasm64-emscripten.
 # Mirrors the CS-Web emcmake+Ninja pattern. Headless geometry kernel only.
 set -e
 cd "$(dirname "$0")"
@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 embuilder build freetype >/dev/null 2>&1
 CACHE=$(em-config CACHE)
 FT_INC="$CACHE/sysroot/include/freetype2"
-FT_LIBDIR="$CACHE/sysroot/lib/wasm32-emscripten"
+FT_LIBDIR="$CACHE/sysroot/lib/wasm64-emscripten"
 
 # BUILD_MODULE_DETools=OFF below: DETools builds ExpToCasExe, OCCT's EXPRESS-schema compiler.
 # It is a developer tool, not a library FreeCAD links -- verified, TKExpress appears in zero

@@ -13,7 +13,7 @@ SYSROOT="$(em-config CACHE)/sysroot"
 
 # ---- Host-machine paths --------------------------------------------------------------
 # Everything below used to name ONE machine: python.exe (a macOS-only name for CPython's
-# host build), qt/6.9.0/macos, and a pybind11 under .qtvenv/lib/python3.14. That is the
+# host build), qt/6.11.2/macos, and a pybind11 under .qtvenv/lib/python3.14. That is the
 # same defect the numpy, pivy, IfcOpenShell and PySide lanes each hit separately -- a
 # configure that only runs where it was written. Resolve each, and fail naming what is
 # missing rather than handing cmake a path that does not exist.
@@ -28,13 +28,13 @@ done
 echo "cpython host: $HOSTPY"
 
 # Host Qt: the wasm build needs the native tools (moc, rcc, qmake). build-qt-wasm.yml
-# installs them to qt-host/6.9.0/gcc_64 on Linux; the build machine has qt/6.9.0/macos.
+# installs them to qt-host/6.11.2/gcc_64 on Linux; the build machine has qt/6.11.2/macos.
 QT_HOST=""
-for d in "$ROOT/qt-host/6.9.0/gcc_64" "$ROOT/qt/6.9.0/macos" "$ROOT/qt/6.9.0/gcc_64" \
-         "$ROOT/qt-host/6.9.0/macos"; do
+for d in "$ROOT/qt-host/6.11.2/gcc_64" "$ROOT/qt/6.11.2/macos" "$ROOT/qt/6.11.2/gcc_64" \
+         "$ROOT/qt-host/6.11.2/macos"; do
     if [ -x "$d/bin/qmake" ] || [ -x "$d/bin/moc" ]; then QT_HOST="$d"; break; fi
 done
-[ -n "$QT_HOST" ] || { echo "ERROR: no host Qt found (looked for bin/qmake under qt-host/6.9.0/gcc_64, qt/6.9.0/macos, ...)" >&2; exit 1; }
+[ -n "$QT_HOST" ] || { echo "ERROR: no host Qt found (looked for bin/qmake under qt-host/6.11.2/gcc_64, qt/6.11.2/macos, ...)" >&2; exit 1; }
 echo "host Qt:      $QT_HOST"
 
 # pybind11's cmake package. Ask whichever interpreter has it rather than naming a
@@ -118,48 +118,59 @@ fi
 echo "ifcopenshell: $(printf '%s' "$IFCLIBS" | wc -w | tr -d ' ') archive(s)"
 
 # ---- Heap size -------------------------------------------------------------------------
-# Default stays 2 GB. Raising it is a real option now, but it is NOT free, and the failure
-# mode is nasty enough to be worth stating before anyone changes the number.
+# 16 GiB ceiling, growing from 1 GiB. This is a wasm64 build, and the whole reason for the
+# pointer-width change was to make that sentence possible.
 #
-# Measured: ~72 KB per simple solid, so 2 GB is roughly 20,000 of them -- fine for parts,
-# tight for a large assembly.
+# WHAT CHANGED. Under wasm32 this block carried a long warning: above 2 GB a pointer exceeds
+# INT32_MAX, so any C++ in OCCT, Coin, Qt or CPython that stashed a pointer in a signed int
+# would break -- and plausibly as CORRUPT GEOMETRY rather than a clean crash. That hazard is
+# gone. Pointers are 64-bit now, and no reachable heap address is near the signed boundary
+# of the type holding it. The old ceiling was an architectural limit; the new one is policy.
 #
-# Why raising INITIAL_MEMORY is the cheap lever, and ALLOW_MEMORY_GROWTH is not: with growth
-# OFF, emscripten keeps direct HEAPU8[...] access. Turning growth ON rewrites 841 heap
-# accesses into accessor form (GROWABLE_HEAP_F32()[x>>>2>>>0]), which invalidates the entire
-# hand-derived patch table in tools/patch-freecad-js.py -- and the hot path here IS the JS GL
-# emulation. See BUILD-WEH.md. So: ask for more, do not ask for growth.
+# GROWTH IS ON, which under wasm32 was forbidden here. The old objection was real: growth
+# rewrites every direct HEAPU8[...] access into GROWABLE_HEAP_F32()[x>>>2>>>0] accessor form
+# and invalidated the hand-derived offsets in tools/patch-freecad-js.py. That objection no
+# longer decides anything, because wasm64 changes emscripten codegen regardless -- the patch
+# table has to be re-derived for 64-bit indexing either way. Given that, growth is simply the
+# right choice: reserving 16 GiB up front would make the module allocate a 16 GiB buffer at
+# boot on every machine, most of which do not have it.
 #
-# ALLOW_MEMORY_GROWTH=0 is now passed EXPLICITLY. This file only ever discussed it in this
-# comment, and the linked JS came out full of GROWABLE_HEAP_F32() -- 154 occurrences -- which
-# is the accessor form emitted when growth is on under pthreads. That is precisely the state
-# the paragraph above says must not happen, and it silently invalidated every hand-derived
-# offset in tools/patch-freecad-js.py. The recorded browser link has always passed it; the
-# cmake link never did.
+# THE ONE THING TO VERIFY BEFORE TRUSTING A BIG NUMBER HERE. emscripten had a bug where
+# MEMORY64 + pthreads + MAXIMUM_MEMORY above 4 GB failed at link with
+#     WebAssembly.Memory(): Property "maximum": value 262144 is above the upper bound 65536
+# because the tooling still computed page counts against the 32-bit ceiling
+# (emscripten#26311). PR #26357 "Clamp maximum memory if set during run_embind_gen" merged
+# 2026-02-27; emsdk 6.0.9 was released 2026-09-01, so the pinned SDK carries it -- verified,
+# not assumed. If a link ever dies with that message, the pin moved backwards rather than
+# the flag being wrong.
 #
-# THE HAZARD, and it is why the default has not simply been raised. Above 2 GB a pointer
-# exceeds INT32_MAX. Any C++ in OCCT, Coin, Qt or CPython that stores a pointer in a signed
-# int, or compares one, breaks -- and plausibly as CORRUPT GEOMETRY rather than a clean
-# crash, which is the hardest kind of bug to attribute. Nothing here can prove that absent;
-# only a build and the full workflow suite can.
+#   FCWEB_HEAP_MAX_BYTES=4294967296 bash configure-gui-weh.sh    # 4 GiB, the old ceiling
 #
-#   FCWEB_HEAP_BYTES=3221225472 bash configure-gui-weh.sh    # 3 GB
-#
-# After linking such a build, before trusting it:
-#   1. node scratchpad/heapprobe.js       -- pointers past 2 GB behave
+# After changing this, the four checks that matter are unchanged in spirit but now probe a
+# different boundary:
+#   1. node scratchpad/heapprobe.js       -- pointers past 4 GB behave
 #   2. node scratchpad/workflows.js       -- all eight geometry results still exact
 #   3. node scratchpad/ccxe2e/run-prod.js -- FEM still matches closed form
 #   4. node scratchpad/shot.js            -- render still pixel-identical
-# A wrong answer in (2) or (4) with no crash is exactly what the signed-pointer hazard looks
-# like. Keep 2 GB shipped until all four pass.
-FCWEB_HEAP_BYTES="${FCWEB_HEAP_BYTES:-2147483648}"
-FCWEB_HEAP_FLAGS="-sINITIAL_MEMORY=$FCWEB_HEAP_BYTES"
-if [ "$FCWEB_HEAP_BYTES" -gt 2147483648 ]; then
-  # wasm32 tops out at 4 GB, and emscripten wants MAXIMUM_MEMORY stated once past 2 GB.
-  FCWEB_HEAP_FLAGS="$FCWEB_HEAP_FLAGS -sMAXIMUM_MEMORY=$FCWEB_HEAP_BYTES"
-  echo "[heap] $FCWEB_HEAP_BYTES bytes -- ABOVE 2 GB: pointers now exceed INT32_MAX." >&2
-  echo "[heap] Run heapprobe/workflows/ccxe2e/shot before trusting this build." >&2
+# A wrong answer in (2) or (4) with no crash is still the signature of a width bug.
+FCWEB_HEAP_MAX_BYTES="${FCWEB_HEAP_MAX_BYTES:-17179869184}"   # 16 GiB
+FCWEB_HEAP_FLAGS="-sINITIAL_MEMORY=1073741824 -sMAXIMUM_MEMORY=$FCWEB_HEAP_MAX_BYTES -sALLOW_MEMORY_GROWTH=1"
+echo "[heap] initial 1 GiB, ceiling $FCWEB_HEAP_MAX_BYTES bytes, growth ON (wasm64)" >&2
+if [ "$FCWEB_HEAP_MAX_BYTES" -gt 17179869184 ]; then
+  echo "[heap] WARNING: above 16 GiB. V8 caps wasm64 memory at 16 GiB, so a larger" >&2
+  echo "[heap] ceiling cannot be honoured by the browser and the module will fail to" >&2
+  echo "[heap] instantiate rather than simply using less." >&2
 fi
+# ---- Main stack size: deliberately NOT set here --------------------------------------
+# This file used to pass -sSTACK_SIZE=32MB in CMAKE_EXE_LINKER_FLAGS. It never took
+# effect. Upstream FreeCAD's own cmake appends "-s STACK_SIZE=5MB" to the FreeCADMain
+# target AFTER these flags, and emcc takes the last assignment silently, so every green
+# build has run a 5 MB main stack while this line claimed 32 MB.
+#
+# Do not simply add it back: a value stated here loses to upstream, so it buys nothing but
+# a false record. To genuinely change the main stack, append it to the END of the link
+# line and re-run the gates -- and see the -s STACK_SIZE note in
+# scratchpad/linkcmds/fc-linkcmd-weh.sh, which is the command that actually ships.
 
 # numpy C-extension static libs (built by configure-numpy.sh into deps/wasm/lib/numpy-mod).
 # Module libs first (provide PyInit_*), then support libs (npymath/mtargets/dispatch/highway).
@@ -187,7 +198,7 @@ if [ -d "$DW/lib/numpy-mod" ]; then
   echo "numpy:        $(printf '%s' "$NPYLIBS" | wc -w | tr -d ' ') archive(s) on the link line"
 fi
 
-# matplotlib C-extension static libs (built by configure-matplotlib.sh into
+# matplotlib C-extension static libs (built by configure-matplotlib-weh.sh into
 # deps/wasm/lib/mpl-mod). The libmpl_*.a modules provide PyInit_*; the shared
 # libfreetype/libqhull_r/libagg/libttconv resolve their undefined refs once.
 # Skip the _tkagg backend (Tk is unavailable and not registered).
@@ -255,7 +266,7 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DBUILD_TEST=ON -DBUILD_MEASURE=ON -DBUILD_TECHDRAW=ON -DBUILD_TUX=ON \
   -DBUILD_WEB=ON -DBUILD_SURFACE=ON -DBUILD_PART=ON \
   -DBUILD_DYNAMIC_LINK_PYTHON=OFF \
-  `# SetupCoin3D.cmake otherwise imports pivy in the HOST python to compare its Coin`   `# version against the one being built. That makes the cross-build depend on an`   `# ambient host package -- exactly the uncaptured-state problem this repo keeps`   `# getting bitten by. FreeCAD guards it for this reason; take the guard.`   `# E57_RELEASE_LTO defaults ON, putting INTERPROCEDURAL_OPTIMIZATION on the bundled` \n  `# libE57Format target ALONE. Nothing else here is built with LTO, so it buys nothing,` \n  `# and it makes emscripten build a separate set of port variants under` \n  `# sysroot/lib/wasm32-emscripten/thinlto/, where its ICU port dies with` \n  `#   tools/ports/icu.py:89 ... TypeError: expected str, bytes or os.PathLike, not NoneType` \n  `# check_ipo_supported() answers yes under emscripten, so it never switches itself off.` \n  -DE57_RELEASE_LTO=OFF \n  -DFREECAD_CHECK_PIVY=OFF \
+  `# SetupCoin3D.cmake otherwise imports pivy in the HOST python to compare its Coin`   `# version against the one being built. That makes the cross-build depend on an`   `# ambient host package -- exactly the uncaptured-state problem this repo keeps`   `# getting bitten by. FreeCAD guards it for this reason; take the guard.`   `# E57_RELEASE_LTO defaults ON, putting INTERPROCEDURAL_OPTIMIZATION on the bundled` \n  `# libE57Format target ALONE. Nothing else here is built with LTO, so it buys nothing,` \n  `# and it makes emscripten build a separate set of port variants under` \n  `# sysroot/lib/wasm64-emscripten/thinlto/, where its ICU port dies with` \n  `#   tools/ports/icu.py:89 ... TypeError: expected str, bytes or os.PathLike, not NoneType` \n  `# check_ipo_supported() answers yes under emscripten, so it never switches itself off.` \n  -DE57_RELEASE_LTO=OFF \n  -DFREECAD_CHECK_PIVY=OFF \
   -DFREECAD_USE_EXTERNAL_PIVY=OFF -DFREECAD_USE_PCH=OFF \
   `# FreeType ON: without it Part.makeWireString() raises "FreeCAD compiled without FreeType` \
   `# support!", which kills Draft ShapeString (text/engraving) entirely. Point it at the` \
@@ -269,12 +280,12 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DFREETYPE_INCLUDE_DIR_freetype2="$FT_INC" \
   -DFREETYPE_LIBRARY="$ROOT/deps/wasm/lib/mpl-mod/libfreetype.a" \
   -DFREETYPE_LIBRARIES="$ROOT/deps/wasm/lib/mpl-mod/libfreetype.a" \
-  -DCMAKE_PREFIX_PATH="$DW;$ROOT/qt/6.9.0/wasm_mt_weh" \
-  -DCMAKE_FIND_ROOT_PATH="$DW;$ROOT/qt/6.9.0/wasm_mt_weh" \
+  -DCMAKE_PREFIX_PATH="$DW;$ROOT/qt/6.11.2/wasm_mt_weh" \
+  -DCMAKE_FIND_ROOT_PATH="$DW;$ROOT/qt/6.11.2/wasm_mt_weh" \
   -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
   -DFREECAD_QT_VERSION=6 \
   -DBoost_USE_STATIC_LIBS=ON -DBoost_USE_STATIC_RUNTIME=ON \
-  -DQt6_DIR="$ROOT/qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6" \
+  -DQt6_DIR="$ROOT/qt/6.11.2/wasm_mt_weh/lib/cmake/Qt6" \
   -DQT_HOST_PATH="$QT_HOST" \
   -DOpenCASCADE_DIR="$DW/lib/cmake/opencascade" \
   -DEIGEN3_INCLUDE_DIR="$EIGEN_INC" \
@@ -286,7 +297,7 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DPython3_LIBRARY="$PYMT/libpython3.13.a" \
   -DPYTHON_VERSION_STRING=3.13 \
   -DZLIB_INCLUDE_DIR="$SYSROOT/include" \
-  -DZLIB_LIBRARY="$SYSROOT/lib/wasm32-emscripten/libz.a" \
+  -DZLIB_LIBRARY="$SYSROOT/lib/wasm64-emscripten/libz.a" \
   -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O2 -DBOOST_ALL_NO_LIB --use-port=zlib --use-port=icu -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
   -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread -O2 --use-port=zlib --use-port=icu -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
-  -DCMAKE_EXE_LINKER_FLAGS="$FC_LINK_MODE_FLAGS -O2 -lembind -lidbfs.js -pthread -sSUPPORT_LONGJMP=wasm -sJSPI -sASYNCIFY_EXPORTS=fcweb_run_python -fwasm-exceptions -sALLOW_TABLE_GROWTH -sPTHREAD_POOL_SIZE=16 -sASSERTIONS=0 -sFORCE_FILESYSTEM=1 -sMODULARIZE=1 -sEXPORT_NAME=FreeCAD_entry -sWASM_BIGINT=1 -sSTACK_SIZE=32MB -sDEFAULT_PTHREAD_STACK_SIZE=16MB $FCWEB_HEAP_FLAGS -sALLOW_MEMORY_GROWTH=0 -sMAX_WEBGL_VERSION=2 -sLEGACY_GL_EMULATION=1 -sGL_UNSAFE_OPTS=0 -sERROR_ON_UNDEFINED_SYMBOLS=0 -sEXPORT_EXCEPTION_HANDLING_HELPERS -sFETCH -sEXPORTED_RUNTIME_METHODS=UTF16ToString,stringToUTF16,UTF8ToString,stringToUTF8,JSEvents,specialHTMLTargets,FS,ENV,callMain,ccall -sEXPORTED_FUNCTIONS=_main,__embind_initialize_bindings,_fcweb_run_python,_malloc,_free -Wl,--allow-multiple-definition -Wl,--wrap=_ZN16QCoreApplication9postEventEP7QObjectP6QEventi -Wl,--wrap=_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData -Wl,--wrap=_ZN23QCoreApplicationPrivate13notify_helperEP7QObjectP6QEvent $ROOT/weh-objs/postevent_wrap.o $ROOT/weh-objs/fcweb_export_stub.o $ROOT/weh-objs/spe_sanitize.o $ROOT/weh-objs/gl_legacy_stubs.o $ROOT/weh-objs/fcweb_dlg_module.o $ROOT/weh-objs/fcweb_gmsh_module.o $ROOT/weh-objs/fcweb_ccx_module.o  --pre-js=$ROOT/pre-gui.js --use-port=zlib --use-port=bzip2 --use-port=sqlite3 $PYMT/Modules/_decimal/libmpdec/libmpdec.a $PYMT/Modules/_hacl/libHacl_Hash_SHA2.a $PYMT/Modules/expat/libexpat.a -Wl,--start-group ${FCWEB_PYSIDE_LIBS:-$DW/shiboken6/lib/libshiboken6.abi3.a $ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a $ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a $ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a $ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a $ROOT/build-pyside-wasm/PySide6/QtNetwork/QtNetwork.abi3.a $ROOT/build-pyside-wasm/PySide6/QtSvg/QtSvg.abi3.a $ROOT/build-shiboken-wasm/shibokenmodule/CMakeFiles/shibokenmodule.dir/Shiboken/shiboken_module_wrapper.cpp.o $ROOT/build-freecad-gui-weh/src/Mod/Draft/App/DraftUtils.a $ROOT/build-freecad-gui-weh/src/Mod/CAM/libarea/area.a $ROOT/build-freecad-gui-weh/src/Mod/CAM/libarea/libarea-native.a $ROOT/build-freecad-gui-weh/src/Mod/Test/Gui/QtUnitGui.a $DW/lib/pivy-mod/lib_coin.a $IFCLIBS} $NPYLIBS $MPLLIBS -Wl,--end-group"
+  -DCMAKE_EXE_LINKER_FLAGS="$FC_LINK_MODE_FLAGS -O2 -lembind -lidbfs.js -pthread -sSUPPORT_LONGJMP=wasm -sJSPI -sJSPI_EXPORTS=fcweb_run_python -fwasm-exceptions -sALLOW_TABLE_GROWTH -sPTHREAD_POOL_SIZE=16 -sASSERTIONS=0 -sFORCE_FILESYSTEM=1 -sMODULARIZE=1 -sEXPORT_NAME=FreeCAD_entry -sDEFAULT_PTHREAD_STACK_SIZE=16MB $FCWEB_HEAP_FLAGS -sMAX_WEBGL_VERSION=2 -sLEGACY_GL_EMULATION=1 -sGL_UNSAFE_OPTS=0 -sERROR_ON_UNDEFINED_SYMBOLS=0 -sEXPORT_EXCEPTION_HANDLING_HELPERS -sFETCH -sEXPORTED_RUNTIME_METHODS=UTF16ToString,stringToUTF16,UTF8ToString,stringToUTF8,JSEvents,specialHTMLTargets,FS,ENV,callMain,ccall -sEXPORTED_FUNCTIONS=_main,__embind_initialize_bindings,_fcweb_run_python,_malloc,_free -Wl,--allow-multiple-definition -Wl,--wrap=_ZN16QCoreApplication9postEventEP7QObjectP6QEventi -Wl,--wrap=_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData -Wl,--wrap=_ZN23QCoreApplicationPrivate13notify_helperEP7QObjectP6QEvent $ROOT/weh-objs/postevent_wrap.o $ROOT/weh-objs/fcweb_export_stub.o $ROOT/weh-objs/spe_sanitize.o $ROOT/weh-objs/gl_legacy_stubs.o $ROOT/weh-objs/fcweb_dlg_module.o $ROOT/weh-objs/fcweb_gmsh_module.o $ROOT/weh-objs/fcweb_ccx_module.o  --pre-js=$ROOT/pre-gui.js --use-port=zlib --use-port=bzip2 --use-port=sqlite3 $PYMT/Modules/_decimal/libmpdec/libmpdec.a $PYMT/Modules/_hacl/libHacl_Hash_SHA2.a $PYMT/Modules/expat/libexpat.a -Wl,--start-group ${FCWEB_PYSIDE_LIBS:-$DW/shiboken6/lib/libshiboken6.abi3.a $ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a $ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a $ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a $ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a $ROOT/build-pyside-wasm/PySide6/QtNetwork/QtNetwork.abi3.a $ROOT/build-pyside-wasm/PySide6/QtSvg/QtSvg.abi3.a $ROOT/build-shiboken-wasm/shibokenmodule/CMakeFiles/shibokenmodule.dir/Shiboken/shiboken_module_wrapper.cpp.o $ROOT/build-freecad-gui-weh/src/Mod/Draft/App/DraftUtils.a $ROOT/build-freecad-gui-weh/src/Mod/CAM/libarea/area.a $ROOT/build-freecad-gui-weh/src/Mod/CAM/libarea/libarea-native.a $ROOT/build-freecad-gui-weh/src/Mod/Test/Gui/QtUnitGui.a $DW/lib/pivy-mod/lib_coin.a $IFCLIBS} $NPYLIBS $MPLLIBS -Wl,--end-group"

@@ -17,7 +17,7 @@
 # stop the build are demoted -- see the -Wno- list. Output: deps/wasm/lib/libspooles.a
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 SRC="$ROOT/deps/src/spooles/SPOOLES.2.2"
 PREFIX="$ROOT/deps/wasm"
 OBJ="$ROOT/build-spooles-weh"

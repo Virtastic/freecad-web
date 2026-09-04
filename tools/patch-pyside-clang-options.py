@@ -47,7 +47,7 @@ import re
 import sys
 
 REL = 'sources/pyside6/cmake/Macros/PySideModules.cmake'
-ANCHOR = 'list(APPEND shiboken_command "--clang-option=--target=wasm32-unknown-emscripten")'
+ANCHOR = 'list(APPEND shiboken_command "--clang-option=--target=wasm64-unknown-emscripten")'
 BEGIN = '        # FCWEB-CLANG-OPTIONS-BEGIN'
 END = '        # FCWEB-CLANG-OPTIONS-END'
 

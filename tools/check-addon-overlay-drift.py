@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
 """Fail when the Addon Manager overlay's forks have gone stale.
 
 play-gui/am/ forks two upstream worker modules and patches the methods of a third. None of

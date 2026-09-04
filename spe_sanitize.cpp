@@ -12,7 +12,12 @@
 
 extern "C" char __heap_base;  // linker-provided: end of static data
 
-static bool badPtr(uintptr_t p) { return p == 0 || (p & 3) || p < 1024; }
+static bool badPtr(uintptr_t p)
+{
+    // Alignment is pointer-width, not a hardcoded 4. On wasm64 a QObject carrying a
+    // vptr is 8-aligned, and (p & 3) would wave a misaligned pointer straight through.
+    return p == 0 || (p & (sizeof(void*) - 1)) || p < 1024;
+}
 
 // Deep receiver check: pointer sane, vptr sane AND static, d_ptr sane.
 static int receiverBad(void* r)
@@ -20,14 +25,14 @@ static int receiverBad(void* r)
     uintptr_t rp = (uintptr_t)r;
     if (badPtr(rp)) return 1;
     uintptr_t vp = *(uintptr_t*)rp;
-    uintptr_t d  = *(uintptr_t*)(rp + 4);
+    uintptr_t d  = *(uintptr_t*)(rp + sizeof(void*));  // d_ptr follows the vptr
     if (badPtr(vp) || badPtr(d)) return 2;
     if (vp >= (uintptr_t)&__heap_base) return 3;  // vtable must be static data
     return 0;
 }
 
 extern "C" void fcweb_poll_tracked(const char* site);
-extern "C" uint32_t fcweb_tracked_addr(void);
+extern "C" uintptr_t fcweb_tracked_addr(void);
 
 extern "C" void __real__ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData(
     QObject*, int, QThreadData*);
@@ -77,10 +82,10 @@ extern "C" void __wrap__ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjecti
             if (bad) {
                 uintptr_t rp = (uintptr_t)pe.receiver;
                 uintptr_t vp = badPtr(rp) ? 0 : *(uintptr_t*)rp;
-                uintptr_t d  = badPtr(rp) ? 0 : *(uintptr_t*)(rp + 4);
+                uintptr_t d  = badPtr(rp) ? 0 : *(uintptr_t*)(rp + sizeof(void*));
                 fprintf(stderr,
-                        "[SPE %u] POISONED entry i=%d/%d bad=%d recv=%p vp=0x%x d=0x%x ev=%p — neutralized\n",
-                        call_n, i, n, bad, (void*)pe.receiver, (unsigned)vp, (unsigned)d, (void*)pe.event);
+                        "[SPE %u] POISONED entry i=%d/%d bad=%d recv=%p vp=%p d=%p ev=%p — neutralized\n",
+                        call_n, i, n, bad, (void*)pe.receiver, (void*)vp, (void*)d, (void*)pe.event);
                 fflush(stderr);
                 pe.event = nullptr;  // Qt skips null-event entries; leaks one event, saves the loop
             }

@@ -13,7 +13,7 @@ a description. If the app showed you a crash toast, its "Copy report" button put
 blob on your clipboard — paste that in. Include your browser and version.
 
 Before reporting, please check the limits in [README.md](README.md#requirements-and-limits) —
-Chrome/Edge 137+ only, a fixed 2 GB heap, no AddonManager, single-threaded CalculiX. Those are
+Chrome/Edge 137+ only, a 16 GB heap ceiling, no AddonManager, single-threaded CalculiX. Those are
 known and deliberate.
 
 ## Before changing code

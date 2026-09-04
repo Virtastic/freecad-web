@@ -110,7 +110,7 @@ Getting there took eight defects, none of which a passing script would have reve
    against the `.wrap`.
 8. libffi's `LT_SYS_SYMBOL_USCORE` is **not shipped by this libtool at all** — three
    rounds went into the macro search path before a diagnostic showed the macro simply does
-   not exist here. Supplied directly: wasm32-emscripten has no underscore prefix.
+   not exist here. Supplied directly: wasm64-emscripten has no underscore prefix.
 
 The lesson worth keeping is #8's shape: the error named a symptom (`possibly undefined
 macro`) and every fix aimed at the wrong cause until something printed what was actually
@@ -126,7 +126,7 @@ the full link needs all of these, not just the compile job.
 | **ICU** | `find_package(ICU REQUIRED COMPONENTS uc i18n)` is now at the top of FreeCAD's `CMakeLists.txt`, and ICU is linked into `Base`. 1.0 had no ICU dependency at all. emscripten ships a port (`embuilder build icu`, `--use-port=icu`), so no cross-compile is needed -- but it names the libraries after ICU's source directories (`libicu_common`, `libicu_i18n`, `libicu_stubdata`) rather than the usual `libicuuc`/`libicui18n`/`libicudata`, so CMake's own `FindICU` finds the headers and then reports the components missing. `toolchain/cmake/FindICU.cmake` replaces it. Note the port is **stubdata** -- no locale data, which is right for a browser but rules out real collation. |
 | **Eigen ≥ 3.4** | Header-only, and the dependency stack never built it: `deps/wasm/include` contains no Eigen, which is why `FindEigen3` reported an empty version and refused. |
 | **SWIG** | `SetupSwig.cmake` FATAL_ERRORs whenever `BUILD_SKETCHER` is on, then runs `swig -python -external-runtime` to check its runtime version against pivy's. Host tool; `pip install swig` avoids needing root. |
-| **A threaded Qt** | Not new in 1.1, but 1.1 is what exposed it. FreeCAD lists `Concurrent` among its four base Qt components, and QtConcurrent requires the thread feature. Qt for WebAssembly defaults to **single-threaded**, and `build-qt-wasm.yml` never passed `-feature-thread` -- so the Qt cached under `qt/6.9.0/wasm_mt_weh` was, despite the name, a single-threaded build with no QtConcurrent in it. Everything else here is compiled `-pthread`, so that artifact was wrong regardless. |
+| **A threaded Qt** | Not new in 1.1, but 1.1 is what exposed it. FreeCAD lists `Concurrent` among its four base Qt components, and QtConcurrent requires the thread feature. Qt for WebAssembly defaults to **single-threaded**, and `build-qt-wasm.yml` never passed `-feature-thread` -- so the Qt cached under `qt/6.11.2/wasm_mt_weh` was, despite the name, a single-threaded build with no QtConcurrent in it. Everything else here is compiled `-pthread`, so that artifact was wrong regardless. |
 
 Already handled by `patches/freecad.patch`, and worth knowing before someone re-derives it:
 the bundled SMESH path does `find_package(MEDFile REQUIRED)`, which the port replaces with
@@ -137,12 +137,30 @@ compiles no DriverMED sources, only headers.
 
 | Path | Version | Used for |
 |---|---|---|
-| `emsdk/` | 3.1.70 (pinned) | all compiling and linking |
-| `emsdk2/` | 4.0.23 | **only** its `wasm-opt` (binaryen v125) |
+| `emsdk/` | 6.0.9 (pinned) | all compiling and linking |
 
-emsdk 3.1.70 ships binaryen v119, which cannot parse wasm-EH and fails the
-link. `wasm-opt` is shimmed to the emsdk2 binary; the
-`unexpected binaryen version: 125 (expected 119)` warning at link is expected.
+Pinned in `toolchain/env.sh`, which is the ONLY place the SDK and the target are set.
+It exports `EMCC_CFLAGS=-m64` and then asserts `__wasm64__` is defined before any build
+runs -- emcc appends `EMCC_CFLAGS` to every invocation, including the probe compiles
+autotools and meson run during configure, which is what keeps a configure test from
+measuring wasm32 sizes and baking them into a wasm64 build.
+
+`tools/check-toolchain-env.py` fails CI if any script reaches `emcc` without sourcing it.
+That gate exists because fifteen scripts once sourced `emsdk/emsdk_env.sh` directly -- the
+whole CalculiX/gmsh stack and most of the Python extension stack -- along with the shipped
+link command, which called `em++` by absolute path.
+
+**The `emsdk2/` wasm-opt shim is gone.** It existed because emsdk 3.1.70 shipped binaryen
+v119, which could not parse wasm-EH, so `wasm-opt` was shimmed to a 4.0.23 binary and every
+link printed `unexpected binaryen version: 125 (expected 119)`. 6.0.9 carries a binaryen
+that parses its own output, so both the second SDK and that warning are history.
+
+**Why 6.0.9 and not a Qt-sanctioned emscripten.** Qt for WebAssembly pins one emscripten
+per Qt minor: Qt 6.9 pinned 3.1.70 (which is why this project sat there for so long) and
+Qt 6.11 pins 4.0.7. But wasm64 with pthreads and a `MAXIMUM_MEMORY` above 4 GB is only
+fixed in 5.0.1/6.x (emscripten#26311, PR #26357), and the pthread mailbox gap is
+emscripten#21159. Both pins cannot be honoured at once, so Qt 6.11.2 is deliberately built
+on an emscripten it has never been validated against. Expect to carry Qt patches.
 
 ## The three force-included headers (read this before anything else)
 
@@ -243,7 +261,7 @@ bash pyside-finish-weh.sh
 bash lane4-weh.sh; bash lane4b-weh.sh; bash lane5-weh.sh
 ```
 
-Qt 6.9.0 is built from source into `qt/6.9.0/wasm_mt_weh` with
+Qt 6.11.2 is built from source into `qt/6.11.2/wasm_mt_weh` with
 `-feature-wasm-exceptions -feature-wasm-jspi`.
 
 **This now builds in CI** — `.github/workflows/build-qt-wasm.yml`, **56 minutes** on a hosted
@@ -260,7 +278,7 @@ Three things had to be right, each found from a build log rather than guessed:
    compiler runs on the host. Without it configure dies with *"Qt6ShaderToolsTools package
    could not be found"*. The rule: a host Qt needs every module whose **tools** the build
    runs — not the target's module list.
-2. **Only `qtshadertools` is a separate `aqtinstall` module** for 6.9.0. `qtdeclarative`,
+2. **Only `qtshadertools` is a separate `aqtinstall` module** for 6.11.2. `qtdeclarative`,
    `qtsvg` and `qttools` live in the base `linux_gcc_64` package, and naming them makes `aqt`
    fail outright so no host Qt is installed at all.
 3. **The runner needs desktop runtime libraries.** `qsb` is a dynamically-linked Qt Gui binary
@@ -853,7 +871,44 @@ CAD workflows), `guidrive.js` (menus and toolbars through Qt input), `datasafety
 (work survives a reload), `ccxe2e/run-prod.js` (FEM end to end), `prodcheck.js` (boot,
 storage, bridges).
 
-## Memory: the heap grows to 4 GB (superseding the fixed-2 GB decision below)
+## Memory: 16 GiB on wasm64 (supersedes both sections below)
+
+**Status 2026-09-04:** this is a `wasm64-emscripten` build. The shipped link is
+`-sINITIAL_MEMORY=1073741824 -sMAXIMUM_MEMORY=17179869184 -sALLOW_MEMORY_GROWTH=1` --
+1 GiB growing to 16 GiB, which is where V8 caps wasm64 memory.
+
+The thing that actually changed is not the number. Under wasm32 the ceiling was an
+ARCHITECTURAL limit and the section below spends most of its length on the hazard that came
+with approaching it: above 2 GB a pointer exceeds `INT32_MAX`, so any C++ in OCCT, Coin, Qt
+or CPython holding a pointer in a signed `int` breaks -- plausibly as corrupt geometry
+rather than a clean crash. **That entire hazard class is gone.** Pointers are 64-bit; no
+reachable heap address comes near the signed boundary of the type holding it. The ceiling is
+now policy, not physics.
+
+The ceiling is stated in three places and they must agree, because the browser cannot ask
+the module what its real maximum is (emscripten keeps the `Memory` object closure-private
+and `Module.wasmMemory` is not set here):
+
+| Where | What |
+|---|---|
+| `scratchpad/linkcmds/fc-linkcmd-weh.sh` | `-sMAXIMUM_MEMORY=17179869184` |
+| `configure-gui-weh.sh` | `FCWEB_HEAP_MAX_BYTES` default |
+| `play-gui/freecad-gui.html` | `var FCWEB_HEAP_MAX_BYTES` |
+
+`tools/check-link-settings.py` fails CI when they drift. If they do, nothing breaks loudly:
+the memory-pressure monitor computes `used/cap` against the wrong cap and force-saves at the
+wrong moment, or never -- and that feature exists precisely to save the document just before
+an unavoidable abort.
+
+One caveat carried forward from the toolchain notes: emscripten had a bug where MEMORY64 +
+pthreads + `MAXIMUM_MEMORY` above 4 GB failed at link with `value 262144 is above the upper
+bound 65536`, because the tooling still computed page counts against the 32-bit ceiling
+(emscripten#26311, PR #26357). A link dying with that message means the SDK pin moved
+backwards, not that the flag is wrong.
+
+The earlier reasoning is kept below for the record. Both sections are now historical.
+
+### (historical, wasm32) Memory: the heap grows to 4 GB
 
 **Status 2026-09-02:** the shipped link is `-sINITIAL_MEMORY=1073741824
 -sMAXIMUM_MEMORY=4294967296 -sALLOW_MEMORY_GROWTH=1` (see
@@ -873,7 +928,8 @@ The original reasoning is kept for the record:
 ### (historical) Memory: the heap is a fixed 2 GB, deliberately
 
 `-sINITIAL_MEMORY=2147483648 -sALLOW_MEMORY_GROWTH=0`. Growth was built and measured
-(`scratchpad/linkcmds/fc-linkcmd-weh-grow.sh`, initial 1 GB / maximum 4 GB) and **not
+(`scratchpad/linkcmds/fc-linkcmd-weh-grow.sh`, since removed with the wasm32 lane;
+initial 1 GB / maximum 4 GB) and **not
 shipped**, for a reason worth knowing before anyone tries again:
 
 - With growth, emscripten can no longer hold a heap view across a grow, so every heap

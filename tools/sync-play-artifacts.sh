@@ -10,6 +10,13 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/build-freecad-gui-weh/bin"
+# wasm64 NOTE: these numbers were measured on the wasm32 build. 64-bit pointers make the
+# module bigger -- expect the correct link to land somewhere above 152 MB, and the
+# skipped-wasm-opt case to move up with it. The 200 MB threshold is kept unchanged on
+# purpose: it is a discriminator between "optimised" and "wasm-opt never ran", not a
+# budget, and guessing a new value before a single wasm64 link has been measured would
+# either mask the failure it exists to catch or fail a good build. RE-BASELINE IT from the
+# first green wasm64 link: set it a little above the real size, not to a round number.
 # A correct link lands near 152 MB. 234 MB means wasm-opt did not run (or was killed
 # mid-link, which leaves the un-optimized intermediate sitting in bin/ looking finished).
 # Shipping that is a silent, large performance regression -- refuse it here.

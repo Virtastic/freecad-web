@@ -1078,11 +1078,12 @@ window.fcwebNotify = function (text, kind, actions) {
     (window.FCWEB_BUILD ? ' quoting build ' + window.FCWEB_BUILD + '.' : '.')],
    [/doesn't contain expected phrase/i,
     'The configured solver binary did not respond as expected, so the solve was skipped.'],
-   // Out of wasm memory. The heap grows to a 4 GB ceiling (the wasm32 maximum; see the
-   // memory-pressure block below and BUILD-WEH.md), so a big enough model still aborts.
+   // Out of wasm memory. The heap grows to a 16 GiB ceiling (V8 caps wasm64 memory there;
+   // see the memory-pressure block below and BUILD-WEH.md), so a big enough model still
+   // aborts -- four times later than it used to, but it still aborts.
    // Say so in words instead of dying silently.
    [/Cannot enlarge memory|OOM|out of memory|Aborted\(OOM\)|memory allocation failed/i,
-    'This model needs more memory than the browser build has (the limit is 4 GB). ' +
+    'This model needs more memory than the browser build has (the limit is 16 GB). ' +
     'Try simplifying it, meshing more coarsely, or closing other documents. ' +
     'Your open work has been autosaved.'],
    // pre-gui.js emits this when FS.syncfs fails -- browser storage full, evicted, or
@@ -1992,7 +1993,7 @@ window.fcRunPy = fcRunPy;
     // this build), so the ceiling is a build constant, kept in step with -sMAXIMUM_MEMORY
     // in the link command. max() with byteLength so a build with a larger heap than this
     // constant can never report a fraction above 1.
-    var FCWEB_HEAP_MAX_BYTES = 4294967296;   // -sMAXIMUM_MEMORY=4294967296
+    var FCWEB_HEAP_MAX_BYTES = 17179869184;  // -sMAXIMUM_MEMORY=17179869184 (16 GiB, wasm64)
     function heapCapBytes(m){
       return Math.max(FCWEB_HEAP_MAX_BYTES, m.HEAPU8.buffer.byteLength || 0);
     }
@@ -2003,7 +2004,14 @@ window.fcRunPy = fcRunPy;
       try {
         var m = window.fcInstance;
         if (!m || typeof m._emscripten_get_sbrk_ptr !== 'function') return -1;
-        var used = m.HEAPU32[m._emscripten_get_sbrk_ptr() >> 2];
+        // >>> not >>: the shift is UNSIGNED. With a heap above 2 GB the sbrk pointer
+        // exceeds INT32_MAX, a signed >>2 yields a negative index, HEAPU32[negative] is
+        // undefined, and used/cap is NaN -- so the memory warning goes silent at exactly
+        // the moment it is needed. The shipped link is INITIAL_MEMORY=1GB growing to 4GB,
+        // so this is reachable today, not a wasm64 hypothetical.
+        // wasm64 follow-up: get_sbrk_ptr returns a BigInt there and the break it points
+        // at is 64-bit, so this needs Number() plus a BigInt64Array read, not just >>>.
+        var used = m.HEAPU32[m._emscripten_get_sbrk_ptr() >>> 2];
         var cap = heapCapBytes(m);
         return cap > 0 ? used / cap : -1;
       } catch (e) { return -1; }
@@ -3076,6 +3084,44 @@ window.fcRunPy = fcRunPy;
     }
     py(src);
   }
+
+  // ---- "reload to finish enabling that addon" ------------------------------------
+  // Installing a WORKBENCH cannot take effect in the running session: FreeCAD executes
+  // each addon's InitGui.py at startup to register its menu. On the desktop the Addon
+  // Manager offers "Restart Now" for this; here that button called
+  // utils.restart_freecad -> QProcess.startDetached, which does nothing in a browser, so
+  // the user was left with an addon that appeared installed and absent at the same time
+  // and no indication that a reload was needed.
+  //
+  // The overlay writes a sentinel instead (fcweb_am_install._request_reload) and this
+  // turns it into a toast with a button that actually reloads. Themes and plain Python
+  // modules do NOT come through here -- those are made usable immediately by putting the
+  // addon on sys.path, so the prompt only appears when a reload is genuinely required.
+  (function () {
+    var SENTINEL = '/tmp/.fcweb_reload_request';
+    var shown = false;
+    setInterval(function () {
+      if (shown) { return; }
+      var m = window.fcInstance;
+      if (!window.__fcAppReady || !m || !m.FS) { return; }
+      var reason;
+      try { reason = m.FS.readFile(SENTINEL, { encoding: 'utf8' }); }
+      catch (e) { return; }                       // absent is the normal case
+      try { m.FS.unlink(SENTINEL); } catch (e) {}
+      shown = true;
+      var text = (reason && reason.trim())
+        || 'An addon is installed. Reload to finish enabling it.';
+      if (typeof window.fcwebNotify !== 'function') { return; }
+      window.fcwebNotify(text + ' Your work is autosaved.', 'info', [
+        { label: 'Reload now', onClick: function () { location.reload(); } },
+        { label: 'Later', onClick: function (b) {
+            // Let a second install re-offer it rather than going quiet for the session.
+            shown = false;
+            try { b.parentNode.parentNode.remove(); } catch (e) {}
+          } }
+      ]);
+    }, 2000);
+  })();
 
   function ready(){ var m=window.fcInstance;
     return window.__fcAppReady && m && m._fcweb_run_python && m.FS; }

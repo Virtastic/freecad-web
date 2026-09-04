@@ -198,7 +198,7 @@ actionable; "3D view is janky" is not.
   (It genuinely was not cached before 2026-08-16: Chrome's HTTP cache will not retain a
   152 MB entry, so every visit re-downloaded the lot. If you see a return visit downloading
   again, that is a regression worth reporting.)
-- Memory grows to a 4 GB ceiling (the wasm32 maximum), with a civil message if a model
+- Memory grows to a 16 GB ceiling (where V8 caps wasm64 memory), with a civil message if a model
   exhausts it. It was a fixed 2 GB until the growable link shipped; the page's own
   pressure monitor divided by the heap's CURRENT size until 2026-09-02 and so announced
   "2 GB" long after the build had stopped being limited to it.

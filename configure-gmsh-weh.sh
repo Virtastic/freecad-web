@@ -10,7 +10,7 @@
 # OCCT we already build for wasm so `Merge "...brep"` in the .geo works.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 SRC="$ROOT/deps/src/gmsh"
 BUILD="$ROOT/build-gmsh-weh"
 PREFIX="$ROOT/deps/wasm"

@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 # CMAKE_CROSSCOMPILING_EMULATOR that does not exist.
 FCWEB_NODE="${EMSDK_NODE:-$(command -v node)}"
 [ -x "$FCWEB_NODE" ] || { echo "ERROR: no node found (EMSDK_NODE unset and none on PATH)" >&2; exit 1; }
-QNEW="$ROOT/qt/6.9.0/wasm_mt_weh"
+QNEW="$ROOT/qt/6.11.2/wasm_mt_weh"
 TC="$ROOT/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
 NODE="$FCWEB_NODE"
 CPY="$ROOT/deps/src/cpython"
@@ -21,13 +21,13 @@ CPY="$ROOT/deps/src/cpython"
 # rather than handing cmake a path that does not exist.
 
 # Host Qt: the wasm build needs the host tools (moc, rcc, qmake). build-qt-wasm.yml
-# installs them to qt-host/6.9.0/gcc_64 on Linux; the build machine has qt/6.9.0/macos.
+# installs them to qt-host/6.11.2/gcc_64 on Linux; the build machine has qt/6.11.2/macos.
 QT_HOST=""
-for d in "$ROOT/qt-host/6.9.0/gcc_64" "$ROOT/qt/6.9.0/macos" "$ROOT/qt/6.9.0/gcc_64" \
-         "$ROOT/qt-host/6.9.0/macos"; do
+for d in "$ROOT/qt-host/6.11.2/gcc_64" "$ROOT/qt/6.11.2/macos" "$ROOT/qt/6.11.2/gcc_64" \
+         "$ROOT/qt-host/6.11.2/macos"; do
     if [ -x "$d/bin/qmake" ] || [ -x "$d/bin/moc" ]; then QT_HOST="$d"; break; fi
 done
-[ -n "$QT_HOST" ] || { echo "ERROR: no host Qt found (looked for bin/qmake under qt-host/6.9.0/gcc_64, qt/6.9.0/macos, ...)" >&2; exit 1; }
+[ -n "$QT_HOST" ] || { echo "ERROR: no host Qt found (looked for bin/qmake under qt-host/6.11.2/gcc_64, qt/6.11.2/macos, ...)" >&2; exit 1; }
 echo "host Qt:      $QT_HOST"
 
 # Host interpreter that RUNS during the build (shiboken's generator, cmake probes). Not
@@ -179,7 +179,7 @@ cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja
   -DQFP_PYTHON_HOST_PATH="$HOSTPY3" -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
   -DShiboken_SKIP_GENERATOR_BUILD=ON \
   -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
-  -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
+  -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm64-emscripten \
   `# See the QFP_NO_STRIP comment on the PySide configure below. Same reason here.` \
   -DQFP_NO_STRIP=ON -DCMAKE_STRIP=/usr/bin/true \
   -DCMAKE_INSTALL_PREFIX="$ROOT/deps/wasm/shiboken6" \
@@ -222,7 +222,7 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   `# one link is a defect this repository has already shipped once (OCCT, ROADMAP 12).` \
   -DQFP_NO_OVERRIDE_OPTIMIZATION_FLAGS=ON \
   -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
-  -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm32-emscripten \
+  -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm64-emscripten \
   `# QFP_NO_STRIP: create_pyside_module() ends with qfp_strip_library(), which adds a` \
   `# POST_BUILD "${CMAKE_STRIP} $<TARGET_FILE:...>" whenever` \
   `#     CMAKE_STRIP AND UNIX AND NOT APPLE AND NOT QFP_NO_STRIP AND NOT Debug` \

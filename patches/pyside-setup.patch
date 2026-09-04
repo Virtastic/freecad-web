@@ -15,7 +15,7 @@ index 5cd12b6..84991af 100644
 +    if(EMSCRIPTEN)
 +        message(STATUS "Building PySide bindings for Emscripten/wasm; compiler-path=${CMAKE_CXX_COMPILER}")
 +        list(APPEND shiboken_command "--compiler-path=${CMAKE_CXX_COMPILER}")
-+        list(APPEND shiboken_command "--clang-option=--target=wasm32-unknown-emscripten")
++        list(APPEND shiboken_command "--clang-option=--target=wasm64-unknown-emscripten")
 +    endif()
 +
 +    if(CMAKE_HOST_APPLE AND NOT EMSCRIPTEN)

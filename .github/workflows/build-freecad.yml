@@ -57,10 +57,10 @@ permissions:
   contents: read
 
 env:
-  DEPS_KEY: v1-emsdk3.1.70-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
+  DEPS_KEY: v2-wasm64-emsdk6.0.9-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
   # -mt-v2: the threaded rebuild. The v1 cache was single-threaded and had no
   # QtConcurrent in it at all -- see build-qt-wasm.yml.
-  QT_KEY: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
+  QT_KEY: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v1
   FREECAD_TAG: "1.1.3"
 
 jobs:
@@ -104,11 +104,11 @@ jobs:
           restore-keys: |
             fcweb-deps-${{ env.DEPS_KEY }}-
 
-      - name: Restore Qt 6.9.0 for wasm
+      - name: Restore Qt 6.11.2 for wasm
         id: qtcache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: qt/6.9.0/wasm_mt_weh
+          path: qt/6.11.2/wasm_mt_weh
           key: ${{ env.QT_KEY }}
 
       # Both caches are produced by other workflows. If either is missing, say which and
@@ -129,9 +129,9 @@ jobs:
           need deps/wasm/lib/libCoin.a               "Coin3D"              build-deps.yml
           need deps/wasm/lib/libpython3.13.a         "CPython (wasm/mt)"   build-deps.yml
           need deps/wasm/include/python3.13/Python.h "CPython headers"     build-deps.yml
-          need qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6    "Qt 6.9.0 for wasm"   build-qt-wasm.yml
+          need qt/6.11.2/wasm_mt_weh/lib/cmake/Qt6    "Qt 6.11.2 for wasm"   build-qt-wasm.yml
           echo "  Qt modules present:"
-          ls -d qt/6.9.0/wasm_mt_weh/lib/cmake/Qt6*/ 2>/dev/null | sed 's|.*/cmake/||; s|/$||' | xargs echo | fold -sw 100 | sed 's/^/    /'
+          ls -d qt/6.11.2/wasm_mt_weh/lib/cmake/Qt6*/ 2>/dev/null | sed 's|.*/cmake/||; s|/$||' | xargs echo | fold -sw 100 | sed 's/^/    /'
           if [ "$fail" != 0 ]; then
             echo
             echo "deps cache key hit: ${{ steps.depcache.outputs.cache-matched-key || '(none)' }}"
@@ -171,30 +171,30 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: emsdk
-          key: emsdk-3.1.70-shims-v1
+          key: emsdk-6.0.9-wasm64-shims-v1
 
-      - name: Install emsdk 3.1.70
+      - name: Install emsdk 6.0.9
         if: steps.emsdk-cache.outputs.cache-hit != 'true'
         run: |
           set -e
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git
-          cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+          cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
 
       # QT_HOST_PATH. The wasm Qt ships no host tools, but the build runs moc, uic and rcc,
       # and they must be native. Same aqtinstall route build-qt-wasm.yml uses.
-      - name: Host Qt 6.9.0 (native tools only)
+      - name: Host Qt 6.11.2 (native tools only)
         id: hostqt
         run: |
           set -e
-          if [ -d qt-host/6.9.0/gcc_64/bin ]; then
+          if [ -d qt-host/6.11.2/gcc_64/bin ]; then
             echo "  host Qt already present"
           else
             python3 -m pip install --quiet --break-system-packages aqtinstall 2>/dev/null \
               || python3 -m pip install --quiet aqtinstall
-            python3 -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 \
+            python3 -m aqt install-qt linux desktop 6.11.2 linux_gcc_64 \
               -m qtshadertools -O "$PWD/qt-host"
           fi
-          host="$PWD/qt-host/6.9.0/gcc_64"
+          host="$PWD/qt-host/6.11.2/gcc_64"
           [ -x "$host/libexec/moc" ] || [ -x "$host/bin/moc" ] || {
             echo "::error::no moc under $host"; find qt-host -name moc | head; exit 1; }
           echo "path=$host" >> "$GITHUB_OUTPUT"
@@ -337,7 +337,7 @@ jobs:
           set -o pipefail
           . emsdk/emsdk_env.sh
           ROOT="$PWD"; DW="$ROOT/deps/wasm"
-          QT="$ROOT/qt/6.9.0/wasm_mt_weh"
+          QT="$ROOT/qt/6.11.2/wasm_mt_weh"
           mkdir -p /tmp/fclogs
 
           # Modules are limited to the ones whose third-party libraries the deps cache

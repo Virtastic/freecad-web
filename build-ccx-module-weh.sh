@@ -13,11 +13,13 @@
 #                               the workers never run and every matrix comes out zero.
 #   --start-group               libccx and libarpack reference each other.
 # ENVIRONMENT includes node so the module can be exercised outside a browser.
-# -sWASM_BIGINT avoids the i64 legalization pass, which invokes emsdk 3.1.70's
-# wasm-emscripten-finalize (binaryen v119) -- and that cannot parse wasm-EH.
+# -sWASM_BIGINT is no longer passed: BigInt integration is the default in emscripten 6.x and
+# the flag is deprecated. It was here to dodge the i64 legalization pass, which called emsdk
+# 3.1.70's wasm-emscripten-finalize (binaryen v119) -- and that could not parse wasm-EH. Both
+# the SDK and that problem are gone.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 PREFIX="$ROOT/deps/wasm"
 CCX="$ROOT/deps/src/ccx/ccx_2.22/src"
 OUT="$ROOT/play-gui"
@@ -59,12 +61,16 @@ emcc -fwasm-exceptions -O2 "$OBJ/ccx_main.o" "$OBJ/wrapper.o" \
   -o "$OUT/ccx.js" \
   -sMODULARIZE=1 \
   -sEXPORT_NAME=CcxModule \
-  -sWASM_BIGINT=1 \
+  \
   -sEXPORTED_FUNCTIONS=_fcweb_ccx_run,_fcweb_ccx_version,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=FS,ccall,cwrap,stringToUTF8,UTF8ToString,lengthBytesUTF8 \
   -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
   -sINITIAL_MEMORY=268435456 \
+  # 16 GiB, matching the engine. This is a separate wasm module with its own heap, so
+  # without an explicit ceiling it would default to 2 GB and gain nothing from wasm64 --
+  # which for ccx is exactly the workload the extra address space is for.
+  -sMAXIMUM_MEMORY=17179869184 \
   -sSTACK_SIZE=16MB \
   -sEXIT_RUNTIME=0 \
   -sASSERTIONS=0 \

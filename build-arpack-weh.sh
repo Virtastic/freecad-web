@@ -19,7 +19,7 @@
 # Output: deps/wasm/lib/libarpack.a
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 A="$ROOT/deps/src/arpack/arpack-ng-3.9.1"
 L="$ROOT/deps/src/lapack/lapack-3.12.0"
 PREFIX="$ROOT/deps/wasm"

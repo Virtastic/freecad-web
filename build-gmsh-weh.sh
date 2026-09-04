@@ -9,7 +9,7 @@
 # (-fwasm-exceptions) — see BUILD-WEH.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 PREFIX="$ROOT/deps/wasm"
 BUILD="$ROOT/build-gmsh-weh"
 OUT="$ROOT/play-gui"
@@ -37,6 +37,10 @@ em++ -fwasm-exceptions -O2 \
   -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
   -sINITIAL_MEMORY=268435456 \
+  # 16 GiB, matching the engine. This is a separate wasm module with its own heap, so
+  # without an explicit ceiling it would default to 2 GB and gain nothing from wasm64 --
+  # which for gmsh is exactly the workload the extra address space is for.
+  -sMAXIMUM_MEMORY=17179869184 \
   -sSTACK_SIZE=8MB \
   -sEXIT_RUNTIME=0 \
   -sASSERTIONS=0 \

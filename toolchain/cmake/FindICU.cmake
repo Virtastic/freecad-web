@@ -78,7 +78,7 @@ foreach(_comp IN LISTS ICU_FIND_COMPONENTS)
     # different NAMES list would otherwise keep returning the previously found path.
     find_library(FCWEB_ICU_${_COMP}_LIB${_icu_mt}
         NAMES ${_icu_lib_${_comp}}${_icu_mt} ${_icu_lib_${_comp}}
-        HINTS "${_icu_sysroot}/lib/wasm32-emscripten"
+        HINTS "${_icu_sysroot}/lib/wasm64-emscripten"
         NO_CMAKE_FIND_ROOT_PATH
     )
     set(ICU_${_COMP}_LIBRARY "${FCWEB_ICU_${_COMP}_LIB${_icu_mt}}")
@@ -101,7 +101,7 @@ endforeach()
 # u_init_* comes out undefined. Append it whenever it exists.
 find_library(FCWEB_ICU_DATA_LIB${_icu_mt}
     NAMES ${_icu_lib_data}${_icu_mt} ${_icu_lib_data}
-    HINTS "${_icu_sysroot}/lib/wasm32-emscripten"
+    HINTS "${_icu_sysroot}/lib/wasm64-emscripten"
     NO_CMAKE_FIND_ROOT_PATH
 )
 set(ICU_DATA_LIBRARY "${FCWEB_ICU_DATA_LIB${_icu_mt}}")

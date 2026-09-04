@@ -7,7 +7,7 @@ your tab.
 👉 **<https://freecad.virtastic.app>**
 
 This is not a viewer or a cut-down demo. It is upstream FreeCAD built for
-`wasm32-emscripten` with wasm exceptions and JSPI: the same 20 workbenches, the same 578
+`wasm64-emscripten` with wasm exceptions and JSPI: the same 20 workbenches, the same 578
 commands, the same OCCT geometry kernel, the same CPython interpreter running the same
 Python workbenches, and the same solvers.
 
@@ -69,7 +69,7 @@ These are real constraints, stated up front rather than discovered:
 |---|---|
 | **Browser** | Chrome or Edge 137+. Firefox and Safari lack JSPI; they are refused up front having downloaded nothing. |
 | **First load** | ~115 MB. Return visits fetch nothing — the engine is held in Cache Storage and reaches Ready in seconds. |
-| **Memory** | A 4 GB heap ceiling. The app force-saves your documents and warns before it runs out. |
+| **Memory** | A 16 GB heap ceiling (the wasm64 build; V8 caps wasm64 memory there). The app force-saves your documents and warns before it runs out. |
 | **AddonManager** | Absent (it needs `git` and real sockets). A `.zip` / GitHub workbench installer covers the same use case. |
 | **CalculiX** | Single-threaded, so large FEM jobs are slower than desktop. |
 

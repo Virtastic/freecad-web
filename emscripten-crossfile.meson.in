@@ -1,4 +1,4 @@
-# Meson cross-file TEMPLATE for building Python C-extensions (numpy) to wasm32-emscripten.
+# Meson cross-file TEMPLATE for building Python C-extensions (numpy) to wasm64-emscripten.
 #
 # @ROOT@ is substituted with the repo root by tools/gen-crossfiles.sh, which every
 # consumer runs before `meson setup`. Do not edit the generated
@@ -17,8 +17,8 @@ python = '@ROOT@/deps/src/cpython/builddir/build/python3-native'
 
 [host_machine]
 system = 'emscripten'
-cpu_family = 'wasm32'
-cpu = 'wasm32'
+cpu_family = 'wasm64'
+cpu = 'wasm64'
 endian = 'little'
 
 # EXCEPTIONS. -fwasm-exceptions, not -fexceptions, because every other object in the

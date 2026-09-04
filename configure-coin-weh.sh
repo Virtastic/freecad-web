@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Coin3D static cross-compile for wasm32-emscripten. GLES/WebGL2 target, force-include the
+# Coin3D static cross-compile for wasm64-emscripten. GLES/WebGL2 target, force-include the
 # reused gl_compat.h shim.
 #
 # THIS SCRIPT USED TO CONFIGURE AND NOTHING ELSE, AND COULD NOT REPORT FAILURE.

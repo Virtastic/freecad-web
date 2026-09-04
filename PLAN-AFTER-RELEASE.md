@@ -1,3 +1,8 @@
+> **Superseded, 2026-09-04.** This document reasons throughout about a wasm32 build and its
+> 2 GB/4 GB heap limits. The project is now `wasm64-emscripten` with a 16 GiB ceiling, and
+> the signed-pointer hazard that drives much of the analysis below does not exist at 64-bit.
+> Kept as the record of how the decision was reached. Current state: `BUILD-WEH.md`.
+
 # What is left after build-20260826-fem, and how to finish it
 
 Written 2026-08-26, with the release in flight. Everything here is *after* the release: none

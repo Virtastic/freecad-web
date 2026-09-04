@@ -25,7 +25,7 @@ if [ -d "$DW/lib/numpy-mod" ]; then
   NPYLIBS="$( { ls "$DW"/lib/numpy-mod/libnpy__multiarray_umath.a "$DW"/lib/numpy-mod/libnpy__pocketfft_umath.a "$DW"/lib/numpy-mod/libnpy__umath_linalg.a "$DW"/lib/numpy-mod/libnpy_lapack_lite.a; ls "$DW"/lib/numpy-mod/*.a | grep -vE 'libnpy_(_multiarray|_pocketfft|_umath_linalg|lapack_lite)\.a|dispatch\.h_baseline\.a'; } 2>/dev/null | tr '\n' ' ')"
 fi
 
-# matplotlib C-extension static libs (built by configure-matplotlib.sh into
+# matplotlib C-extension static libs (built by configure-matplotlib-weh.sh into
 # deps/wasm/lib/mpl-mod). The libmpl_*.a modules provide PyInit_*; the shared
 # libfreetype/libqhull_r/libagg/libttconv resolve their undefined refs once.
 # Skip the _tkagg backend (Tk is unavailable and not registered).
@@ -80,13 +80,13 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui -G Ninja \
   -DFREETYPE_INCLUDE_DIR_freetype2="$ROOT/deps/src/matplotlib/subprojects/freetype-2.6.1/include" \
   -DFREETYPE_LIBRARY="$ROOT/deps/wasm/lib/mpl-mod/libfreetype.a" \
   -DFREETYPE_LIBRARIES="$ROOT/deps/wasm/lib/mpl-mod/libfreetype.a" \
-  -DCMAKE_PREFIX_PATH="$DW;$ROOT/qt/6.9.0/wasm_multithread" \
-  -DCMAKE_FIND_ROOT_PATH="$DW;$ROOT/qt/6.9.0/wasm_multithread" \
+  -DCMAKE_PREFIX_PATH="$DW;$ROOT/qt/6.11.2/wasm_multithread" \
+  -DCMAKE_FIND_ROOT_PATH="$DW;$ROOT/qt/6.11.2/wasm_multithread" \
   -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
   -DFREECAD_QT_VERSION=6 \
   -DBoost_USE_STATIC_LIBS=ON -DBoost_USE_STATIC_RUNTIME=ON \
-  -DQt6_DIR="$ROOT/qt/6.9.0/wasm_multithread/lib/cmake/Qt6" \
-  -DQT_HOST_PATH="$ROOT/qt/6.9.0/macos" \
+  -DQt6_DIR="$ROOT/qt/6.11.2/wasm_multithread/lib/cmake/Qt6" \
+  -DQT_HOST_PATH="$ROOT/qt/6.11.2/macos" \
   -DOpenCASCADE_DIR="$DW/lib/cmake/opencascade" \
   -DEIGEN3_INCLUDE_DIR="$DW/include" \
   -DCOIN3D_INCLUDE_DIRS="$DW/include" \
@@ -97,7 +97,7 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui -G Ninja \
   -DPython3_LIBRARY="$PYMT/libpython3.13.a" \
   -DPYTHON_VERSION_STRING=3.13 \
   -DZLIB_INCLUDE_DIR="$SYSROOT/include" \
-  -DZLIB_LIBRARY="$SYSROOT/lib/wasm32-emscripten/libz.a" \
+  -DZLIB_LIBRARY="$SYSROOT/lib/wasm64-emscripten/libz.a" \
   -DCMAKE_CXX_FLAGS="-fexceptions -pthread -O2 -DBOOST_ALL_NO_LIB --use-port=zlib -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
   -DCMAKE_C_FLAGS="-fexceptions -pthread -O2 --use-port=zlib -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
-  -DCMAKE_EXE_LINKER_FLAGS="$FC_LINK_MODE_FLAGS -O2 -lembind -lidbfs.js -pthread -sASYNCIFY -sASYNCIFY_STACK_SIZE=16777216 -sASYNCIFY_REMOVE=@$ROOT/asyncify-removelist.txt -sALLOW_TABLE_GROWTH -sPTHREAD_POOL_SIZE=16 -sASSERTIONS=0 -sFORCE_FILESYSTEM=1 -sMODULARIZE=1 -sEXPORT_NAME=FreeCAD_entry -sWASM_BIGINT=1 -sSTACK_SIZE=32MB -sDEFAULT_PTHREAD_STACK_SIZE=16MB -sINITIAL_MEMORY=2147483648 -sMAX_WEBGL_VERSION=2 -sLEGACY_GL_EMULATION=1 -sGL_UNSAFE_OPTS=0 -sERROR_ON_UNDEFINED_SYMBOLS=0 -sFETCH -sEXPORTED_RUNTIME_METHODS=UTF16ToString,stringToUTF16,UTF8ToString,stringToUTF8,JSEvents,specialHTMLTargets,FS,ENV,callMain,ccall -sEXPORTED_FUNCTIONS=_main,__embind_initialize_bindings,_fcweb_run_python,_malloc,_free -Wl,--allow-multiple-definition -Wl,--wrap=_ZN16QCoreApplication9postEventEP7QObjectP6QEventi -Wl,--wrap=_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData -Wl,--wrap=_ZN23QCoreApplicationPrivate13notify_helperEP7QObjectP6QEvent -Wl,--wrap=_ZN7QDialog4execEv $ROOT/postevent_wrap.o $ROOT/dialog_exec_wrap.o $ROOT/spe_sanitize.o $ROOT/gl_legacy_stubs.o --pre-js=$ROOT/pre-gui.js --use-port=zlib --use-port=bzip2 --use-port=sqlite3 $PYMT/Modules/_decimal/libmpdec/libmpdec.a $PYMT/Modules/_hacl/libHacl_Hash_SHA2.a $PYMT/Modules/expat/libexpat.a -Wl,--start-group ${FCWEB_PYSIDE_LIBS:-$DW/shiboken6/lib/libshiboken6.abi3.a $ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a $ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a $ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a $ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a $ROOT/build-shiboken-wasm/shibokenmodule/CMakeFiles/shibokenmodule.dir/Shiboken/shiboken_module_wrapper.cpp.o $ROOT/build-freecad-gui/src/Mod/Draft/App/DraftUtils.a $ROOT/build-pivy-wasm/interfaces/_coin.a $ROOT/build-ifcopenshell/ifcwrap/lib_ifcopenshell_wrapper.a $ROOT/build-ifcopenshell/ifcgeom/libIfcGeom.a $ROOT/build-ifcopenshell/ifcgeom/kernels/libgeometry_kernel_opencascade.a $ROOT/build-ifcopenshell/ifcgeom/Serialization/libgeometry_serializer.a $ROOT/build-ifcopenshell/serializers/libSerializers.a $ROOT/build-ifcopenshell/ifcparse/libIfcParse.a} $NPYLIBS $MPLLIBS -Wl,--end-group"
+  -DCMAKE_EXE_LINKER_FLAGS="$FC_LINK_MODE_FLAGS -O2 -lembind -lidbfs.js -pthread -sASYNCIFY -sASYNCIFY_STACK_SIZE=16777216 -sASYNCIFY_REMOVE=@$ROOT/asyncify-removelist.txt -sALLOW_TABLE_GROWTH -sPTHREAD_POOL_SIZE=16 -sASSERTIONS=0 -sFORCE_FILESYSTEM=1 -sMODULARIZE=1 -sEXPORT_NAME=FreeCAD_entry -sSTACK_SIZE=32MB -sDEFAULT_PTHREAD_STACK_SIZE=16MB -sINITIAL_MEMORY=2147483648 -sMAX_WEBGL_VERSION=2 -sLEGACY_GL_EMULATION=1 -sGL_UNSAFE_OPTS=0 -sERROR_ON_UNDEFINED_SYMBOLS=0 -sFETCH -sEXPORTED_RUNTIME_METHODS=UTF16ToString,stringToUTF16,UTF8ToString,stringToUTF8,JSEvents,specialHTMLTargets,FS,ENV,callMain,ccall -sEXPORTED_FUNCTIONS=_main,__embind_initialize_bindings,_fcweb_run_python,_malloc,_free -Wl,--allow-multiple-definition -Wl,--wrap=_ZN16QCoreApplication9postEventEP7QObjectP6QEventi -Wl,--wrap=_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData -Wl,--wrap=_ZN23QCoreApplicationPrivate13notify_helperEP7QObjectP6QEvent -Wl,--wrap=_ZN7QDialog4execEv $ROOT/postevent_wrap.o $ROOT/dialog_exec_wrap.o $ROOT/spe_sanitize.o $ROOT/gl_legacy_stubs.o --pre-js=$ROOT/pre-gui.js --use-port=zlib --use-port=bzip2 --use-port=sqlite3 $PYMT/Modules/_decimal/libmpdec/libmpdec.a $PYMT/Modules/_hacl/libHacl_Hash_SHA2.a $PYMT/Modules/expat/libexpat.a -Wl,--start-group ${FCWEB_PYSIDE_LIBS:-$DW/shiboken6/lib/libshiboken6.abi3.a $ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a $ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a $ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a $ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a $ROOT/build-shiboken-wasm/shibokenmodule/CMakeFiles/shibokenmodule.dir/Shiboken/shiboken_module_wrapper.cpp.o $ROOT/build-freecad-gui/src/Mod/Draft/App/DraftUtils.a $ROOT/build-pivy-wasm/interfaces/_coin.a $ROOT/build-ifcopenshell/ifcwrap/lib_ifcopenshell_wrapper.a $ROOT/build-ifcopenshell/ifcgeom/libIfcGeom.a $ROOT/build-ifcopenshell/ifcgeom/kernels/libgeometry_kernel_opencascade.a $ROOT/build-ifcopenshell/ifcgeom/Serialization/libgeometry_serializer.a $ROOT/build-ifcopenshell/serializers/libSerializers.a $ROOT/build-ifcopenshell/ifcparse/libIfcParse.a} $NPYLIBS $MPLLIBS -Wl,--end-group"

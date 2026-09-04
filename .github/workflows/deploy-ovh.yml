@@ -18,9 +18,21 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag holding the artifacts (blank = latest)"
+        description: "Release tag holding the artifacts (blank = the pinned release)"
         required: false
         default: ""
+
+# PRODUCTION IS PINNED to this release for the duration of the wasm32 -> wasm64
+# conversion. It used to resolve /releases/latest, and tools/publish-release.sh creates
+# releases with --latest, so any publish -- including a half-converted engine -- became
+# what production served on the next deploy. During the conversion the wasm32 lane is
+# being deleted, so there is no source hotfix path: the tag below and the image rollback
+# in rollback-ovh.yml are the only ways back.
+#
+# To unfreeze: delete FCWEB_PINNED_RELEASE and the fallback returns to /releases/latest.
+# A workflow_dispatch release_tag still overrides it either way.
+env:
+  FCWEB_PINNED_RELEASE: v1.0.0
 
 concurrency:
   group: deploy-ovh-freecad
@@ -42,10 +54,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           REQ_TAG: ${{ inputs.release_tag }}
+          PINNED_TAG: ${{ env.FCWEB_PINNED_RELEASE }}
         run: |
           set -e
           api="https://api.github.com/repos/$REPO/releases"
-          if [ -n "$REQ_TAG" ]; then rel="$api/tags/$REQ_TAG"; else rel="$api/latest"; fi
+          # A dispatch input wins; otherwise the pinned release. "latest" is deliberately
+          # NOT the fallback while FCWEB_PINNED_RELEASE is set -- see the top of this file.
+          want="$REQ_TAG"
+          if [ -z "$want" ]; then want="$PINNED_TAG"; fi
+          if [ -n "$want" ]; then rel="$api/tags/$want"; else rel="$api/latest"; fi
+          echo "resolving release: ${want:-latest (UNPINNED)}"
           json=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$rel")
           tag=$(printf '%s' "$json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tag_name"])')
           echo "using release: $tag"

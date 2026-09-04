@@ -62,7 +62,7 @@ permissions:
   contents: read
 
 env:
-  PYDEPS_KEY: v1-emsdk3.1.70-cpython3.13.3-numpy2.1.3-mpl3.9.2
+  PYDEPS_KEY: v2-wasm64-emsdk6.0.9-cpython3.13.3-numpy2.1.3-mpl3.9.2
 
 jobs:
   pydeps:
@@ -126,30 +126,30 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/wasm
-          key: fcweb-deps-v1-emsdk3.1.70-pydeps-consumer
+          key: fcweb-deps-v2-wasm64-emsdk6.0.9-pydeps-consumer
           restore-keys: |
-            fcweb-deps-v1-emsdk3.1.70-
+            fcweb-deps-v2-wasm64-emsdk6.0.9-
 
       - name: Restore CPython build tree
         id: cpycache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/src/cpython
-          key: fcweb-cpython-3.13.3-emsdk3.1.70-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
+          key: fcweb-cpython-3.13.3-wasm64-emsdk6.0.9-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
 
       - name: Cache emsdk
         id: emsdk-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: emsdk
-          key: emsdk-3.1.70-shims-v1
+          key: emsdk-6.0.9-wasm64-shims-v1
 
-      - name: Install emsdk 3.1.70
+      - name: Install emsdk 6.0.9
         if: steps.emsdk-cache.outputs.cache-hit != 'true'
         run: |
           set -e
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git
-          cd emsdk && ./emsdk install 3.1.70 && ./emsdk activate 3.1.70
+          cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
 
       # The VPS system Python is 3.14 and ships no ensurepip, so `python3 -m venv` fails
       # outright ("you need to install the python3.14-venv package"), and there is no root
@@ -280,7 +280,7 @@ jobs:
           # because a moving head is exactly the unreproducibility BUILD-WEH.md opens with.
           # 481676e5 is 0.8.0 as of 2025-11-21.
           get ifcopenshell https://github.com/IfcOpenShell/IfcOpenShell/archive/481676e51b65cb93e520b9f073123f22a06b212b.tar.gz 1 cmake/CMakeLists.txt
-          get pyside-setup https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.9.0-src/pyside-setup-everywhere-src-6.9.0.tar.xz 1 sources/pyside6/cmake/Macros/PySideModules.cmake
+          get pyside-setup https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.2-src/pyside-setup-everywhere-src-6.11.2.tar.xz 1 sources/pyside6/cmake/Macros/PySideModules.cmake
           # src/svgfill is a SUBMODULE, and GitHub tarballs carry no submodules -- the same
           # fact that keeps Assembly and AddonManager out of the FreeCAD build. The Python
           # wrapper needs it unconditionally: IfcPython.i includes svgfill.h outside the
@@ -344,7 +344,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/src/cpython
-          key: fcweb-cpython-3.13.3-emsdk3.1.70-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
+          key: fcweb-cpython-3.13.3-wasm64-emsdk6.0.9-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
 
       # PySide needs BOTH Qts: the wasm one this repo builds, and a host one for the
       # tools (moc, rcc, qmake) that run during the cross-build. build-qt-wasm.yml caches
@@ -353,18 +353,18 @@ jobs:
         id: qtcache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: qt/6.9.0/wasm_mt_weh
-          key: fcweb-qt-6.9.0-wasm-eh-jspi-mt-emsdk3.1.70-v2
+          path: qt/6.11.2/wasm_mt_weh
+          key: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v1
 
-      - name: Host Qt 6.9.0 (tools only)
+      - name: Host Qt 6.11.2 (tools only)
         continue-on-error: true
         run: |
           set -e
-          if [ -x qt-host/6.9.0/gcc_64/bin/moc ]; then echo "  host Qt present"; exit 0; fi
+          if [ -x qt-host/6.11.2/gcc_64/bin/moc ]; then echo "  host Qt present"; exit 0; fi
           . .qtvenv/bin/activate
           python -m pip install --quiet aqtinstall
-          python -m aqt install-qt linux desktop 6.9.0 linux_gcc_64 -m qtshadertools -O "$PWD/qt-host"
-          ls qt-host/6.9.0/gcc_64/bin/moc && echo "  host Qt installed"
+          python -m aqt install-qt linux desktop 6.11.2 linux_gcc_64 -m qtshadertools -O "$PWD/qt-host"
+          ls qt-host/6.11.2/gcc_64/bin/moc && echo "  host Qt installed"
 
 
       - name: numpy
@@ -523,7 +523,7 @@ jobs:
           set -e
           # also require the .llvm-prefix marker: a generator built before it existed will
           # search for clang builtins on its own and silently emit nothing.
-          # The generator must have been built against LLVM 20: emsdk 3.1.70 ships clang 20,
+          # The generator must have been built against LLVM 20: emsdk 6.0.9 ships clang 20,
           # and an older libclang cannot parse its sysroot however it is configured. A
           # cached 17.0.6 generator would skip this step and fail identically later.
           if [ -x deps/host/shiboken6/bin/shiboken6 ] && grep -q "llvm-20" deps/host/shiboken6/.llvm-prefix 2>/dev/null && grep -qx "2" deps/host/shiboken6/.builtin-includes-skippable 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then

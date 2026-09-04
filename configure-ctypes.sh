@@ -8,7 +8,7 @@
 set -e
 cd "$(dirname "$0")"
 ROOT="$PWD"; DW="$ROOT/deps/wasm"
-source emsdk/emsdk_env.sh >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 
 # 1. libffi (needs automake for autogen)
 if [ ! -d deps/src/libffi ]; then
@@ -50,14 +50,14 @@ if [ ! -f configure ]; then
   fi
   # Still absent after libtoolize copied m4/libtool.m4: this libtool release simply does
   # not ship LT_SYS_SYMBOL_USCORE. Supply it. The macro exists to discover whether the
-  # toolchain prefixes C symbols with an underscore, and for wasm32-emscripten the answer
+  # toolchain prefixes C symbols with an underscore, and for wasm64-emscripten the answer
   # is a fact rather than something to probe: it does not. libffi only reads
   # $sys_symbol_underscore afterwards, so a minimal definition is faithful, not a fudge.
   if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
     mkdir -p m4
     cat > m4/lt_sys_symbol_uscore.m4 <<'M4EOF'
 # Supplied by freecad-web: this libtool does not ship LT_SYS_SYMBOL_USCORE.
-# wasm32-emscripten does not prefix C symbols with an underscore.
+# wasm64-emscripten does not prefix C symbols with an underscore.
 AC_DEFUN([LT_SYS_SYMBOL_USCORE],
 [AC_CACHE_CHECK([for _ prefix in compiled symbols],
    [lt_cv_sys_symbol_underscore],
@@ -65,7 +65,7 @@ AC_DEFUN([LT_SYS_SYMBOL_USCORE],
  sys_symbol_underscore=$lt_cv_sys_symbol_underscore
 ])
 M4EOF
-    echo "supplied m4/lt_sys_symbol_uscore.m4 (no underscore prefix on wasm32-emscripten)"
+    echo "supplied m4/lt_sys_symbol_uscore.m4 (no underscore prefix on wasm64-emscripten)"
   fi
   if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
     echo "!! LT_SYS_SYMBOL_USCORE is defined nowhere reachable:"
@@ -76,10 +76,10 @@ M4EOF
   fi
   ./autogen.sh
 fi
-emconfigure ./configure --host=wasm32-unknown-emscripten --enable-static --disable-shared \
+emconfigure ./configure --host=wasm64-unknown-emscripten --enable-static --disable-shared \
   --disable-dependency-tracking CFLAGS="-fPIC -O2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread"
 emmake make -j4 libffi.la   # 'make' fails on docs (texinfo); build just the lib
-FFI="$PWD/wasm32-unknown-emscripten"
+FFI="$PWD/wasm64-unknown-emscripten"
 # These directories exist on the build machine because the whole stack was built
 # there; in a job that only builds the Python extensions they may not.
 mkdir -p "$DW/lib" "$DW/include"

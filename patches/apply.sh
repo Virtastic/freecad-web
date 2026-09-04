@@ -168,7 +168,7 @@ apply_one freecad       freecad.patch
 # Marker rather than a reverse-apply check: tools/patch-pyside-clang-options.py edits inside
 # the branch this patch adds, so after one build the file matches neither direction.
 apply_one pyside-setup  pyside-setup.patch \
-  'sources/pyside6/cmake/Macros/PySideModules.cmake::--clang-option=--target=wasm32-unknown-emscripten'
+  'sources/pyside6/cmake/Macros/PySideModules.cmake::--clang-option=--target=wasm64-unknown-emscripten'
 apply_one occt          occt.patch
 apply_one cpython       cpython-ctypes-wasm.patch
 apply_one numpy         numpy.patch

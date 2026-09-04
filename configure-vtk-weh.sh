@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Port VTK 9.3.1 to wasm32-emscripten (static, -pthread to match the FreeCAD
+# Port VTK 9.3.1 to wasm64-emscripten (static, -pthread to match the FreeCAD
 # stack). Minimal module set: just what FreeCAD's bundled SMESH (salomesmesh)
 # needs — the vtkUnstructuredGrid data model + mesh-quality filter + legacy IO.
 # No rendering, no wrapping (so no host compile-tools build required).

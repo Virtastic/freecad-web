@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Cross-compile numpy's C extensions to wasm32-emscripten and harvest them into
+# Cross-compile numpy's C extensions to wasm64-emscripten and harvest them into
 # deps/wasm/lib/numpy-mod/ for the FreeCAD monolith link.
 #
 # RECONSTRUCTED. This script was referenced by name in configure-gui-weh.sh and
@@ -42,7 +42,7 @@ if [ -f "$ROOT/.qtvenv/bin/activate" ]; then
     source "$ROOT/.qtvenv/bin/activate"
 fi
 # shellcheck disable=SC1091
-source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 
 # The cross-file needs absolute paths, so it is generated rather than committed.
 bash tools/gen-crossfiles.sh

@@ -66,6 +66,28 @@ pipeline in ways emscripten warns about on every call, which floods the console)
                    stops a renderer from a dead context being reused.
 
 Usage: patch-freecad-js.py <FreeCAD.js> [--check]
+
+WASM64: EXPECT THIS TO FAIL ON THE FIRST wasm64 LINK, AND THAT IS CORRECT.
+
+Every pattern below was derived by hand against wasm32 codegen. Under wasm64 emscripten
+indexes the heap differently and pointers cross the JS boundary as BigInt, so the literal
+anchors (HEAPF32[param>>2], ptr+i*2>>1, numProvidedIndexes<<2 ...) will not match.
+
+The tool fails CLOSED, deliberately: check_postconditions() asserts exact counts
+(__grow=function == 1, GLImmediate.__grow() == 6, __idxType=type == 1,
+__idxType===5125 == 3) and zero surviving _TODO_THROWS. So a non-matching run is a loud
+failure, not a silently unpatched engine -- which is the whole point, because an
+unpatched engine boots and then throws out of nine GL entry points, unwinds through
+Coin's render traversal and takes the viewport with it.
+
+To fix it, do NOT relax the postcondition counts. Re-derive the patterns:
+  1. link a trivial GL program twice, once with -m64 and once without, both with
+     -sLEGACY_GL_EMULATION=1 -sMAX_WEBGL_VERSION=2
+  2. diff the two generated glues to get the new indexing form
+  3. add a fourth matching mode alongside the plain / growable / relaxed ones
+  4. add wasm64 fixtures to --selftest
+That diff is cheap and takes minutes; discovering the same thing after a 12-hour link
+does not.
 """
 import re
 import sys

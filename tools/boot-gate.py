@@ -807,7 +807,7 @@ DOM_STACK_JS = r"""(() => {
   out.atCentre = (document.elementsFromPoint ? document.elementsFromPoint(cx, cy) : [])
     .slice(0, 6)
     .map(el => el.tagName + (el.id ? '#' + el.id : ''));
-  // Collect canvases from the document AND from every open shadow root -- Qt 6.9 keeps
+  // Collect canvases from the document AND from every open shadow root -- Qt 6.11 keeps
   // its own canvas inside #qt-shadow-container, where querySelectorAll cannot reach.
   const cans = [];
   const walk = (root) => {

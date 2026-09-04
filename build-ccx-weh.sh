@@ -12,7 +12,7 @@
 # Output: deps/wasm/lib/libccx.a
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 CCX="$ROOT/deps/src/ccx/ccx_2.22/src"
 SPOOLES="$ROOT/deps/src/spooles/SPOOLES.2.2"
 PREFIX="$ROOT/deps/wasm"

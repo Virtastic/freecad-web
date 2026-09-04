@@ -8,8 +8,8 @@
 import sys
 import importlib
 
-__version__ = "6.9.0"
-__version_info__ = (6, 9, 0, "", "")
+__version__ = "6.11.2"
+__version_info__ = (6, 11, 2, "", "")
 __all__ = ["QtCore", "QtGui", "QtWidgets", "QtNetwork", "QtSvg"]
 __path__ = []  # mark as package
 

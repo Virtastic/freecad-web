@@ -543,8 +543,12 @@ Sequence: measure what a real assembly actually needs → spike `INITIAL_MEMORY=
 only then consider 4 GB. Keep 2 GB as the shipped fallback until a suite passes clean. Do **not**
 pair this with other changes in the same link; if geometry goes strange you want one variable.
 
-**Longer term:** wasm64 (`MEMORY64`) removes the ceiling properly, but it means rebuilding the
-entire dependency stack for 64-bit pointers. Worth tracking, not worth starting.
+**Longer term: DONE, 2026-09-04.** wasm64 (`MEMORY64`) removed the ceiling properly. The whole
+dependency stack is built for 64-bit pointers: the target is `wasm64-emscripten` on emsdk
+6.0.9 with Qt 6.11.2, and the heap runs 1 GiB growing to 16 GiB. The signed-pointer hazard
+this item is about no longer exists -- it was an artefact of 32-bit pointers, not of the heap
+size. See "Memory: 16 GiB on wasm64" in `BUILD-WEH.md`; everything above in this item is now
+historical.
 
 ### 7. CalculiX is single-threaded
 

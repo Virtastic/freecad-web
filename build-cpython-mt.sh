@@ -24,12 +24,18 @@ echo "host python: $BUILD_PY"
 # not a build error: it is JSPI failing to suspend across a Python call, i.e. every modal
 # dialog quietly returning the wrong answer. BUILD-WEH.md has documented this since the
 # beginning; no script had ever passed the flag.
-export EMCC_CFLAGS="-pthread -DPY_CALL_TRAMPOLINE=1"   # atomics+bulk-memory, and the trampoline
+# APPEND, never assign. toolchain/env.sh puts -m64 in EMCC_CFLAGS, and emcc appends that to
+# every invocation including configure probes -- that is what makes this a wasm64 build. A
+# plain assignment here dropped it, so CPython alone would have been compiled for wasm32
+# while every other archive was wasm64, and the only symptom would have been a wall of
+# incompatible-target errors at the final link, hours later. build-cpython.sh next door
+# already did this correctly, which is what made the difference visible.
+export EMCC_CFLAGS="${EMCC_CFLAGS:+$EMCC_CFLAGS }-pthread -DPY_CALL_TRAMPOLINE=1"   # atomics+bulk-memory, and the trampoline
 rm -rf "$SRC/builddir/emscripten-mt" && mkdir -p "$SRC/builddir/emscripten-mt"
 cd "$SRC/builddir/emscripten-mt"
-CONFIG_SITE="$SRC/Tools/wasm/config.site-wasm32-emscripten" \
+CONFIG_SITE="$ROOT/toolchain/config.site-wasm64-emscripten" \
 emconfigure ../../configure -C \
-  --host=wasm32-unknown-emscripten \
+  --host=wasm64-unknown-emscripten \
   --build="$($SRC/config.guess)" \
   --with-emscripten-target=node \
   --with-build-python="$BUILD_PY"

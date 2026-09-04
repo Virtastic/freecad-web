@@ -19,7 +19,7 @@ cd "$(dirname "$0")"
 OUT="$ROOT/weh-objs"
 CPY="$ROOT/deps/src/cpython"
 PYMT="$CPY/builddir/emscripten-mt"
-QT="$ROOT/qt/6.9.0/wasm_mt_weh"
+QT="$ROOT/qt/6.11.2/wasm_mt_weh"
 mkdir -p "$OUT"
 
 # -fwasm-exceptions and -pthread must match the rest of the build. Mixing exception models
@@ -67,7 +67,7 @@ echo "  qt include:     $QT/include${QTVER:+ (+ private $QTVER)}${QTMKSPEC:+ (+ 
 # supplies that one, and this file exists only for the entry points the emulation LACKS.
 #
 # wasm_event_dispatch.cpp goes with -sEXPORTED_FUNCTIONS+=_fcweb_dispatch_event and
-# -sASYNCIFY_EXPORTS=fcweb_run_python,fcweb_dispatch_event, both of which the recorded
+# -sJSPI_EXPORTS=fcweb_run_python,fcweb_dispatch_event, both of which the recorded
 # link command scratchpad/linkcmds/fc-linkcmd-weh.sh already carries. NOTE that
 # configure-gui-weh.sh's own linker flags do NOT -- it lists neither the object nor the
 # two flags -- so a link driven from the cmake target alone leaves Qt DOM events on a

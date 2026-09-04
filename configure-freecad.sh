@@ -33,13 +33,13 @@ emcmake cmake -S deps/src/freecad -B build-freecad -G Ninja \
   -DFREECAD_USE_EXTERNAL_PIVY=OFF \
   -DFREECAD_USE_PCH=OFF \
   -DFREECAD_USE_FREETYPE=OFF \
-  -DCMAKE_PREFIX_PATH="$DW;$ROOT/qt/6.9.0/wasm_multithread" \
-  -DCMAKE_FIND_ROOT_PATH="$DW;$ROOT/qt/6.9.0/wasm_multithread" \
+  -DCMAKE_PREFIX_PATH="$DW;$ROOT/qt/6.11.2/wasm_multithread" \
+  -DCMAKE_FIND_ROOT_PATH="$DW;$ROOT/qt/6.11.2/wasm_multithread" \
   -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
   -DFREECAD_QT_VERSION=6 \
   -DBoost_USE_STATIC_LIBS=ON -DBoost_USE_STATIC_RUNTIME=ON \
-  -DQt6_DIR="$ROOT/qt/6.9.0/wasm_multithread/lib/cmake/Qt6" \
-  -DQT_HOST_PATH="$ROOT/qt/6.9.0/macos" \
+  -DQt6_DIR="$ROOT/qt/6.11.2/wasm_multithread/lib/cmake/Qt6" \
+  -DQT_HOST_PATH="$ROOT/qt/6.11.2/macos" \
   -DOpenCASCADE_DIR="$DW/lib/cmake/opencascade" \
   -DEIGEN3_INCLUDE_DIR="$DW/include" \
   -DPython3_EXECUTABLE="$HOSTPY" \
@@ -47,7 +47,7 @@ emcmake cmake -S deps/src/freecad -B build-freecad -G Ninja \
   -DPython3_LIBRARY="$PYMT/libpython3.13.a" \
   -DPYTHON_VERSION_STRING=3.13 \
   -DZLIB_INCLUDE_DIR="$SYSROOT/include" \
-  -DZLIB_LIBRARY="$SYSROOT/lib/wasm32-emscripten/libz.a" \
+  -DZLIB_LIBRARY="$SYSROOT/lib/wasm64-emscripten/libz.a" \
   -DCMAKE_CXX_FLAGS="-fexceptions -pthread -O2 -DBOOST_ALL_NO_LIB --use-port=zlib" \
   -DCMAKE_C_FLAGS="-fexceptions -pthread -O2 --use-port=zlib" \
   -DCMAKE_EXE_LINKER_FLAGS="$FC_LINK_MODE_FLAGS -lembind -pthread -sALLOW_MEMORY_GROWTH -sEXIT_RUNTIME=1 -sPTHREAD_POOL_SIZE=4 -sASSERTIONS=1 -sFORCE_FILESYSTEM=1 --pre-js=$ROOT/pre-env.js --use-port=zlib --use-port=bzip2 --use-port=sqlite3 $PYMT/Modules/_decimal/libmpdec/libmpdec.a $PYMT/Modules/_hacl/libHacl_Hash_SHA2.a $PYMT/Modules/expat/libexpat.a"

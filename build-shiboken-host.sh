@@ -32,8 +32,8 @@ HOSTPY3="$(command -v python3 || command -v python)"
 
 # --- host Qt ---------------------------------------------------------------------------
 QT_HOST=""
-for d in "$ROOT/qt-host/6.9.0/gcc_64" "$ROOT/qt/6.9.0/macos" "$ROOT/qt/6.9.0/gcc_64" \
-         "$ROOT/qt-host/6.9.0/macos"; do
+for d in "$ROOT/qt-host/6.11.2/gcc_64" "$ROOT/qt/6.11.2/macos" "$ROOT/qt/6.11.2/gcc_64" \
+         "$ROOT/qt-host/6.11.2/macos"; do
     if [ -x "$d/bin/qmake" ] || [ -x "$d/bin/moc" ]; then QT_HOST="$d"; break; fi
 done
 [ -n "$QT_HOST" ] || { echo "!! no host Qt (need bin/qmake or bin/moc)" >&2; exit 1; }

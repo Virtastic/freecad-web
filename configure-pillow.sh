@@ -7,7 +7,7 @@
 set -e
 cd "$(dirname "$0")"
 ROOT="$PWD"; DW="$ROOT/deps/wasm"; P="$ROOT/deps/src/Pillow"
-source emsdk/emsdk_env.sh >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 OUT=/tmp/pilbuild; mkdir -p "$OUT"; rm -f "$OUT"/*.o
 FLAGS=(-c -O2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread -fPIC -DHAVE_LIBZ -DPILLOW_VERSION='"10.4.0"' --use-port=zlib
   -I"$P/src/libImaging" -I"$ROOT/deps/src/cpython/Include" -I"$ROOT/deps/src/cpython/builddir/emscripten-mt")

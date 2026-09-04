@@ -5,8 +5,8 @@
 import sys
 import importlib
 
-__version__ = "6.9.0"
-__version_info__ = (6, 9, 0, "", "")
+__version__ = "6.11.2"
+__version_info__ = (6, 11, 2, "", "")
 # Consumed by shibokensupport.signature.parser._get_flag_enum_option; keep
 # minimum < (3, 10) to avoid its "can now be simplified" dev warnings.
 __minimum_python_version__ = (3, 9)

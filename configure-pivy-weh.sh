@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Cross-compile pivy (the SWIG Coin3D bindings) to wasm32-emscripten, producing the
+# Cross-compile pivy (the SWIG Coin3D bindings) to wasm64-emscripten, producing the
 # _coin.a that MainGui.cpp registers as the builtin `_coin` module.
 #
 # Extracted from rebuild-pyside-weh.sh, which builds shiboken, PySide AND pivy in one
@@ -25,7 +25,7 @@ if [ -f "$ROOT/.qtvenv/bin/activate" ]; then
     source "$ROOT/.qtvenv/bin/activate"
 fi
 # shellcheck disable=SC1091
-source "$ROOT/emsdk/emsdk_env.sh" >/dev/null 2>&1
+source "$ROOT/toolchain/env.sh"
 
 CPY="$ROOT/deps/src/cpython"
 PYMT="$CPY/builddir/emscripten-mt"

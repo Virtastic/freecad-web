@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Port IfcOpenShell 0.8.6 to wasm32-emscripten for real IFC in FreeCAD's BIM/Arch
+# Port IfcOpenShell 0.8.6 to wasm64-emscripten for real IFC in FreeCAD's BIM/Arch
 # (replaces the ifcopenshell stub). Builds IfcParse (schema parser) + IfcGeom
 # (geometry over OUR wasm OCCT 7.8.1 — exact version match) + the SWIG Python
 # wrapper as a static module (inittab like pivy/_coin). Uses OUR emsdk 3.1.70 +
