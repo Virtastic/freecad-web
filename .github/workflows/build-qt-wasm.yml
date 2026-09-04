@@ -98,27 +98,33 @@ jobs:
           cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
           . ./emsdk_env.sh && emcc --version | head -1
 
-          # Expand $CFGDIR in .emscripten to a real path, for Qt's benefit.
+          # Rewrite EMSCRIPTEN_ROOT into the exact shape Qt parses.
           #
-          # emsdk 6.0.9 writes its config with paths relative to a $CFGDIR placeholder that
-          # emcc expands itself at runtime. Qt does not run emcc to find emcc: its
-          # __qt_internal_query_emsdk_version reads this file, takes the string literally,
-          # and tries to execute
-          #     .../emsdk/$CFGDIR/upstream/emscripten/emcc --version
-          # which cannot exist. configure then dies with "Couldn't determine Emscripten
-          # version" (QtPublicWasmToolchainHelpers.cmake:43) before compiling anything.
+          # QtPublicWasmToolchainHelpers.cmake regex-extracts the QUOTED value out of
+          # .emscripten and appends it to $EMSDK:
+          #     set(EXECUTE_COMMANDPATH "$ENV{EMSDK}/${emroot_path}/emcc")
+          # so the value has to be the SUFFIX "/upstream/emscripten" and nothing else.
           #
-          # This is the cost of running Qt 6.11.2 on an emscripten it never pinned -- and it
-          # is worth being clear that it is a PATH-PARSING bug, not a wasm64 one. Nothing
-          # here is incompatible; Qt simply cannot read a newer emsdk's config format.
-          # Rewriting the placeholder is a smaller, more honest change than patching Qt.
+          # emsdk 6.0.9 writes it as '$CFGDIR/upstream/emscripten', a placeholder emcc expands
+          # itself. Qt does not expand it, so it built $EMSDK/$CFGDIR/... and failed. Making
+          # the value ABSOLUTE fails differently -- Qt still prepends $EMSDK and you get the
+          # path doubled, which is what the second attempt produced. Only the bare suffix
+          # satisfies the way Qt joins them.
+          #
+          # emcc does not need this value: it locates its own root from its file path. The
+          # emcc --version below is the proof, and it runs BEFORE Qt configure so a wrong
+          # guess here fails in seconds rather than after a Qt build.
           cfg="$PWD/.emscripten"
-          if [ -f "$cfg" ] && grep -q CFGDIR "$cfg"; then
-            sed -i "s|\$CFGDIR|$PWD|g" "$cfg"
-            echo "  expanded \$CFGDIR -> $PWD in .emscripten"
-            grep -E "EMSCRIPTEN_ROOT|LLVM_ROOT|BINARYEN_ROOT" "$cfg" | sed "s/^/    /"
+          if [ -f "$cfg" ]; then
+            sed -i "s|^EMSCRIPTEN_ROOT.*|EMSCRIPTEN_ROOT = '/upstream/emscripten'|" "$cfg"
+            echo "  .emscripten now says: $(grep EMSCRIPTEN_ROOT "$cfg")"
+            if emcc --version | head -1; then
+              echo "  emcc still works with the rewritten config"
+            else
+              echo "::error::emcc broke after rewriting EMSCRIPTEN_ROOT"; exit 1
+            fi
           else
-            echo "  .emscripten has no \$CFGDIR placeholder; nothing to expand"
+            echo "::error::no .emscripten at $cfg"; exit 1
           fi
 
       # Everything below logs to /tmp/qtlogs and is uploaded as an ARTIFACT. GitHub's job-log
