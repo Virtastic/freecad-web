@@ -5,7 +5,7 @@
 **freecad-web-dev** on the builder's Jenkins (`http://192.168.1.130:8080`) is a *Pipeline script
 from SCM* job: every build clones latest **`dev`** from `github.com/Virtastic/freecad-web.git`
 (credential `github-virtastic`) and runs this repo's `Jenkinsfile` — Fetch release artifacts → GL-patch
-+ build image → Deploy to `testapp@192.168.1.131:8084` → Smoke. Click **Build Now**; no manual sync.
++ build image → Deploy to `testapp@192.168.1.137:8084` → Smoke. Click **Build Now**; no manual sync.
 
 ## Why this differs from the game ports
 
@@ -22,7 +22,12 @@ production path — never touched here.
 | Role         | host                      | what it is                                   |
 |--------------|---------------------------|----------------------------------------------|
 | Build server | `192.168.1.130`           | Jenkins (Docker container) + Docker.         |
-| Test app srv | `testapp@192.168.1.131`   | Runs `freecad-test` (nginx) on `:8084`.      |
+| Test app srv | `testapp@192.168.1.137`   | Runs `freecad-test` (nginx) on `:8084`.      |
+
+The test host is `.137`, and it is only reachable from the **Jenkins container** -- neither
+the build server's host namespace nor a shell on it has a route (`No route to host`). This
+file said `.131` until 2026-09-04, which is a dead address; `Jenkinsfile` has always been
+the source of truth.
 
 Ports across the set: ja2 = 8081, jk2 = 8082, jka = 8083, **freecad = 8084**.
 
@@ -32,7 +37,7 @@ Ports across the set: ja2 = 8081, jk2 = 8082, jka = 8083, **freecad = 8084**.
 GH_TOKEN=<read-token> ci/jenkins/fetch-artifacts.sh     # download latest release artifacts -> play-gui/
 ci/jenkins/build-image.sh                               # GL-patch + docker build freecad:test
 ci/jenkins/deploy-test.sh                               # docker save | ssh test docker load; run :8084
-ci/jenkins/smoke-test.sh http://192.168.1.131:8084      # (or https://freecad.dev.virtastic.app)
+ci/jenkins/smoke-test.sh http://192.168.1.137:8084      # (or https://freecad.dev.virtastic.app)
 ```
 
 ## Notes
@@ -43,7 +48,7 @@ ci/jenkins/smoke-test.sh http://192.168.1.131:8084      # (or https://freecad.de
 - The image is large (~785 MB — the engine and the 341 MB preload FS are baked in). `deploy-test.sh`
   ships it over the LAN with `docker save | ssh docker load`.
 - `freecad.dev.virtastic.app` is **live** (openresty, COOP/COEP set) and is what the
-  smoke stage checks. It falls back to `192.168.1.131:8084` only if the public origin is unreachable.
+  smoke stage checks. It falls back to `192.168.1.137:8084` only if the public origin is unreachable.
 - The job was renamed `FreeCAD-Web-Test` -> `freecad-web-dev` on 2026-08-26, matching the
   `*-web-dev` convention the other jobs on this Jenkins now use.
 - The job tracked `*/main` until 2026-08-26 and now tracks `*/dev`. `main` had been stale for weeks,
