@@ -1,0 +1,36 @@
+diff --git a/ThirdParty/diy2/vtkdiy2/include/vtkdiy2/fmt/format.h b/ThirdParty/diy2/vtkdiy2/include/vtkdiy2/fmt/format.h
+index dcf4a39..050c966 100644
+--- a/ThirdParty/diy2/vtkdiy2/include/vtkdiy2/fmt/format.h
++++ b/ThirdParty/diy2/vtkdiy2/include/vtkdiy2/fmt/format.h
+@@ -481,10 +481,30 @@ void buffer<T>::append(const U* begin, const U* end) {
+ }  // namespace internal
+ 
+ // A UTF-8 string view.
++//
++// FCWEB: pass the length explicitly instead of letting basic_string_view compute it.
++//
++// fmt only defines its own `enum char8_t : unsigned char` when the compiler has no native
++// char8_t (core.h:332, #ifndef __cpp_char8_t), and VTK compiles this at -std=c++11, so that
++// is the branch taken. basic_string_view then computes the length with
++// std::char_traits<Char>::length -- std::char_traits of an ENUM type. That worked only
++// because libc++ once shipped a generic char_traits PRIMARY TEMPLATE; the libc++ in emsdk
++// 6.0.9 declares char_traits without defining it, so the instantiation fails:
++//     error: implicit instantiation of undefined template
++//     note: template is declared here -- struct char_traits;
++//
++// Taking the length from the ORIGINAL char* uses std::char_traits<char>, a real
++// specialisation, and selects the (ptr, count) constructor, which never touches
++// char_traits<char8_t>. Same bytes, same semantics, one fewer instantiation.
++//
++// A toolchain-age problem, not a wasm64 one: the same VTK against the same libc++ fails
++// identically at wasm32. -DFMT_USE_CHAR8_T=0 does NOT help -- u8string_view is defined
++// unconditionally in this vintage of fmt, which is why that was tried first and failed.
+ class u8string_view : public basic_string_view<char8_t> {
+  public:
+   u8string_view(const char* s)
+-      : basic_string_view<char8_t>(reinterpret_cast<const char8_t*>(s)) {}
++      : basic_string_view<char8_t>(reinterpret_cast<const char8_t*>(s),
++                                   std::char_traits<char>::length(s)) {}
+   u8string_view(const char* s, size_t count) FMT_NOEXCEPT
+       : basic_string_view<char8_t>(reinterpret_cast<const char8_t*>(s), count) {
+   }

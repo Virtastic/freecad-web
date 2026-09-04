@@ -42,6 +42,7 @@ on:
       - 'patches/cpython-ctypes-wasm.patch'
       - 'patches/numpy.patch'
       - 'patches/vtk-expat-wasm-xmlsize.patch'
+      - 'patches/vtk-fmt-char8-traits.patch'
       - 'configure-*-weh.sh'
       # Named without the -weh suffix every other configure script carries, so the
       # glob above misses it -- but the lane really does run it. Listed explicitly
@@ -144,7 +145,7 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/wasm
-          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
+          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/vtk-fmt-char8-traits.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
           # Two levels. The exact source-hash prefix first; then a bare `fcweb-deps-<KEY>-`
           # fallback, which restore-keys resolves to the NEWEST matching entry.
           #
@@ -156,7 +157,7 @@ jobs:
           # the point. Without the fallback, touching toolchain/** rebuilds all of boost,
           # xerces, OCCT and VTK to recompile the one library that depends on it.
           restore-keys: |
-            fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-
+            fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/vtk-fmt-char8-traits.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-
             fcweb-deps-${{ env.DEPS_KEY }}-
 
       # A hosted runner ships cmake, ninja and gcc. The OVH box does not: run 32155916113
@@ -370,7 +371,7 @@ jobs:
           # -- which is how the shipped FEMExample stayed unopenable while this step
           # printed "cache hit". Stamp the inputs beside the archives and compare.
           stamp=deps/wasm/lib/.fcweb-vtk-inputs
-          want=$(cat patches/vtk-expat-wasm-xmlsize.patch configure-vtk-weh.sh | sha256sum | cut -d" " -f1)
+          want=$(cat patches/vtk-expat-wasm-xmlsize.patch patches/vtk-fmt-char8-traits.patch configure-vtk-weh.sh | sha256sum | cut -d" " -f1)
           if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libvtk*.a 2>/dev/null | wc -l)" -ge 20 ] && [ "$(cat $stamp 2>/dev/null)" = "$want" ]; then
             echo "  VTK: already built from these inputs (cache hit), skipping"; exit 0
           fi
@@ -667,7 +668,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/wasm
-          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
+          key: fcweb-deps-${{ env.DEPS_KEY }}-${{ hashFiles('patches/occt.patch', 'patches/coin3d.patch', 'patches/cpython-ctypes-wasm.patch', 'patches/numpy.patch', 'patches/vtk-expat-wasm-xmlsize.patch', 'patches/vtk-fmt-char8-traits.patch', 'patches/apply.sh', 'configure-*-weh.sh', 'build-*-weh.sh', 'build-cpython*.sh', 'toolchain/**') }}-${{ github.run_id }}
 
       - name: Disk after
         if: always()

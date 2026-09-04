@@ -180,6 +180,14 @@ apply_one coin3d        coin3d.patch
 # that is how the tarball extracts.
 apply_one VTK-9.3.1     vtk-expat-wasm-xmlsize.patch   'ThirdParty/expat/CMakeLists.txt::AND NOT EMSCRIPTEN'
 
+# VTK vendors an fmt old enough that it defines its own `enum char8_t` whenever the
+# compiler has no native one -- and VTK builds at -std=c++11, so it always does here.
+# basic_string_view then instantiates std::char_traits<that enum>, which only ever worked
+# because libc++ shipped a generic char_traits primary template. emsdk 6.0.9 does not, so
+# ThirdParty/diy2 fails to compile and takes ParallelDIY with it. Toolchain age, not
+# pointer width: the same VTK fails identically at wasm32 against the same libc++.
+apply_one VTK-9.3.1     vtk-fmt-char8-traits.patch     'ThirdParty/diy2/vtkdiy2/include/vtkdiy2/fmt/format.h::char_traits<char>::length'
+
 # Applying cleanly says the lines went in, not that they went in somewhere they can run.
 # Four fixes in this port were written where control never reached them; the last one had
 # been spliced into the middle of an if-body, so the rest of that branch sat after a return
