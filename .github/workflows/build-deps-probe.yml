@@ -3,7 +3,7 @@
 name: probe — can the FreeCAD deps build in CI?
 
 # I claimed a FreeCAD relink "needs the build machine" and could not happen in CI, citing 14
-# dependency builds plus Qt 6.11 from source. I never tested it. That is the same claim I made
+# dependency builds plus Qt 6.9 from source. I never tested it. That is the same claim I made
 # about CalculiX, where it turned out to be false and the whole solver now builds here.
 #
 # This measures rather than argues. It builds real dependencies for wasm on a hosted runner

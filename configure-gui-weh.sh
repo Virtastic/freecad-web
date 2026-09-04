@@ -13,7 +13,7 @@ SYSROOT="$(em-config CACHE)/sysroot"
 
 # ---- Host-machine paths --------------------------------------------------------------
 # Everything below used to name ONE machine: python.exe (a macOS-only name for CPython's
-# host build), qt/6.11.2/macos, and a pybind11 under .qtvenv/lib/python3.14. That is the
+# host build), qt/6.9.0/macos, and a pybind11 under .qtvenv/lib/python3.14. That is the
 # same defect the numpy, pivy, IfcOpenShell and PySide lanes each hit separately -- a
 # configure that only runs where it was written. Resolve each, and fail naming what is
 # missing rather than handing cmake a path that does not exist.
