@@ -19,9 +19,8 @@
 #
 # When updating CPython, re-copy from Tools/wasm/config.site-wasm32-emscripten and read the
 # diff: a new entry there that IS width-dependent would need adjusting here.
-## CONFIG_SITE=Tools/wasm/config.site-wasm32-emscripten \
-#     emconfigure ./configure --host=wasm32-unknown-emscripten --build=...
 #
+# Upstream attribution for the settings below, copied verbatim:
 # Written by Christian Heimes <christian@python.org>
 # Partly based on pyodide's pyconfig.undefs.h file.
 #

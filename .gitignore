@@ -1,6 +1,6 @@
 # === Vendored toolchains (multi-GB, not source) ===
-# emsdk* covers both pinned toolchains: emsdk (3.1.70, compiles/links) and
-# emsdk2 (4.0.23, supplies wasm-opt only). See BUILD-WEH.md.
+# emsdk* covers the pinned toolchain: emsdk (6.0.9, compiles and links, wasm64).
+# The emsdk2 wasm-opt shim is gone -- see BUILD-WEH.md.
 /emsdk*/
 /qt/
 /deps/

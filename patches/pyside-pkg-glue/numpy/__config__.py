@@ -33,7 +33,7 @@ CONFIG = _cleanup(
             "c": {
                 "name": "emscripten",
                 "linker": r"ld.wasm",
-                "version": "3.1.70",
+                "version": "6.0.9",
                 "commands": r"<freecad-web-root>/emsdk/upstream/emscripten/emcc",
                 "args": r"-fexceptions, -pthread, -O2, -I<freecad-web-root>/deps/src/cpython/Include, -I<freecad-web-root>/deps/src/cpython/builddir/emscripten-mt",
                 "linker args": r"-fexceptions, -pthread",
@@ -49,7 +49,7 @@ CONFIG = _cleanup(
             "c++": {
                 "name": "emscripten",
                 "linker": r"ld.wasm",
-                "version": "3.1.70",
+                "version": "6.0.9",
                 "commands": r"<freecad-web-root>/emsdk/upstream/emscripten/em++",
                 "args": r"-fexceptions, -pthread, -O2, -I<freecad-web-root>/deps/src/cpython/Include, -I<freecad-web-root>/deps/src/cpython/builddir/emscripten-mt",
                 "linker args": r"-fexceptions, -pthread",

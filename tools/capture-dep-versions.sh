@@ -87,7 +87,7 @@ done
 
 echo
 echo "# --- toolchains ---"
-for t in emsdk emsdk2; do
+for t in emsdk; do
   if [ -d "$t/.git" ]; then
     printf '%-16s git      %s  %s\n' "$t" \
       "$(git -C "$t" rev-parse HEAD 2>/dev/null || echo unknown)" \

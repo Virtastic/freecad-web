@@ -8,7 +8,7 @@
 # must source this first so nothing accidentally falls back to Homebrew emscripten.
 #
 # WHY 6.0.9 AND NOT A QT-SANCTIONED VERSION. Qt for WebAssembly pins one emscripten per Qt
-# minor: Qt 6.11 -> 3.1.70 (which is why this project sat there), Qt 6.11 -> 4.0.7. But
+# minor: Qt 6.9 -> 3.1.70 (which is why this project sat there), Qt 6.11 -> 4.0.7. But
 # wasm64 with pthreads and a MAXIMUM_MEMORY above 4 GB is only fixed in 5.0.1/6.x
 # (emscripten#26311, PR #26357), and the pthread mailbox gap is emscripten#21159. Both
 # pins cannot be honoured at once, so Qt 6.11 is deliberately run on an emscripten it has
