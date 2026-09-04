@@ -349,6 +349,13 @@ POLYGON_MODE = [
         'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;'
         'try{if(GLctx.webglPolygonMode)GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};'
         + _CTX_STATE_INSTALLER,
+        # 4th field: the POINT guard below rewrites the forwarding condition inside this
+        # replacement, so `new` stops appearing whole once both are in -- the same 3-pass
+        # re-insertion trap the flush patch documents. Without this the patch flips from
+        # 'already applied' to NOT FOUND, apply() errors, and the tool refuses to write
+        # ANY patch, silently taking the other 32 with it. Detect on the assignment, which
+        # both forms contain and nothing rewrites.
+        'GLEmulation.__polyMode=pmode',
     ),
     (
         # Anchored on flush()'s DRAW TAIL, which no other patch rewrites -- the head is
@@ -369,6 +376,34 @@ POLYGON_MODE = [
         '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){',
     ),
 ]
+# ---- polygon mode: do not hand GL_POINT to an extension that rejects it --------------
+#
+# WEBGL_polygon_mode accepts FILL (6914) and LINE (6913) only, on FRONT_AND_BACK (1032).
+# Coin also asks for POINT (6912) -- the Points draw style -- and the extension answers
+# GL_INVALID_ENUM "glPolygonModeANGLE: Invalid polygon mode" for every single call.
+# Reported from the dev console opening a sample file: 255 of them, then "too many
+# errors, no more errors will be reported for this context", which silences the console
+# for anything genuinely wrong afterwards.
+#
+# The surrounding try/catch cannot help: a WebGL error is not a JS exception, it sets the
+# context error state and logs.
+#
+# Behaviour is otherwise unchanged. __polyMode is still recorded, so the flush patch above
+# keeps its existing handling. POINT mode still rasterises filled where the extension is
+# present (flush only drops triangle draws when the extension is ABSENT) -- that is
+# pre-existing and not what this fixes; this only stops the error storm.
+#
+# Its own entry rather than an edit to the patch above, because changing that patch's
+# replacement would leave an already-patched release artifact matching neither its anchor
+# nor its new text, and the fix would never reach the asset that actually ships.
+POLYGON_MODE += [
+    (
+        'glPolygonMode does not forward POINT to WEBGL_polygon_mode',
+        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode)GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
+        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode&&face===1032&&(pmode===6913||pmode===6914))GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
+    ),
+]
+
 PATCHES += POLYGON_MODE
 
 

@@ -274,6 +274,30 @@ def _fix_proxy_host_map():
     return "www.freecad.org -> docswww"
 
 
+def _fix_stats_url():
+    """Ask for the stats file at the host that actually serves it.
+
+    The shipped preference points at https://freecad.org/addon_stats.json, which 301s to
+    the www host over plain http. The proxy rewrites that redirect now, but a 301 is
+    cached by the browser INDEFINITELY -- so anyone who loaded the page before the fix
+    keeps replaying the old one from cache and keeps getting the mixed-content block, no
+    matter what the server returns. A hard refresh does not clear it.
+
+    Asking for the www URL directly changes the proxy path (/proxy/docswww/... instead of
+    /proxy/docs/...), which is a different cache key, so the poisoned entry is bypassed
+    rather than waited out. It also removes the redirect hop entirely.
+    """
+    import addonmanager_freecad_interface as fci
+
+    prefs = fci.Preferences()
+    current = prefs.get("AddonsStatsURL") or ""
+    if current.startswith("https://freecad.org/"):
+        prefs.set("AddonsStatsURL", current.replace(
+            "https://freecad.org/", "https://www.freecad.org/", 1))
+        return "stats URL -> www host (bypasses cached 301)"
+    return "stats URL already %s" % (current or "unset")
+
+
 def _install_now():
     """Applied the first time an Addon Manager module is importable."""
     notes = []
@@ -291,6 +315,10 @@ def _install_now():
         notes.extend(fcweb_am_install.install())
     except Exception as e:
         notes.append("install patches FAILED %r" % (e,))
+    try:
+        notes.append(_fix_stats_url())
+    except Exception as e:
+        notes.append("stats URL patch FAILED %r" % (e,))
     try:
         notes.append(_fix_proxy_host_map())
     except Exception as e:
