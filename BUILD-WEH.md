@@ -276,6 +276,25 @@ bash scratchpad/linkcmds/fc-linkcmd-weh.sh     # link (~45-60 min; wasm-opt is t
 bash scratchpad/stage-jspi.sh                  # GL post-patches + validate -> play-gui/
 ```
 
+**`stage-jspi.sh` can report `mat:MISS` and still exit 0.** Its material-colour regex only
+matched an else-branch of `{0}`; the 2026-09-04 link emitted
+`{throw"glMaterialfv: TODO: "+pname}` instead, so the patch silently did not apply and the
+staged `FreeCAD.js` came out without a fix the shipping artifact had. The link succeeded,
+the size was right, and only a byte comparison against the live file showed it. Two other
+traps in the same run: `scratchpad/wasmvalidate.js` was absent, so the `VALID` check never
+ran at all, and `fc-post-weh.sh` died on a missing `play/server.py` after doing its work --
+`stage-jspi.sh` swallows that with `|| true`.
+
+So after staging, verify rather than trust the exit status:
+
+```bash
+python3 tools/patch-freecad-material.py play-gui/FreeCAD.js   # tracked; matches either form
+python3 tools/patch-freecad-js.py play-gui/FreeCAD.js --check
+```
+
+The material patch is now tracked as `tools/patch-freecad-material.py` precisely because
+living only in `scratchpad/` is how it came to be lost.
+
 `stage-jspi.sh` must run after every link. It applies the minified GL-glue
 patches (`fc-post-weh.sh`), the material-colour patch, and the JSPI table
 guard, then validates the wasm. It prints `VALID` on success — if it doesn't,
