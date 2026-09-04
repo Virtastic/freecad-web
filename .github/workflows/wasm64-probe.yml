@@ -1,0 +1,219 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
+name: probe - does the wasm64 toolchain actually work?
+
+# Phase 1 of the wasm32 -> wasm64 conversion, as a 15-minute job instead of a discovery
+# buried inside a 12-hour link.
+#
+# Three things decide whether wasm64 is possible here at all, and none of them had been
+# tested when the conversion was written. Each is cheap to answer and ruinous to guess:
+#
+#   1. pthreads. emscripten#21159 records Emscripten_Thread_Mailbox_Await as "Wasm64 is not
+#      currently supported". This project cannot drop threads -- Qt threads,
+#      PTHREAD_POOL_SIZE=16, and a SharedArrayBuffer gate on boot. If threads do not work at
+#      64-bit, the conversion stops here rather than after 23 dependency builds.
+#
+#   2. A 16 GiB ceiling. emscripten#26311 failed at link with "value 262144 is above the
+#      upper bound 65536" because the tooling computed pages against the 32-bit ceiling. PR
+#      #26357 merged 2026-02-27 and emsdk 6.0.9 shipped 2026-09-01, so it should be fixed --
+#      "should" is why this runs it.
+#
+#   3. LEGACY_GL_EMULATION. It is the entire 3D viewport (Coin3D drives the fixed-function
+#      pipeline), it is barely-maintained emscripten code, and it has almost certainly never
+#      been exercised at 64-bit. This links it both ways and uploads the two generated JS
+#      glues, because tools/patch-freecad-js.py needs that diff to re-derive its 41 anchors
+#      -- and getting the diff here costs minutes, while getting it from a full link costs a
+#      day.
+#
+# Every step is continue-on-error on purpose: the point is to come back with ALL the answers
+# in one run, not to stop at the first one that fails.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, ovh, virtastic]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install emsdk 6.0.9
+        run: |
+          set -e
+          t0=$SECONDS
+          rm -rf emsdk
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
+          . ./emsdk_env.sh && emcc --version | head -1
+          node --version | sed "s/^/  node: /"
+          echo "  emsdk install: $((SECONDS-t0))s"
+
+      # The single source of truth must agree it is targeting wasm64 before anything else is
+      # believed. env.sh asserts __wasm64__ itself and returns non-zero if it is absent.
+      - name: A. toolchain/env.sh reports wasm64
+        id: env
+        continue-on-error: true
+        run: |
+          set -e
+          mkdir -p /tmp/w64
+          . ./toolchain/env.sh
+          echo "EMCC_CFLAGS=$EMCC_CFLAGS"
+
+      - name: B. pointer width is actually 64-bit
+        id: width
+        continue-on-error: true
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          cat > /tmp/w64/width.c <<'CEOF'
+          #include <stdio.h>
+          int main(void) {
+            if (sizeof(void*) == 8) puts("OK sizeof(void*)==8"); else puts("FAIL void* not 8");
+            if (sizeof(long)  == 8) puts("OK sizeof(long)==8");  else puts("FAIL long not 8");
+            if (sizeof(int)   == 4) puts("OK sizeof(int)==4");   else puts("FAIL int not 4");
+            return 0;
+          }
+          CEOF
+          emcc $EMCC_CFLAGS /tmp/w64/width.c -o /tmp/w64/width.js
+          node /tmp/w64/width.js
+
+      # RISK 1 + 2 together, minus JSPI so that a JSPI-only failure cannot be mistaken for a
+      # threading or a memory failure. This is exactly the combination emscripten#21159 and
+      # #26311 are about: MEMORY64 + pthreads + a ceiling above 4 GB.
+      - name: C. RISK 1+2 - pthreads and a 16 GiB ceiling at wasm64
+        id: threads
+        continue-on-error: true
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          cat > /tmp/w64/thr.c <<'CEOF'
+          #include <stdio.h>
+          #include <pthread.h>
+          static void *worker(void *a) { *(int *)a = 42; return 0; }
+          int main(void) {
+            pthread_t t; int v = 0;
+            if (pthread_create(&t, 0, worker, &v)) { puts("FAIL pthread_create"); return 1; }
+            if (pthread_join(t, 0))                { puts("FAIL pthread_join");   return 1; }
+            if (v != 42)                           { puts("FAIL worker never ran"); return 1; }
+            puts("OK pthread create+join+result at wasm64");
+            return 0;
+          }
+          CEOF
+          echo "--- linking with MAXIMUM_MEMORY=17179869184 (16 GiB) ---"
+          emcc $EMCC_CFLAGS -pthread -sPTHREAD_POOL_SIZE=4 -sINITIAL_MEMORY=1073741824 -sMAXIMUM_MEMORY=17179869184 -sALLOW_MEMORY_GROWTH=1 /tmp/w64/thr.c -o /tmp/w64/thr.js
+          echo "  link OK -- emscripten#26311 (page count vs the 32-bit ceiling) is NOT present"
+          echo "--- running ---"
+          if node /tmp/w64/thr.js; then
+            echo "  ran on the default node"
+          else
+            echo "  default node refused; retrying with the experimental flag"
+            node --experimental-wasm-memory64 /tmp/w64/thr.js
+          fi
+
+      # The full production flag set. LINK ONLY: node may lack JSPI, and a JSPI runtime gap is
+      # a different question from whether these flags can coexist at 64-bit.
+      - name: D. full production flag set links at wasm64
+        id: flags
+        continue-on-error: true
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          emcc $EMCC_CFLAGS -pthread -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -sJSPI -sPTHREAD_POOL_SIZE=16 -sSTACK_SIZE=5MB -sDEFAULT_PTHREAD_STACK_SIZE=16MB -sINITIAL_MEMORY=1073741824 -sMAXIMUM_MEMORY=17179869184 -sALLOW_MEMORY_GROWTH=1 -sMODULARIZE=1 -sEXPORT_NAME=Probe -sENVIRONMENT=web,worker -sFETCH -sFORCE_FILESYSTEM=1 /tmp/w64/thr.c -o /tmp/w64/full.js
+          ls -la /tmp/w64/full.js /tmp/w64/full.wasm | sed "s/^/  /"
+          echo "  OK: wasm64 + pthreads + wasm-EH + wasm-longjmp + JSPI + 16 GiB all link together"
+
+      # RISK 3. Link the same fixed-function program twice and keep both glues. This is the
+      # input tools/patch-freecad-js.py needs; without it the patch table cannot be re-derived
+      # except by guessing.
+      - name: E. RISK 3 - LEGACY_GL_EMULATION at wasm64, and the glue diff
+        id: gl
+        continue-on-error: true
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          cat > /tmp/w64/gl.c <<'CEOF'
+          #include <GL/gl.h>
+          /* Reference the fixed-function entry points Coin3D drives, so the linker emits the
+             GL emulation glue. This never needs to RUN -- the glue is what is wanted. */
+          int main(void) {
+            float m[16] = {0};
+            unsigned int idx[3] = {0, 1, 2};
+            glMatrixMode(GL_MODELVIEW); glLoadMatrixf(m); glPushMatrix();
+            glBegin(GL_TRIANGLES); glNormal3f(0, 0, 1); glColor4f(1, 1, 1, 1);
+            glTexCoord2f(0, 0); glVertex3f(0, 0, 0); glEnd();
+            glEnableClientState(GL_VERTEX_ARRAY); glVertexPointer(3, GL_FLOAT, 0, m);
+            glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, idx);
+            glDrawArrays(GL_TRIANGLES, 0, 3); glPopMatrix();
+            return 0;
+          }
+          CEOF
+          GLFLAGS="-sLEGACY_GL_EMULATION=1 -sMAX_WEBGL_VERSION=2 -sGL_UNSAFE_OPTS=0"
+          echo "--- wasm32 reference glue ---"
+          emcc $GLFLAGS /tmp/w64/gl.c -o /tmp/w64/gl32.js
+          echo "--- wasm64 glue ---"
+          emcc $EMCC_CFLAGS $GLFLAGS /tmp/w64/gl.c -o /tmp/w64/gl64.js
+          echo "  BOTH LINKED -- LEGACY_GL_EMULATION is not rejected at wasm64"
+          echo
+          echo "--- the patterns tools/patch-freecad-js.py anchors on ---"
+          for f in /tmp/w64/gl32.js /tmp/w64/gl64.js; do
+            echo "  $f:"
+            for pat in "HEAPF32[" "GROWABLE_HEAP" "BigInt" "Number(" "getTempIndexBuffer" "MAX_TEMP_BUFFER_SIZE" "UNSIGNED_SHORT"; do
+              n=$(grep -o -F "$pat" "$f" | wc -l)
+              printf "    %-24s %s" "$pat" "$n"
+              echo
+            done
+          done
+
+      - name: F. file_packager and Embind at wasm64
+        id: extras
+        continue-on-error: true
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          mkdir -p /tmp/w64/data && echo hello > /tmp/w64/data/f.txt
+          cat > /tmp/w64/emb.cpp <<'CEOF'
+          #include <emscripten/bind.h>
+          int twice(int x) { return x * 2; }
+          EMSCRIPTEN_BINDINGS(p) { emscripten::function("twice", &twice); }
+          int main(void) { return 0; }
+          CEOF
+          em++ $EMCC_CFLAGS -lembind --preload-file /tmp/w64/data@/data /tmp/w64/emb.cpp -o /tmp/w64/emb.js
+          ls -la /tmp/w64/emb.data | sed "s/^/  /"
+          echo "  OK: Embind linked and file_packager produced a .data at wasm64"
+
+      - name: Upload the GL glues (input for re-deriving the patch table)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wasm64-gl-glue
+          path: |
+            /tmp/w64/gl32.js
+            /tmp/w64/gl64.js
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Verdict
+        if: always()
+        run: |
+          r() { if [ "$1" = "success" ]; then echo "PASS"; else echo "FAIL"; fi; }
+          {
+            echo "## wasm64 toolchain probe"
+            echo
+            echo "| # | What it decides | Result |"
+            echo "|---|---|---|"
+            echo "| A | toolchain/env.sh targets wasm64 | $(r ${{ steps.env.outcome }}) |"
+            echo "| B | pointers/long are 64-bit, int stays 32 | $(r ${{ steps.width.outcome }}) |"
+            echo "| C | pthreads + 16 GiB ceiling (#21159, #26311) | $(r ${{ steps.threads.outcome }}) |"
+            echo "| D | full production flag set links | $(r ${{ steps.flags.outcome }}) |"
+            echo "| E | LEGACY_GL_EMULATION = the 3D viewport | $(r ${{ steps.gl.outcome }}) |"
+            echo "| F | file_packager + Embind | $(r ${{ steps.extras.outcome }}) |"
+            echo
+            echo "C and E are the go/no-go pair. If C fails, threads do not work at wasm64 and"
+            echo "this project cannot drop them. If E fails, the 3D viewport has no path yet."
+            echo "Download the wasm64-gl-glue artifact either way: gl32.js vs gl64.js is what"
+            echo "tools/patch-freecad-js.py needs to re-derive its 41 anchors."
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
