@@ -54,6 +54,13 @@ on:
       - 'build-cpython.sh'
       - 'build-cpython-mt.sh'
       - 'patches/apply.sh'
+      # The patches this lane APPLIES, which it did not watch. A change to
+      # pyside-setup.patch rebuilt nothing, so a patch that had stopped applying could sit
+      # in the tree indefinitely -- the same shape as the vtk-expat patch that nothing
+      # applied for months. numpy and cpython-ctypes are here for the same reason.
+      - 'patches/pyside-setup.patch'
+      - 'patches/numpy.patch'
+      - 'patches/cpython-ctypes-wasm.patch'
       - 'tools/**'
       # the cmake shims decide whether Coin, ICU and OpenGL are found at all
       - 'toolchain/**'
