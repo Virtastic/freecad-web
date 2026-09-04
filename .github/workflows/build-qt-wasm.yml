@@ -98,6 +98,29 @@ jobs:
           cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
           . ./emsdk_env.sh && emcc --version | head -1
 
+          # Expand $CFGDIR in .emscripten to a real path, for Qt's benefit.
+          #
+          # emsdk 6.0.9 writes its config with paths relative to a $CFGDIR placeholder that
+          # emcc expands itself at runtime. Qt does not run emcc to find emcc: its
+          # __qt_internal_query_emsdk_version reads this file, takes the string literally,
+          # and tries to execute
+          #     .../emsdk/$CFGDIR/upstream/emscripten/emcc --version
+          # which cannot exist. configure then dies with "Couldn't determine Emscripten
+          # version" (QtPublicWasmToolchainHelpers.cmake:43) before compiling anything.
+          #
+          # This is the cost of running Qt 6.11.2 on an emscripten it never pinned -- and it
+          # is worth being clear that it is a PATH-PARSING bug, not a wasm64 one. Nothing
+          # here is incompatible; Qt simply cannot read a newer emsdk's config format.
+          # Rewriting the placeholder is a smaller, more honest change than patching Qt.
+          cfg="$PWD/.emscripten"
+          if [ -f "$cfg" ] && grep -q CFGDIR "$cfg"; then
+            sed -i "s|\$CFGDIR|$PWD|g" "$cfg"
+            echo "  expanded \$CFGDIR -> $PWD in .emscripten"
+            grep -E "EMSCRIPTEN_ROOT|LLVM_ROOT|BINARYEN_ROOT" "$cfg" | sed "s/^/    /"
+          else
+            echo "  .emscripten has no \$CFGDIR placeholder; nothing to expand"
+          fi
+
       # Everything below logs to /tmp/qtlogs and is uploaded as an ARTIFACT. GitHub's job-log
       # API has returned 404 for this repo for the whole session, so the normal way of finding
       # out why a step failed is unavailable -- but the artifacts API works. Routing the
