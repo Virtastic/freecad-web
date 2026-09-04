@@ -3031,6 +3031,52 @@ window.fcRunPy = fcRunPy;
     // suspended call still holds it). File open/save go through here.
     (window.fcRunPy||function(mm,pp){ mm._fcweb_run_python(pp); mm._free(pp); })(m,q);
     return true; }
+  // ---- Addon Manager overlay -------------------------------------------------------
+  // FreeCAD's Addon Manager cannot run here as shipped: its workers are QThreads, and
+  // CPython in this build aborts the moment Python runs on a Qt worker thread
+  // (PyGILState_Release: thread state must be current when releasing). Running those
+  // workers inline instead DEADLOCKS -- they block on network replies that the Qt event
+  // loop delivers, so blocking the loop starves the reply. Measured 2026-09-03: the app
+  // froze and never opened. The fix is an event-driven rewrite of its workers, delivered
+  // as replacement modules that shadow the shipped ones.
+  //
+  // Shadowing works because the Addon Manager imports by bare name (import NetworkManager,
+  // import addonmanager_workers_startup), so a same-named module earlier on sys.path wins.
+  // /fcweb-am goes in at position 0, ahead of the Mod/AddonManager directory FreeCAD
+  // appends when the workbench is activated -- and nothing there is imported until then.
+  //
+  // These are plain files under play-gui/am/ COPYed into the image, so changing one is an
+  // image rebuild (seconds) rather than a relink (~2 h).
+  var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_boot.py'];
+  var amOverlayDone = false;
+  async function installAmOverlay(){
+    if(amOverlayDone || !ready()) return;
+    amOverlayDone = true;
+    var m = window.fcInstance, FS = m.FS;
+    try { FS.mkdirTree('/fcweb-am'); } catch(e){}
+    var wrote = 0;
+    for (var i = 0; i < AM_MODULES.length; i++){
+      var name = AM_MODULES[i];
+      try {
+        var r = await fetch('am/' + name, {cache: 'no-cache'});
+        if(!r.ok){ append('addon overlay: ' + name + ' -> HTTP ' + r.status, 'err'); continue; }
+        FS.writeFile('/fcweb-am/' + name, new Uint8Array(await r.arrayBuffer()));
+        wrote++;
+      } catch(e){ append('addon overlay: ' + name + ' failed: ' + e, 'err'); }
+    }
+    if(!wrote){ append('addon overlay: nothing written; shipped Addon Manager left in place', 'err'); return; }
+    // Deliberately tiny. Every line of Python written into a JS string is a chance to
+    // break the page; the real code is in the files just written.
+    var src = "import sys\nif '/fcweb-am' not in sys.path: sys.path.insert(0,'/fcweb-am')\n"
+             + "try:\n import fcweb_am_boot as _amb; _amb.install()\n"
+             + "except Exception as _e: print('[fcweb] addon overlay import failed:', repr(_e))\n";
+    if(new URLSearchParams(location.search).has('amprobe')){
+      src += "try:\n _amb.probe_modal_from_callback()\n"
+            + "except Exception as _e: print('[fcweb] probe failed:', repr(_e))\n";
+    }
+    py(src);
+  }
+
   function ready(){ var m=window.fcInstance;
     return window.__fcAppReady && m && m._fcweb_run_python && m.FS; }
 
@@ -3340,6 +3386,7 @@ window.fcRunPy = fcRunPy;
   // Bridge FreeCAD.installAddon('owner/repo') (Python console) -> the JS GitHub fetcher.
   setInterval(function(){
     if(!ready()) return;
+    if(!amOverlayDone) installAmOverlay();
     var FS=window.fcInstance.FS, spec;
     try{ spec=new TextDecoder().decode(FS.readFile('/tmp/_fcaddonreq')).trim(); }catch(e){ return; }
     try{ FS.unlink('/tmp/_fcaddonreq'); }catch(e){}

@@ -19,3 +19,8 @@
 # goes back to shipping tens of GB. Compose is less fussy but is kept consistent.
 .dockerignore text eol=lf
 docker-compose*.yml text eol=lf
+
+# Addon Manager overlay: these forks of upstream AddonManager modules are folded into
+# patches/freecad.patch, and that subtree is LF throughout upstream. A CRLF checkout here
+# would produce hunks whose context lines cannot match, which GNU patch rejects outright.
+/play-gui/am/*.py text eol=lf

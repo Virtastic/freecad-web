@@ -41,6 +41,10 @@ COPY LICENSE NOTICE /usr/share/nginx/html/
 COPY LICENSES /usr/share/nginx/html/LICENSES/
 # Installability: an installed app is the only case where Chrome grants persistent
 # storage without a prompt, which is what protects a user's documents from eviction.
+# The Addon Manager overlay: event-driven replacements for its QThread workers,
+# shadowed onto sys.path at boot (see the loader in freecad-gui.html). Plain files so a
+# change is an image rebuild, not a ~2 h relink.
+COPY play-gui/am /usr/share/nginx/html/am/
 COPY play-gui/manifest.webmanifest play-gui/sw.js play-gui/icon-192.png play-gui/icon-512.png /usr/share/nginx/html/
 # Build artifacts (fetched into play-gui/ by CI from the release).
 # FreeCAD.js comes from the glpatch stage above, already GL-patched. Splitting it out of

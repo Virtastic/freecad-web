@@ -36,6 +36,11 @@
 !/play-gui/sw.js
 !/play-gui/icon-192.png
 !/play-gui/icon-512.png
+# Addon Manager overlay: hand-authored Python that shadows the shipped workers. COPYed
+# by infra/Dockerfile and fetched at runtime by freecad-gui.html. Without this negation
+# /play-gui/* swallows it and the container serves no am/ directory at all.
+!/play-gui/am/
+/play-gui/am/__pycache__/
 # crawler + social files: hand-authored, COPYed by infra/Dockerfile. Without these negations
 # /play-gui/* swallows them, the build context arrives without them, and the COPY fails.
 !/play-gui/og.png
