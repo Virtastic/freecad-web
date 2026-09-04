@@ -169,6 +169,16 @@ jobs:
           env -u EMCC_CFLAGS emcc $GLFLAGS /tmp/w64/gl.c -o /tmp/w64/gl32.js
           echo "--- wasm64 glue ---"
           emcc $EMCC_CFLAGS $GLFLAGS /tmp/w64/gl.c -o /tmp/w64/gl64.js
+          # THE PRODUCTION SHAPE. The shipped link is ALLOW_MEMORY_GROWTH=1, and growth is
+          # not cosmetic here: it rewrites every direct HEAPF32[...] into the accessor form
+          # GROWABLE_HEAP_F32()[...]. tools/patch-freecad-js.py has a whole second matching
+          # mode for that. Comparing only the non-growable builds measures a glue this
+          # project never ships -- the first version of this probe did exactly that and
+          # reported GROWABLE_HEAP=0 on both sides.
+          echo "--- wasm64 + growth glue (what production actually links) ---"
+          emcc $EMCC_CFLAGS $GLFLAGS -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=17179869184 /tmp/w64/gl.c -o /tmp/w64/gl64grow.js
+          echo "--- wasm32 + growth glue (the form the current patch table was derived on) ---"
+          env -u EMCC_CFLAGS emcc $GLFLAGS -sALLOW_MEMORY_GROWTH=1 /tmp/w64/gl.c -o /tmp/w64/gl32grow.js
           echo "  BOTH LINKED -- LEGACY_GL_EMULATION is not rejected at wasm64"
 
           # Prove the two builds really are different targets before drawing any conclusion
@@ -190,7 +200,7 @@ jobs:
           fi
           echo
           echo "--- the patterns tools/patch-freecad-js.py anchors on ---"
-          for f in /tmp/w64/gl32.js /tmp/w64/gl64.js; do
+          for f in /tmp/w64/gl32.js /tmp/w64/gl64.js /tmp/w64/gl32grow.js /tmp/w64/gl64grow.js; do
             echo "  $f:"
             for pat in "HEAPF32[" "GROWABLE_HEAP" "BigInt" "Number(" "getTempIndexBuffer" "MAX_TEMP_BUFFER_SIZE" "UNSIGNED_SHORT"; do
               n=$(grep -o -F "$pat" "$f" | wc -l)
@@ -224,6 +234,8 @@ jobs:
           path: |
             /tmp/w64/gl32.js
             /tmp/w64/gl64.js
+            /tmp/w64/gl32grow.js
+            /tmp/w64/gl64grow.js
           retention-days: 14
           if-no-files-found: warn
 

@@ -778,6 +778,21 @@ def growable(s):
 _PROLOGUE = r'((?:[A-Za-z_$][\w$]*>>>=0;)*)'
 _FN_HEAD = re.compile(r'var (_' + r'\w+)=' + r'\(([^)]*)' + r'\)=>' + r'\{')
 
+# Shift width -> the divisor wasm64 uses instead. Only these three occur in the GL glue.
+_SHIFT_DIV = {'1': '2', '2': '4', '3': '8'}
+
+
+def _relax_index(m):
+    """Rewrite one escaped '>>N<closer>' into an alternation over every spelling.
+
+    Deliberately anchored on the closer rather than relaxing every '>>N' in the body: an
+    unanchored rule would also match genuine arithmetic and could move a patch onto the
+    wrong site, which is far worse than not matching at all -- a miss fails the
+    postcondition counts loudly, a mismatch does not.
+    """
+    n, closer = m.group(1), m.group(2)
+    return '(?:>>>?%s(?:>>>0)?|/%s)%s' % (n, _SHIFT_DIV[n], closer)
+
 
 def _growable_regex(lit):
     """A pattern matching how a growable build emits this literal anchor.
@@ -796,11 +811,22 @@ def _growable_regex(lit):
     else:
         head, rest, group = '', s, None
     body = re.escape(rest)
-    # >>2]  may be  >>>2>>>0]
-    # In the escaped pattern, '>>2]' appears as '>>2\\]'. Relax it to accept
-    # either that or the unsigned-safe '>>>2>>>0]'.
-    body = re.sub(r'>>(\d)\\\]',
-                  r'>>>?\1(?:>>>0)?\\]', body)
+    # A heap index has three spellings and the anchor must accept all of them.
+    #
+    #   plain wasm32      HEAPF32[(((param)+(12))>>2)]
+    #   growable wasm32   the same, but >>2 may be >>>2>>>0 (unsigned-safe above 2 GB)
+    #   wasm64            HEAPF32[(((param)+(12))/4)]
+    #
+    # The wasm64 form is a DIVISION, not a shift: a pointer is a BigInt there and BigInt
+    # will not take >> with a Number operand, so emscripten divides instead. Measured on
+    # emsdk 6.0.9 by linking the same fixed-function program with and without -m64
+    # (.github/workflows/wasm64-probe.yml): >>1 becomes /2 and >>2 becomes /4, across
+    # HEAPU16/HEAP32/HEAPU32/HEAPF32, with 92 shift-indexes becoming 0.
+    #
+    # Both closers matter. In the escaped pattern '>>2]' is '>>2\\]' and '>>2)' is
+    # '>>2\\)'; the real glue uses the paren form inside the bracket, so relaxing only
+    # ']' -- as this did -- would have matched nothing at wasm64.
+    body = re.sub(r'>>(\d)(\\[\]\)])', _relax_index, body)
     # a converted function no longer needs its trailing semicolon
     body = body.replace(re.escape('};'), re.escape('}') + ';?')
     return re.compile(head + body), group
