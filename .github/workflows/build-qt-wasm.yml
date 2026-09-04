@@ -184,30 +184,31 @@ jobs:
         run: |
           . ./toolchain/env.sh
 
-          # Rewrite EMSCRIPTEN_ROOT here, in THIS step, immediately before configure.
+          # Give Qt its own EMSDK directory instead of editing the real one.
           #
-          # QtPublicWasmToolchainHelpers.cmake regex-extracts the quoted value out of
-          # .emscripten and appends it to $EMSDK:
+          # QtPublicWasmToolchainHelpers.cmake reads $ENV{EMSDK}/.emscripten, regex-extracts
+          # the quoted EMSCRIPTEN_ROOT, and appends it to $EMSDK:
           #     set(EXECUTE_COMMANDPATH "$ENV{EMSDK}/${emroot_path}/emcc")
-          # so it has to be the bare SUFFIX "/upstream/emscripten". emsdk 6.0.9 writes
-          # '$CFGDIR/upstream/emscripten' (Qt does not expand $CFGDIR), and an absolute path
-          # makes Qt build the path DOUBLED. Only the suffix works.
+          # so the value must be the bare suffix "/upstream/emscripten". emsdk 6.0.9 writes
+          # '$CFGDIR/upstream/emscripten' there, which Qt does not expand.
           #
-          # It has to be done HERE and not in the emsdk install step: sourcing
-          # emsdk_env.sh regenerates .emscripten with absolute paths, so a fixup applied
-          # in an earlier step is silently reverted by the next `. ./toolchain/env.sh`.
-          # That is exactly what happened -- the rewrite logged "now says /upstream/..."
-          # and Qt still saw the doubled path one step later.
+          # Rewriting the REAL .emscripten to that suffix satisfied Qt and then broke the
+          # very next step: emsdk_env.sh derives PATH from that file, got a nonexistent
+          # /upstream/emscripten, and emcc vanished -- toolchain/env.sh refused to continue,
+          # which is what that assertion is for. So the real file is never touched now.
           #
-          # emcc does not need the value (it finds its own root from its file path); the
-          # version check below proves that before Qt is allowed to start.
-          sed -i "s|^EMSCRIPTEN_ROOT.*|EMSCRIPTEN_ROOT = '/upstream/emscripten'|" "$EMSDK/.emscripten"
-          echo "  .emscripten: $(grep EMSCRIPTEN_ROOT "$EMSDK/.emscripten")"
-          emcc --version | head -1 | sed "s/^/  emcc still OK: /"
+          # The shim holds only a Qt-shaped .emscripten and a symlink to the real upstream/,
+          # so $shim/upstream/emscripten/emcc resolves. EMSDK is overridden for Qt's own
+          # processes only; emcc itself uses EM_CONFIG and its file path, and never reads it.
+          shim="$GITHUB_WORKSPACE/qt-emsdk-shim"
+          rm -rf "$shim" && mkdir -p "$shim"
+          ln -s "$EMSDK/upstream" "$shim/upstream"
+          echo "EMSCRIPTEN_ROOT = '/upstream/emscripten'" > "$shim/.emscripten"
+          "$shim/upstream/emscripten/emcc" --version | head -1 | sed "s/^/  shim resolves emcc: /"
 
           mkdir -p qt-build && cd qt-build
           rc=0
-          ../qt-src/configure \
+          EMSDK="$shim" ../qt-src/configure \
             -platform wasm-emscripten \
             -qt-host-path "$GITHUB_WORKSPACE/qt-host/6.11.2/gcc_64" \
             -prefix "$GITHUB_WORKSPACE/qt/6.11.2/wasm_mt_weh" \
@@ -247,7 +248,10 @@ jobs:
           . ./toolchain/env.sh
           t0=$SECONDS
           rc=0
-          { cmake --build qt-build --parallel && cmake --install qt-build; } \
+          # Same shim as configure: cmake can re-run the configure step during a build,
+          # and Qt would read the real .emscripten again and fail the same way.
+          shim="$GITHUB_WORKSPACE/qt-emsdk-shim"
+          { EMSDK="$shim" cmake --build qt-build --parallel && EMSDK="$shim" cmake --install qt-build; } \
             > /tmp/qtlogs/05-build.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
           echo "  === Qt build exit=$rc in $((SECONDS-t0))s ==="
