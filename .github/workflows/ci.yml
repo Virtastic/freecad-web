@@ -288,6 +288,14 @@ jobs:
       - name: No routable IP in tracked files
         run: python3 tools/check-no-public-ip.py
 
+      # The Addon Manager overlay forks two upstream worker modules and patches the
+      # methods of a third. A stale fork is silent: FreeCAD moves on, the overlay keeps
+      # shadowing it with the old logic, and the workbench quietly behaves like the
+      # previous release with no error anywhere. Skips where the vendored source is
+      # absent, so it is a no-op on runners that do not check it out.
+      - name: Addon Manager overlay matches its upstream
+        run: python3 tools/check-addon-overlay-drift.py
+
       - name: No tracked-but-ignored files
         run: |
           out=$(git ls-files --cached | git check-ignore --stdin --no-index || true)

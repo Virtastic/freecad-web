@@ -1,0 +1,22 @@
+# Upstream sources the Addon Manager overlay was derived from.
+#
+# addonmanager_workers_startup.py and addonmanager_workers_utility.py in this directory
+# are FORKS of the files below, with their QThread workers rewritten onto the overlay's
+# callback-based AsyncWorker. A fork is invisible when it goes stale: FreeCAD changes the
+# original, the overlay keeps shadowing it with the old logic, and the Addon Manager
+# quietly behaves like the previous release with no error anywhere.
+#
+# tools/check-addon-overlay-drift.py compares these hashes against the vendored tree and
+# fails when upstream moves, so the fork is re-derived deliberately rather than by
+# accident. If it fires: diff the new upstream file against the recorded hash's version,
+# re-apply the overlay's changes, and update the hash here in the same commit.
+#
+# addonmanager_installer.py is listed because the overlay patches its classes at runtime
+# (fcweb_am_install.py) rather than forking it -- the same staleness risk applies to the
+# method names and call sites those patches assume.
+#
+# FreeCAD 1.1.3, sha256 of the pristine file as vendored under deps/src/freecad.
+
+a2b9fb8a3b3b03691399ee8943bdb025bf6bd5595be4f22e4a2d660e6f036fe2  src/Mod/AddonManager/addonmanager_workers_startup.py
+c561b1ab4c5b4862d1aab01f965ca9d87659d980dbd4146769aec1f602ddbabe  src/Mod/AddonManager/addonmanager_workers_utility.py
+879b2ca093ff19a91c6bfa08de3b3c93c1294488ad9868b499c48fbdea67461c  src/Mod/AddonManager/addonmanager_installer.py
