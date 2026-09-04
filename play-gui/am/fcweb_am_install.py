@@ -95,11 +95,15 @@ def _patch_zip_install():
         async_get(zip_url, arrived, timeout_ms=120000, attempts=2)
         return False   # not finished yet; arrived() re-enters run()
 
+    orig_install_by_zip = inst.AddonInstaller._install_by_zip
+
     def _install_by_zip(self):
         """Upstream's version, minus the download it can no longer do here."""
         data = getattr(self, "_fcweb_zip", None)
         if data is None:
-            raise RuntimeError("ZIP bytes missing -- run() should have fetched them")
+            # A local path: upstream's version does no network work on that branch, so
+            # let it run rather than failing. run() only pre-fetches remote URLs.
+            return orig_install_by_zip(self)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as f:
             name = f.name
             f.write(data)
@@ -293,6 +297,72 @@ def _patch_macro_toolbar_prompt():
     return "macro toolbar prompt replaced with a non-blocking note"
 
 
+def _rescan_preference_packs():
+    """Pick up preference packs an addon just installed, without a restart.
+
+    Returns the names that appeared, or [] if none did.
+
+    Guarded with hasattr: the binding only exists in a build carrying the
+    ApplicationPy PreferencePackManager patch. On an older engine this does nothing and
+    a page reload still picks the theme up, which is the pre-existing behaviour.
+    """
+    try:
+        import FreeCADGui as Gui
+    except Exception:
+        return []
+    if not hasattr(Gui, "rescanPreferencePacks"):
+        return []
+    try:
+        before = set(Gui.listPreferencePacks())
+        Gui.rescanPreferencePacks()
+        new = sorted(set(Gui.listPreferencePacks()) - before)
+    except Exception as e:
+        fci.Console.PrintLog("Preference pack rescan failed: %r\n" % (e,))
+        return []
+    if new:
+        fci.Console.PrintMessage(
+            "New preference pack(s) available: %s\n" % ", ".join(new)
+        )
+    return new
+
+
+def _patch_preference_pack_rescan():
+    """Rescan preference packs as soon as an addon's files are on disk.
+
+    Without this the theme installs correctly and then appears nowhere: FreeCAD only
+    scans for preference packs at startup, and in the browser a restart is a page reload
+    that costs the user their session. That is the whole reason the binding was added,
+    and nothing was calling it.
+
+    Hooked on _finalize_zip_installation rather than on a success signal because that is
+    the exact moment the files exist, and it covers both the downloaded and local-path
+    branches.
+    """
+    import addonmanager_installer as inst
+    from addonmanager_fcweb_async import notify
+
+    orig_finalize = inst.AddonInstaller._finalize_zip_installation
+
+    def finalize(self, filename):
+        result = orig_finalize(self, filename)
+        new = _rescan_preference_packs()
+        if new:
+            try:
+                name = self.addon_to_install.display_name
+            except Exception:
+                name = "The addon"
+            notify(
+                "Theme installed",
+                "%s added %d preference pack(s): %s.\n\nChoose one under "
+                "Edit then Preferences, General, Theme -- no reload needed."
+                % (name, len(new), ", ".join(new)),
+            )
+        return result
+
+    inst.AddonInstaller._finalize_zip_installation = finalize
+    return "preference packs rescanned after install"
+
+
 def _when_settled(pending, then, tries=0):
     """Call then() once no fetches are outstanding. Polls; never blocks."""
     from addonmanager_fcweb_async import defer
@@ -308,7 +378,7 @@ def install():
     notes = []
     for fn in (_patch_move_to_thread, _patch_allowed_packages, _patch_verify_pip,
                _patch_zip_install, _patch_macro_fetch,
-               _patch_macro_toolbar_prompt):
+               _patch_macro_toolbar_prompt, _patch_preference_pack_rescan):
         try:
             notes.append(fn())
         except Exception as e:
