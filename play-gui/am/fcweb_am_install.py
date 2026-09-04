@@ -363,6 +363,55 @@ def _patch_preference_pack_rescan():
     return "preference packs rescanned after install"
 
 
+def _patch_user_agent_header():
+    """Build the request without the User-Agent header at all.
+
+    __create_get_request sets User-Agent. XHR forbids that header, so the browser drops
+    it, logs "Refused to set unsafe header" and prints a ~200-frame stack -- on every
+    request. Harmless, but it buries real errors; a genuine mixed-content failure sat in
+    that noise unnoticed.
+
+    Setting it to an empty value does NOT remove it (measured: still 6 warnings a
+    session), so the request is rebuilt here instead. Everything except the User-Agent
+    line is upstream's, including the ManualRedirectPolicy the redirect handling depends
+    on and the cache attributes.
+    """
+    import NetworkManager as nm
+
+    QtNetwork = nm.QtNetwork
+    QtCore = nm.QtCore
+    cls = nm.NetworkManager
+    attr = "_NetworkManager__create_get_request"
+
+    def create_get_request(url, timeout_ms, disable_cache):
+        request = QtNetwork.QNetworkRequest(QtCore.QUrl(nm.fcweb_proxy_url(url)))
+        request.setAttribute(
+            QtNetwork.QNetworkRequest.RedirectPolicyAttribute,
+            QtNetwork.QNetworkRequest.ManualRedirectPolicy,
+        )
+        if disable_cache:
+            request.setAttribute(QtNetwork.QNetworkRequest.CacheSaveControlAttribute, False)
+            request.setAttribute(
+                QtNetwork.QNetworkRequest.CacheLoadControlAttribute,
+                QtNetwork.QNetworkRequest.AlwaysNetwork,
+            )
+        else:
+            request.setAttribute(QtNetwork.QNetworkRequest.CacheSaveControlAttribute, True)
+            request.setAttribute(
+                QtNetwork.QNetworkRequest.CacheLoadControlAttribute,
+                QtNetwork.QNetworkRequest.PreferNetwork,
+            )
+        if hasattr(request, "setTransferTimeout"):
+            request.setTransferTimeout(timeout_ms)
+        # No setRawHeader(b"User-Agent", ...) -- the browser refuses it regardless.
+        return request
+
+    if not hasattr(cls, attr):
+        return "User-Agent patch skipped (private method not found)"
+    setattr(cls, attr, staticmethod(create_get_request))
+    return "requests built without a User-Agent header"
+
+
 def _when_settled(pending, then, tries=0):
     """Call then() once no fetches are outstanding. Polls; never blocks."""
     from addonmanager_fcweb_async import defer
@@ -378,7 +427,8 @@ def install():
     notes = []
     for fn in (_patch_move_to_thread, _patch_allowed_packages, _patch_verify_pip,
                _patch_zip_install, _patch_macro_fetch,
-               _patch_macro_toolbar_prompt, _patch_preference_pack_rescan):
+               _patch_macro_toolbar_prompt, _patch_preference_pack_rescan,
+               _patch_user_agent_header):
         try:
             notes.append(fn())
         except Exception as e:

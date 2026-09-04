@@ -257,6 +257,23 @@ def _stash_command():
     return "command object exposed as AddonManager._fcweb_cmd"
 
 
+def _fix_proxy_host_map():
+    """Point www.freecad.org at its own proxy key.
+
+    The shipped map sends both freecad.org and www.freecad.org to the "docs" key, and
+    that key resolves to the NON-www host. Anything asking for www therefore lands on
+    freecad.org, which 301s to www, which maps back to "docs" -- a loop. nginx now has a
+    separate "docswww" key; this keeps the Python side consistent with it.
+    """
+    import NetworkManager as nm
+
+    hosts = getattr(nm, "FCWEB_PROXY_HOSTS", None)
+    if not isinstance(hosts, dict):
+        return "proxy host map unavailable"
+    hosts["www.freecad.org"] = "docswww"
+    return "www.freecad.org -> docswww"
+
+
 def _install_now():
     """Applied the first time an Addon Manager module is importable."""
     notes = []
@@ -274,6 +291,10 @@ def _install_now():
         notes.extend(fcweb_am_install.install())
     except Exception as e:
         notes.append("install patches FAILED %r" % (e,))
+    try:
+        notes.append(_fix_proxy_host_map())
+    except Exception as e:
+        notes.append("proxy host map patch FAILED %r" % (e,))
     try:
         notes.append(_stash_command())
     except Exception as e:
