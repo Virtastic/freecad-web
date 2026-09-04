@@ -906,6 +906,20 @@ bound 65536`, because the tooling still computed page counts against the 32-bit 
 (emscripten#26311, PR #26357). A link dying with that message means the SDK pin moved
 backwards, not that the flag is wrong.
 
+One long-standing claim in those sections is now measurably FALSE, and it is worth saying
+plainly because it was used for a year to argue against a bigger heap: **growth does not
+invalidate the GL patch table.** emsdk 6.0.9 no longer emits the `GROWABLE_HEAP_*()`
+accessor form at all. Linking the same program with `ALLOW_MEMORY_GROWTH=1` produces the
+growth machinery and *zero* accessors, on both wasm32 and wasm64
+(`.github/workflows/wasm64-probe.yml`). The 841-rewritten-accesses problem was a 3.1.x
+behaviour and it left with the SDK.
+
+What does change at wasm64 is smaller than anyone expected: the heap is indexed by
+division rather than shift (`>>2` becomes `/4`), because a pointer is a BigInt and BigInt
+will not take `>>` with a Number. Of the 48 anchors in `tools/patch-freecad-js.py` only
+**four** carry a heap index; the other 44 are byte-identical between targets. The tool
+gained one relaxation and a selftest, not a rewrite.
+
 The earlier reasoning is kept below for the record. Both sections are now historical.
 
 ### (historical, wasm32) Memory: the heap grows to 4 GB

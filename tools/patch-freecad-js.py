@@ -67,27 +67,30 @@ pipeline in ways emscripten warns about on every call, which floods the console)
 
 Usage: patch-freecad-js.py <FreeCAD.js> [--check]
 
-WASM64: EXPECT THIS TO FAIL ON THE FIRST wasm64 LINK, AND THAT IS CORRECT.
+WASM64
 
-Every pattern below was derived by hand against wasm32 codegen. Under wasm64 emscripten
-indexes the heap differently and pointers cross the JS boundary as BigInt, so the literal
-anchors (HEAPF32[param>>2], ptr+i*2>>1, numProvidedIndexes<<2 ...) will not match.
+A wasm64 glue indexes the heap by DIVISION rather than by shift: a pointer is a BigInt
+there, and BigInt will not take >> with a Number operand, so emscripten divides instead.
+Measured on emsdk 6.0.9 by linking the same fixed-function program with and without -m64
+(.github/workflows/wasm64-probe.yml): >>1 becomes /2 and >>2 becomes /4 across
+HEAPU16/HEAP32/HEAPU32/HEAPF32, 92 shift-indexes became 0, and the .wasm grew 12.7%.
 
-The tool fails CLOSED, deliberately: check_postconditions() asserts exact counts
-(__grow=function == 1, GLImmediate.__grow() == 6, __idxType=type == 1,
-__idxType===5125 == 3) and zero surviving _TODO_THROWS. So a non-matching run is a loud
-failure, not a silently unpatched engine -- which is the whole point, because an
-unpatched engine boots and then throws out of nine GL entry points, unwinds through
-Coin's render traversal and takes the viewport with it.
+Nothing else moves. Of the 48 anchors here only FOUR carry a heap index; the other 44 are
+byte-identical between targets. Arithmetic such as GLImmediate.stride>>2 is untouched,
+because that is a plain Number and not a pointer -- which is why this is a relaxation of
+the existing anchors rather than a second table.
 
-To fix it, do NOT relax the postcondition counts. Re-derive the patterns:
-  1. link a trivial GL program twice, once with -m64 and once without, both with
-     -sLEGACY_GL_EMULATION=1 -sMAX_WEBGL_VERSION=2
-  2. diff the two generated glues to get the new indexing form
-  3. add a fourth matching mode alongside the plain / growable / relaxed ones
-  4. add wasm64 fixtures to --selftest
-That diff is cheap and takes minutes; discovering the same thing after a 12-hour link
-does not.
+The growable mode below is now DEAD on any current link. emsdk 6.0.9 no longer emits the
+GROWABLE_HEAP_*() accessor form at all: linking with ALLOW_MEMORY_GROWTH=1 produces the
+growth machinery and zero accessors, on both targets. It is kept only for the shipped
+3.1.70-era asset. The long-standing claim that growth invalidates this table -- recorded
+in BUILD-WEH.md and once used to argue against a bigger heap -- no longer holds.
+
+The tool still fails CLOSED. check_postconditions() asserts exact counts and zero
+surviving _TODO_THROWS, so a glue this does not understand is a loud refusal rather than
+a silently unpatched engine -- which matters, because an unpatched engine boots and then
+throws out of nine GL entry points, unwinds through Coin's render traversal and takes the
+viewport with it.
 """
 import re
 import sys
@@ -832,6 +835,24 @@ def _growable_regex(lit):
     return re.compile(head + body), group
 
 
+def _wasm64_regex(lit):
+    """The same literal anchor, as a wasm64 build emits it.
+
+    Only the heap INDEX moves. Everything else is byte-identical, which is why this is a
+    relaxation of the literal rather than a second table: arithmetic such as
+    GLImmediate.stride>>2 operates on a plain Number, not a pointer, and emscripten leaves
+    it exactly as it was.
+    """
+    return re.compile(re.sub(r'>>(\d)(\\[\]\)])', _relax_index, re.escape(lit)))
+
+
+def _to_wasm64(lit):
+    """Rewrite a replacement's heap indexes into the divide form, so injected code reads
+    in the same idiom as the glue around it."""
+    return re.sub(r'>>(\d)([\]\)])',
+                  lambda m: '/%s%s' % (_SHIFT_DIV[m.group(1)], m.group(2)), lit)
+
+
 def _growable_replacement(new_lit, prologue):
     """The replacement, written the way a growable build writes it."""
     s = growable(new_lit)
@@ -847,7 +868,17 @@ def _growable_replacement(new_lit, prologue):
 def _apply_once(text):
     status = []
     # Only pay for the transform on a build that needs it.
+    #
+    # is_growable is False on any CURRENT link. emsdk 6.0.9 no longer emits the
+    # GROWABLE_HEAP_*() accessor form at all -- measured by linking the same program with
+    # ALLOW_MEMORY_GROWTH=1 on both targets, which produced the growth machinery and zero
+    # accessors (.github/workflows/wasm64-probe.yml). The branch stays for the shipped
+    # 3.1.70-era asset, which still carries them.
     is_growable = 'GROWABLE_HEAP_' in text
+    # A wasm64 glue indexes the heap by division rather than by shift, because a pointer is
+    # a BigInt and BigInt will not take >> with a Number operand. HEAPU64 is the cleanest
+    # tell: 5 occurrences at wasm64, 0 at wasm32, growable or not.
+    is_wasm64 = 'HEAPU64[' in text
     for entry in PATCHES:
         name, old, new = entry[0], entry[1], entry[2]
         # a 4th field is the text that proves the fix is in effect, for when a
@@ -878,6 +909,18 @@ def _apply_once(text):
             mpat, _ = _growable_regex(marker if len(entry) > 3 else entry[2])
             if mpat.search(text):
                 status.append((name, 'already applied (growable form)'))
+                continue
+        # Same idea for a wasm64 glue: the anchor is the literal with its heap indexes
+        # relaxed to accept either spelling, and the replacement is written in the divide
+        # idiom so the injected code matches the code around it.
+        if is_wasm64:
+            m = _wasm64_regex(entry[1]).search(text)
+            if m:
+                text = text[:m.start()] + _to_wasm64(entry[2]) + text[m.end():]
+                status.append((name, 'applied (wasm64 form)'))
+                continue
+            if _wasm64_regex(marker if len(entry) > 3 else entry[2]).search(text):
+                status.append((name, 'already applied (wasm64 form)'))
                 continue
         status.append((name, 'NOT FOUND'))
     return text, status
@@ -997,8 +1040,42 @@ def selftest():
     # minified JS. That is why apply() tests for the UNPATCHED site first; the
     # worst case is a cosmetic status, never a missed or double substitution.
 
-    print('patch-freecad-js selftest OK (%d patches + %d counters)'
-          % (len(PATCHES), len(COUNTING_PATCHES)))
+    # ---- wasm64 -------------------------------------------------------------------
+    # A wasm64 glue indexes the heap by division, not by shift: a pointer is a BigInt
+    # there and BigInt will not take >> with a Number operand. Measured on emsdk 6.0.9
+    # by linking the same fixed-function program with and without -m64
+    # (.github/workflows/wasm64-probe.yml): >>1 -> /2 and >>2 -> /4, 92 shift-indexes
+    # became 0, and the .wasm grew 12.7 percent.
+    #
+    # Built the same way as the fixture above, from the table itself, so it cannot go
+    # stale. The HEAPU64 prefix is what apply() detects the target on.
+    #
+    # This is the check that would have caught the old behaviour: before the divide
+    # relaxation, _growable_regex only ever relaxed '>>N]', while the real glue closes
+    # with '>>N)' inside the bracket -- so at wasm64 every one of these anchors would
+    # have missed, and the tool would have refused the link rather than silently
+    # mispatching it. Loud, but a day late.
+    # HEAPU64[i], not HEAPU64[0]: several throw-removal patches use "0" as their marker,
+    # so a literal zero in the preamble makes them report "already applied" and could mask
+    # a genuine miss. The detector only needs the view name.
+    w64_src = 'var _probe=HEAPU64[i];' + ''.join(_to_wasm64(e[1]) for e in PATCHES)
+    _w64_out, w64_status = apply(w64_src, counting=False)
+    w64_bad = [(n, st) for n, st in w64_status if st == 'NOT FOUND']
+    assert not w64_bad, ('wasm64 form not matched: %r' % w64_bad)
+    # Only the anchors that actually carry a heap index should need the new mode; if this
+    # number climbs, the relaxation has grown teeth it was not meant to have.
+    via64 = [n for n, st in w64_status if 'wasm64 form' in st]
+    assert 0 < len(via64) <= 8, ('unexpected wasm64-form count: %d %r' % (len(via64), via64))
+
+    # And the relaxation must not have bought matches with looseness: on a wasm64 file that
+    # genuinely lacks every site, every patch must still report NOT FOUND, exactly as it
+    # does at wasm32. A mode that matches something here would be free to land a patch on
+    # the wrong site, which the postcondition counts cannot catch.
+    _, s5 = apply('var _p=HEAPU64[i];function unrelated(){}', counting=False)
+    assert all(st == 'NOT FOUND' for _, st in s5), s5
+
+    print('patch-freecad-js selftest OK (%d patches + %d counters, %d via wasm64 form)'
+          % (len(PATCHES), len(COUNTING_PATCHES), len(via64)))
 
 
 if __name__ == '__main__':
