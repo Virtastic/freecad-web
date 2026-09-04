@@ -326,7 +326,7 @@ jobs:
         id: cpython
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           if [ -e deps/src/cpython/builddir/emscripten-mt/libpython3.13.a ] \
              && [ -e deps/src/cpython/builddir/build/python3-native ]; then
             echo "  cpython: already built (cache hit)"
@@ -379,7 +379,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           . .qtvenv/bin/activate
           if [ -s deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a ] && grep -qx 3 deps/wasm/lib/numpy-mod/.staged 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  numpy: already built (cache hit)"
@@ -395,7 +395,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           . .qtvenv/bin/activate
           if [ ! -s deps/wasm/lib/kiwi-mod/libkiwi__cext.a ] || [ "${{ inputs.rebuild }}" = "true" ]; then
             bash configure-kiwisolver-weh.sh
@@ -409,7 +409,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           . .qtvenv/bin/activate
           # Rebuild when the marker is absent or old: v1 was built -fexceptions, which
           # cannot link against a -fwasm-exceptions FreeCAD, and the archive name alone
@@ -427,7 +427,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           . .qtvenv/bin/activate
           # Same as _ctypes: v1 was -fexceptions and cannot link against a
           # -fwasm-exceptions FreeCAD; the archive name cannot tell the two apart.
@@ -474,7 +474,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           . .qtvenv/bin/activate
           # A THIN libagg.a means the staged set predates the fix that rebuilds meson's
           # archives from their objects. Thin archives hold references, not code
@@ -513,7 +513,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           if [ -s deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a ] && grep -qx 2 deps/wasm/lib/ifc-mod/.staged 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  IfcOpenShell: already built"; exit 0
           fi
@@ -550,7 +550,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # The skip now lives INSIDE rebuild-pyside-weh.sh, keyed on an archive the link
           # actually consumes (it used to be `-d deps/wasm/pyside-pkg`, a directory of
           # hand-written Python that proved nothing about the build). Skipping the whole
@@ -596,7 +596,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           . .qtvenv/bin/activate
           if [ -s deps/wasm/lib/pivy-mod/lib_coin.a ] && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  pivy: already built"; exit 0
@@ -651,7 +651,7 @@ jobs:
             echo "  deps/wasm/lib/$d: $n archive(s)"
           done
           echo '--- PyInit_* symbols actually present ---'
-          . emsdk/emsdk_env.sh 2>/dev/null || true
+          . ./toolchain/env.sh 2>/dev/null || true
           for a in deps/wasm/lib/*/*.a; do
             [ -e "$a" ] || continue
             syms=$(emsdk/upstream/bin/llvm-nm "$a" 2>/dev/null | grep -c ' T PyInit' || true)

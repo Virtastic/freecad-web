@@ -182,7 +182,7 @@ jobs:
       # cause of the first run's failure, and harmless to remove regardless.
       - name: Configure for wasm
         run: |
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           mkdir -p qt-build && cd qt-build
           rc=0
           ../qt-src/configure \
@@ -222,7 +222,7 @@ jobs:
         id: build
         run: |
           set -o pipefail
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           t0=$SECONDS
           rc=0
           { cmake --build qt-build --parallel && cmake --install qt-build; } \

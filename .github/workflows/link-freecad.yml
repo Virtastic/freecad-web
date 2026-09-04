@@ -405,7 +405,7 @@ jobs:
       - name: Build tools (pybind11, swig) and the ICU port
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # SWIG IS PINNED, and it must match the version that built pivy in
           # build-python-deps.yml (swig==4.2.1). This is not tidiness.
           #
@@ -566,7 +566,7 @@ jobs:
       - name: weh-objs
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           bash build-weh-objs.sh
 
       # Before the hour-long compile, not after: an object built -fexceptions cannot link
@@ -576,7 +576,7 @@ jobs:
       - name: Which objects were built with the wrong exception model?
         run: |
           set -e
-          . emsdk/emsdk_env.sh 2>/dev/null || true
+          . ./toolchain/env.sh 2>/dev/null || true
           bash tools/check-eh-model.sh
 
       - name: Configure (the production configure, not a compile check)
@@ -584,7 +584,7 @@ jobs:
         run: |
           set -e
           mkdir -p /tmp/fclogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # A configure that FAILED still writes CMakeCache.txt, complete with the negative
           # results of whatever probes it got through -- and the cache saves on always(), so
           # the next run restores those negatives and repeats them. build.ninja is the signal
@@ -609,7 +609,7 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           n="${{ inputs.jobs }}"; [ -n "$n" ] || n="$(nproc)"
           t0=$(date +%s)
 
@@ -726,7 +726,7 @@ jobs:
         if: ${{ always() && steps.ccache.outputs.available == 'true' && steps.ccache.outputs.mode != 'off' }}
         continue-on-error: true
         run: |
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           export CCACHE_DIR="$HOME/.cache/fcweb-ccache"
           python3 tools/check-ccache-objects.py build-freecad-gui-weh --sample 15
 
@@ -735,7 +735,7 @@ jobs:
         if: ${{ inputs.stop_after != 'configure' && inputs.stop_after != 'compile' }}
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # A PARTIAL install is what this has to catch. The existing "is there a Mod tree"
           # check below passes when half the workbenches copied, and the install tree is
           # what becomes FreeCAD.data -- so a silent partial install is one of the ways a
@@ -753,7 +753,7 @@ jobs:
         if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           cd build-freecad-gui-weh
           # A marker to date the outputs against. A link that fails leaves the PREVIOUS
           # bin/FreeCAD.* in place, and every later step happily works on them.
@@ -801,7 +801,7 @@ jobs:
           # node comes from emsdk, not from the runner. Without this the validate below
           # fails with "node: command not found" AFTER the patches have been applied --
           # a green link reported as a failure.
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           js=build-freecad-gui-weh/bin/FreeCAD.js
           # Keep a copy with the logs. It is 489 KB, it rides along with an artifact that is
           # uploaded on always(), and when a patch site moves it is the only way to see what

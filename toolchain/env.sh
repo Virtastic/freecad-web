@@ -36,7 +36,39 @@ export DW="$ROOT/deps/wasm"
 # built for wasm32 would measure wasm32 sizeof/alignment and bake the answers into a build
 # that is then linked for wasm64. Setting it here retargets all ~40 build scripts at once
 # and keeps configure honest, which naming the flag per-script would not.
-export EMCC_CFLAGS="${EMCC_CFLAGS:+$EMCC_CFLAGS }-m64"
+# Appended idempotently: this file is sourced by ~50 build scripts and by workflow steps
+# that then call one of them, so a plain append would repeat the flag once per nesting
+# level. Harmless in effect, but it makes EMCC_CFLAGS unreadable in a log, which is the
+# one place anyone looks when the target is in doubt.
+case " $EMCC_CFLAGS " in
+  *" -m64 "*) ;;
+  *) export EMCC_CFLAGS="${EMCC_CFLAGS:+$EMCC_CFLAGS }-m64" ;;
+esac
+
+# -sWASM_LEGACY_EXCEPTIONS=0: use the STANDARDIZED wasm exception opcodes, not the phase-3
+# legacy ones. Two reasons, and the second is why it is here rather than in a build script.
+#
+# Correctness: this project compiles -fwasm-exceptions and targets Chrome 137+, which
+# implements the final proposal. 3.1.70 defaulted to the legacy opcodes; 6.x does not, and
+# tools/check-eh-model.sh already asserts no legacy EH symbols survive.
+#
+# And it unbreaks the ports. With SUPPORT_LONGJMP=wasm and legacy exceptions still in play,
+# emscripten selects the "legacysjlj" variant of a port and builds it with
+#     -sWASM_LEGACY_EXCEPTIONS=True
+# -- a stringified Python bool, which 6.0.9 rejects outright:
+#     emcc: error: attempt to set `WASM_LEGACY_EXCEPTIONS` to `True`; use 1/0
+# That killed the OCCT build 15 seconds in, while compiling the freetype port, on a flag
+# nothing in this repo passes. Setting it to 0 here selects the non-legacy variant instead,
+# so the port is never built down that path. Note it cannot be fixed by appending the flag
+# to a build script: the port system appends its own copy LAST, and emcc takes the last.
+# Appended idempotently: this file is sourced by ~50 build scripts and by workflow steps
+# that then call one of them, so a plain append would repeat the flag once per nesting
+# level. Harmless in effect, but it makes EMCC_CFLAGS unreadable in a log, which is the
+# one place anyone looks when the target is in doubt.
+case " $EMCC_CFLAGS " in
+  *" -sWASM_LEGACY_EXCEPTIONS=0 "*) ;;
+  *) export EMCC_CFLAGS="${EMCC_CFLAGS:+$EMCC_CFLAGS }-sWASM_LEGACY_EXCEPTIONS=0" ;;
+esac
 
 # Sanity echo so a wrong toolchain is obvious immediately.
 echo "[env] emcc: $(emcc --version 2>/dev/null | head -1)"

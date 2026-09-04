@@ -269,7 +269,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           rc=0
           { embuilder build freetype && em-config CACHE; } > /tmp/deplogs/01-freetype.txt 2>&1 || rc=$?
           echo "  freetype port exit=$rc"
@@ -280,7 +280,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
           # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
           # already on disk. Honour the cache this workflow already pays to save.
@@ -298,7 +298,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
           # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
           # already on disk. Honour the cache this workflow already pays to save.
@@ -342,7 +342,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
           # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
           # already on disk. Honour the cache this workflow already pays to save.
@@ -360,7 +360,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
           # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
           # already on disk. Honour the cache this workflow already pays to save.
@@ -425,7 +425,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
           # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
           # already on disk. Honour the cache this workflow already pays to save.
@@ -453,7 +453,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libyaml-cpp.a ]; then
             echo "  yaml-cpp: already built (cache hit), skipping"; exit 0
           fi
@@ -478,7 +478,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libpython3.13.a ]; then
             echo "  cpython: already built (cache hit), skipping"; exit 0
           fi
@@ -511,7 +511,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           dest=deps/wasm/include/python3.13
           if [ -s "$dest/Python.h" ] && [ -s "$dest/pyconfig.h" ]; then
             echo "  cpython headers: already staged"
@@ -537,7 +537,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libhdf5*.a 2>/dev/null | wc -l)" -ge 1 ]; then
             echo "  hdf5: already built (cache hit), skipping"; exit 0
           fi

@@ -209,7 +209,7 @@ jobs:
         id: icu
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           embuilder build icu
           sysroot="$(em-config CACHE)/sysroot"
           echo "sysroot=$sysroot" >> "$GITHUB_OUTPUT"
@@ -335,7 +335,7 @@ jobs:
           # diagnostics below, which are the point of this job.
           set +e
           set -o pipefail
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           ROOT="$PWD"; DW="$ROOT/deps/wasm"
           QT="$ROOT/qt/6.11.2/wasm_mt_weh"
           mkdir -p /tmp/fclogs
@@ -425,7 +425,7 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           n="${{ inputs.jobs }}"; [ -n "$n" ] || n="$(nproc)"
           t="${{ inputs.targets }}"
           if [ -z "$t" ]; then

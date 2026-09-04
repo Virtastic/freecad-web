@@ -198,7 +198,7 @@ jobs:
       - name: Build the dependency libs
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           bash build-libf2c-weh.sh
           bash build-spooles-weh.sh
           bash build-arpack-weh.sh
@@ -209,7 +209,7 @@ jobs:
           FCWEB_CCX_PTHREADS: ${{ inputs.pthreads && '1' || '0' }}
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           echo "FCWEB_CCX_PTHREADS=$FCWEB_CCX_PTHREADS"
           bash build-ccx-weh.sh
 
@@ -276,7 +276,7 @@ jobs:
           FCWEB_CCX_PTHREADS: ${{ inputs.pthreads && '1' || '0' }}
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           # Must match how libccx.a was built: the serial build needs the --wrap flags, the
           # threaded one must NOT have them or wasm-ld segfaults instead of erroring.
           bash build-ccx-module-weh.sh

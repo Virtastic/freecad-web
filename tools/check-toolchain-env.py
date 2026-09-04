@@ -20,6 +20,7 @@ rejects after hours, or -- worse -- that reports its own size and symbol counts 
 The failure has no symptom at the point it happens, which is why it is a gate and not a
 convention.
 """
+import glob
 import io
 import subprocess
 import sys
@@ -62,6 +63,43 @@ def clobbers_emcc_cflags(text):
                 return raw.strip()
     return None
 
+def workflow_problems():
+    """The same rule for workflow `run:` blocks, which are shell scripts wearing a hat.
+
+    Scripts were only half the surface. Forty-one workflow steps sourced emsdk directly,
+    and five of them built real artifacts: the freetype and ICU ports, yaml-cpp, and
+    FreeCAD's own Configure. The freetype one is what actually broke the first wasm64
+    build-deps run -- it pre-built the port for wasm32, so OCCT then triggered an
+    on-demand wasm64 build of the same port and died on an emscripten flag bug 15 seconds
+    in. yaml-cpp is the quieter case: it built, produced one archive, and passed the
+    archive-count gate, which counts files and cannot see a target.
+
+    The emsdk-install steps are exempt: they run `. ./emsdk_env.sh` from INSIDE the emsdk
+    directory purely to confirm the SDK landed, and build nothing.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return []
+    problems = []
+    for path in sorted(glob.glob('.github/workflows/*.yml')):
+        doc = yaml.safe_load(io.open(path, encoding='utf-8').read())
+        for job in (doc.get('jobs') or {}).values():
+            for step in (job.get('steps') or []):
+                run = step.get('run') or ''
+                if not run or 'toolchain/env.sh' in run:
+                    continue
+                if 'emsdk/emsdk_env.sh' in run:
+                    problems.append((path, 'step %r sources emsdk directly'
+                                     % (step.get('name') or '?')))
+                    continue
+                used = tools_used(run)
+                if used and 'emsdk_env.sh' not in run:
+                    problems.append((path, 'step %r runs %s without the pinned toolchain'
+                                     % (step.get('name') or '?', ', '.join(sorted(used)))))
+    return problems
+
+
 def main():
     listed = subprocess.check_output(['git', 'ls-files', '*.sh']).decode()
     problems = []
@@ -85,14 +123,16 @@ def main():
             problems.append((path, 'runs %s without sourcing toolchain/env.sh'
                                    % ', '.join(sorted(used))))
 
+    problems += workflow_problems()
+
     if problems:
         for path, why in problems:
             print('%s: %s' % (path, why), file=sys.stderr)
         print('', file=sys.stderr)
-        print('%d script(s) can reach emcc without the pinned toolchain. Each would build '
+        print('%d place(s) can reach emcc without the pinned toolchain. Each would build '
               'for wasm32 with no diagnostic.' % len(problems), file=sys.stderr)
         return 1
-    print('every emscripten-invoking script sources toolchain/env.sh')
+    print('every emscripten-invoking script and workflow step sources toolchain/env.sh')
     return 0
 
 

@@ -87,7 +87,7 @@ jobs:
       - name: Compile the linked C shims
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           fail=0
           for f in gl_legacy_stubs.c bridge/ccx_stubs.c bridge/ccx_threads.c \
                    bridge/ccx_fortran_rt.c fcweb_export_stub.c postevent_wrap.c; do
@@ -130,7 +130,7 @@ jobs:
       - name: gl_compat.h agrees with every stub signature
         run: |
           set -e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           if emcc -fsyntax-only -pthread -include toolchain/include/gl_compat.h                   gl_legacy_stubs.c 2>/tmp/glc.txt; then
             n=$(grep -cE '^[A-Za-z].*\);$' toolchain/include/gl_compat.h)
             echo "  ok  $n declarations agree with their definitions"
@@ -150,7 +150,7 @@ jobs:
       - name: gl_compat.h constants match the system GL headers
         run: |
           set +e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           python3 tools/gen-gl-compat.py --check > /tmp/gl_compat_check.c
           n=$(grep -c '^#error' /tmp/gl_compat_check.c)
           if emcc -fsyntax-only -pthread /tmp/gl_compat_check.c 2>/tmp/gce.txt; then
@@ -170,7 +170,7 @@ jobs:
       - name: gl_compat.h coexists with the emscripten GL headers
         run: |
           set +e
-          . emsdk/emsdk_env.sh
+          . ./toolchain/env.sh
           fail=0
           for lang in c c++; do
             for hdr in GL/gl.h GLES2/gl2.h GLES3/gl3.h; do
