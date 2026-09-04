@@ -29,7 +29,7 @@ on:
   # branch until the port is merged. A branch-scoped push trigger makes it runnable now.
   # Drop this trigger when the branch merges and dispatch takes over.
   push:
-    branches: [freecad-1.1.3]
+    branches: [dev]
     paths:
       - '.github/workflows/build-freecad.yml'
       - 'patches/freecad.patch'

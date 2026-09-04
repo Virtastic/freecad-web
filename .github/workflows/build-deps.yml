@@ -33,7 +33,7 @@ on:
   # and never built -- and the shipped FEMExample trapped on the bug it fixes for months.
   # link-freecad.yml watches its own inputs for exactly this reason; so does this one now.
   push:
-    branches: [freecad-1.1.3]
+    branches: [dev]
     paths:
       - '.github/workflows/build-deps.yml'
       - 'patches/apply.sh'

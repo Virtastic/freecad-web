@@ -29,7 +29,7 @@ on:
   # is on the DEFAULT branch, and this lives on the port branch. Drop the push trigger when
   # the branch merges.
   push:
-    branches: [freecad-1.1.3]
+    branches: [dev]
     paths:
       - '.github/workflows/link-freecad.yml'
       - 'build-weh-objs.sh'

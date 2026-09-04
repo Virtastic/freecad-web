@@ -22,7 +22,10 @@ name: ci
 # guard jk2-web and jka-web already carry.
 on:
   push:
-    branches: [main]
+    # dev as well as main. Development happens on dev, and a hygiene gate that only runs
+    # on the default branch reports on work that was merged rather than work being done --
+    # which is the wrong end. These checks are seconds, not minutes.
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 

@@ -34,9 +34,14 @@ on:
   # trigger carries no such restriction, so the probe can run without putting anything on
   # main. That matters here: ci.yml and dns.yml are the only two workflows bound to main,
   # and dns.yml writes a Cloudflare A-record. Every other workflow names an explicit branch
-  # (freecad-1.1.3 / ovhcloud), so pushing this branch starts this job and nothing else.
+  # (ovhcloud), so this stays narrow deliberately: it runs on dev, but only when the
+  # toolchain it exists to verify actually changes. Everything happens on dev now, so a
+  # branch-triggered probe would either never fire or fire on every commit.
   push:
-    branches: [wasm64-probe]
+    branches: [dev]
+    paths:
+      - toolchain/env.sh
+      - .github/workflows/wasm64-probe.yml
 
 permissions:
   contents: read
