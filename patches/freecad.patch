@@ -1,4 +1,3 @@
-diff -ruNp a/cMake/FindOCC.cmake b/cMake/FindOCC.cmake
 --- a/cMake/FindOCC.cmake
 +++ b/cMake/FindOCC.cmake
 @@ -122,7 +122,8 @@ if (OCC_FOUND)
@@ -5214,7 +5213,21 @@ diff --git a/src/Mod/AddonManager/NetworkManager.py b/src/Mod/AddonManager/Netwo
  class QueueItem:
      """A container for information about an item in the network queue."""
  
-@@ -408,7 +453,7 @@
+@@ -252,7 +297,12 @@
+ 
+         self.__last_started_index = index
+         reply.finished.connect(self.__reply_finished)
+-        reply.sslErrors.connect(self.__on_ssl_error)
++        # FCWEB: this PySide6 build's QNetworkReply has no sslErrors signal, and the
++        # AttributeError landed MID-METHOD -- so the readyRead and downloadProgress
++        # connects below were skipped and every monitored download lost its progress
++        # reporting. Unmonitored GETs survived, which is why it stayed hidden.
++        if hasattr(reply, "sslErrors"):
++            reply.sslErrors.connect(self.__on_ssl_error)
+         if index in self.monitored_connections:
+             reply.readyRead.connect(self.__ready_to_read)
+             reply.downloadProgress.connect(self.__download_progress)
+@@ -408,7 +458,7 @@
          url: str, timeout_ms: int, disable_cache: bool
      ) -> QtNetwork.QNetworkRequest:
          """Construct a network request to a given URL"""
@@ -5614,3 +5627,109 @@ diff -ruNp a/src/Mod/Mesh/App/Core/IO/Reader3MF.cpp b/src/Mod/Mesh/App/Core/IO/R
                  facets.emplace_back(v1, v2, v3);
              }
          }
+diff --git a/src/Gui/ApplicationPy.h b/src/Gui/ApplicationPy.h
+--- a/src/Gui/ApplicationPy.h
++++ b/src/Gui/ApplicationPy.h
+@@ -48,6 +48,11 @@
+     static PyObject* sListWorkbenchHandlers    (PyObject *self,PyObject *args); // retrieves a list of all workbench handlers
+     static PyObject* sActiveWorkbenchHandler   (PyObject *self,PyObject *args); // retrieves the active workbench object
+     static PyObject* sAddResPath               (PyObject *self,PyObject *args); // adds a path where to find resources
++    // FCWEB: PreferencePackManager, so an installed theme can be listed and applied
++    // without restarting -- a browser tab reload loses the session.
++    static PyObject* sRescanPreferencePacks    (PyObject *self,PyObject *args);
++    static PyObject* sListPreferencePacks      (PyObject *self,PyObject *args);
++    static PyObject* sApplyPreferencePack      (PyObject *self,PyObject *args);
+     static PyObject* sAddLangPath              (PyObject *self,PyObject *args); // adds a path to a qm file
+     static PyObject* sAddIconPath              (PyObject *self,PyObject *args); // adds a path to an icon file
+     static PyObject* sAddIcon                  (PyObject *self,PyObject *args); // adds an icon to the cache
+diff --git a/src/Gui/ApplicationPy.cpp b/src/Gui/ApplicationPy.cpp
+--- a/src/Gui/ApplicationPy.cpp
++++ b/src/Gui/ApplicationPy.cpp
+@@ -43,6 +43,7 @@
+ #include <Gui/PreferencePages/DlgSettingsPDF.h>
+ 
+ #include "Application.h"
++#include "PreferencePackManager.h"
+ #include "ApplicationPy.h"
+ #include "BitmapFactory.h"
+ #include "Command.h"
+@@ -550,6 +551,25 @@
+      METH_VARARGS,
+      "resumeWaitCursor() -> None\n\n"
+      "Resumes the application's wait cursor and event filter."},
++    {"rescanPreferencePacks",
++     (PyCFunction)ApplicationPy::sRescanPreferencePacks,
++     METH_VARARGS,
++     "rescanPreferencePacks() -> None\n"
++     "\n"
++     "Re-read the preference packs on disk. Call after installing a theme so it\n"
++     "becomes selectable without restarting."},
++    {"listPreferencePacks",
++     (PyCFunction)ApplicationPy::sListPreferencePacks,
++     METH_VARARGS,
++     "listPreferencePacks() -> list of str\n"
++     "\n"
++     "The names of every preference pack currently known."},
++    {"applyPreferencePack",
++     (PyCFunction)ApplicationPy::sApplyPreferencePack,
++     METH_VARARGS,
++     "applyPreferencePack(name) -> bool\n"
++     "\n"
++     "Apply the named preference pack. Returns False if it is not known."},
+     {nullptr, nullptr, 0, nullptr} /* Sentinel */
+ };
+ 
+@@ -1966,3 +1986,53 @@
+     WaitCursor::resume();
+     Py_RETURN_NONE;
+ }
++
++// FCWEB: PreferencePackManager bindings.
++//
++// Gui::Application::prefPackManager() and PreferencePackManager's rescan(),
++// preferencePackNames() and apply() all exist already, but nothing exposed them to
++// Python. On the desktop that hardly matters -- a theme is picked up on the next start.
++// In the browser a "restart" is a page reload, which costs the user their session, so the
++// Addon Manager needs to rescan in place after installing a theme.
++PyObject* ApplicationPy::sRescanPreferencePacks(PyObject* /*self*/, PyObject* args)
++{
++    if (!PyArg_ParseTuple(args, "")) {
++        return nullptr;
++    }
++    PY_TRY
++    {
++        Application::Instance->prefPackManager()->rescan();
++        Py_Return;
++    }
++    PY_CATCH
++}
++
++PyObject* ApplicationPy::sListPreferencePacks(PyObject* /*self*/, PyObject* args)
++{
++    if (!PyArg_ParseTuple(args, "")) {
++        return nullptr;
++    }
++    PY_TRY
++    {
++        Py::List names;
++        for (const auto& name : Application::Instance->prefPackManager()->preferencePackNames()) {
++            names.append(Py::String(name));
++        }
++        return Py::new_reference_to(names);
++    }
++    PY_CATCH
++}
++
++PyObject* ApplicationPy::sApplyPreferencePack(PyObject* /*self*/, PyObject* args)
++{
++    const char* name = nullptr;
++    if (!PyArg_ParseTuple(args, "s", &name)) {
++        return nullptr;
++    }
++    PY_TRY
++    {
++        bool ok = Application::Instance->prefPackManager()->apply(std::string(name));
++        return Py::new_reference_to(Py::Boolean(ok));
++    }
++    PY_CATCH
++}
