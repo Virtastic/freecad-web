@@ -192,28 +192,6 @@ jobs:
           echo "  swig $(swig -version 2>/dev/null | grep -i 'SWIG Version' | head -1)"
           echo "  python $(python -V), meson $(meson --version), ninja $(ninja --version)"
 
-      # libffi is the one lane that still uses autotools: configure-ctypes.sh clones
-      # hoodmane/libffi-emscripten and runs ./autogen.sh, which needs libtool's m4 macros.
-      # Without them autoreconf stops at
-      #   configure.ac:219: error: possibly undefined macro: LT_SYS_SYMBOL_USCORE
-      # Try to install them; if there is no sudo here, say so plainly -- that is a
-      # provisioning fact about the box, not a mystery about the build.
-      - name: autotools for libffi
-        continue-on-error: true
-        run: |
-          if command -v libtoolize >/dev/null 2>&1 && [ -e /usr/share/aclocal/libtool.m4 ]; then
-            echo "  libtool already present"
-            exit 0
-          fi
-          if sudo -n true 2>/dev/null; then
-            sudo -n apt-get update -qq && sudo -n apt-get install -y -qq libtool automake autoconf
-            echo "  installed libtool/automake/autoconf"
-          else
-            echo "::warning::no libtool and no passwordless sudo on this runner."
-            echo "  libffi (and therefore _ctypes) cannot be autoreconf'd here."
-            echo "  Provision once with: sudo apt-get install -y libtool automake autoconf"
-          fi
-
       # A restored cache carries source trees that were patched by an EARLIER commit's
       # patches. Nothing downstream notices: apply.sh sees its marker, the build lane sees
       # its archives, and the job goes green around source that does not contain the fix
@@ -411,15 +389,16 @@ jobs:
           set -e
           . ./toolchain/env.sh
           . .qtvenv/bin/activate
-          # Rebuild when the marker is absent or old: v1 was built -fexceptions, which
-          # cannot link against a -fwasm-exceptions FreeCAD, and the archive name alone
-          # cannot tell the two apart.
-          if [ ! -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ] || ! grep -qx 2 deps/wasm/lib/ctypes-mod/.staged 2>/dev/null || [ "${{ inputs.rebuild }}" = "true" ]; then
+          # Rebuild when the marker is absent or old. v1 was built -fexceptions, which
+          # cannot link against a -fwasm-exceptions FreeCAD; v2 was the hoodmane fork,
+          # whose ffi.c is 32-bit throughout; v3 is upstream libffi 3.8.0, the first with
+          # a wasm64 target. The archive name alone cannot tell them apart.
+          if [ ! -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ] || ! grep -qx 3 deps/wasm/lib/ctypes-mod/.staged 2>/dev/null || [ "${{ inputs.rebuild }}" = "true" ]; then
             bash configure-ctypes.sh
           else
             echo "  _ctypes: already built"
           fi
-          [ -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ] && grep -qx 2 deps/wasm/lib/ctypes-mod/.staged 2>/dev/null             || { echo "::error::ctypes-mod/lib_ctypes.a not produced"; exit 1; }
+          [ -s deps/wasm/lib/ctypes-mod/lib_ctypes.a ] && grep -qx 3 deps/wasm/lib/ctypes-mod/.staged 2>/dev/null             || { echo "::error::ctypes-mod/lib_ctypes.a not produced"; exit 1; }
           [ -s deps/wasm/lib/libffi.a ] || { echo "::error::libffi.a not produced"; exit 1; }
 
       - name: Pillow _imaging
@@ -670,7 +649,7 @@ jobs:
 
       # always(), not success(). The gate is meant to REPORT what is missing, not to throw
       # away the lanes that worked -- numpy alone is 19 archives and a long build, and
-      # discarding it because _ctypes needs libtool would make every iteration pay for it
+      # discarding it because one lane failed would make every iteration pay for it
       # again. Partial progress is exactly what is worth caching here.
       - name: Save the Python extension libraries
         if: always()

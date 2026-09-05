@@ -1,81 +1,53 @@
 #!/bin/bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
-# Build libffi (pyodide's wasm-capable fork) + CPython _ctypes for wasm.
+# Build libffi + CPython _ctypes for wasm64.
 # Enables the `ctypes` stdlib module (and thus matplotlib's interactive QtAgg
 # canvas). libffi creates function-table entries at runtime for closures, so the
-# final FreeCAD link needs -sALLOW_TABLE_GROWTH (added in configure-gui.sh).
+# final FreeCAD link needs -sALLOW_TABLE_GROWTH (added in configure-gui-weh.sh),
+# and its JS calls _malloc/_free, so the link must export them (it does).
+#
+# Source: the upstream libffi 3.8.0 release. Upstream merged the Emscripten port
+# and then added a wasm64 target ("Emscripten: Add wasm64 target", #927):
+# src/wasm/ffi.c switches on __SIZEOF_POINTER__, recomputes every struct offset
+# for 8-byte pointers, and DEC_PTR/ENC_PTR every pointer that crosses the EM_JS
+# boundary -- where wasm64 hands JS a BigInt. The hoodmane/libffi-emscripten
+# fork this script used to clone never got any of that: its ffi.c is
+# HEAPU32[(addr >> 2)] and CHECK_FIELD_OFFSET(ffi_cif, arg_types, 4*2)
+# throughout, and its configure.host has no wasm64 case at all:
+#     configure: error: "libffi has not been ported to wasm64-unknown-emscripten."
+#
+# A release tarball also ships a generated configure, so the libtoolize/autogen
+# dance -- and the LT_SYS_SYMBOL_USCORE macro this script used to supply because
+# the runner's libtool does not define it -- went with the fork.
 set -e
 cd "$(dirname "$0")"
 ROOT="$PWD"; DW="$ROOT/deps/wasm"
 source "$ROOT/toolchain/env.sh"
 
-# 1. libffi (needs automake for autogen)
-if [ ! -d deps/src/libffi ]; then
-  git clone --depth 1 https://github.com/hoodmane/libffi-emscripten.git deps/src/libffi
+FFI_VERSION=3.8.0
+FFI_SHA256=7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4
+FFI_URL="https://github.com/libffi/libffi/releases/download/v$FFI_VERSION/libffi-$FFI_VERSION.tar.gz"
+STAMP="deps/src/libffi/.fcweb-libffi-$FFI_VERSION"
+
+# 1. libffi
+# A tree without the stamp is the fork, another version, or half of an extract:
+# not this source. Replace it rather than build whatever happens to be there.
+if [ ! -f "$STAMP" ]; then
+  rm -rf deps/src/libffi
+  mkdir -p deps/src/libffi
+  curl -fL --retry 3 -o "deps/src/libffi-$FFI_VERSION.tar.gz" "$FFI_URL"
+  echo "$FFI_SHA256  deps/src/libffi-$FFI_VERSION.tar.gz" | sha256sum -c -
+  tar xzf "deps/src/libffi-$FFI_VERSION.tar.gz" --strip-components=1 -C deps/src/libffi
+  rm -f "deps/src/libffi-$FFI_VERSION.tar.gz"
+  # Upstream's EM_JS_DEPS omits the helper DEC_PTR expands to at wasm64; whether
+  # it is defined at runtime then depends on what else the link happened to pull
+  # in. Zero fuzz, fail closed -- the patch says the rest.
+  patch -p1 -d deps/src/libffi --dry-run -F0 < patches/libffi-wasm64-em-js-deps.patch
+  patch -p1 -d deps/src/libffi -F0 < patches/libffi-wasm64-em-js-deps.patch
+  touch "$STAMP"
 fi
 cd deps/src/libffi
-# libtoolize BEFORE autogen. libffi's configure.ac uses LT_SYS_SYMBOL_USCORE, which lives
-# in libtool.m4, and aclocal only sees it once libtoolize has copied the libtool macros
-# into m4/. Having the libtool package installed is not enough -- autoreconf stops with
-#   configure.ac:219: error: possibly undefined macro: LT_SYS_SYMBOL_USCORE
-# which reads like a missing package when it is really a missing step.
-if [ ! -f configure ]; then
-  # ACLOCAL_PATH so aclocal can see libtool.m4 wherever the distro put it. libtoolize
-  # --install copies the macros into m4/, but autogen.sh re-runs autoreconf which
-  # invokes plain `libtoolize --copy` and aclocal -I m4; if the copy did not land,
-  # LT_SYS_SYMBOL_USCORE is undefined again. Giving aclocal the system macro directory
-  # makes it work either way.
-  for d in /usr/share/aclocal /usr/local/share/aclocal; do
-    [ -d "$d" ] && ACLOCAL_PATH="${ACLOCAL_PATH:+$ACLOCAL_PATH:}$d"
-  done
-  export ACLOCAL_PATH
-  echo "ACLOCAL_PATH=$ACLOCAL_PATH"
-  # The fork ships its own m4/, and `aclocal -I m4` searches that FIRST. If those copies
-  # predate LT_SYS_SYMBOL_USCORE, the system libtool.m4 never gets a look in and autoreconf
-  # fails no matter what ACLOCAL_PATH says. So refresh them, then CHECK -- and if the macro
-  # is still missing, copy the system libtool.m4 in directly rather than failing with a
-  # message that blames a package which is installed.
-  if command -v libtoolize >/dev/null 2>&1; then
-    libtoolize --copy --install --force || libtoolize --copy --force || true
-  fi
-  if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
-    for d in /usr/share/aclocal /usr/local/share/aclocal; do
-      if grep -qs 'AC_DEFUN(\[LT_SYS_SYMBOL_USCORE\]' "$d/libtool.m4" 2>/dev/null; then
-        mkdir -p m4 && cp "$d/libtool.m4" m4/
-        echo "copied $d/libtool.m4 into m4/ (defines LT_SYS_SYMBOL_USCORE)"
-        break
-      fi
-    done
-  fi
-  # Still absent after libtoolize copied m4/libtool.m4: this libtool release simply does
-  # not ship LT_SYS_SYMBOL_USCORE. Supply it. The macro exists to discover whether the
-  # toolchain prefixes C symbols with an underscore, and for wasm64-emscripten the answer
-  # is a fact rather than something to probe: it does not. libffi only reads
-  # $sys_symbol_underscore afterwards, so a minimal definition is faithful, not a fudge.
-  if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
-    mkdir -p m4
-    cat > m4/lt_sys_symbol_uscore.m4 <<'M4EOF'
-# Supplied by freecad-web: this libtool does not ship LT_SYS_SYMBOL_USCORE.
-# wasm64-emscripten does not prefix C symbols with an underscore.
-AC_DEFUN([LT_SYS_SYMBOL_USCORE],
-[AC_CACHE_CHECK([for _ prefix in compiled symbols],
-   [lt_cv_sys_symbol_underscore],
-   [lt_cv_sys_symbol_underscore=no])
- sys_symbol_underscore=$lt_cv_sys_symbol_underscore
-])
-M4EOF
-    echo "supplied m4/lt_sys_symbol_uscore.m4 (no underscore prefix on wasm64-emscripten)"
-  fi
-  if ! grep -rqs 'LT_SYS_SYMBOL_USCORE' m4/ 2>/dev/null; then
-    echo "!! LT_SYS_SYMBOL_USCORE is defined nowhere reachable:"
-    echo "   libtoolize: $(command -v libtoolize || echo absent)"
-    echo "   libtool:    $(libtool --version 2>/dev/null | head -1 || echo absent)"
-    grep -rls 'LT_SYS_SYMBOL_USCORE' /usr/share/aclocal /usr/local/share/aclocal 2>/dev/null       | sed 's/^/   defines it: /' | head
-    ls m4/ 2>/dev/null | sed 's/^/   m4\/: /' | head
-  fi
-  ./autogen.sh
-fi
 emconfigure ./configure --host=wasm64-unknown-emscripten --enable-static --disable-shared \
   --disable-dependency-tracking CFLAGS="-fPIC -O2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread"
 emmake make -j4 libffi.la   # 'make' fails on docs (texinfo); build just the lib
@@ -117,10 +89,14 @@ mkdir -p "$DW/lib/ctypes-mod"
 echo "_ctypes built (PyInit__ctypes):"
 "$ROOT/emsdk/upstream/emscripten/emnm" "$DW/lib/ctypes-mod/lib_ctypes.a" | grep 'T PyInit'
 
-# Staging version. v1 was built -fexceptions (JS exception handling) while every
-# other object in the FreeCAD link is -fwasm-exceptions, so the link ended in
-#     undefined symbol: __cxa_find_matching_catch_2 / __resumeException /
-#     llvm_eh_typeid_for
-# v2 is -fwasm-exceptions -sSUPPORT_LONGJMP=wasm. The lane skips on the archive
-# existing, which cannot tell the two apart -- hence the marker.
-echo 2 > "$DW/lib/ctypes-mod/.staged"
+# Staging version. The lane skips on the archive existing, which cannot tell these
+# apart -- hence the marker.
+#   1: built -fexceptions (JS exception handling) while every other object in the
+#      FreeCAD link is -fwasm-exceptions; the link ended in
+#          undefined symbol: __cxa_find_matching_catch_2 / __resumeException /
+#          llvm_eh_typeid_for
+#   2: -fwasm-exceptions -sSUPPORT_LONGJMP=wasm, against the hoodmane fork.
+#   3: the same flags against upstream libffi 3.8.0, the first libffi with a
+#      wasm64 target. A v2 archive on a wasm64 runner is the fork's 32-bit ffi.c
+#      and never actually built; nothing that old may satisfy the lane.
+echo 3 > "$DW/lib/ctypes-mod/.staged"

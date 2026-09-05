@@ -44,6 +44,10 @@ ELSEWHERE = {
     # Qt is fetched into qt-src/ by its own workflow, not into deps/src/, so apply.sh never
     # sees it; the Qt sources step applies this one itself, zero-fuzz and fail-closed.
     'qt-wasm-embind-int64.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-wasm-embind-int64.patch'),
+    # libffi is a release tarball that configure-ctypes.sh fetches into deps/src/libffi
+    # itself, outside apply.sh's build-deps run; the same script applies this one,
+    # zero-fuzz and fail-closed, before configure.
+    'libffi-wasm64-em-js-deps.patch': ('configure-ctypes.sh', 'patches/libffi-wasm64-em-js-deps.patch'),
 }
 
 

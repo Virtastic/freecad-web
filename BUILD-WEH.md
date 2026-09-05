@@ -110,7 +110,9 @@ Getting there took eight defects, none of which a passing script would have reve
    against the `.wrap`.
 8. libffi's `LT_SYS_SYMBOL_USCORE` is **not shipped by this libtool at all** — three
    rounds went into the macro search path before a diagnostic showed the macro simply does
-   not exist here. Supplied directly: wasm64-emscripten has no underscore prefix.
+   not exist here. Supplied directly at the time. Superseded: libffi now comes from the
+   upstream 3.8.0 release tarball, which ships a generated `configure` (no autogen, no
+   libtool macros) and carries the wasm64 target the hoodmane fork never had.
 
 The lesson worth keeping is #8's shape: the error named a symptom (`possibly undefined
 macro`) and every fix aimed at the wrong cause until something printed what was actually

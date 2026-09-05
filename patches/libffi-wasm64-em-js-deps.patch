@@ -1,0 +1,20 @@
+--- a/src/wasm/ffi.c
++++ b/src/wasm/ffi.c
+@@ -42,7 +42,16 @@
+ 
+ #define EM_JS_MACROS(ret, name, args, body...) EM_JS(ret, name, args, body)
+ 
+-EM_JS_DEPS(libffi, "$getWasmTableEntry,$setWasmTableEntry,$getEmptyTableSlot,$convertJsFunctionToWasm");
++// FCWEB: at wasm64 DEC_PTR expands to bigintToI53Checked, a JS-library helper that
++// nothing here declares. Whether it is present at runtime then depends on what ELSE
++// the link pulled in (embind and the pthread runtime both happen to), and a link that
++// has neither dies at the first ffi_call with
++//     ReferenceError: bigintToI53Checked is not defined
++// Declare it. _malloc/_free, which this file also calls from JS, cannot be declared
++// here -- EM_JS_DEPS is read after wasm-ld has run, so naming a native symbol only
++// demands an export that was never made -- and stay the consumer's job:
++//     -sEXPORTED_FUNCTIONS=...,_malloc,_free
++EM_JS_DEPS(libffi, "$getWasmTableEntry,$setWasmTableEntry,$getEmptyTableSlot,$convertJsFunctionToWasm,$bigintToI53Checked");
+ 
+ #define DEREF_U8(addr, offset) HEAPU8[addr + offset]
+ #define DEREF_S8(addr, offset) HEAP8[addr + offset]
