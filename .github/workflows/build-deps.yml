@@ -42,6 +42,7 @@ on:
       - 'patches/occt.patch'
       - 'patches/coin3d.patch'
       - 'patches/cpython-ctypes-wasm.patch'
+      - 'patches/cpython-trampoline-wasm64.patch'
       - 'patches/numpy.patch'
       - 'patches/vtk-expat-wasm-xmlsize.patch'
       - 'patches/vtk-fmt-char8-traits.patch'
@@ -510,8 +511,16 @@ jobs:
         run: |
           mkdir -p /tmp/deplogs
           . ./toolchain/env.sh
-          if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libpython3.13.a ]; then
-            echo "  cpython: already built (cache hit), skipping"; exit 0
+          # Same stamp discipline as VTK: "libpython3.13.a exists" is not "libpython3.13.a was
+          # built from these patches and scripts". patches/cpython-trampoline-wasm64.patch
+          # changed the trampoline and this guard would have skipped straight past it.
+          stamp=deps/wasm/lib/.fcweb-cpython-inputs
+          want=$(cat patches/cpython-ctypes-wasm.patch patches/cpython-trampoline-wasm64.patch build-cpython.sh build-cpython-mt.sh | sha256sum | cut -d" " -f1)
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libpython3.13.a ] && [ "$(cat $stamp 2>/dev/null)" = "$want" ]; then
+            echo "  cpython: already built from these inputs (cache hit), skipping"; exit 0
+          fi
+          if [ -s deps/wasm/lib/libpython3.13.a ]; then
+            echo "  cpython: the cached library was built from different inputs, rebuilding"
           fi
           t0=$SECONDS; rc=0
           bash build-cpython.sh    > /tmp/deplogs/cpython.txt   2>&1 || rc=$?
@@ -523,6 +532,7 @@ jobs:
             mkdir -p deps/wasm/lib
             cp deps/src/cpython/builddir/emscripten-mt/libpython3.13.a deps/wasm/lib/ || rc=$?
           fi
+          [ "$rc" = 0 ] && echo "$want" > "$stamp"
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
           echo "  cpython exit=$rc in $((SECONDS-t0))s"
           echo "--- host/stage2 tail ---"; tail -15 /tmp/deplogs/cpython.txt 2>/dev/null

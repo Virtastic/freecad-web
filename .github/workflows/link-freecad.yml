@@ -55,6 +55,14 @@ on:
       - 'tools/check-archive-eh.sh'
       - 'tools/wasm-func-sig.py'
       - 'tools/fetch-freecad-submodules.sh'
+      # Link inputs and boot-gate inputs that were not watched: the --pre-js is compiled
+      # INTO FreeCAD.js, and the gate boots the checked-out page. A pre-gui.js fix that
+      # relinked nothing shipped nothing (the wasm64 BigInt event-dispatch fix).
+      - 'pre-gui.js'
+      - 'play-gui/freecad-gui.html'
+      - 'play-gui/qtloader.js'
+      - 'tools/boot-gate.py'
+      - 'tools/check-payload-packages.py'
   workflow_dispatch:
     inputs:
       rebuild:

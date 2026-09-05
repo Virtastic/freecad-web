@@ -590,7 +590,7 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
       ].join('\n');
       var n = new TextEncoder().encode(py).length + 1, q = m._malloc(n);
       m.stringToUTF8(py, q, n);
-      (window.fcRunPy || function (mm, pp) { mm._fcweb_run_python(pp); mm._free(pp); })(m, q);
+      (window.fcRunPy || function (mm, pp) { mm._fcweb_run_python(BigInt(pp)); mm._free(pp); })(m, q);
       return true;
     } catch (e) { return false; }
   };
@@ -1153,7 +1153,12 @@ window.__fcPyBusy = window.__fcPyBusy || false;
 function fcRunPy(m, ptr){
   var r;
   window.__fcPyBusy = true;
-  try { r = m._fcweb_run_python(ptr); }
+  // BigInt: fcweb_run_python is a JSPI export. emscripten 6.0.9 wraps those with
+  // WebAssembly.promising but leaves them OUT of the pointer-signature conversion every
+  // other export gets, so on wasm64 the argument reaches the wasm as a raw i64 and a
+  // Number throws "Cannot convert N to a BigInt" (link 33969348139's boot gate).
+  // BigInt(BigInt) is a no-op, so this also survives the day emscripten converts it.
+  try { r = m._fcweb_run_python(BigInt(ptr)); }
   catch(e){ window.__fcPyBusy = false; m._free(ptr); throw e; }
   if (r && typeof r.then === 'function') {
     r.then(()=>{ m._free(ptr); window.__fcPyBusy = false; },
@@ -1999,7 +2004,10 @@ window.fcRunPy = fcRunPy;
     // constant can never report a fraction above 1.
     var FCWEB_HEAP_MAX_BYTES = 17179869184;  // -sMAXIMUM_MEMORY=17179869184 (16 GiB, wasm64)
     function heapCapBytes(m){
-      return Math.max(FCWEB_HEAP_MAX_BYTES, m.HEAPU8.buffer.byteLength || 0);
+      // HEAPU8 is on the Module only because the link exports it (EXPORTED_RUNTIME_METHODS);
+      // emscripten 6 stopped exporting the views by default, and without the guard this
+      // threw, every caller caught it, and the memory warning went silent.
+      return Math.max(FCWEB_HEAP_MAX_BYTES, (m.HEAPU8 && m.HEAPU8.buffer.byteLength) || 0);
     }
     function heapCapMB(){
       try { return Math.round(heapCapBytes(window.fcInstance) / 1048576); } catch (e) { return 0; }
@@ -2013,9 +2021,13 @@ window.fcRunPy = fcRunPy;
         // undefined, and used/cap is NaN -- so the memory warning goes silent at exactly
         // the moment it is needed. The shipped link is INITIAL_MEMORY=1GB growing to 4GB,
         // so this is reachable today, not a wasm64 hypothetical.
-        // wasm64 follow-up: get_sbrk_ptr returns a BigInt there and the break it points
-        // at is 64-bit, so this needs Number() plus a BigInt64Array read, not just >>>.
-        var used = m.HEAPU32[m._emscripten_get_sbrk_ptr() >>> 2];
+        // wasm64: the export is signature-converted, so the ADDRESS arrives as a Number,
+        // but the break stored there is a 64-bit pointer. HEAPU32 would read its low half --
+        // right below 4 GB, wrapping above it, which is the whole point of wasm64 -- so read
+        // it as an i64 (HEAP64 is exported for exactly this).
+        var p = m._emscripten_get_sbrk_ptr();
+        if (!m.HEAP64) return -1;
+        var used = Number(m.HEAP64[p / 8]);
         var cap = heapCapBytes(m);
         return cap > 0 ? used / cap : -1;
       } catch (e) { return -1; }
@@ -3041,7 +3053,7 @@ window.fcRunPy = fcRunPy;
     // off while this (possibly long, JSPI-suspending) op runs, and frees the ptr
     // only when the call actually settles (a raw finally-free would free it while a
     // suspended call still holds it). File open/save go through here.
-    (window.fcRunPy||function(mm,pp){ mm._fcweb_run_python(pp); mm._free(pp); })(m,q);
+    (window.fcRunPy||function(mm,pp){ mm._fcweb_run_python(BigInt(pp)); mm._free(pp); })(m,q);
     return true; }
   // ---- Addon Manager overlay -------------------------------------------------------
   // FreeCAD's Addon Manager cannot run here as shipped: its workers are QThreads, and
@@ -3516,7 +3528,7 @@ window.fcRunPy = fcRunPy;
              + "\nif _w is not None:\n    _w.close()\n";
       var n=new TextEncoder().encode(code).length+1;
       var q=m._malloc(n); m.stringToUTF8(code,q,n);
-      (window.fcRunPy||function(mm,pp){mm._fcweb_run_python(pp);mm._free(pp);})(m,q);
+      (window.fcRunPy||function(mm,pp){mm._fcweb_run_python(BigInt(pp));mm._free(pp);})(m,q);
     }catch(err){}
   }
 })();
