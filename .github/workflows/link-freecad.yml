@@ -52,6 +52,7 @@ on:
       - 'tools/check-eh-model.sh'
       - 'tools/check-symbol-hijack.py'
       - 'tools/check-archive-target.py'
+      - 'tools/check-archive-eh.sh'
       - 'tools/wasm-func-sig.py'
       - 'tools/fetch-freecad-submodules.sh'
   workflow_dispatch:
@@ -336,6 +337,9 @@ jobs:
           for d in deps/wasm/lib qt/6.11.2/wasm_mt_weh/lib deps/wasm/shiboken6/lib build-pyside-wasm weh-objs; do
             [ -d "$d" ] || continue
             python3 tools/check-archive-target.py "$d" || fail=1
+            # ...and every one on the exception-handling model env.sh sets. Chrome refuses a
+            # module that mixes the two; node's validate does not (link 33963711535).
+            bash tools/check-archive-eh.sh "$d" || fail=1
           done
           exit $fail
 
@@ -646,6 +650,10 @@ jobs:
             export CCACHE_COMPRESSLEVEL=1
             export CCACHE_COMPILERCHECK=content
             export CCACHE_SLOPPINESS=
+            # emcc appends EMCC_CFLAGS itself, so ccache never sees them on the command line:
+            # a flag that changes the object code (-m64, WASM_LEGACY_EXCEPTIONS) would be
+            # served stale objects from before it. Hash the file that sets them instead.
+            export CCACHE_EXTRAFILES="$PWD/toolchain/env.sh"
             export CCACHE_DEPEND=true
             export CCACHE_STATSLOG=/tmp/fclogs/ccache-stats.log
             export EM_COMPILER_WRAPPER=ccache

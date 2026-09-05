@@ -37,6 +37,7 @@ on:
     paths:
       - '.github/workflows/build-deps.yml'
       - 'tools/check-archive-target.py'
+      - 'tools/check-archive-eh.sh'
       - 'patches/apply.sh'
       - 'patches/occt.patch'
       - 'patches/coin3d.patch'
@@ -202,10 +203,18 @@ jobs:
       # The checker reads the target_features of each object (+memory64), which is what
       # wasm-ld goes by. Pruning here makes the steps below rebuild exactly the wrong ones;
       # the gate at the end refuses to call the run green while any remain.
-      - name: Discard restored archives not built for wasm64
+      #
+      # The same shape again for the exception-handling model. toolchain/env.sh moved the
+      # whole build to the new (try_table) model in c604b5a; libCoin.a and libxerces-c.a
+      # built before that stayed in this cache on the legacy model, and Chrome refuses a
+      # module that mixes the two (link 33963711535: every static gate green, the
+      # application never started). target_features cannot tell the models apart, so
+      # this one reads the opcodes -- see tools/check-archive-eh.sh.
+      - name: Discard restored archives not built for wasm64, or on the legacy EH model
         run: |
           if [ -d deps/wasm/lib ]; then
             python3 tools/check-archive-target.py --prune deps/wasm/lib || echo "  pruned; the steps below rebuild them"
+            bash tools/check-archive-eh.sh --prune deps/wasm/lib
           else
             echo "  no deps/wasm/lib yet (cold)"
           fi
@@ -598,6 +607,8 @@ jobs:
           check yamlcpp "deps/wasm/lib/libyaml-cpp.a"  1
           # ...and every one of them built for THIS target (see the prune step above).
           python3 tools/check-archive-target.py deps/wasm/lib || fail=1
+          # ...and on the exception-handling model env.sh sets (see the prune step above).
+          bash tools/check-archive-eh.sh deps/wasm/lib || fail=1
           check cpython "deps/wasm/lib/libpython3.13.a" 1
           check hdf5    "deps/wasm/lib/libhdf5*.a"      1
 
