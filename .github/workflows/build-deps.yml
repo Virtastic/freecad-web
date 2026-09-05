@@ -36,6 +36,7 @@ on:
     branches: [dev]
     paths:
       - '.github/workflows/build-deps.yml'
+      - 'tools/check-archive-target.py'
       - 'patches/apply.sh'
       - 'patches/occt.patch'
       - 'patches/coin3d.patch'
@@ -190,6 +191,24 @@ jobs:
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git
           cd emsdk && ./emsdk install 6.0.9 && ./emsdk activate 6.0.9
           . ./emsdk_env.sh && emcc --version | head -1
+
+      # An archive that exists is not an archive built for this target. The first wasm64-keyed
+      # run of this lane predates the fix that routed every step through -m64, so what it
+      # built went into the wasm64 cache as wasm32 and every run since said "already built
+      # (cache hit), skipping". link-freecad 33950974628 found one such archive -- after
+      # compiling the whole of FreeCAD:
+      #     wasm-ld: error: libyaml-cpp.a(graphbuilder.cpp.o): wasm32 object file cannot be
+      #     linked in wasm64 mode
+      # The checker reads the target_features of each object (+memory64), which is what
+      # wasm-ld goes by. Pruning here makes the steps below rebuild exactly the wrong ones;
+      # the gate at the end refuses to call the run green while any remain.
+      - name: Discard restored archives not built for wasm64
+        run: |
+          if [ -d deps/wasm/lib ]; then
+            python3 tools/check-archive-target.py --prune deps/wasm/lib || echo "  pruned; the steps below rebuild them"
+          else
+            echo "  no deps/wasm/lib yet (cold)"
+          fi
 
       # Fetch only what is missing, so a cache hit skips straight to the gaps.
       - name: Fetch sources
@@ -577,6 +596,8 @@ jobs:
           check OCCT   "deps/wasm/lib/libTK*.a"      30
           check VTK    "deps/wasm/lib/libvtk*.a"     20
           check yamlcpp "deps/wasm/lib/libyaml-cpp.a"  1
+          # ...and every one of them built for THIS target (see the prune step above).
+          python3 tools/check-archive-target.py deps/wasm/lib || fail=1
           check cpython "deps/wasm/lib/libpython3.13.a" 1
           check hdf5    "deps/wasm/lib/libhdf5*.a"      1
 

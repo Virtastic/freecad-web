@@ -47,6 +47,7 @@ on:
       # check in ci.yml enforces exactly this).
       - 'tools/check-eh-model.sh'
       - 'tools/check-symbol-hijack.py'
+      - 'tools/check-archive-target.py'
       - 'tools/wasm-func-sig.py'
       - 'tools/fetch-freecad-submodules.sh'
   workflow_dispatch:
@@ -323,6 +324,15 @@ jobs:
           # "undefined symbol: PyInit_QtNetwork", because nothing had put it on the link
           # line. This compares the three files that have to agree, in a second.
           python3 tools/check-pyside-link-line.py || fail=1
+          # Every archive the link consumes must be built for wasm64. A cache is named, not
+          # inspected: run 33950974628 compiled all of FreeCAD and then died in wasm-ld on a
+          # wasm32 libyaml-cpp.a that a wasm64-keyed cache had carried for days. The checker
+          # reads the target_features of each object, which is what wasm-ld goes by, and it
+          # runs here, in seconds, not in the linker an hour from now.
+          for d in deps/wasm/lib qt/6.11.2/wasm_mt_weh/lib deps/wasm/shiboken6/lib build-pyside-wasm weh-objs; do
+            [ -d "$d" ] || continue
+            python3 tools/check-archive-target.py "$d" || fail=1
+          done
           exit $fail
 
       - name: Cache emsdk

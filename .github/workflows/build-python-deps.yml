@@ -352,6 +352,23 @@ jobs:
           ls qt-host/6.11.2/gcc_64/bin/moc && echo "  host Qt installed"
 
 
+      # An archive that exists is not an archive built for this target. The first wasm64-keyed
+      # run of the dependency lanes predates the fix that routed every step through -m64, so what it
+      # built went into the wasm64 cache as wasm32 and every run since said "already built
+      # (cache hit), skipping". link-freecad 33950974628 found one such archive -- after
+      # compiling the whole of FreeCAD:
+      #     wasm-ld: error: libyaml-cpp.a(graphbuilder.cpp.o): wasm32 object file cannot be
+      #     linked in wasm64 mode
+      # The checker reads the target_features of each object (+memory64), which is what
+      # wasm-ld goes by. Pruning here makes the steps below rebuild exactly the wrong ones;
+      # the gate at the end refuses to call the run green while any remain.
+      - name: Discard restored archives not built for wasm64
+        run: |
+          for d in deps/wasm/lib deps/wasm/shiboken6/lib build-pyside-wasm; do
+            [ -d "$d" ] || continue
+            python3 tools/check-archive-target.py --prune "$d" || echo "  pruned under $d; the lanes below rebuild them"
+          done
+
       - name: numpy
         id: lane_numpy
         continue-on-error: true
@@ -623,6 +640,10 @@ jobs:
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
           if [ "$n" -ge 8 ]; then echo "  ok       matplotlib ($n archives)"
           else echo "::error::matplotlib has $n archives, expected at least 8"; fail=1; fi
+          # ...and every archive built for THIS target (see the prune step above).
+          for d in deps/wasm/lib deps/wasm/shiboken6/lib build-pyside-wasm; do
+            [ -d "$d" ] && { python3 tools/check-archive-target.py "$d" || fail=1; }
+          done
           exit $fail
 
       - name: What exists now
