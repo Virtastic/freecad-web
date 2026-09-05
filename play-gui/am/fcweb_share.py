@@ -259,6 +259,7 @@ def set_readonly(on):
         return 0
     saved = _ro.setdefault(d.Name, {})
     n = 0
+    changed_before = _obs.changed      # status flips fire the observer; they are not edits
     for o in d.Objects:
         props = saved.setdefault(o.Name, {})
         for prop in o.PropertiesList:
@@ -276,6 +277,7 @@ def set_readonly(on):
                 pass
     if not on:
         _ro.pop(d.Name, None)
+    _obs.changed = changed_before
     _obs.guard = bool(on)
     _obs.tripped = False
     try:

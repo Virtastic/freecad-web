@@ -107,6 +107,18 @@ def _volumes(s, fail, seconds=60):
     return r
 
 
+def _wait_volume(s, fail, target, seconds=90):
+    """Probe until some document's Box has this volume; the last probe on failure."""
+    deadline = time.time() + seconds
+    v = {}
+    while time.time() < deadline:
+        v = _volumes(s, fail, 30)
+        if any(abs(x['volume'] - target) < 1e-6 for x in v.values()):
+            return v
+        time.sleep(4)
+    return v
+
+
 def _enable_sharing(s, name='Alice', extra=''):
     s.run_python("import FreeCAD as A\np = A.ParamGet(%r)\np.SetString('DisplayName', %r)\n%s\np.SetBool('Enabled', True)\nA.saveParameter()\n"
                  % (GROUP, name, extra))
@@ -202,7 +214,7 @@ def scenario_share(ctx, url, args, fail):
         _dump(s1, 'v2')
     if not _wait(s2, 'share applied v2', 60, 'console'):
         fail('viewer never applied v2')
-    v = _volumes(s2, fail)
+    v = _wait_volume(s2, fail, 12000.0)
     got = [x for x in v.values() if abs(x['volume'] - 12000.0) < 1e-6]
     if not got:
         fail('viewer did not receive the live edit (volumes %r)' % {k: x['volume'] for k, x in v.items()})
@@ -280,7 +292,7 @@ def scenario_control(ctx, url, args, fail):
         fail('the new holder never published')
     if not _wait(s1, 'share applied v', 60, 'console'):
         fail('the owner never received the new holder\'s version')
-    v = _volumes(s1, fail)
+    v = _wait_volume(s1, fail, 15000.0)
     if not any(abs(x['volume'] - 15000.0) < 1e-6 for x in v.values()):
         fail('the owner did not get Bob\'s edit (volumes %r)' % {k: x['volume'] for k, x in v.items()})
     else:
