@@ -250,6 +250,12 @@ jobs:
       - name: Workflow run blocks have no mangled escapes
         run: python3 tools/check-run-block-escapes.py
 
+      # The shared-session service's protocol, asserted without sockets: roles, control,
+      # passwords, the MCP capability, expiry, quota eviction, and that every error carries
+      # a hint. The container's own build runs it too, but here it fails in seconds.
+      - name: Shared-session core selftest
+        run: python3 infra/session/share.py --selftest
+
       # `cmd | tee log` exits with tee's status, and tee always succeeds. A link that died
       # on `undefined symbol: PyInit_QtSvg` was recorded as "Link: success", handed on the
       # PREVIOUS bin/FreeCAD.{js,wasm,data}, and that artifact was released and served to
