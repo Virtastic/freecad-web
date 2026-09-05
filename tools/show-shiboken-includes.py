@@ -36,8 +36,8 @@ import re
 import sys
 
 CANDIDATES = [
-    'sources/shiboken6/ApiExtractor/clangparser/compilersupport.cpp',
-    'sources/shiboken6/ApiExtractor/clangparser/compilersupport.h',
+    'sources/shiboken6_generator/ApiExtractor/clangparser/compilersupport.cpp',
+    'sources/shiboken6_generator/ApiExtractor/clangparser/compilersupport.h',
 ]
 
 # The words worth seeing: anything that builds an include list, names a builtins/resource

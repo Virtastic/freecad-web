@@ -30,7 +30,13 @@ endian = 'little'
 # these two: libnpy__pocketfft_umath.a (pocketfft) and libhighway.a (Google Highway).
 # SUPPORT_LONGJMP=wasm goes with it: wasm EH needs it for setjmp/longjmp.
 [built-in options]
-c_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
+# -Wno-error=incompatible-pointer-types: numpy is told longdouble_format = IEEE_DOUBLE_LE
+# below, i.e. long double has the same representation as double. dragon4.c relies on that,
+# casting npy_longdouble* to npy_float64* on purpose. clang 20 (emsdk 6.0.9) promoted that
+# warning to a hard error where the older clang in emsdk 3.1.70 only warned, which is the
+# whole of the change -- not a wasm64 issue. Demote it back to a warning so the deliberate
+# cast compiles; the low 8 bytes it reads ARE the value under IEEE_DOUBLE_LE.
+c_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread', '-O2', '-Wno-error=incompatible-pointer-types', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
 cpp_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread', '-O2', '-I@ROOT@/deps/src/cpython/Include', '-I@ROOT@/deps/src/cpython/builddir/emscripten-mt']
 c_link_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread']
 cpp_link_args = ['-fwasm-exceptions', '-sSUPPORT_LONGJMP=wasm', '-pthread']

@@ -43,7 +43,7 @@ import io
 import os
 import sys
 
-REL = 'sources/shiboken6/ApiExtractor/clangparser/compilersupport.cpp'
+REL = 'sources/shiboken6_generator/ApiExtractor/clangparser/compilersupport.cpp'
 SIG = 'static void appendClangBuiltinIncludes(HeaderPaths *p)'
 MARK = 'FCWEB: return unconditionally'
 
