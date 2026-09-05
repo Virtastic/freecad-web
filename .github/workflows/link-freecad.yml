@@ -48,6 +48,7 @@ on:
       - 'tools/check-eh-model.sh'
       - 'tools/check-symbol-hijack.py'
       - 'tools/wasm-func-sig.py'
+      - 'tools/fetch-freecad-submodules.sh'
   workflow_dispatch:
     inputs:
       rebuild:
@@ -463,36 +464,7 @@ jobs:
       # FreeCAD 1.1.3 itself points at, so this tracks the release rather than a moving
       # branch. googletest stays out; it is only for ENABLE_DEVELOPER_TESTS, which is off.
       - name: Submodules the tarball does not carry (GSL, OndselSolver, AddonManager)
-        run: |
-          set -e
-          gsl=deps/src/freecad/src/3rdParty/GSL
-          if [ ! -e "$gsl/include/gsl/gsl" ]; then
-            mkdir -p "$gsl"
-            curl -fsSL -o /tmp/gsl.tar.gz https://github.com/microsoft/GSL/archive/refs/tags/v4.0.0.tar.gz
-            tar xzf /tmp/gsl.tar.gz -C "$gsl" --strip-components=1
-          fi
-          echo "  GSL:          $(ls "$gsl/include/gsl" | wc -l) headers"
-          ond=deps/src/freecad/src/3rdParty/OndselSolver
-          if [ ! -e "$ond/CMakeLists.txt" ]; then
-            mkdir -p "$ond"
-            curl -fsSL -o /tmp/ondsel.tar.gz \
-              https://github.com/Ondsel-Development/OndselSolver/archive/refs/heads/main.tar.gz
-            tar xzf /tmp/ondsel.tar.gz -C "$ond" --strip-components=1
-          fi
-          [ -e "$ond/CMakeLists.txt" ] || { echo "::error::OndselSolver missing -- BUILD_ASSEMBLY needs it"; exit 1; }
-          echo "  OndselSolver: present"
-          # The commit FreeCAD 1.1.3 pins for src/Mod/AddonManager. Read from the tag, not
-          # from a branch: an addon manager newer than the app it ships in is a bug waiting.
-          adm=deps/src/freecad/src/Mod/AddonManager
-          adm_sha=937b6877239dc78ef59eeefe8099e5f14243eda1
-          if [ ! -e "$adm/AddonManager.py" ]; then
-            mkdir -p "$adm"
-            curl -fsSL -o /tmp/addonmgr.tar.gz \
-              "https://codeload.github.com/FreeCAD/AddonManager/tar.gz/$adm_sha"
-            tar xzf /tmp/addonmgr.tar.gz -C "$adm" --strip-components=1
-          fi
-          [ -e "$adm/AddonManager.py" ] || { echo "::error::AddonManager missing -- BUILD_ADDONMGR needs it"; exit 1; }
-          echo "  AddonManager: present ($(ls "$adm"/*.py 2>/dev/null | wc -l) modules)"
+        run: bash tools/fetch-freecad-submodules.sh
 
       - name: The patch matches this tree byte for byte
         run: python3 tools/check-patch-applies.py patches/freecad.patch deps/src/freecad
