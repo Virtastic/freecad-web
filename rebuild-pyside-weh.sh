@@ -177,7 +177,6 @@ cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja
   -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
   -DQt6_DIR="$QNEW/lib/cmake/Qt6" -DQT_HOST_PATH="$QT_HOST" \
   -DQFP_PYTHON_HOST_PATH="$HOSTPY3" -DQFP_SHIBOKEN_HOST_PATH="$ROOT/deps/host/shiboken6" \
-  -DShiboken_SKIP_GENERATOR_BUILD=ON \
   -DPython_EXECUTABLE="$WASMPY_HOST" -DPython_INCLUDE_DIR="$PYINC" \
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm64-emscripten \
   `# See the QFP_NO_STRIP comment on the PySide configure below. Same reason here.` \

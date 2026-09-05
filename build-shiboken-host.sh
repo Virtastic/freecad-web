@@ -4,6 +4,18 @@
 # Build the HOST shiboken6 generator -- the tool that reads Qt's headers and emits the C++
 # binding sources the wasm shiboken then compiles.
 #
+# PySide 6.11 split the shiboken tree in two. sources/shiboken6 is now only libshiboken and
+# the Python module, and it expects the generator to be ALREADY INSTALLED as the
+# Shiboken6Tools cmake package (shibokenmodule/CMakeLists.txt uses
+# $<TARGET_FILE:Shiboken6::shiboken6>; ShibokenHelpers.cmake finds the package under
+# QFP_SHIBOKEN_HOST_PATH/lib/cmake). The generator itself lives in
+# sources/shiboken6_generator, its own project, which exports that package. Configuring
+# sources/shiboken6 here, as this script did on 6.9, now dies at generate time:
+#     CMake Error at shibokenmodule/CMakeLists.txt:15 (add_custom_command):
+#       No target "Shiboken6::shiboken6"
+# So build the generator project, and only that: the wasm side (rebuild-pyside-weh.sh)
+# builds sources/shiboken6 for wasm and finds this install through QFP_SHIBOKEN_HOST_PATH.
+#
 # This is a prerequisite for rebuild-pyside-weh.sh, which passes it as
 # QFP_SHIBOKEN_HOST_PATH and refuses to start without it. It has never been built anywhere
 # but the build machine, where deps/host/shiboken6 simply already existed.
@@ -16,7 +28,7 @@
 set -e
 cd "$(dirname "$0")"
 ROOT="$PWD"
-SRC="$ROOT/deps/src/pyside-setup/sources/shiboken6"
+SRC="$ROOT/deps/src/pyside-setup/sources/shiboken6_generator"
 BUILD="$ROOT/build-shiboken-host"
 PREFIX="$ROOT/deps/host/shiboken6"
 
@@ -244,6 +256,26 @@ if [ -z "$GEN" ]; then
     find "$PREFIX" -maxdepth 3 -type f | sed 's/^/     /' | head -20 >&2
     exit 1
 fi
+# The consumers do not run the binary by path; they find_package(Shiboken6Tools) under
+# $PREFIX/lib/cmake. An install with the binary but without the package config is what a
+# wrong -S directory produces, and it fails one lane later with "Shiboken6Tools package
+# was not found". Check the artifact they need, not just the one this script wants.
+CFG=""
+for c in "$PREFIX"/lib*/cmake/Shiboken6Tools/Shiboken6ToolsConfig.cmake; do
+    [ -f "$c" ] && { CFG="$c"; break; }
+done
+if [ -z "$CFG" ]; then
+    echo "!! generator installed but no Shiboken6ToolsConfig.cmake under $PREFIX/lib*/cmake:" >&2
+    find "$PREFIX" -name "*.cmake" | sed 's/^/     /' | head -20 >&2
+    exit 1
+fi
+echo "tools package: $CFG"
+# The generator must match the PySide sources it will generate for; the lane's skip
+# checks this stamp against the pinned version, so a generator left over from another
+# release cannot be reused just because a binary of the right name exists.
+"$GEN" --version > "$PREFIX/.version" 2>&1 || true
+echo "generator version: $(head -1 "$PREFIX/.version")"
+
 # Record which LLVM this generator was built against. It resolves clang's builtin headers
 # at RUN time, and it runs from rebuild-pyside-weh.sh, where LLVM_INSTALL_DIR is not set --
 # so it fell back to a default search, found a different LLVM, and parsed nothing:

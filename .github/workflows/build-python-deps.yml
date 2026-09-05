@@ -512,7 +512,10 @@ jobs:
           # The generator must have been built against LLVM 20: emsdk 6.0.9 ships clang 20,
           # and an older libclang cannot parse its sysroot however it is configured. A
           # cached 17.0.6 generator would skip this step and fail identically later.
-          if [ -x deps/host/shiboken6/bin/shiboken6 ] && grep -q "llvm-20" deps/host/shiboken6/.llvm-prefix 2>/dev/null && grep -qx "2" deps/host/shiboken6/.builtin-includes-skippable 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then
+          # And it must be the generator for THESE PySide sources (.version, written from
+          # `shiboken6 --version`): one from another release has the right name and the
+          # right LLVM and generates bindings the 6.11.2 libshiboken will not build.
+          if [ -x deps/host/shiboken6/bin/shiboken6 ] && grep -q "llvm-20" deps/host/shiboken6/.llvm-prefix 2>/dev/null && grep -qx "2" deps/host/shiboken6/.builtin-includes-skippable 2>/dev/null && grep -q "6[.]11[.]2" deps/host/shiboken6/.version 2>/dev/null && [ "${{ inputs.rebuild }}" != "true" ]; then
             echo "  host shiboken: already built"; exit 0
           fi
           # MEASURED: libclang must match the resource dir it is given, which is emsdk's
