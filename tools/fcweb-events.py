@@ -57,6 +57,9 @@ SSH_KEY = '~/Documents/SSH/ovh_nostalgia'
 REMOTE_LOG = 'docker exec freecad cat /var/log/fcweb/events.log'
 
 
+AUTOMATED_UA = ('HeadlessChrome', 'Puppeteer', 'bot', 'Bot')
+
+
 def ssh_cmd(key, host):
     cmd = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20']
     if key:
@@ -129,7 +132,7 @@ def main():
     if args.exclude_headless:
         before = len(rows)
         rows = [r for r in rows
-                if not any(x in r['ua'] for x in ('HeadlessChrome', 'Puppeteer', 'bot'))]
+                if not any(b in r['ua'] for b in AUTOMATED_UA)]
         print('dropped %d event(s) whose user agent looks automated' % (before - len(rows)))
     if args.days:
         days = sorted({r['day'] for r in rows})[-args.days:]
