@@ -1460,7 +1460,8 @@ window.fcwebNotify = function (text, kind, actions) {
   }
   async function live(st, note, acting) {
     if (!S.holder || !S.edit) return;
-    try { await api('PUT', '/share/' + S.id + '/live', JSON.stringify({ cam: (st && st.cam) || S.cam || '', note: note, acting_as: acting || 'human' }), { 'Content-Type': 'application/json' }); }
+    var body = { cam: (st && st.cam) || S.cam || '', acting_as: acting || 'human' }; if (note) body.note = note;   // a heartbeat never carries a note
+    try { await api('PUT', '/share/' + S.id + '/live', JSON.stringify(body), { 'Content-Type': 'application/json' }); }
     catch (e) { if (e.code === 'not_holder') { becomeHolder(false, 'lost (server)'); } else fail('live', e); }
   }
 

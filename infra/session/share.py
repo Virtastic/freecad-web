@@ -389,7 +389,8 @@ def _route(method, path, fullpath, h, body):
         stale = s['holder'] is not None and _now() - s['holder_seen'] > HOLDER_SILENCE_S
         return _json(200, {
             'v': m['v'], 'env_v': m['env_v'], 'n': m['n'], 't': m['t'], 'seen': m['seen'],
-            'cam': m['cam'], 'note': m['note'], 'acting_as': m['acting_as'],
+            'cam': m['cam'], 'acting_as': m['acting_as'],
+            'note': m['note'] if _now() - m.get('note_t', 0) < 60 else '',   # an activity line, not a label
             'holder': {'name': _name(s, s['holder']), 'silent': stale} if s['holder'] else None,
             'pending': {'name': _name(s, s['pending'])} if s['pending'] else None,
             'watching': _watching(s), 'expires': m['expires'], 'owner': m.get('owner', ''),
@@ -444,8 +445,9 @@ def _route(method, path, fullpath, h, body):
         except Exception:
             return _fail(400, 'bad_request')
         m['cam'] = str(b.get('cam', m['cam']))[:2000]
-        if 'note' in b:
+        if b.get('note'):                      # a heartbeat carries no note and must not wipe one
             m['note'] = str(b['note'])[:200]
+            m['note_t'] = _now()
         m['acting_as'] = 'agent' if b.get('acting_as') == 'agent' else 'human'
         m['seen'] = _now()
         s['holder_seen'] = _now()
