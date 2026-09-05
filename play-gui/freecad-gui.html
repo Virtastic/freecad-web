@@ -1292,7 +1292,7 @@ window.fcwebNotify = function (text, kind, actions) {
   // Self-healing: STATE echoes what the parameter tree really holds; anything we meant
   // to write that is not there yet is sent again on the next tick.
   function healParams(st) {
-    var echo = { SessionId: st.session, WriteKey: st.key, AgentUrl: st.agent_url, DisplayName: st.name };
+    var echo = { SessionId: st.session, WriteKey: st.key, AgentUrl: st.agent_url, DisplayName: st.name, LastPublished: st.last_published };
     Object.keys(echo).forEach(function (k) { if (k in wantParams && echo[k] !== undefined && echo[k] !== wantParams[k]) { flushParams(); } else if (k in wantParams && echo[k] === wantParams[k]) { delete wantParams[k]; } });
   }
   function setReadonly(on) { pyCall('_fs.set_readonly(' + (on ? 'True' : 'False') + ')'); }

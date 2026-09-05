@@ -455,6 +455,7 @@ def tick():
             'active': App.ActiveDocument.Name if App.ActiveDocument else None,
             'obs_changed': _obs.changed if _obs else None, 'last_pub': _last_pub_change,
             'guard': bool(_obs and _obs.guard), 'tick': _tick_n,
+            'last_published': p.GetInt('LastPublished', 0),
         }
         if st != _last_state:
             _last_state = dict(st)
