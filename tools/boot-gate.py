@@ -3064,6 +3064,7 @@ def main():
 
     ran = []            # labels of the scenarios that actually ran, for the pass line
     server = None
+    session_proc = None
     if args.base_url:
         if args.scenario == 'upgrade':
             print('::error::the upgrade scenario rewrites the serve tree, so it cannot run '
@@ -3080,10 +3081,37 @@ def main():
                 return 2
 
         here = os.path.dirname(os.path.abspath(__file__))
+        # Shared sessions: with FCWEB_SESSION_PYTHON set (an interpreter carrying mcp<2,
+        # uvicorn and starlette), run the REAL service and have the static server forward
+        # /share/, /api/ and /mcp/ to it -- the only way the mcp scenario exercises the
+        # genuine transport. Without it the static server answers with the stdlib core
+        # in-process, which covers every scenario but mcp.
+        env = dict(os.environ)
+        spy = os.environ.get('FCWEB_SESSION_PYTHON')
+        if spy:
+            sport = args.port + 1000
+            env['FCWEB_SESSION_UPSTREAM'] = 'http://127.0.0.1:%d' % sport
+            senv = dict(os.environ, PORT=str(sport),
+                        FCWEB_SHARE_DIR=tempfile.mkdtemp(prefix='fcgate-session-'))
+            session_proc = subprocess.Popen(
+                [spy, os.path.join(here, '..', 'infra', 'session', 'app.py')],
+                env=senv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            import urllib.request
+            for _ in range(60):
+                try:
+                    urllib.request.urlopen('http://127.0.0.1:%d/share/health' % sport, timeout=2).read()
+                    break
+                except Exception:
+                    time.sleep(0.5)
+            else:
+                print('::error::the session service never answered /share/health: %s'
+                      % session_proc.stderr.read().decode('utf-8', 'replace')[-800:], file=sys.stderr)
+                return 2
+            print('==> session service up on :%d (real MCP transport)' % sport)
         server = subprocess.Popen(
             [sys.executable, os.path.join(here, 'serve-artifact.py'), args.directory,
              str(args.port)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         time.sleep(1.5)
         if server.poll() is not None:
             print('::error::the static server exited immediately: %s'
@@ -3202,6 +3230,8 @@ def main():
     finally:
         if server is not None:
             server.terminate()
+        if session_proc is not None:
+            session_proc.terminate()
         shutil.rmtree(profile, ignore_errors=True)
 
     if failures:

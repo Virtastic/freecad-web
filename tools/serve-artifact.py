@@ -84,6 +84,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # which is also how an origin without the container behaves.
     def _serve_session(self, method):
         import importlib.util
+        # With a real service running (the boot gate starts infra/session/app.py when
+        # FCWEB_SESSION_PYTHON is set), forward to it so the MCP transport is the genuine
+        # one. Otherwise the stdlib core answers in-process, which covers everything but
+        # the FastMCP layer.
+        up = os.environ.get('FCWEB_SESSION_UPSTREAM')
+        if up:
+            return self._forward_session(method, up)
         here = os.path.dirname(os.path.abspath(__file__))
         spec = importlib.util.spec_from_file_location(
             'fcweb_share_core', os.path.join(here, '..', 'infra', 'session', 'share.py'))
@@ -106,6 +113,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Content-Length', str(len(b)))
         self.end_headers()
         self.wfile.write(b)
+
+    def _forward_session(self, method, up):
+        import http.client
+        from urllib.parse import urlsplit
+        u = urlsplit(up)
+        n = int(self.headers.get('Content-Length') or 0)
+        body = self.rfile.read(n) if n else b''
+        hdrs = {k: v for k, v in self.headers.items() if k.lower() not in ('host', 'connection', 'content-length')}
+        hdrs['Content-Length'] = str(len(body))
+        try:
+            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=120)
+            conn.request(method, self.path, body=body, headers=hdrs)
+            resp = conn.getresponse()
+            out = resp.read()
+        except Exception as exc:
+            self.send_response(502); self.end_headers()
+            self.wfile.write(('session upstream: %s' % exc).encode() + bytes([10]))
+            return
+        self.send_response(resp.status)
+        for k, v in resp.getheaders():
+            if k.lower() in ('transfer-encoding', 'connection', 'content-length'):
+                continue
+            self.send_header(k, v)
+        self.send_header('Content-Length', str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
 
     def _is_session(self):
         return self.path.startswith(('/share/', '/api/', '/mcp/'))

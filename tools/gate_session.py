@@ -311,7 +311,7 @@ def scenario_mcp(ctx, url, args, fail):
 
     def rpc(u, method, params=None):
         n[0] += 1
-        st_, body, _ = _http(base, u.replace(base, ''), json.dumps({'jsonrpc': '2.0', 'id': n[0], 'method': method, 'params': params or {}}).encode(), hdr)
+        st_, body, _ = _http(base, 'POST', u.replace(base, ''), json.dumps({'jsonrpc': '2.0', 'id': n[0], 'method': method, 'params': params or {}}).encode(), hdr)
         try:
             return st_, json.loads(body)
         except Exception:
@@ -328,7 +328,7 @@ def scenario_mcp(ctx, url, args, fail):
 
     st_, j = rpc(mcp_url, 'initialize', {'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'gate', 'version': '0'}})
     if st_ != 200 or 'result' not in j:
-        fail('initialize failed: %s %s' % (st_, str(j)[:200]))
+        fail('initialize failed: %s %s -- the MCP transport needs the real service: set FCWEB_SESSION_PYTHON to an interpreter with mcp<2, uvicorn and starlette installed so the gate can run infra/session/app.py behind serve-artifact.py' % (st_, str(j)[:160]))
         return s1
     if 'fc_session_info' not in (j['result'].get('instructions') or ''):
         fail('the server instructions do not tell the model where to start')
