@@ -39,7 +39,7 @@ for _n, _d in App.listDocuments().items():
     if _b is not None:
         _out[_n] = {"volume": _b.Shape.Volume, "length": _b.Length.Value, "label": _d.Label,
                     "ro": "ReadOnly" in _b.getPropertyStatus("Length")}
-sys.__stderr__.write("GATE_VOL " + repr(_out) + "\n")
+sys.__stderr__.write("GATE_VOL_%d " + repr(_out) + "\n")
 '''
 
 
@@ -93,9 +93,13 @@ def _wait_state(s, pred, seconds):
     return None
 
 
+_probe_n = [0]
+
+
 def _volumes(s, fail, seconds=60):
-    s.run_python(VOLUME_PY)
-    r = s.wait_for('GATE_VOL', seconds)
+    _probe_n[0] += 1
+    s.run_python(VOLUME_PY % _probe_n[0])
+    r = s.wait_for('GATE_VOL_%d' % _probe_n[0], seconds)
     if not isinstance(r, dict):
         fail('no volume report from the interpreter in %ds' % seconds)
         _dump(s, 'volumes')
@@ -415,11 +419,12 @@ def scenario_mcp(ctx, url, args, fail):
         fail('viewer never applied v1')
         _dump(s2, 'mcp-viewer')
         return s1
+    v_before = _state(s2).get('v') or 0
     t0 = time.time()
     r = tool('fc_set_property', {'name': 'Box', 'prop': 'Length', 'value': 30, 'note': 'stretched the box'})
     if not r.get('ok'):
         fail('fc_set_property -> %r' % r)
-    if not _wait(s2, 'share applied v2', 20, 'console'):
+    if not _wait(s2, 'share applied v%d' % (v_before + 1), 20, 'console'):
         fail('the viewer did not see the assistant\'s edit within ~one poll tick')
     else:
         print('==> assistant edit reached the viewer in %.1fs' % (time.time() - t0))
