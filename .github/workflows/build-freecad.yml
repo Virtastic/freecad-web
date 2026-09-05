@@ -409,7 +409,12 @@ jobs:
             -DPython3_INCLUDE_DIR="$DW/include/python3.13" \
             -DPython3_LIBRARY="$DW/lib/libpython3.13.a" \
             -DPYTHON_VERSION_STRING=3.13 \
-            -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O1 -DBOOST_ALL_NO_LIB --use-port=zlib --use-port=icu -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
+            `# -include cstdlib: LLVM 20 libc++ no longer includes <cstdlib> through <string>,` \
+            `# <stdexcept> or <new>, even at -std=c++20, and fmt 11.1.4 -- the exact release FreeCAD` \
+            `# pins by URL+MD5 in SetupLibFmt.cmake -- calls malloc/free bare. Its first TU stopped` \
+            `# the wasm64 build (fmt #4520; fixed upstream in a later release). Same mechanism as` \
+            `# the two headers below; keep configure-gui-weh.sh in step.` \
+            -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread -O1 -DBOOST_ALL_NO_LIB --use-port=zlib --use-port=icu -I$DW/include -include cstdlib -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
             -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread -O1 --use-port=zlib --use-port=icu -I$DW/include -include $DW/include/gl_compat.h -include $DW/include/coin_intrusive.h" \
             2>&1 | tee /tmp/fclogs/configure.txt
           # PIPESTATUS[0], not $?. $? here is tee's, which is always 0, so this guard read
