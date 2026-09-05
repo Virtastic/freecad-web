@@ -98,6 +98,17 @@ import pathlib
 
 PATCHES = [
     (
+        # Shared sessions (see infra/session/): when the page joins a session it materializes
+        # an EPHEMERAL home before main() and must stop pre-gui.js from mounting the visitor's
+        # own IDBFS home over it. pre-gui.js is --pre-js, baked in at link time, so until the
+        # next relink carries the same line natively this is a post-link patch like the rest.
+        # The flag is a plain property the page sets on the Module config before qtLoad, so
+        # it does not depend on preRun ordering (addOnPreRun unshifts: the pre-js runs FIRST).
+        'session mode: skip the IDBFS home mount',
+        'qs2.has("noidbfs")&&typeof IDBFS!=="undefined"',
+        'qs2.has("noidbfs")&&!Module.fcwebSessionMode&&typeof IDBFS!=="undefined"',
+    ),
+    (
         'getCurTexUnit null-guard',
         'function getCurTexUnit(){return s_texUnits[s_activeTexture]}',
         'function getCurTexUnit(){if(!s_texUnits)return{enabled_tex1D:false,'
