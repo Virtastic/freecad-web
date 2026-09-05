@@ -128,8 +128,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             resp = conn.getresponse()
             out = resp.read()
         except Exception as exc:
+            sys.stderr.write('[serve-artifact] session upstream %s %s: %r' % (method, self.path[:60], exc) + chr(10))
             self.send_response(502); self.end_headers()
-            self.wfile.write(('session upstream: %s' % exc).encode() + bytes([10]))
+            self.wfile.write(('session upstream: %r' % (exc,)).encode() + bytes([10]))
             return
         self.send_response(resp.status)
         for k, v in resp.getheaders():

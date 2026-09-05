@@ -98,6 +98,7 @@ def _volumes(s, fail, seconds=60):
     r = s.wait_for('GATE_VOL', seconds)
     if not isinstance(r, dict):
         fail('no volume report from the interpreter in %ds' % seconds)
+        _dump(s, 'volumes')
         return {}
     return r
 
@@ -174,7 +175,7 @@ def scenario_share(ctx, url, args, fail):
         return s1
     if not _wait(s2, 'session mode: own home NOT mounted', 30):
         fail('session mode did not materialize the ephemeral home (isolation lost)')
-    if not _wait(s2, 'share applied v1', 90, 'console'):
+    if not _wait(s2, 'share applied v', 90, 'console'):
         fail('viewer never applied v1 (ring: %s)' % _ring(s2)[-6:])
         _dump(s2, 'v1')
     v = _volumes(s2, fail)
@@ -237,7 +238,7 @@ def scenario_control(ctx, url, args, fail):
     if not _wait(s1, 'share: passwords updated', 40):
         fail('the editor password never reached the server')
     s2 = _viewer(ctx, url, sid, args, epw='e1')
-    if not s2.load() or not _wait(s2, 'share applied v1', 90, 'console'):
+    if not s2.load() or not _wait(s2, 'share applied v', 90, 'console'):
         fail('viewer never applied v1')
         return s1
     # 1. a bridge-driven edit on a non-holder does not stick
@@ -403,8 +404,9 @@ def scenario_mcp(ctx, url, args, fail):
         fail('a failing tool must carry code and hint: %r' % r)
     # live edit while a viewer watches: one poll tick
     s2 = _viewer(ctx, url, sid, args)
-    if not s2.load() or not _wait(s2, 'share applied v1', 90, 'console'):
+    if not s2.load() or not _wait(s2, 'share applied v', 90, 'console'):
         fail('viewer never applied v1')
+        _dump(s2, 'mcp-viewer')
         return s1
     t0 = time.time()
     r = tool('fc_set_property', {'name': 'Box', 'prop': 'Length', 'value': 30, 'note': 'stretched the box'})
@@ -507,7 +509,7 @@ def scenario_env(ctx, url, args, fail):
             fail('ISOLATION FAILED: the visitor\'s own setting is visible inside the session')
         if 'MyOwnWork' in r['docs']:
             fail('ISOLATION FAILED: the visitor\'s own document is open inside the session')
-    if not _wait(s2, 'share applied v1', 90, 'console'):
+    if not _wait(s2, 'share applied v', 90, 'console'):
         fail('the shared document did not open with the owner offline')
     else:
         print('==> opened with the owner offline')

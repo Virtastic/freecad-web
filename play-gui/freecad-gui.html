@@ -1052,10 +1052,11 @@ window.fcwebNotify = function (text, kind, actions) {
     var r;
     try { r = await fetch(path, { method: method, headers: hdrs(extra), body: body, cache: 'no-store' }); }
     catch (e) { var ne = new Error('cannot reach the session service'); ne.code = 'network'; throw ne; }
-    var j = null;
-    if ((r.headers.get('content-type') || '').indexOf('json') >= 0) { try { j = await r.json(); } catch (e) {} }
+    var j = null, txt = '';
+    if (r.status !== 204 && r.status !== 304) { try { txt = await r.text(); j = JSON.parse(txt); } catch (e) { j = null; } }
     if (!r.ok && r.status !== 304) {
-      var e2 = new Error((j && j.hint) || ('HTTP ' + r.status)); e2.code = (j && j.code) || ('http_' + r.status);
+      // a non-JSON error body (a proxy's, nginx's) is the evidence; keep its first line
+      var e2 = new Error((j && j.hint) || ('HTTP ' + r.status + (txt && !j ? ': ' + txt.split(String.fromCharCode(10))[0].slice(0, 120) : ''))); e2.code = (j && j.code) || ('http_' + r.status);
       e2.status = r.status; e2.req = r.headers.get('X-Fcweb-Req'); throw e2;
     }
     return { status: r.status, json: j, res: r };
@@ -1278,7 +1279,22 @@ window.fcwebNotify = function (text, kind, actions) {
     var c = JSON.stringify({ session: S.id, role: S.role, holder: S.holder, name: S.name, unavailable: S.unavailable });
     if (c !== S.ctlSent) { writeText(CTL, c); S.ctlSent = c; }
   }
-  function setParam(k, v) { pyCall('_fs.set_param(' + JSON.stringify(k) + ', ' + (typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(v)) + ')'); }
+  var wantParams = {};
+  function pyLit(v) { return typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(v); }
+  function setParam(k, v) { wantParams[k] = v; flushParams(); }
+  function setParams(obj) { Object.keys(obj).forEach(function (k) { wantParams[k] = obj[k]; }); flushParams(); }
+  function flushParams() {
+    var ks = Object.keys(wantParams); if (!ks.length) return;
+    var lines = ks.map(function (k) { return '_fs.set_param(' + JSON.stringify(k) + ', ' + pyLit(wantParams[k]) + ')'; });
+    if (py('import fcweb_share as _fs\n' + lines.join('\n'))) { ks.forEach(function (k) { sentParams[k] = wantParams[k]; }); }
+  }
+  var sentParams = {};
+  // Self-healing: STATE echoes what the parameter tree really holds; anything we meant
+  // to write that is not there yet is sent again on the next tick.
+  function healParams(st) {
+    var echo = { SessionId: st.session, WriteKey: st.key, AgentUrl: st.agent_url, DisplayName: st.name };
+    Object.keys(echo).forEach(function (k) { if (k in wantParams && echo[k] !== undefined && echo[k] !== wantParams[k]) { flushParams(); } else if (k in wantParams && echo[k] === wantParams[k]) { delete wantParams[k]; } });
+  }
   function setReadonly(on) { pyCall('_fs.set_readonly(' + (on ? 'True' : 'False') + ')'); }
   function becomeHolder(on, why) {
     if (S.holder === on) return;
@@ -1456,7 +1472,7 @@ window.fcwebNotify = function (text, kind, actions) {
       var j = (await api('POST', '/share/' + id + '/join', JSON.stringify({ name: st.name || 'Owner' }), { 'Content-Type': 'application/json', 'X-Fcweb-Key': key })).json;
       S.id = id; S.key = key; S.client = j.client; S.edit = j.edit; S.role = 'admin'; S.name = j.name; S.owner = j.name;
       S.lastPublished = st.last_published || 0; S.v = j.v; S.applied = j.v;
-      if (!st.key) { setParam('SessionId', id); setParam('WriteKey', key); log('share', 'created session ' + id.slice(0, 8)); }
+      if (!st.key) { setParams({ SessionId: id, WriteKey: key }); log('share', 'created session ' + id.slice(0, 8)); }
       else log('share', 'resumed session ' + id.slice(0, 8) + ' from saved settings (server v' + j.v + ', mine v' + S.lastPublished + ')');
       setParam('ShareLink', shareLink());
       sendCtl();
@@ -1643,6 +1659,7 @@ window.fcwebNotify = function (text, kind, actions) {
     }
     var raw = readText(STATE); if (!raw) return;
     var st; try { st = JSON.parse(raw); } catch (e) { return; }
+    healParams(st);
     S.st = st; S.pinned = st.pinned; if (st.cam) S.cam = st.cam;
     if (raw !== lastStateRaw) {
       lastStateRaw = raw;

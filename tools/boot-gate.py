@@ -3111,14 +3111,16 @@ def main():
                       % slog.name, file=sys.stderr)
                 return 2
             print('==> session service up on :%d (real MCP transport)' % sport)
+        # stderr to a file: the session stand-in logs, and a pipe nobody drains blocks it.
+        alog_path = os.path.join(tempfile.gettempdir(), 'fcgate-static-%d.log' % args.port)
+        alog = open(alog_path, 'wb')
         server = subprocess.Popen(
             [sys.executable, os.path.join(here, 'serve-artifact.py'), args.directory,
              str(args.port)],
-            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            env=env, stdout=subprocess.DEVNULL, stderr=alog)
         time.sleep(1.5)
         if server.poll() is not None:
-            print('::error::the static server exited immediately: %s'
-                  % server.stderr.read().decode('utf-8', 'replace'), file=sys.stderr)
+            print('::error::the static server exited immediately: see %s' % alog_path, file=sys.stderr)
             return 2
 
     failures = []
