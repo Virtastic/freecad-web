@@ -1,0 +1,46 @@
+diff --git a/qtbase/src/plugins/platforms/wasm/qwasmscreen.cpp b/qtbase/src/plugins/platforms/wasm/qwasmscreen.cpp
+index 856a61d..c4cba48 100644
+--- a/qtbase/src/plugins/platforms/wasm/qwasmscreen.cpp
++++ b/qtbase/src/plugins/platforms/wasm/qwasmscreen.cpp
+@@ -97,12 +97,22 @@ QWasmScreen::QWasmScreen(const emscripten::val &containerOrCanvas)
+     QWindowSystemInterface::registerInputDevice(m_touchDevice.get());
+ }
+ 
++// FCWEB: the resize-observer callback context is a pointer stored as an integer on a DOM
++// property, and it crosses the Embind boundary as intptr_t. On wasm64 intptr_t is `long`
++// (8 bytes), which is not one of the types Embind will pack into its generic wire slot:
++//     val.h:237: static_assert(sizeof(T) <= sizeof(cursor->w[0].u),
++//                "Generic wire type must be smaller than unsigned.");
++// Embind DOES carry 64-bit integers -- via dedicated int64_t/uint64_t overloads (val.h:206,
++// :211), marshalled as BigInt -- so the fix is to name that type at every crossing. Write
++// and read are both int64_t so the stored JS value is a BigInt in both directions on both
++// targets: on wasm32 intptr_t widens losslessly into it, on wasm64 they are the same width.
++// Casting only one side would store a Number and read a BigInt, or vice versa.
+ QWasmScreen::~QWasmScreen()
+ {
+     m_intermediateContainer.call<void>("remove");
+ 
+     m_shadowContainer.set(m_canvasResizeObserverCallbackContextPropertyName,
+-                          emscripten::val(intptr_t(0)));
++                          emscripten::val(static_cast<int64_t>(0)));
+ }
+ 
+ void QWasmScreen::deleteScreen()
+@@ -286,7 +296,7 @@ void QWasmScreen::canvasResizeObserverCallback(emscripten::val entries, emscript
+         return;
+     emscripten::val entry = entries[0];
+     QWasmScreen *screen = reinterpret_cast<QWasmScreen *>(
+-            entry["target"][m_canvasResizeObserverCallbackContextPropertyName].as<intptr_t>());
++            static_cast<intptr_t>(entry["target"][m_canvasResizeObserverCallbackContextPropertyName].as<int64_t>()));
+     if (!screen) {
+         qWarning() << "QWasmScreen::canvasResizeObserverCallback: missing screen pointer";
+         return;
+@@ -314,7 +324,7 @@ void QWasmScreen::installCanvasResizeObserver()
+     // We need to get back to this instance from the (static) resize callback;
+     // set a "data-" property on the canvas element.
+     m_shadowContainer.set(m_canvasResizeObserverCallbackContextPropertyName,
+-                          emscripten::val(intptr_t(this)));
++                          emscripten::val(static_cast<int64_t>(reinterpret_cast<intptr_t>(this))));
+ 
+     resizeObserver.call<void>("observe", m_shadowContainer);
+ }

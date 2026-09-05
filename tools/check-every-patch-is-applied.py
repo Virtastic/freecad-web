@@ -41,6 +41,9 @@ ELSEWHERE = {
     'ccx-cload-arity.patch': ('.github/workflows/build-ccx.yml', 'patches/ccx-*.patch'),
     'ccx-patch-lda.patch': ('.github/workflows/build-ccx.yml', 'patches/ccx-*.patch'),
     'ccx-wasm-automatic-array.patch': ('.github/workflows/build-ccx.yml', 'patches/ccx-*.patch'),
+    # Qt is fetched into qt-src/ by its own workflow, not into deps/src/, so apply.sh never
+    # sees it; the Qt sources step applies this one itself, zero-fuzz and fail-closed.
+    'qt-wasm-embind-int64.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-wasm-embind-int64.patch'),
 }
 
 

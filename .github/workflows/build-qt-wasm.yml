@@ -171,7 +171,28 @@ jobs:
           } > /tmp/qtlogs/02-src.txt 2>&1 || rc=$?
           ls qt-src/configure >> /tmp/qtlogs/02-src.txt 2>&1 || true
           echo "  src exit=$rc"; tail -10 /tmp/qtlogs/02-src.txt
-          exit $rc
+          [ "$rc" = 0 ] || exit $rc
+
+          # Qt is the one source tree apply.sh does not reach (it lives in qt-src/, not
+          # deps/src/), so its patch is applied here. Dry-run first with zero fuzz: a hunk
+          # that lands with fuzz can land in the wrong scope while reporting success, and
+          # the check-every-patch-is-applied gate names this step as the applier.
+          #
+          # What the patch fixes: the wasm platform plugin passes intptr_t through
+          # emscripten::val. On wasm64 that is `long`, which Embind refuses to pack into
+          # its generic wire slot (val.h:237 static_assert) -- the build died on
+          # qwasmscreen.cpp. Embind carries 64-bit integers as int64_t/BigInt, so the
+          # patch names that type at each crossing. Four sites exist across all 64 wasm
+          # sources; the read-only ones (.as<size_t>, .as<intptr_t>) compile fine and the
+          # one in qwasmscreen is made symmetric anyway so write and read agree on BigInt.
+          if patch -p1 -d qt-src --dry-run -F0 -i "$PWD/patches/qt-wasm-embind-int64.patch" > /tmp/qtlogs/02b-patch.txt 2>&1; then
+            patch -p1 -d qt-src -F0 -i "$PWD/patches/qt-wasm-embind-int64.patch" >> /tmp/qtlogs/02b-patch.txt 2>&1
+            echo "  applied patches/qt-wasm-embind-int64.patch"
+          else
+            echo "::error::patches/qt-wasm-embind-int64.patch does not apply cleanly to Qt 6.11.2 -- tree may be at the wrong version"
+            cat /tmp/qtlogs/02b-patch.txt; exit 1
+          fi
+          grep -c "static_cast<int64_t>" qt-src/qtbase/src/plugins/platforms/wasm/qwasmscreen.cpp | sed "s/^/  int64 crossings now in qwasmscreen.cpp: /"
 
       # Only the modules FreeCAD actually links. Building all of Qt here would add hours for
       # things this app never loads.
