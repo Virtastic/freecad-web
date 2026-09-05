@@ -203,3 +203,9 @@ actionable; "3D view is janky" is not.
   pressure monitor divided by the heap's CURRENT size until 2026-09-02 and so announced
   "2 GB" long after the build had stopped being limited to it.
 - CalculiX solves are single-threaded, so large FEM jobs are slower than desktop
+- Shared sessions and MCP exist only where the operator runs the optional `session` container
+  (`docker compose --profile share up -d`). Without it, Edit → Share Session… says so and
+  nothing else changes; a `?s=` link on such a site opens FreeCAD normally with one toast.
+  Sharing is turn-taking, not concurrent editing: one person edits, everyone else watches
+  live (following the editor's camera) and can take control. The AI over MCP acts inside a
+  live browser tab and inherits its rights; with no tab open, every tool says `no_tab`.

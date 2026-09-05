@@ -72,6 +72,7 @@ These are real constraints, stated up front rather than discovered:
 | **Memory** | A 16 GB heap ceiling (the wasm64 build; V8 caps wasm64 memory there). The app force-saves your documents and warns before it runs out. |
 | **AddonManager** | Absent (it needs `git` and real sockets). A `.zip` / GitHub workbench installer covers the same use case. |
 | **CalculiX** | Single-threaded, so large FEM jobs are slower than desktop. |
+| **Shared sessions / MCP** | Optional and self-hosted: `docker compose --profile share up -d` adds one container. Edit → Share Session… gives a link that opens your document *in your environment* (units, theme, add-ons, macros) for anyone, now or days later, with turn-taking control; the same page mints one MCP URL through which an AI can see and control everything FreeCAD has. The public origin does not run it, so this README's "no server" claim holds there. |
 
 ## Documentation
 
