@@ -7,8 +7,13 @@ set -e
 cd "$(dirname "$0")"
 . toolchain/env.sh
 
-# Materialize + locate the emscripten freetype port (OCCT's only hard dep).
-embuilder build freetype >/dev/null 2>&1
+# Materialize + locate the emscripten freetype port (OCCT's only hard dep). Through emcc,
+# not embuilder: embuilder never reads EMCC_CFLAGS and lands its output under
+# lib/wasm32-emscripten, so the library pinned below did not exist and only the headers
+# (shared across targets) made this work. A probe compile builds the port for the
+# target the build actually uses.
+echo 'int main(){return 0;}' > /tmp/ftprobe.c
+emcc --use-port=freetype -c /tmp/ftprobe.c -o /tmp/ftprobe.o
 CACHE=$(em-config CACHE)
 FT_INC="$CACHE/sysroot/include/freetype2"
 FT_LIBDIR="$CACHE/sysroot/lib/wasm64-emscripten"

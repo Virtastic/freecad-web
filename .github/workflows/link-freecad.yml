@@ -427,16 +427,17 @@ jobs:
             || python3 -m pip install --quiet pybind11 "swig==$SWIG_PIN"
           python3 -c 'import pybind11; print("  pybind11:", pybind11.get_cmake_dir())'
           swig -version | grep -i version | head -1 | sed 's/^/  swig: /'
-          embuilder build icu
-          # ...and again for the PTHREADS variant. embuilder builds ports with DEFAULT
-          # settings, so `embuilder build icu` produces a single-threaded ICU, and the
-          # FreeCAD link -- which is -pthread throughout -- ends in
+          # Through emcc, not embuilder. embuilder builds ports with its own DEFAULT settings
+          # and never reads EMCC_CFLAGS: single-threaded, and under the wasm64 toolchain
+          # still wasm32 (build-freecad run 33943909532 showed lib/wasm32-emscripten/). The
+          # single-threaded one used to end the link in
           #     --shared-memory is disallowed by umutex.cpp.o because it was not compiled
           #     with 'atomics' or 'bulk-memory' features
           # Emscripten caches port builds per settings-variant, so compiling one trivial
-          # translation unit with -pthread --use-port=icu builds and caches the right one.
+          # translation unit with the build's own flags builds and caches exactly the
+          # variant the link will use.
           echo 'int main(){return 0;}' > /tmp/icuprobe.cpp
-          em++ -pthread --use-port=icu -c /tmp/icuprobe.cpp -o /tmp/icuprobe.o
+          em++ -pthread --use-port=zlib --use-port=icu -c /tmp/icuprobe.cpp -o /tmp/icuprobe.o
           echo "  icu sysroot: $(em-config CACHE)/sysroot"
           echo "  icu libraries now in the cache:"
           find "$(em-config CACHE)" -name 'libicu*.a' | sed 's|.*/cache/|    |'

@@ -47,6 +47,27 @@ def tools_used(text):
     return found
 
 
+def builds_ports_with_embuilder(text):
+    """True if the script runs `embuilder build`.
+
+    embuilder builds ports with its own default settings and never reads EMCC_CFLAGS -- it
+    has its own --wasm64 switch and variant names such as icu-mt, one more thing to keep in
+    step with the build -- so
+    sourcing toolchain/env.sh first changes nothing: under the wasm64 toolchain
+    `embuilder build icu` produced sysroot/lib/wasm32-emscripten/libicu_*.a, single-
+    threaded, in build-freecad run 33943909532. The build then either links the wrong
+    target or, when a correct variant happens to be cached from another lane, silently
+    never uses what this step built. Ports are built by compiling one translation unit
+    through emcc with the build's own flags (`em++ -pthread --use-port=icu -c probe.cpp`),
+    which builds and caches exactly the variant the build will link.
+    """
+    for raw in text.split(chr(10)):
+        line = raw.split(chr(35), 1)[0]
+        if 'embuilder' in line and 'build' in line.split('embuilder', 1)[1]:
+            return True
+    return False
+
+
 def clobbers_emcc_cflags(text):
     """The first EMCC_CFLAGS assignment that discards whatever was already there.
 
@@ -87,7 +108,13 @@ def workflow_problems():
         for job in (doc.get('jobs') or {}).values():
             for step in (job.get('steps') or []):
                 run = step.get('run') or ''
-                if not run or 'toolchain/env.sh' in run:
+                if not run:
+                    continue
+                if builds_ports_with_embuilder(run):
+                    problems.append((path, 'step %r builds a port with embuilder, which ignores '
+                                     'the toolchain -- compile a probe through emcc instead'
+                                     % (step.get('name') or '?')))
+                if 'toolchain/env.sh' in run:
                     continue
                 if 'emsdk/emsdk_env.sh' in run:
                     problems.append((path, 'step %r sources emsdk directly'
@@ -110,6 +137,9 @@ def main():
             text = io.open(path, encoding='utf-8', errors='replace').read()
         except OSError:
             continue
+        if builds_ports_with_embuilder(text):
+            problems.append((path, 'builds a port with embuilder, which ignores the toolchain -- '
+                                   'compile a probe through emcc instead'))
         if 'toolchain/env.sh' in text:
             clobber = clobbers_emcc_cflags(text)
             if clobber:
@@ -129,8 +159,8 @@ def main():
         for path, why in problems:
             print('%s: %s' % (path, why), file=sys.stderr)
         print('', file=sys.stderr)
-        print('%d place(s) can reach emcc without the pinned toolchain. Each would build '
-              'for wasm32 with no diagnostic.' % len(problems), file=sys.stderr)
+        print('%d place(s) can build for wasm32 with no diagnostic: emcc reached without the '
+              'pinned toolchain, or a port built by embuilder.' % len(problems), file=sys.stderr)
         return 1
     print('every emscripten-invoking script and workflow step sources toolchain/env.sh')
     return 0

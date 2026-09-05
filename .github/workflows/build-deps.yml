@@ -262,17 +262,19 @@ jobs:
               || { echo "::error::cpython patched but the trampoline delta is missing"; exit 1; }
           fi
 
-      # OCCT's script runs `embuilder build freetype >/dev/null 2>&1` and, under set -e, dies
-      # silently if that fails -- which is exactly what happened: occt.txt in run 32043014090
-      # contained the three env lines and nothing else. Building the port here first makes the
-      # failure visible instead of invisible, and warms it for the real step.
+      # OCCT's script builds the freetype port and, under set -e, dies silently if that
+      # fails -- which is exactly what happened: occt.txt in run 32043014090 contained the
+      # three env lines and nothing else. Building the port here first makes the failure
+      # visible instead of invisible, and warms it for the real step. Through emcc, not
+      # embuilder, which ignores the toolchain and builds wasm32 (check-toolchain-env.py).
       - name: Pre-build the emscripten freetype port (OCCT's only hard dep)
         continue-on-error: true
         run: |
           mkdir -p /tmp/deplogs
           . ./toolchain/env.sh
           rc=0
-          { embuilder build freetype && em-config CACHE; } > /tmp/deplogs/01-freetype.txt 2>&1 || rc=$?
+          echo 'int main(){return 0;}' > /tmp/ftprobe.c
+          { emcc --use-port=freetype -c /tmp/ftprobe.c -o /tmp/ftprobe.o && em-config CACHE; } > /tmp/deplogs/01-freetype.txt 2>&1 || rc=$?
           echo "  freetype port exit=$rc"
           tail -25 /tmp/deplogs/01-freetype.txt
 

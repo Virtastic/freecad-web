@@ -212,21 +212,26 @@ jobs:
       # genuinely new third-party library the wasm stack has to supply. emscripten ships an
       # ICU port, so it costs a prebuild rather than another cross-compile -- the same route
       # build-deps.yml already uses for freetype.
-      - name: Pre-build the emscripten ICU port (new hard dep in FreeCAD 1.1)
+      # Through emcc, NOT embuilder. embuilder builds ports with its own default settings
+      # and never reads EMCC_CFLAGS, so under the wasm64 toolchain `embuilder build icu`
+      # produced sysroot/lib/wasm32-emscripten/libicu_*.a (run 33943909532) -- the wrong
+      # target, and single-threaded besides. Compiling one empty unit with the same flags
+      # the build uses makes emcc build and cache exactly the variant the build will link:
+      # wasm64, pthreads (-mt). tools/check-toolchain-env.py now refuses embuilder outright.
+      - name: Pre-build the emscripten ports the build links (zlib, ICU)
         id: icu
         run: |
           set -e
           . ./toolchain/env.sh
-          embuilder build icu
+          echo 'int main(){return 0;}' > /tmp/portprobe.cpp
+          em++ -pthread --use-port=zlib --use-port=icu -c /tmp/portprobe.cpp -o /tmp/portprobe.o
           sysroot="$(em-config CACHE)/sysroot"
           echo "sysroot=$sysroot" >> "$GITHUB_OUTPUT"
           echo "  sysroot: $sysroot"
-          echo "  libraries:"
-          find "$sysroot" -name 'libicu*.a' | sed 's/^/    /'
-          if [ ! -e "$sysroot/include/unicode/uversion.h" ]; then
-            echo "::error::ICU port built but no unicode/ headers under $sysroot"
-            exit 1
-          fi
+          lib="$sysroot/lib/wasm64-emscripten"
+          for f in "$lib/libz.a" "$lib/libicu_common-mt.a" "$lib/libicu_i18n-mt.a" "$sysroot/include/unicode/uversion.h" "$sysroot/include/zlib.h"; do
+            if [ -e "$f" ]; then echo "  ok  ${f#$sysroot/}"; else echo "::error::port probe did not produce ${f#$sysroot/}"; exit 1; fi
+          done
 
       - name: pybind11 (FreeCAD 1.1 build dependency)
         id: pybind
@@ -390,6 +395,10 @@ jobs:
             `# over. FreeCAD only APPENDS to CMAKE_MODULE_PATH, so ours stays first.` \
             -DCMAKE_MODULE_PATH="$ROOT/toolchain/cmake" \
             -DICU_EM_SYSROOT="${{ steps.icu.outputs.sysroot }}" \
+            `# Pinned like configure-gui-weh.sh does: FindZLIB finds the port headers on its` \
+            `# own but not the library, and stops the configure with "missing: ZLIB_LIBRARY".` \
+            -DZLIB_INCLUDE_DIR="${{ steps.icu.outputs.sysroot }}/include" \
+            -DZLIB_LIBRARY="${{ steps.icu.outputs.sysroot }}/lib/wasm64-emscripten/libz.a" \
             -DBoost_USE_STATIC_LIBS=ON -DBoost_USE_STATIC_RUNTIME=ON \
             -DCMAKE_PREFIX_PATH="$DW;$QT" \
             -DCMAKE_FIND_ROOT_PATH="$DW;$QT" \
