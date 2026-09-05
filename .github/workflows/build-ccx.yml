@@ -29,6 +29,27 @@ name: build ccx.wasm
 # nothing here raises parallelism, and `ubuntu-latest` remains one dropdown away whenever a
 # deploy or the live site matters more than the minutes.
 on:
+  # workflow_dispatch alone is not enough: GitHub only offers a workflow for manual dispatch
+  # once the file exists on the DEFAULT branch, and this one lives on the port branch until
+  # the port is merged -- so on dev nothing could start it, and ccx.wasm had never been
+  # built by the wasm64 toolchain while every other module had. A branch-scoped push
+  # trigger makes it runnable now, the way build-freecad.yml and link-freecad.yml are;
+  # drop it when the branch merges and dispatch takes over. On a push event every input
+  # is empty: pthreads reads as off (the verified path), and runs-on below must land on
+  # the self-hosted box for an empty runner input, not on hosted minutes.
+  push:
+    branches: [dev]
+    paths:
+      - .github/workflows/build-ccx.yml
+      - build-ccx-module-weh.sh
+      - build-ccx-weh.sh
+      - build-libf2c-weh.sh
+      - build-arpack-weh.sh
+      - build-spooles-weh.sh
+      - patches/ccx-*.patch
+      - bridge/**
+      - scratchpad/ccxval/**
+      - toolchain/**
   workflow_dispatch:
     inputs:
       pthreads:
@@ -49,7 +70,10 @@ permissions:
 
 jobs:
   build:
-    runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
+    # Hosted only when asked for by name. The old form defaulted to ubuntu-latest for any
+    # value other than 'vps' -- including the EMPTY value a push event supplies -- and the
+    # header above is explicit about what hosted minutes cost this org.
+    runs-on: ${{ inputs.runner == 'ubuntu-latest' && 'ubuntu-latest' || fromJSON('["self-hosted","ovh","virtastic"]') }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
