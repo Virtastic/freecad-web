@@ -5733,3 +5733,71 @@ diff --git a/src/Gui/ApplicationPy.cpp b/src/Gui/ApplicationPy.cpp
 +    }
 +    PY_CATCH
 +}
+diff -ruNp a/src/Mod/Sketcher/App/GeoEnum.h b/src/Mod/Sketcher/App/GeoEnum.h
+--- a/src/Mod/Sketcher/App/GeoEnum.h
++++ b/src/Mod/Sketcher/App/GeoEnum.h
+@@ -162,6 +162,19 @@ constexpr const GeoElementId GeoElementI
+ constexpr const GeoElementId GeoElementId::VAxis = GeoElementId(GeoEnum::VAxis, PointPos::none);
+ #endif
+ 
++// FCWEB: a free operator< with the ordering the std::less specialisation below has always
++// had. libc++ from LLVM 20 on rewrites std::map's std::less<Key> into std::less<void> on
++// its emplace and find paths, so the specialisation is bypassed there and `lhs < rhs` has
++// to compile on its own:
++//     lazy_synth_three_way_comparator.h:45: no matching function for call to object of
++//     type 'const std::less<void>'
++// The specialisation now delegates to this, so there is one definition of the order.
++inline bool operator<(const GeoElementId& lhs, const GeoElementId& rhs)
++{
++    return (lhs.GeoId != rhs.GeoId) ? (lhs.GeoId < rhs.GeoId)
++                                    : (static_cast<int>(lhs.Pos) < static_cast<int>(rhs.Pos));
++}
++
+ }  // namespace Sketcher
+ 
+ namespace std
+@@ -171,8 +184,7 @@ struct less<Sketcher::GeoElementId>
+ {
+     bool operator()(const Sketcher::GeoElementId& lhs, const Sketcher::GeoElementId& rhs) const
+     {
+-        return (lhs.GeoId != rhs.GeoId) ? (lhs.GeoId < rhs.GeoId)
+-                                        : (static_cast<int>(lhs.Pos) < static_cast<int>(rhs.Pos));
++        return lhs < rhs;
+     }
+ };
+ }  // namespace std
+diff -ruNp a/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.h b/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.h
+--- a/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.h
++++ b/src/Mod/Sketcher/Gui/EditModeCoinManagerParameters.h
+@@ -231,6 +231,20 @@ public:
+ };
+ 
+ 
++// FCWEB: a free operator< with the ordering the std::less specialisation below has always
++// had. libc++ from LLVM 20 on rewrites std::map's std::less<Key> into std::less<void> on
++// its emplace and find paths, so the specialisation is bypassed there and `lhs < rhs` has
++// to compile on its own:
++//     lazy_synth_three_way_comparator.h:45: no matching function for call to object of
++//     type 'const std::less<void>'
++// The specialisation now delegates to this, so there is one definition of the order.
++inline bool operator<(const MultiFieldId& lhs, const MultiFieldId& rhs)
++{
++    return (lhs.layerId != rhs.layerId)
++        ? (lhs.layerId < rhs.layerId)
++        : (static_cast<int>(lhs.fieldIndex) < static_cast<int>(rhs.fieldIndex));
++}
++
+ }  // namespace SketcherGui
+ 
+ namespace std
+@@ -240,9 +254,7 @@ struct less<SketcherGui::MultiFieldId>
+ {
+     bool operator()(const SketcherGui::MultiFieldId& lhs, const SketcherGui::MultiFieldId& rhs) const
+     {
+-        return (lhs.layerId != rhs.layerId)
+-            ? (lhs.layerId < rhs.layerId)
+-            : (static_cast<int>(lhs.fieldIndex) < static_cast<int>(rhs.fieldIndex));
++        return lhs < rhs;
+     }
+ };
+ }  // namespace std

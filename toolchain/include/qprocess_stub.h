@@ -1,14 +1,25 @@
 /* An inert QProcess for the Qt-for-WebAssembly build.
  *
  * Qt for WebAssembly ships no QProcess: the browser has no fork/exec, so Qt gates the
- * class out (QT_CONFIG(process) is false) and <QProcess> resolves to nothing. FreeCAD's
- * external-tool paths -- Qt Assistant (help), wget (NetworkRetriever), dot/unflatten
- * (GraphvizView), the external-program dialog, and gmsh remeshing -- still reference it
- * from code that must compile. This supplies a QProcess that satisfies every use and
- * does nothing.
+ * class out (QT_CONFIG(process) is false). FreeCAD's external-tool paths -- Qt Assistant
+ * (help), wget (NetworkRetriever), dot/unflatten (GraphvizView), the external-program
+ * dialog, and gmsh remeshing -- still reference it from code that must compile. This
+ * supplies a QProcess that satisfies every use and does nothing.
  *
- * Force-included (-include) into FreeCADGui, MeshGui and MeshPartGui by their
+ * Force-included (-include) into FreeCADGui, MeshGui, MeshPartGui and Start by their
  * CMakeLists, via patches/freecad.patch.
+ *
+ * Qt 6.11 changed what <QtCore/qprocess.h> does when the feature is off. 6.9 simply
+ * declared nothing; 6.11 declares a PLACEHOLDER `class QProcess` there -- one static
+ * splitCommand() and a deleted constructor -- and the same header is where
+ * QProcessEnvironment lives, which Gui/Dialogs/DlgAbout.cpp uses. So the placeholder and
+ * this stub collided:
+ *     qprocess.h:289:7: error: redefinition of 'QProcess'
+ * on 16 translation units. The way out that keeps QProcessEnvironment: this header is
+ * force-included before anything else, so it takes Qt's header first under a different
+ * class name, then defines the real QProcess itself. The rename is one macro around one
+ * include; QProcessEnvironment is a different token and is untouched. If a Qt ever ships
+ * a real QProcess for wasm (QT_CONFIG(process) true), the stub steps aside entirely.
  *
  * NO Q_OBJECT, DELIBERATELY. A header force-included into hundreds of translation units
  * cannot be run through moc, so this class has no signals. Every connect() to a QProcess
@@ -31,6 +42,22 @@
 #define FCWEB_QPROCESS_STUB_H
 
 #if defined(__EMSCRIPTEN__)
+
+#include <QtCore/qglobal.h>
+
+#if QT_CONFIG(process)
+
+/* A real QProcess exists in this Qt. Nothing to stub. */
+#include <QtCore/qprocess.h>
+
+#else /* !QT_CONFIG(process) */
+
+/* Take Qt's header now, with its placeholder QProcess renamed out of the way, so that
+ * QProcessEnvironment is declared and FreeCAD's own #include <QProcess> later finds the
+ * include guard already set. See the note at the top. */
+#define QProcess FcwebQtPlaceholderQProcess
+#include <QtCore/qprocess.h>
+#undef QProcess
 
 #include <unistd.h>
 
@@ -278,6 +305,8 @@ private:
     ProcessChannel m_readChannel = StandardOutput;
     ProcessChannelMode m_channelMode = SeparateChannels;
 };
+
+#endif /* QT_CONFIG(process) */
 
 #endif /* __EMSCRIPTEN__ */
 
