@@ -1,0 +1,195 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
+name: build gmsh.wasm
+
+# The meshing module, as its own wasm (play-gui/gmsh.js + gmsh.wasm, ~28 MB), loaded on
+# demand by the page. BUILD-WEH.md "Meshing (gmsh)" says how FreeCAD drives it: a file
+# boundary -- .geo + .brep in, .unv out -- so this module has its own heap and filesystem
+# and no ABI with the engine beyond that.
+#
+# It had no lane at all. configure-gmsh-weh.sh and build-gmsh-weh.sh existed, the module was
+# built once on the build machine, and every release since has carried the same gmsh.js /
+# gmsh.wasm forward (tools/publish-release.sh copies them from the previous release). That
+# copy is gmsh 4.13.1 at commit 3862278, built for wasm32 -- which still works next to a
+# wasm64 engine, because the boundary is files, but it is the one module the wasm64 move
+# had not rebuilt, and nothing recorded which gmsh it was until the version string was read
+# out of the shipped .wasm. This pins it.
+#
+# Same rules as build-ccx.yml: self-hosted unless hosted is asked for by name (a push event
+# supplies empty inputs), sources go through toolchain/env.sh, and the module is judged by
+# what is on disk. It links the same wasm64 OCCT the engine uses, restored from the deps
+# cache, so build-deps.yml must be green first.
+
+on:
+  # Dispatch needs the file on the default branch, which this port branch is not; a
+  # branch-scoped push trigger is what makes it runnable from dev. Drop it on merge.
+  push:
+    branches: [dev]
+    paths:
+      - .github/workflows/build-gmsh.yml
+      - configure-gmsh-weh.sh
+      - build-gmsh-weh.sh
+      - gmsh_wasm_main.cpp
+      - toolchain/**
+      - tools/check-archive-target.py
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Where to build"
+        type: choice
+        default: vps
+        options:
+          - vps
+          - ubuntu-latest
+
+permissions:
+  contents: read
+
+env:
+  DEPS_KEY: v2-wasm64-emsdk6.0.9-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
+  # gmsh 4.13.1 as shipped in every release to date: "4.13.1-git-3862278" is the version
+  # string inside the v1.0.0 gmsh.wasm. Full sha of that short id, from gitlab.onelab.info.
+  GMSH_SHA: 3862278e6705ecc0f5d32144289635a34f5d90cb
+  GMSH_SHA256: 486f5824b09aea4833bdf1ebeda2cfaa3bbed378180c9bd574671c15d2bce590
+  # Outside the workspace, which actions/checkout cleans: the module stays on the box for
+  # the release step to pull, the way the FreeCAD link output does from the build-tree store.
+  MODULE_STORE: /home/ubuntu/.cache/fcweb-modules
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner == 'ubuntu-latest' && 'ubuntu-latest' || fromJSON('["self-hosted","ovh","virtastic"]') }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Preflight -- is this machine able to build at all?
+        run: |
+          miss=""
+          for t in cmake ninja python3 curl tar node; do
+            command -v "$t" >/dev/null 2>&1 || miss="$miss $t"
+          done
+          if [ -n "$miss" ]; then
+            echo "::error::this runner cannot build:$miss"
+            exit 1
+          fi
+          echo "  cmake $(cmake --version | head -1 | awk '{print $3}'), ninja $(ninja --version), node $(node --version)"
+          df -h / | tail -1 | sed 's/^/  disk: /'
+
+      - name: Cache emsdk
+        id: emsdk-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: emsdk
+          key: emsdk-6.0.9-wasm64-shims-v1
+
+      # Pinned to match BUILD-WEH.md; toolchain/env.sh is what every later step sources, and
+      # it asserts __wasm64__ on the compiler it finds.
+      - name: Install emsdk 6.0.9
+        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install 6.0.9
+          ./emsdk activate 6.0.9
+
+      - name: Restore the C++ dependency stack (OCCT)
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deps/wasm
+          key: fcweb-deps-${{ env.DEPS_KEY }}-gmsh-consumer
+          restore-keys: |
+            fcweb-deps-${{ env.DEPS_KEY }}-
+
+      - name: Is the OCCT this links actually here, and built for wasm64?
+        run: |
+          set -e
+          n=$(ls -1 deps/wasm/lib/libTK*.a 2>/dev/null | wc -l | tr -d ' ')
+          [ "$n" -ge 30 ] || { echo "::error::found $n OCCT archives under deps/wasm/lib -- run build-deps.yml first"; exit 1; }
+          echo "  OCCT: $n archives"
+          # A cache is named, not inspected (link-freecad run 33950974628 found a wasm32
+          # archive in the wasm64 deps cache). Check the objects, not the key.
+          python3 tools/check-archive-target.py deps/wasm/lib
+
+      - name: Fetch gmsh ${{ env.GMSH_SHA }}
+        run: |
+          set -e
+          if [ -e deps/src/gmsh/CMakeLists.txt ] && [ "$(cat deps/src/gmsh/.fcweb-gmsh-sha 2>/dev/null)" = "$GMSH_SHA" ]; then
+            echo "  gmsh: present at $GMSH_SHA"; exit 0
+          fi
+          rm -rf deps/src/gmsh && mkdir -p deps/src/gmsh
+          curl -fL --retry 3 -o /tmp/gmsh.tar.gz "https://gitlab.onelab.info/gmsh/gmsh/-/archive/$GMSH_SHA/gmsh-$GMSH_SHA.tar.gz"
+          echo "$GMSH_SHA256  /tmp/gmsh.tar.gz" | sha256sum -c -
+          tar xzf /tmp/gmsh.tar.gz -C deps/src/gmsh --strip-components=1
+          rm -f /tmp/gmsh.tar.gz
+          echo "$GMSH_SHA" > deps/src/gmsh/.fcweb-gmsh-sha
+          grep -E "GMSH_(MAJOR|MINOR|PATCH)_VERSION" deps/src/gmsh/CMakeLists.txt | head -3 | sed 's/^/  /'
+
+      - name: Configure
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          bash configure-gmsh-weh.sh 2>&1 | tee /tmp/gmsh-configure.txt | tail -30
+          rc=${PIPESTATUS[0]}; [ "$rc" = 0 ] || { echo "::error::configure failed (exit $rc)"; exit "$rc"; }
+          grep -E "Build options" -A2 /tmp/gmsh-configure.txt | sed 's/^/  /' || true
+          # BUILD-WEH.md: if OpenCASCADE is missing from "Build options", gmsh silently
+          # disabled it and .brep import -- the whole point of this module -- is gone.
+          grep -qE "Build options.*OpenCASCADE|OpenCASCADE" /tmp/gmsh-configure.txt || { echo "::error::gmsh configured WITHOUT OpenCASCADE -- .brep import would be missing"; exit 1; }
+
+      - name: Build libgmsh.a
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          t0=$SECONDS
+          cmake --build build-gmsh-weh --target lib > /tmp/gmsh-build.txt 2>&1 || { tail -60 /tmp/gmsh-build.txt; exit 1; }
+          echo "  libgmsh.a built in $((SECONDS-t0))s: $(stat -c %s build-gmsh-weh/libgmsh.a) bytes"
+          python3 tools/check-archive-target.py build-gmsh-weh/libgmsh.a
+
+      - name: Link gmsh.js + gmsh.wasm
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          bash build-gmsh-weh.sh 2>&1 | tail -20
+          rc=${PIPESTATUS[0]}; [ "$rc" = 0 ] || { echo "::error::link failed (exit $rc)"; exit "$rc"; }
+
+      - name: What came out
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          for f in play-gui/gmsh.js play-gui/gmsh.wasm; do
+            [ -s "$f" ] || { echo "::error::$f was not produced"; exit 1; }
+            echo "  $f: $(stat -c %s "$f") bytes"
+          done
+          node -e '
+            const fs=require("fs");
+            const b=fs.readFileSync("play-gui/gmsh.wasm");
+            if(!WebAssembly.validate(b)){console.error("::error::gmsh.wasm does not validate");process.exit(1);}
+            console.log("  gmsh.wasm VALID, "+(b.length/1048576).toFixed(1)+" MB");
+          '
+          # The version the module reports is the version this lane pinned, or the wrong
+          # source was built.
+          v=$(strings play-gui/gmsh.wasm | grep -oE "4\.[0-9]+\.[0-9]+-git-[0-9a-f]+" | head -1 || true)
+          echo "  version string in the module: ${v:-(none found)}"
+          case "$v" in *-git-${GMSH_SHA:0:7}*) echo "  ok  matches the pinned commit";; *) echo "::error::module version '$v' is not the pinned commit ${GMSH_SHA:0:7}"; exit 1;; esac
+
+      # Self-hosted only: keep the module on the box, outside the workspace, for the release
+      # step (tools/publish-release.sh reuses gmsh.js/gmsh.wasm staged next to the engine).
+      - name: Keep the module on the runner
+        if: ${{ inputs.runner != 'ubuntu-latest' }}
+        run: |
+          mkdir -p "$MODULE_STORE"
+          cp play-gui/gmsh.js play-gui/gmsh.wasm "$MODULE_STORE/"
+          echo "$GITHUB_SHA $GMSH_SHA" > "$MODULE_STORE/gmsh.built-from"
+          ls -la "$MODULE_STORE" | sed 's/^/  /'
+
+      # Best effort: the artifact allowance on this repo is small (see link-freecad.yml),
+      # and the store above is the copy that matters.
+      - name: Upload the module
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gmsh-wasm
+          path: |
+            play-gui/gmsh.js
+            play-gui/gmsh.wasm
+          retention-days: 14
