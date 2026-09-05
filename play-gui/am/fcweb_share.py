@@ -239,8 +239,12 @@ def snapshot_env():
 
 def _prov():
     v = App.Version()
+    try:
+        mdir = os.path.relpath(App.getUserMacroDir(True), os.path.expanduser('~')).replace(os.sep, '/')
+    except Exception:
+        mdir = '.FreeCAD/Macro'
     return {'freecad': '.'.join(str(x) for x in v[:3]), 'build': os.environ.get('FCWEB_BUILD', ''),
-            'owner': _p().GetString('DisplayName', '')}
+            'owner': _p().GetString('DisplayName', ''), 'macro_dir': mdir}
 
 
 # --------------------------------------------------------------------------- read-only
@@ -429,14 +433,16 @@ def tick():
             App.saveParameter()
         c = _ctl()
         enabled = p.GetBool('Enabled', False)
-        if enabled and not _pin:
+        if (enabled or c.get('session')) and not _pin:
             d = App.ActiveDocument
             if d is not None and not (d.FileName or '').startswith('/freecad/'):
                 pin(d.Name)
         if _tick_n % 2 == 0:
             ensure_menu()
         staged = False
-        if enabled and _pin and c.get('holder'):
+        # A joiner who took control publishes too: their ephemeral home has the sharing group
+        # stripped (redaction), so 'Enabled' is false there; the page's CTL says it is a session.
+        if (enabled or c.get('session')) and _pin and c.get('holder'):
             staged = publish()
             if c.get('role') == 'admin' and (_env_hash is None or _tick_n % 20 == 0):
                 snapshot_env()          # right away on first enable, then every ~30 s

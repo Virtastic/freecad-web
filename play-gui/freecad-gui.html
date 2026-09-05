@@ -1160,7 +1160,8 @@ window.fcwebNotify = function (text, kind, actions) {
     var files = new Map(), enc = new TextEncoder(), env = {};
     try { env = (await api('GET', '/share/' + S.id + '/env')).json || {}; } catch (e) { fail('env', e); }
     if (env.cfg) files.set('/home/web_user/.config/FreeCAD/user.cfg', enc.encode(env.cfg));
-    Object.keys(env.macros || {}).forEach(function (k) { files.set('/home/web_user/.FreeCAD/Macro/' + k.replace(/[^\w.\-]/g, '_'), enc.encode(env.macros[k])); });
+    var macroDir = '/home/web_user/' + ((env.provenance && env.provenance.macro_dir) || '.FreeCAD/Macro').replace(/^\/+|\/+$/g, '');
+    Object.keys(env.macros || {}).forEach(function (k) { files.set(macroDir + '/' + k.replace(/[^\w.\-]/g, '_'), enc.encode(env.macros[k])); });
     var addons = (env.addons || []).filter(function (a) { return a.repo; }), skipped = (env.addons || []).filter(function (a) { return !a.repo; });
     var installed = 0, failed = [], declined = false;
     if (addons.length) {
@@ -1331,6 +1332,7 @@ window.fcwebNotify = function (text, kind, actions) {
         '    except Exception as _e: _s.__stderr__.write("[fcweb] share: close %s failed: %r\\n" % (_old, _e))',
         '_d = _App.openDocument(' + JSON.stringify(path) + ')',
         '_App._fcweb_shared_doc = _d.Name',
+        '_d.Label = ' + JSON.stringify(name.replace(/\.FCStd$/i, '')),
         '_fs.pin(_d.Name)',
         '_fs.set_readonly(' + (S.holder ? 'False' : 'True') + ')',
         'if _cam:',
@@ -1404,7 +1406,7 @@ window.fcwebNotify = function (text, kind, actions) {
     if (iAmHolder !== S.holder) {
       if (!iAmHolder && S.everHolder) {
         // Displaced (force, auto-grant, or owner reclaim): detach rather than overwrite.
-        py('import FreeCAD as _App, fcweb_share as _fs, sys as _s\n_d = _App.listDocuments().get(' + JSON.stringify(S.pinned || '') + ')\nif _d is not None and _fs.unpublished():\n    _d.Label = _d.Label.replace(" (read-only)", "") + " (my changes)"\n    _App._fcweb_shared_doc = None\n    _s.__stderr__.write("[fcweb] detached as \\"%s\\"\\n" % _d.Label)\n');
+        py('import FreeCAD as _App, fcweb_share as _fs, sys as _s\n_d = _App.listDocuments().get(' + JSON.stringify(S.pinned || '') + ')\nif _d is not None and _fs.unpublished():\n    _d.Label = _d.Label.replace(" (read-only)", "") + " (my changes)"\n    _App._fcweb_shared_doc = None; _fs._pin = None\n    _s.__stderr__.write("[fcweb] detached as \\"%s\\"\\n" % _d.Label)\n');
         toast((S.holderName || 'Someone') + ' took control. Your unpublished changes are kept as a separate document.', 'warn');
       }
       becomeHolder(iAmHolder, iAmHolder ? 'granted' : 'taken by ' + (S.holderName || 'someone'));
