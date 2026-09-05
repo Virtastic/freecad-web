@@ -453,6 +453,8 @@ def tick():
             'pw_pending': bool(pw), 'staged': staged, 'revert': revert,
             'cam': _camera(), 'docs': sorted(App.listDocuments().keys()),
             'active': App.ActiveDocument.Name if App.ActiveDocument else None,
+            'obs_changed': _obs.changed if _obs else None, 'last_pub': _last_pub_change,
+            'guard': bool(_obs and _obs.guard), 'tick': _tick_n,
         }
         if st != _last_state:
             _last_state = dict(st)
@@ -538,8 +540,8 @@ def _tool(kind, a):
         return {'document': d.Name, 'objects': [
             {'name': o.Name, 'label': o.Label, 'type': o.TypeId,
              'parents': [x.Name for x in o.InList], 'children': [x.Name for x in o.OutList],
-             'visible': bool(getattr(o, 'Visibility', True)), 'touched': o.isTouched(),
-             'valid': o.isValid()} for o in d.Objects]}
+             'visible': bool(getattr(o, 'Visibility', True)), 'touched': ('Touched' in o.State),
+             'valid': 'Invalid' not in o.State} for o in d.Objects]}
     if kind == 'list_objects':
         if d is None:
             return {'objects': []}
@@ -596,7 +598,7 @@ def _tool(kind, a):
         return {'deleted': n}
     if kind == 'recompute':
         n = d.recompute() if d else 0
-        errs = [{'name': o.Name, 'error': o.getStatusString()} for o in (d.Objects if d else []) if not o.isValid()]
+        errs = [{'name': o.Name, 'error': o.getStatusString()} for o in (d.Objects if d else []) if 'Invalid' in o.State]
         return {'recomputed': n, 'errors': errs}
     if kind == 'undo':
         d.undo()

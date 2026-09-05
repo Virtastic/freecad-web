@@ -3093,9 +3093,12 @@ def main():
             env['FCWEB_SESSION_UPSTREAM'] = 'http://127.0.0.1:%d' % sport
             senv = dict(os.environ, PORT=str(sport),
                         FCWEB_SHARE_DIR=tempfile.mkdtemp(prefix='fcgate-session-'))
+            # stderr to a FILE, never a pipe nobody drains: the service logs one line per
+            # request, a full pipe blocks it, and every request then 502s.
+            slog = open(os.path.join(senv['FCWEB_SHARE_DIR'], 'service.log'), 'wb')
             session_proc = subprocess.Popen(
                 [spy, os.path.join(here, '..', 'infra', 'session', 'app.py')],
-                env=senv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                env=senv, stdout=subprocess.DEVNULL, stderr=slog)
             import urllib.request
             for _ in range(60):
                 try:
@@ -3104,8 +3107,8 @@ def main():
                 except Exception:
                     time.sleep(0.5)
             else:
-                print('::error::the session service never answered /share/health: %s'
-                      % session_proc.stderr.read().decode('utf-8', 'replace')[-800:], file=sys.stderr)
+                print('::error::the session service never answered /share/health; see %s'
+                      % slog.name, file=sys.stderr)
                 return 2
             print('==> session service up on :%d (real MCP transport)' % sport)
         server = subprocess.Popen(

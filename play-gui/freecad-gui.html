@@ -1065,7 +1065,15 @@ window.fcwebNotify = function (text, kind, actions) {
   function readText(p) { try { return new TextDecoder().decode(fs().readFile(p)); } catch (e) { return null; } }
   function writeText(p, s) { try { fs().mkdirTree(p.slice(0, p.lastIndexOf('/'))); } catch (e) {} fs().writeFile(p, new TextEncoder().encode(s)); }
   function unlink(p) { try { fs().unlink(p); } catch (e) {} }
-  function py(src) { try { window.__fcRunPyGuarded(src); return true; } catch (e) { log('py', e, true); return false; } }
+  function py(src) {
+    if (window.__fcPyBusy) return false;            // runPy would drop it silently; say so
+    try { window.__fcRunPyGuarded(src); return true; } catch (e) { log('py', e, true); return false; }
+  }
+  // Wait for a file the interpreter writes: the only proof a py() call actually ran.
+  async function pyConfirm(marker, ms) {
+    for (var i = 0; i < ms / 100; i++) { if (readText(marker) !== null) { unlink(marker); return true; } await new Promise(function (r) { setTimeout(r, 100); }); }
+    return false;
+  }
   function pyCall(expr) { return py('import fcweb_share as _fs\ntry: ' + expr + '\nexcept Exception as _e: import sys; sys.__stderr__.write("[fcweb] share: %r\\n" % (_e,))'); }
   function safeName(n) { return String(n || 'shared.FCStd').replace(/[^\w .\-]/g, '_'); }
   function hex(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); return Array.prototype.map.call(a, function (b) { return (b + 256).toString(16).slice(1); }).join(''); }
@@ -1295,8 +1303,9 @@ window.fcwebNotify = function (text, kind, actions) {
       var name = safeName(meta.n || S.doc), path = '/home/web_user/' + name;
       try { fs().mkdirTree('/home/web_user'); } catch (e) {}
       fs().writeFile(path, bytes);
-      var lbl = JSON.stringify(name.replace(/\.FCStd$/i, ''));
-      py([
+      var marker = '/tmp/_fcshare_applied_' + meta.v;
+      unlink(marker);
+      var ran = py([
         'import FreeCAD as _App, FreeCADGui as _Gui, sys as _s, fcweb_share as _fs',
         '_cam = ' + JSON.stringify(meta.cam || ''),
         '_old = getattr(_App, "_fcweb_shared_doc", None)',
@@ -1310,8 +1319,13 @@ window.fcwebNotify = function (text, kind, actions) {
         'if _cam:',
         '    try: _Gui.ActiveDocument.ActiveView.setCamera(_cam)',
         '    except Exception: pass',
-        '_s.__stderr__.write("[fcweb] share applied v' + meta.v + '\\n"); _s.__stderr__.flush()'
+        '_s.__stderr__.write("[fcweb] share applied v' + meta.v + '\\n"); _s.__stderr__.flush()',
+        'open(' + JSON.stringify(marker) + ', "w").write("1")'
       ].join('\n'));
+      if (!ran || !(await pyConfirm(marker, 20000))) {
+        log('apply', 'v' + meta.v + ' downloaded but the interpreter did not confirm opening it' + (ran ? '' : ' (busy)') + ' -- retrying next tick', true);
+        return;                                  // S.applied unchanged: the next poll retries
+      }
       S.applied = meta.v; S.doc = meta.n || S.doc;
       log('apply', 'applied v' + meta.v + ' (' + bytes.length + ' bytes)');
     } catch (e) { fail('apply', e, 'apply_fail'); }
@@ -1544,7 +1558,7 @@ window.fcwebNotify = function (text, kind, actions) {
         }
       }
       unlink(MCP + '/' + cmd.id + '.json'); unlink(MCP + '/' + cmd.id + '.result.json');
-    } catch (e) { res = { id: cmd.id, ok: false, code: 'tab_error', error: String(e), hint: 'The tab hit an error running this tool; see Diagnostics.' }; fail('mcp', e, 'mcp_cmd_fail'); }
+    } catch (e) { res = { id: cmd.id, ok: false, code: 'tab_error', error: String(e), hint: String(e && e.message ? e.message : e) }; fail('mcp', e, 'mcp_cmd_fail'); }
     if (!res.ok) beacon('mcp_cmd_fail', res.code);
     log('mcp', cmd.kind + ' ' + (res.ok ? 'ok' : 'FAIL ' + res.code) + ' ' + (Date.now() - t0) + 'ms' + (res.ok && res.mutating ? ' → published v' + S.v : ''));
     try { await api('POST', '/api/s/' + S.id + '/result', JSON.stringify(res), { 'Content-Type': 'application/json', 'X-Fcweb-Tab': S.tab }); }
@@ -1655,10 +1669,7 @@ window.fcwebNotify = function (text, kind, actions) {
     booted = true;
     sendCtl();
     var p = S.pre || {};
-    setReadonly(true);
-    pyCall('_fs.pin(' + JSON.stringify((S.doc || 'shared').replace(/\.FCStd$/i, '')) + ') or [_fs.pin(n) for n in list(__import__("FreeCAD").listDocuments())[:1]]');
-    py('import FreeCAD as _App, os as _os\n_p = "/home/web_user/' + safeName(S.doc) + '"\nif _os.path.exists(_p) and not _App.listDocuments():\n    _d = _App.openDocument(_p); _App._fcweb_shared_doc = _d.Name\n    import fcweb_share as _fs; _fs.pin(_d.Name); _fs.set_readonly(True)\nimport sys as _s; _s.__stderr__.write("[fcweb] share applied v' + S.v + '\\n")');
-    S.applied = S.v;
+    S.applied = 0;                               // the first poll applies v1 through the confirmed path
     py('import FreeCAD as _App, sys as _s\n_u = _App.ParamGet("User parameter:BaseApp/Preferences/Units")\n_s.__stderr__.write("[fcweb] units=%d decimals=%d from session\\n" % (_u.GetInt("UserSchema", 0), _u.GetInt("Decimals", 2)))');
     var msg = 'You are viewing ' + (S.owner ? S.owner + "'s" : 'a shared') + ' session';
     if (p.declined) msg += '. Add-ons were skipped, so add-on features are missing; the geometry is still here';

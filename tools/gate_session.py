@@ -66,6 +66,16 @@ def _wait(s, needle, seconds, where='ring'):
     return None
 
 
+def _dump(s, tag):
+    """On a failure, print what the page and the interpreter half actually saw."""
+    try:
+        st = s.page.evaluate('({st: window.__fcSession.st, ready: !!window.__fcAppReady, guarded: !!window.__fcRunPyGuarded, busy: !!window.__fcPyBusy, id: window.__fcSession.id, holder: window.__fcSession.holder, applied: window.__fcSession.applied, v: window.__fcSession.v})')
+    except Exception as e:
+        st = {'error': str(e)}
+    print('==> [%s] page: %r' % (tag, {k: v for k, v in st.items() if k != 'st'}))
+    print('==> [%s] interpreter state: %r' % (tag, st.get('st')))
+    print('==> [%s] ring tail: %r' % (tag, _ring(s)[-8:]))
+
 def _state(s):
     try:
         return s.page.evaluate('({id: window.__fcSession.id, holder: window.__fcSession.holder, role: window.__fcSession.role, v: window.__fcSession.v, applied: window.__fcSession.applied, silent: window.__fcSession.silent, ended: window.__fcSession.ended, agentUrl: window.__fcSession.agentUrl, tab: window.__fcSession.tab, holderName: window.__fcSession.holderName, note: window.__fcSession.note, cam: window.__fcSession.cam})')
@@ -166,6 +176,7 @@ def scenario_share(ctx, url, args, fail):
         fail('session mode did not materialize the ephemeral home (isolation lost)')
     if not _wait(s2, 'share applied v1', 90, 'console'):
         fail('viewer never applied v1 (ring: %s)' % _ring(s2)[-6:])
+        _dump(s2, 'v1')
     v = _volumes(s2, fail)
     got = [x for x in v.values()]
     if not got or abs(got[0]['volume'] - 6000.0) > 1e-6:
@@ -178,6 +189,7 @@ def scenario_share(ctx, url, args, fail):
     s1.run_python("import FreeCAD as A\n_d=A.getDocument('GateShare'); _d.getObject('Box').Length=20; _d.recompute()")
     if not _wait(s1, 'publish: pushed v2', 40):
         fail('the edit was never published as v2')
+        _dump(s1, 'v2')
     if not _wait(s2, 'share applied v2', 60, 'console'):
         fail('viewer never applied v2')
     v = _volumes(s2, fail)
@@ -199,6 +211,7 @@ def scenario_share(ctx, url, args, fail):
     st = _wait_state(s2, lambda x: x.get('silent'), 90)
     if not st:
         fail('the viewer never learned the owner went silent')
+        _dump(s2, 'silent')
     else:
         print('==> owner silent -> viewer shows "last updated"')
     # the owner resumes on the same id
@@ -210,6 +223,7 @@ def scenario_share(ctx, url, args, fail):
     line = _wait(s3, 'resumed session ' + sid[:8], 60)
     if not line:
         fail('owner did not resume the SAME session after a reload (ring: %s)' % _ring(s3)[-6:])
+        _dump(s3, 'resume')
     else:
         print('==> ' + line)
     return s2
@@ -359,8 +373,8 @@ def scenario_mcp(ctx, url, args, fail):
     if not r.get('ok') or abs(r.get('volume', 0) - 6000.0) > 1e-6:
         fail('fc_shape_info volume %r' % r.get('volume'))
     r = tool('fc_list_commands', {}, 120)
-    if not r.get('ok') or r.get('count', 0) < 500:
-        fail('fc_list_commands returned %r commands, expected > 500' % r.get('count'))
+    if not r.get('ok') or r.get('count', 0) < 400:
+        fail('fc_list_commands returned %r commands, expected > 400 (~460 register before every workbench loads)' % r.get('count'))
     else:
         print('==> fc_list_commands: %d commands' % r['count'])
     r = tool('fc_run_command', {'name': 'Std_ViewFitAll'})
