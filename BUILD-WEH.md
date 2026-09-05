@@ -6,6 +6,20 @@ It is a **full-world rebuild**: everything must be compiled with wasm exceptions
 reintroduces `invoke_*` JS trampolines, and JSPI cannot suspend across a JS
 frame — dialogs stop returning the user's real choice.
 
+There is a second axis to that rule since emsdk 6.0.9. Wasm exceptions come in two
+instruction sets -- the legacy `try`/`delegate` model, which is still the 6.0.9 default,
+and the standardised `try_table`/`throw_ref` model, which `toolchain/env.sh` selects with
+`-sWASM_LEGACY_EXCEPTIONS=0` for every compile and link. The setting changes object code,
+wasm-ld links a mix without a word, and node validates it; Chrome refuses the module
+("uses a mix of legacy and new exception handling instructions"). Link 33963711535 got
+through every static gate and never started for exactly this: Coin3D, xerces-c and the
+boost libraries had been built before env.sh set the flag and sat in a cache with a
+literal key behind "already built, skipping" guards. `target_features` cannot tell the
+two models apart (both say `+exception-handling`), so `tools/check-archive-eh.sh` reads
+the opcodes: the deps lane prunes legacy archives before its build steps and refuses to
+go green with any left, and the link preflight refuses to start on a mix. The link ccache
+hashes env.sh, because emcc appends `EMCC_CFLAGS` itself and ccache never saw them.
+
 ## The dependency versions are not recorded — and that is the top reproducibility defect
 
 Twenty-three dependencies are referenced by an **unversioned** path: `deps/src/occt`,
