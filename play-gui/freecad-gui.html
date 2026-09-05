@@ -1029,7 +1029,7 @@ window.fcwebNotify = function (text, kind, actions) {
     silent: false, watching: 0, note: '', actingAs: 'human', pendingName: null, cam: '',
     preFiles: null, pre: null, ctlSent: '', st: null, everHolder: false, divergePrompted: false
   };
-  var RING = [];
+  var RING = []; window.__fcSessionRing = RING;   // the boot gate reads this
 
   // ---- plumbing -------------------------------------------------------------------
   function log(sub, msg, err) {
@@ -1326,7 +1326,17 @@ window.fcwebNotify = function (text, kind, actions) {
   // ---- control ---------------------------------------------------------------------
   var askedToast = false;
   async function requestControl(force) {
-    if (!S.edit) { toast('Only editors can take control. Ask the sender for the editor password.', 'warn'); return; }
+    if (!S.edit) {
+      // A viewer who knows the editor password becomes an editor here: re-join with it.
+      var epw = window.prompt('Enter the editor password to take control:', '');
+      if (!epw) return;
+      try {
+        var jj = (await api('POST', '/share/' + S.id + '/join', JSON.stringify({ name: S.name || 'Guest', viewer_pw: (function () { try { return sessionStorage.getItem('fcweb.pw.' + S.id) || ''; } catch (e) { return ''; } })(), editor_pw: epw }), { 'Content-Type': 'application/json' })).json;
+        if (!jj.edit) { toast('That is not the editor password.', 'error'); return; }
+        S.client = jj.client; S.edit = jj.edit; S.role = jj.role; try { sessionStorage.setItem('fcweb.epw.' + S.id, epw); } catch (e) {}
+        sendCtl(); log('control', 'upgraded to editor');
+      } catch (e) { fail('control', e); toast(e.message, 'error'); return; }
+    }
     try {
       var r = await api('POST', '/share/' + S.id + '/control/request', JSON.stringify({ force: !!force }), { 'Content-Type': 'application/json' });
       if (force) beacon('control_force');
@@ -1510,7 +1520,9 @@ window.fcwebNotify = function (text, kind, actions) {
       try { fs().mkdirTree(MCP); } catch (e) {}
       if (cmd.args && cmd.args.bytes_b64) { fs().writeFile(MCP + '/' + cmd.id + '.in', Uint8Array.from(atob(cmd.args.bytes_b64), function (c) { return c.charCodeAt(0); })); delete cmd.args.bytes_b64; }
       writeText(MCP + '/' + cmd.id + '.json', JSON.stringify({ kind: cmd.kind, args: cmd.args || {} }));
-      if (cmd.kind === 'screenshot') {
+      if (/^(session_|control_)/.test(cmd.kind) || cmd.kind === 'install_addon') {
+        var pr = await pageTool(cmd); res = { id: cmd.id, ok: !!pr.ok, result: pr, code: pr.code, hint: pr.hint, error: pr.error };
+      } else if (cmd.kind === 'screenshot') {
         var shot = await capture((cmd.args && cmd.args.region) || 'viewport', (cmd.args && cmd.args.max_px) || 1280);
         res = { id: cmd.id, ok: true, result: shot };
       } else {
@@ -1542,6 +1554,48 @@ window.fcwebNotify = function (text, kind, actions) {
   // last complete composited 3D frame); 'window' reads the default framebuffer in the same
   // task as the present quad. Neither touches FreeCAD's offscreen saveImage path, which has a
   // measured material-corruption bug. The compositor answers via window.__fcCaptureReq.
+  var consentAsked = {};
+  async function pageTool(cmd) {
+    var a = cmd.args || {}, k = cmd.kind;
+    function need(cond, code, hint) { if (!cond) { var e = new Error(hint); e.code = code; e.hint = hint; throw e; } }
+    try {
+      if (k === 'control_request') {
+        need(S.edit, 'not_editor', 'This tab cannot take control: it has no editor rights.');
+        var r = await api('POST', '/share/' + S.id + '/control/request', JSON.stringify({ force: !!a.force }), { 'Content-Type': 'application/json' });
+        if (a.force) beacon('control_force', 'agent');
+        if (r.json.granted) becomeHolder(true, a.force ? 'taken by your assistant' : 'granted to your assistant');
+        await poll();
+        return { ok: true, granted: !!r.json.granted, holder: S.holder, hint: r.json.granted ? null : 'Waiting for ' + (r.json.holder || 'the editor') + ' to grant; call again in a moment.' };
+      }
+      if (k === 'control_release') { await releaseControl(); return { ok: true, holder: S.holder }; }
+      need(S.key, 'not_admin', 'Only the person who shared this session can do that, from their own tab.');
+      if (k === 'session_set_passwords') {
+        var b = {}; if ('viewer' in a) b.viewer = a.viewer; if ('editor' in a) b.editor = a.editor;
+        await api('PUT', '/share/' + S.id + '/passwords', JSON.stringify(b), { 'Content-Type': 'application/json' });
+        toast('Assistant updated the session passwords.', 'info'); return { ok: true, set: Object.keys(b) };
+      }
+      if (k === 'session_set_expiry') {
+        var days = Math.max(0, parseInt(a.days || 0, 10) || 0);
+        await api('PUT', '/share/' + S.id + '/expiry', JSON.stringify({ expires: days ? Math.floor(Date.now() / 1000) + days * 86400 : null }), { 'Content-Type': 'application/json' });
+        toast('Assistant set the link to ' + (days ? 'expire in ' + days + ' days' : 'never expire') + '.', 'info'); return { ok: true, days: days };
+      }
+      if (k === 'session_stop') { await stopSharing(); return { ok: true, stopped: true }; }
+      if (k === 'install_addon') {
+        var repo = String(a.repo || '');
+        need(/^[\w.\-]+\/[\w.\-]+$/.test(repo), 'bad_request', 'repo must be owner/name');
+        if (consentAsked[repo] === 'yes') { consentAsked[repo] = 'done'; window.fcInstallAddon && window.fcInstallAddon(repo); return { ok: true, installing: repo, hint: 'Installing; check fc_env_info in a moment.' }; }
+        if (consentAsked[repo] !== 'asked') {
+          consentAsked[repo] = 'asked';
+          toast('Your assistant wants to install the add-on ' + repo + (a.note ? ' — ' + a.note : '') + '.', 'warn', [
+            { label: 'Install', onClick: function () { consentAsked[repo] = 'yes'; } },
+            { label: 'No', onClick: function () { consentAsked[repo] = 'no'; } }]);
+        }
+        if (consentAsked[repo] === 'no') { delete consentAsked[repo]; need(false, 'declined', 'The person declined the install.'); }
+        need(false, 'consent_required', 'The owner has been asked to approve this install; call again after they click Install.');
+      }
+      need(false, 'unknown_tool', 'No such page-side tool: ' + k);
+    } catch (e) { return { ok: false, code: e.code || 'error', error: String(e.message || e), hint: e.hint || e.message }; }
+  }
   function capture(region, maxPx) {
     return new Promise(function (resolve, reject) {
       var t = setTimeout(function () { window.__fcCaptureReq = null; reject(new Error('no frame was presented within 3 s (is the 3D view up?)')); }, 3000);

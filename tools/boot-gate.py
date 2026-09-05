@@ -2970,6 +2970,8 @@ def scenario_project3d(ctx, url, args, fail):
 #
 # in_all is False for render (needs the 3D pipeline, and "all" runs ?no3d) and for upgrade
 # (rewrites the serve tree under itself).
+import gate_session as _gs   # the shared-session scenarios live beside this file
+
 SCENARIOS = (
     # name            function                in_all  what a pass actually means
     ('boot',          scenario_boot,          True,
@@ -3008,6 +3010,15 @@ SCENARIOS = (
      'draws a shaded solid in the 3D viewport'),
     ('upgrade',       scenario_upgrade,       False,
      'survives an engine upgrade with the documents intact'),
+    # Shared sessions (tools/gate_session.py). Two browser contexts each, so not in "all".
+    ('share',         _gs.scenario_share,     False,
+     'publishes a shared document that a second browser opens, follows live, and resumes'),
+    ('control',       _gs.scenario_control,   False,
+     'enforces read-only, hands control over, keeps displaced work, auto-grants a vanished holder'),
+    ('mcp',           _gs.scenario_mcp,       False,
+     'serves the whole tool surface over MCP from the URL the page shows, editing live for a viewer'),
+    ('env',           _gs.scenario_env,       False,
+     'carries units and macros to a visitor with the owner offline, touching nothing the visitor owns'),
 )
 
 # Nothing below may name a scenario this table does not.

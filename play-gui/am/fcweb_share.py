@@ -438,8 +438,8 @@ def tick():
         staged = False
         if enabled and _pin and c.get('holder'):
             staged = publish()
-            if c.get('role') == 'admin' and _tick_n % 20 == 0:
-                snapshot_env()
+            if c.get('role') == 'admin' and (_env_hash is None or _tick_n % 20 == 0):
+                snapshot_env()          # right away on first enable, then every ~30 s
         revert = False
         if _obs is not None and _obs.tripped and not c.get('holder'):
             _obs.tripped = False
