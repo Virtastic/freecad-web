@@ -1402,7 +1402,7 @@ window.fcwebNotify = function (text, kind, actions) {
     if (iAmHolder !== S.holder) {
       if (!iAmHolder && S.everHolder) {
         // Displaced (force, auto-grant, or owner reclaim): detach rather than overwrite.
-        py('import FreeCAD as _App, fcweb_share as _fs, sys as _s\n_d = _App.listDocuments().get(' + JSON.stringify(S.pinned || '') + ')\nif _d is not None and _d.Modified:\n    _d.Label = _d.Label.replace(" (read-only)", "") + " (my changes)"\n    _App._fcweb_shared_doc = None\n    _s.__stderr__.write("[fcweb] detached as \\"%s\\"\\n" % _d.Label)\n');
+        py('import FreeCAD as _App, fcweb_share as _fs, sys as _s\n_d = _App.listDocuments().get(' + JSON.stringify(S.pinned || '') + ')\nif _d is not None and _fs.unpublished():\n    _d.Label = _d.Label.replace(" (read-only)", "") + " (my changes)"\n    _App._fcweb_shared_doc = None\n    _s.__stderr__.write("[fcweb] detached as \\"%s\\"\\n" % _d.Label)\n');
         toast((S.holderName || 'Someone') + ' took control. Your unpublished changes are kept as a separate document.', 'warn');
       }
       becomeHolder(iAmHolder, iAmHolder ? 'granted' : 'taken by ' + (S.holderName || 'someone'));

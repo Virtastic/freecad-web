@@ -38,7 +38,7 @@ for _n, _d in App.listDocuments().items():
     _b = _d.getObject("Box")
     if _b is not None:
         _out[_n] = {"volume": _b.Shape.Volume, "length": _b.Length.Value, "label": _d.Label,
-                    "modified": _d.Modified, "ro": "ReadOnly" in _b.getPropertyStatus("Length")}
+                    "ro": "ReadOnly" in _b.getPropertyStatus("Length")}
 sys.__stderr__.write("GATE_VOL " + repr(_out) + "\n")
 '''
 

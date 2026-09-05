@@ -513,6 +513,11 @@ def _shape_info(o):
             'type': s.ShapeType}
 
 
+def unpublished():
+    """True when the pinned document changed after its last publish."""
+    return bool(_obs and _obs.changed > _last_pub_change)
+
+
 def _tool(kind, a):
     Gui = _gui()
     d = App.ActiveDocument
@@ -526,7 +531,8 @@ def _tool(kind, a):
     if kind == 'document_info':
         if d is None:
             return {'document': None}
-        return {'document': d.Name, 'label': d.Label, 'file': d.FileName, 'modified': d.Modified,
+        return {'document': d.Name, 'label': d.Label, 'file': d.FileName,
+                'unpublished': bool(_obs and _obs.changed > _last_pub_change),
                 'objects': len(d.Objects), 'undo': d.UndoCount, 'redo': d.RedoCount,
                 'active_workbench': Gui.activeWorkbench().name() if Gui else None,
                 'pinned': _pin}
