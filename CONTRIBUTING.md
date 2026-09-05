@@ -18,8 +18,7 @@ known and deliberate.
 
 ## Before changing code
 
-Read [AGENTS.md](AGENTS.md). It is short, and it is the actual working agreement for this
-repository — in particular:
+The working agreements for this repository, in particular:
 
 - **The target is 1:1 parity with desktop FreeCAD.** We have the source in `deps/src/`, so the
   answer to "what should this do?" is *read the code that does it*, not reason about it.

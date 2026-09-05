@@ -79,7 +79,6 @@ These are real constraints, stated up front rather than discovered:
   order, linking, staging, deploy, and a frank record of every trap that cost real time.
 - **[MANUAL-QA.md](MANUAL-QA.md)** — the 20-minute human pass, scoped to the three things
   automation is structurally blind to.
-- **[AGENTS.md](AGENTS.md)** — the working agreements this project is developed under.
 - **[QUICKSTART.md](QUICKSTART.md)** — running it yourself with Docker: the three
   install paths, troubleshooting, updating, uninstalling.
 - **[infra/README.md](infra/README.md)** — serving and deployment.
