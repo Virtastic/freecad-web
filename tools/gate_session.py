@@ -202,6 +202,8 @@ def scenario_share(ctx, url, args, fail):
     got = [x for x in v.values() if abs(x['volume'] - 12000.0) < 1e-6]
     if not got:
         fail('viewer did not receive the live edit (volumes %r)' % {k: x['volume'] for k, x in v.items()})
+        _dump(s2, 'live-edit')
+        print('==> [live-edit] viewer console about share: %r' % [c[:200] for c in s2.lines() if 'share' in c and ('applied' in c or 'close' in c or 'fail' in c)][-8:])
     else:
         print('==> live edit reached the viewer: volume 12000.0')
     # camera follows without a reopen
