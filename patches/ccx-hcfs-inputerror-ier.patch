@@ -1,0 +1,50 @@
+Pass ier to inputerror from hcfs.f, as every other caller does.
+
+CalculiX 2.22 declares
+
+    subroutine inputerror(inpc,ipoinpc,iline,text,ier)
+
+and 657 of its 660 call sites pass all five arguments. The three in hcfs.f stop
+after the text. In native Fortran that reads an undefined ier, which happens to
+be harmless because inputerror only ever sets it. Under f2c on wasm the missing
+argument is a hole in the call: at wasm32 every argument was an i32 and the
+slot was filled with whatever was on the stack, unnoticed; at wasm64 the caller
+and the definition no longer agree --
+
+    wasm-ld: warning: function signature mismatch: inputerror_
+    >>> defined as (i64, i64, i64, i64, i32, i32, i64) -> void in libccx.a(f_hcfs.o)
+    >>> defined as (i64, i64, i64, i64, i64, i32, i32) -> void in libccx.a(f_inputerror.o)
+
+-- and wasm-ld routes the call through a stub that traps, so a malformed *HCF
+card would trap the solver instead of printing the error. ier is in scope in
+hcfs (it is the subroutine's own argument).
+
+--- a/src/hcfs.f
++++ b/src/hcfs.f
+@@ -94,7 +94,7 @@
+         write(*,*) '         ',
+      &       textpart(i)(1:index(textpart(i),' ')-1)
+         call inputerror(inpc,ipoinpc,iline,
+-     &       "*HCF%")
++     &       "*HCF%",ier)
+       endif
+ !     
+       if(mei(1).eq.0) then
+@@ -103,7 +103,7 @@
+         write(*,*) '         ',
+      &       textpart(i)(1:index(textpart(i),' ')-1)
+         call inputerror(inpc,ipoinpc,iline,
+-     &       "*HCF%")
++     &       "*HCF%",ier)
+       endif
+ !     
+       if(mei(2).eq.0) then
+@@ -112,7 +112,7 @@
+         write(*,*) '         ',
+      &       textpart(i)(1:index(textpart(i),' ')-1)
+         call inputerror(inpc,ipoinpc,iline,
+-     &       "*HCF%")
++     &       "*HCF%",ier)
+       endif
+ !     
+       if(tincf.eq.0.d0) then
