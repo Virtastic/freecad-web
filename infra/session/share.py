@@ -431,7 +431,12 @@ def _route(method, path, fullpath, h, body):
         m['t'] = int(_now())
         m['seen'] = _now()
         s['holder_seen'] = _now()
-        m['n'] = re.sub(r'[^\w .\-]', '', h.get('x-fcweb-name', ''))[:64] or m['n'] or 'shared.FCStd'
+        # the document's name is fixed by its first publish (or by the admin); a joiner who
+        # holds control does not rename it -- their copy's label may carry a suffix
+        nm = re.sub(r'[^\w .\-]', '', h.get('x-fcweb-name', ''))[:64]
+        if nm and (not m['n'] or admin):
+            m['n'] = nm
+        m['n'] = m['n'] or 'shared.FCStd'
         _save_meta(i, m)
         return _json(200, {'v': m['v']})
 

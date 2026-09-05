@@ -437,6 +437,13 @@ def tick():
             d = App.ActiveDocument
             if d is not None and not (d.FileName or '').startswith('/freecad/'):
                 pin(d.Name)
+        # Read-only is reconciled HERE, every tick, from what the page says about control.
+        # A page-initiated set_readonly() can be dropped while the interpreter is busy; a
+        # state the interpreter re-derives itself cannot stay wrong for more than one tick.
+        if _pin and _obs is not None and (enabled or c.get('session')):
+            want = not bool(c.get('holder'))
+            if _obs.guard != want:
+                set_readonly(want)
         if _tick_n % 2 == 0:
             ensure_menu()
         staged = False

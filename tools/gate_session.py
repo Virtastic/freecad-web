@@ -274,6 +274,7 @@ def scenario_control(ctx, url, args, fail):
     if not st1:
         fail('the owner still believes it holds control after handing over')
     print('==> handover: Bob holds control, owner read-only')
+    time.sleep(5)          # two interpreter ticks: the unlock is reconciled there
     s2.run_python("import FreeCAD as A\nfor _d in A.listDocuments().values():\n    _b=_d.getObject('Box')\n    if _b: _b.Length = 25; _d.recompute()")
     if not _wait(s2, 'publish: pushed v', 40):
         fail('the new holder never published')
