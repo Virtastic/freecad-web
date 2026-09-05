@@ -61,6 +61,7 @@ on:
       - 'patches/pyside-setup.patch'
       - 'patches/numpy.patch'
       - 'patches/cpython-ctypes-wasm.patch'
+      - 'patches/cpython-trampoline-wasm64.patch'
       - 'tools/**'
       # the cmake shims decide whether Coin, ICU and OpenGL are found at all
       - 'toolchain/**'
@@ -142,7 +143,7 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/src/cpython
-          key: fcweb-cpython-3.13.3-wasm64-emsdk6.0.9-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
+          key: fcweb-cpython-3.13.3-wasm64-emsdk6.0.9-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch', 'patches/cpython-trampoline-wasm64.patch') }}
 
       - name: Cache emsdk
         id: emsdk-cache
@@ -305,15 +306,31 @@ jobs:
         run: |
           set -e
           . ./toolchain/env.sh
+          # "libpython3.13.a exists" is not "libpython3.13.a was built from these patches".
+          # The pydeps cache restores deps/src/cpython WITH its builddir, so the CPython
+          # cache key changing is not enough: this guard saw the old library and skipped.
+          # That is how patches/cpython-trampoline-wasm64.patch was applied to the tree,
+          # asserted in the deps lane, and absent from the linked module (link
+          # 33979963439: the trampoline still had four cases). Stamp the inputs beside
+          # the build and rebuild clean when they differ -- the same discipline the deps
+          # lane uses for VTK and CPython.
+          stamp=deps/src/cpython/builddir/.fcweb-cpython-inputs
+          want=$(cat patches/cpython-ctypes-wasm.patch patches/cpython-trampoline-wasm64.patch build-cpython.sh build-cpython-mt.sh | sha256sum | cut -d" " -f1)
           if [ -e deps/src/cpython/builddir/emscripten-mt/libpython3.13.a ] \
-             && [ -e deps/src/cpython/builddir/build/python3-native ]; then
-            echo "  cpython: already built (cache hit)"
+             && [ -e deps/src/cpython/builddir/build/python3-native ] \
+             && [ "$(cat $stamp 2>/dev/null)" = "$want" ]; then
+            echo "  cpython: already built from these inputs (cache hit)"
             exit 0
+          fi
+          if [ -d deps/src/cpython/builddir ]; then
+            echo "  cpython: the cached build was made from different inputs, rebuilding clean"
+            rm -rf deps/src/cpython/builddir
           fi
           t0=$SECONDS
           bash build-cpython.sh
           bash build-cpython-mt.sh
           echo "  cpython built in $((SECONDS-t0))s"
+          echo "$want" > "$stamp"
           # The cross-file names python3-native specifically; CPython does not always
           # create it, and meson mono-wraps the .exe name if we point at that instead.
           cd deps/src/cpython/builddir/build
@@ -329,7 +346,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: deps/src/cpython
-          key: fcweb-cpython-3.13.3-wasm64-emsdk6.0.9-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch') }}
+          key: fcweb-cpython-3.13.3-wasm64-emsdk6.0.9-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch', 'patches/cpython-trampoline-wasm64.patch') }}
 
       # PySide needs BOTH Qts: the wasm one this repo builds, and a host one for the
       # tools (moc, rcc, qmake) that run during the cross-build. build-qt-wasm.yml caches
