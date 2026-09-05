@@ -658,7 +658,11 @@ window.fcwebNotify = function (text, kind, actions) {
     }
     host.appendChild(t);
     requestAnimationFrame(function () { t.style.opacity = '1'; });
-    if (kind !== 'error') { setTimeout(function () { t.style.opacity = '0'; setTimeout(kill, 200); }, 9000); }
+    // A toast with action buttons is asking the user to DO something, so it must not
+    // expire on its own. The reload-required prompt was auto-dismissing after 9 s --
+    // during an addon install that itself takes 45-75 s -- and the user never saw it.
+    var actionable = !!(actions && actions.length);
+    if (kind !== 'error' && !actionable) { setTimeout(function () { t.style.opacity = '0'; setTimeout(kill, 200); }, 9000); }
   } catch (e) { try { console.warn('[fcweb] notify failed', e, text); } catch (_) {} }
 };
 </script>
