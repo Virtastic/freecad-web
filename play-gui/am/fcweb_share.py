@@ -46,6 +46,8 @@ _env_hash = None
 _ro = {}          # doc name -> obj name -> prop name -> original status list
 _actions = {}     # our QActions on the Edit menu
 _tick_n = 0
+_revert_t = 0.0      # advanced whenever a non-holder's edit is noticed; the page re-applies
+_was_holder = None
 
 
 def _log(msg):
@@ -416,7 +418,7 @@ def tick():
     into STATE, written only when it changes. Passwords are moved out of the parameter
     tree the moment they appear: Gui::PrefLineEdit persists them as plaintext into
     user.cfg, which is now a file we publish."""
-    global _last_state, _tick_n
+    global _last_state, _tick_n, _pin
     _tick_n += 1
     try:
         p = _p()
@@ -453,17 +455,31 @@ def tick():
             staged = publish()
             if c.get('role') == 'admin' and (_env_hash is None or _tick_n % 20 == 0):
                 snapshot_env()          # right away on first enable, then every ~30 s
-        revert = False
+        global _revert_t, _was_holder
         if _obs is not None and _obs.tripped and not c.get('holder'):
             _obs.tripped = False
-            revert = True
+            _revert_t = time.time()
+        # Losing control with unpublished work: keep it as a separate document, here, where
+        # it cannot be dropped by a busy interpreter. The page only tells the person.
+        holder_now = bool(c.get('holder'))
+        if _was_holder and not holder_now and _pin and unpublished():
+            d = _doc()
+            if d is not None:
+                try:
+                    d.Label = d.Label.replace(' (read-only)', '') + ' (my changes)'
+                    App._fcweb_shared_doc = None
+                    _log('detached as "%s"' % d.Label)
+                except Exception as e:
+                    _log('detach failed: %r' % (e,))
+                _pin = None
+        _was_holder = holder_now
         st = {
             'enabled': enabled, 'pinned': _pin, 'name': p.GetString('DisplayName', ''),
             'include_env': p.GetBool('IncludeEnv', True), 'agent': p.GetBool('AllowAgent', False),
             'regen_agent': p.GetBool('RegenerateAgent', False),
             'expiry_days': p.GetInt('ExpiryDays', 0), 'session': p.GetString('SessionId', ''),
             'key': p.GetString('WriteKey', ''), 'agent_url': p.GetString('AgentUrl', ''),
-            'pw_pending': bool(pw), 'staged': staged, 'revert': revert,
+            'pw_pending': bool(pw), 'staged': staged, 'revert_t': _revert_t,
             'cam': _camera(), 'docs': sorted(App.listDocuments().keys()),
             'active': App.ActiveDocument.Name if App.ActiveDocument else None,
             'obs_changed': _obs.changed if _obs else None, 'last_pub': _last_pub_change,

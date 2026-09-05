@@ -1405,8 +1405,8 @@ window.fcwebNotify = function (text, kind, actions) {
     var iAmHolder = !!(j.you && j.you.holder);
     if (iAmHolder !== S.holder) {
       if (!iAmHolder && S.everHolder) {
-        // Displaced (force, auto-grant, or owner reclaim): detach rather than overwrite.
-        py('import FreeCAD as _App, fcweb_share as _fs, sys as _s\n_d = _App.listDocuments().get(' + JSON.stringify(S.pinned || '') + ')\nif _d is not None and _fs.unpublished():\n    _d.Label = _d.Label.replace(" (read-only)", "") + " (my changes)"\n    _App._fcweb_shared_doc = None; _fs._pin = None\n    _s.__stderr__.write("[fcweb] detached as \\"%s\\"\\n" % _d.Label)\n');
+        // Displaced (force, auto-grant, or owner reclaim): the interpreter's tick detaches any
+        // unpublished work as '<Name> (my changes)' the moment CTL says we no longer hold.
         toast((S.holderName || 'Someone') + ' took control. Your unpublished changes are kept as a separate document.', 'warn');
       }
       becomeHolder(iAmHolder, iAmHolder ? 'granted' : 'taken by ' + (S.holderName || 'someone'));
@@ -1673,7 +1673,10 @@ window.fcwebNotify = function (text, kind, actions) {
         else if (!st.enabled && S.id && S.key) await stopSharing();
         if (S.id) { S.name = st.name || S.name; await ownerSettings(st); }
       }
-      if (st.revert && !S.holder && S.id) { log('control', 'read-only edit reverted', true); toast('This session is read-only for you — use Edit → Request Control to make changes.', 'warn'); S.applied = 0; }
+    }
+    if (st.revert_t && st.revert_t !== S.revertSeen && !S.holder && S.id) {
+      S.revertSeen = st.revert_t;
+      log('control', 'read-only edit reverted', true); toast('This session is read-only for you — use Edit → Request Control to make changes.', 'warn'); S.applied = 0;
     }
     var req = readText(REQ);
     if (req) { unlink(REQ); if (req === 'request') requestControl(false); else if (req === 'force') requestControl(true); else if (req === 'release') releaseControl(); }
