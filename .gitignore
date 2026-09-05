@@ -60,10 +60,6 @@
 *.wasm.map
 
 # spike build outputs (keep source: *.cpp *.mjs *.cjs *.sh CMakeLists.txt package.json)
-spikes/**/build/
-spikes/**/node_modules/
-spikes/**/*.js
-spikes/**/*.wasm
 
 # === Logs ===
 aqtinstall.log
@@ -79,14 +75,6 @@ aqtinstall.log
 # tools/gen-crossfiles.sh (they need absolute paths, which differ per machine).
 /*.meson
 !/*.meson.in
-scratchpad/vtktest/*.wasm
-scratchpad/vtktest/*.js
-scratchpad/vtktest/*.vtu
-scratchpad/vtktest/*.log
-scratchpad/fttest/*.wasm
-scratchpad/fttest/*.js
-scratchpad/fttest/*.ttf
-scratchpad/fttest/*.err
 
 # === Python bytecode (stray .pyc files have been committed here before) ===
 __pycache__/

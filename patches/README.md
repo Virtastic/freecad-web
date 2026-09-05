@@ -94,7 +94,7 @@ cp pyside-pkg-glue/include-shiboken/sbkversion.h  deps/wasm/include/shiboken/sbk
 
 - **The rest of `deps/wasm/pyside-pkg/pivy/`** (`coin.py`, `coin.pyi`, `quarter/`,
   `interactive/`, …): copied from `build-pivy-wasm/pivy/` after building pivy
-  (see `pivy-pre.cmake` + the build in memory notes). Re-apply the glue
+  (see `configure-pivy-weh.sh`). Re-apply the glue
   `pivy/__init__.py` on top afterward.
 - **`deps/wasm/pyside-pkg/Arch_rc.py`** (14 MB Qt resource for Draft):
   ```bash

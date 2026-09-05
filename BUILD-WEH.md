@@ -254,13 +254,12 @@ bash configure-occt-weh.sh         # OCCT   (gates OCC_CONVERT_SIGNALS off, see 
 bash configure-vtk-weh.sh          # VTK
 bash configure-coin-weh.sh         # Coin3D
 bash deps-weh-lane2.sh             # yaml-cpp, etc.
-bash deps-weh-lane2b.sh
 bash configure-kiwisolver-weh.sh
 bash configure-matplotlib-weh.sh   # uses matplotlib-crossfile.meson
 bash configure-ifcopenshell-weh.sh
 bash rebuild-pyside-weh.sh         # shiboken6 + PySide6
 bash pyside-finish-weh.sh
-bash lane4-weh.sh; bash lane4b-weh.sh; bash lane5-weh.sh
+bash lane4-weh.sh; bash lane5-weh.sh
 ```
 
 Qt 6.11.2 is built from source into `qt/6.11.2/wasm_mt_weh` with

@@ -34,7 +34,7 @@ the origin stays private. CI reads it from the `ORIGIN_IP` repository variable, 
 ## Cut a deploy
 ```bash
 # 1. Build locally -> play-gui/FreeCAD.{js,wasm,data}   (see BUILD-WEH.md for the full lane)
-FC_SKIP_CONFIGURE=1 bash build-browser-gui.sh
+#    Normally CI (link-freecad.yml); for a manual lane follow BUILD-WEH.md.
 
 # 2. Publish the artifacts as a Release BEFORE pushing — CI pulls them by tag.
 #    ALL SEVEN, always: CI hard-fails on a missing asset, and gmsh/ccx are separate wasm

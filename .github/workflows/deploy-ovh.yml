@@ -7,7 +7,7 @@ name: deploy-ovh (freecad.virtastic.app)
 # (same pattern as openmw-wasm / ja2-web). Unlike openmw, FreeCAD is NOT compiled on the box — the
 # huge prebuilt artifacts (FreeCAD.js/.wasm/.data) are gitignored and pulled from a GitHub Release
 # published after a local build:
-#     FC_SKIP_CONFIGURE=1 bash build-browser-gui.sh
+#     (link-freecad.yml builds them; see BUILD-WEH.md "Releasing")
 #     gh release create build-YYYYMMDD play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data
 #
 # Prereqs on the box (one-time, shared with the other sites): the self-hosted runner, the shared
