@@ -135,6 +135,11 @@ def _owner_up(ctx, url, args, fail, extra=''):
     s1 = S(ctx, url, args.timeout)
     if not s1.load():
         fail('owner never reached Ready (%s)' % s1.phase())
+        print('==> [owner-boot] url %s' % s1.url)
+        print('==> [owner-boot] fatals: %r' % s1.fatals()[:3])
+        print('==> [owner-boot] last console: %r' % [c[:160] for c in s1.lines()[-12:]])
+        try: print('==> [owner-boot] title %r, body chars %d' % (s1.page.title(), len(s1.page.content())))
+        except Exception as e: print('==> [owner-boot] page unreachable: %s' % e)
         return None, None
     s1.run_python(MAKE_DOC_PY)
     if not _wait(s1, 'GATE_DOC ready', 120, 'console'):

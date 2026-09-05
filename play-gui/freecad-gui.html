@@ -1072,7 +1072,7 @@ window.fcwebNotify = function (text, kind, actions) {
   }
   // Wait for a file the interpreter writes: the only proof a py() call actually ran.
   async function pyConfirm(marker, ms) {
-    for (var i = 0; i < ms / 100; i++) { if (readText(marker) !== null) { unlink(marker); return true; } await new Promise(function (r) { setTimeout(r, 100); }); }
+    for (var i = 0; i < ms / 100; i++) { var t = readText(marker); if (t !== null) { unlink(marker); return t || '1'; } await new Promise(function (r) { setTimeout(r, 100); }); }
     return false;
   }
   function pyCall(expr) { return py('import fcweb_share as _fs\ntry: ' + expr + '\nexcept Exception as _e: import sys; sys.__stderr__.write("[fcweb] share: %r\\n" % (_e,))'); }
@@ -1316,9 +1316,10 @@ window.fcwebNotify = function (text, kind, actions) {
       var r = await fetch('/share/' + S.id, { headers: hdrs(), cache: 'no-store' });
       if (!r.ok) throw Object.assign(new Error('document HTTP ' + r.status), { code: 'http_' + r.status });
       var bytes = new Uint8Array(await r.arrayBuffer());
-      var name = safeName(meta.n || S.doc), path = '/home/web_user/' + name;
+      var name = safeName(meta.n || S.doc), path = '/home/web_user/.fcweb-v' + meta.v + '-' + name;
       try { fs().mkdirTree('/home/web_user'); } catch (e) {}
       fs().writeFile(path, bytes);
+      try { fs().writeFile('/home/web_user/' + name, bytes); } catch (e) {}   // the copy Download hands out
       var marker = '/tmp/_fcshare_applied_' + meta.v;
       unlink(marker);
       var ran = py([
@@ -1327,7 +1328,7 @@ window.fcwebNotify = function (text, kind, actions) {
         '_old = getattr(_App, "_fcweb_shared_doc", None)',
         'if _old and _old in _App.listDocuments():',
         '    try: _App.closeDocument(_old)',
-        '    except Exception: pass',
+        '    except Exception as _e: _s.__stderr__.write("[fcweb] share: close %s failed: %r\\n" % (_old, _e))',
         '_d = _App.openDocument(' + JSON.stringify(path) + ')',
         '_App._fcweb_shared_doc = _d.Name',
         '_fs.pin(_d.Name)',
@@ -1336,14 +1337,15 @@ window.fcwebNotify = function (text, kind, actions) {
         '    try: _Gui.ActiveDocument.ActiveView.setCamera(_cam)',
         '    except Exception: pass',
         '_s.__stderr__.write("[fcweb] share applied v' + meta.v + '\\n"); _s.__stderr__.flush()',
-        'open(' + JSON.stringify(marker) + ', "w").write("1")'
+        'open(' + JSON.stringify(marker) + ', "w").write("%s, %d objects" % (_d.Name, len(_d.Objects)))'
       ].join('\n'));
-      if (!ran || !(await pyConfirm(marker, 20000))) {
+      var opened = ran && await pyConfirm(marker, 20000);
+      if (!opened) {
         log('apply', 'v' + meta.v + ' downloaded but the interpreter did not confirm opening it' + (ran ? '' : ' (busy)') + ' -- retrying next tick', true);
         return;                                  // S.applied unchanged: the next poll retries
       }
       S.applied = meta.v; S.doc = meta.n || S.doc;
-      log('apply', 'applied v' + meta.v + ' (' + bytes.length + ' bytes)');
+      log('apply', 'applied v' + meta.v + ' (' + bytes.length + ' bytes; ' + opened + ')');
     } catch (e) { fail('apply', e, 'apply_fail'); }
     finally { applying = false; }
   }
