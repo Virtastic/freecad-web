@@ -296,6 +296,13 @@ emcmake cmake -S deps/src/freecad -B build-freecad-gui-weh -G Ninja \
   -DPython3_INCLUDE_DIR="$PYINC" \
   -DPython3_LIBRARY="$PYMT/libpython3.13.a" \
   -DPYTHON_VERSION_STRING=3.13 \
+  `# -DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=ON: src/Mod/Fem/App/CMakeLists.txt does` \
+  `# find_package(OpenMP 4.0) and links OpenMP::OpenMP_CXX when found. Under emsdk 6.0.9` \
+  `# and cmake 4.2 the probe now succeeds (clang accepts -fopenmp), so FemMesh.cpp's` \
+  `# #pragma omp loops compiled to calls into an OpenMP runtime emscripten does not have:` \
+  `#     wasm-ld: error: Fem.a(FemMesh.cpp.o): undefined symbol: __kmpc_fork_call` \
+  `# Without the package the pragmas are ignored, which is what the wasm32 build had.` \
+  -DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=ON \
   -DZLIB_INCLUDE_DIR="$SYSROOT/include" \
   -DZLIB_LIBRARY="$SYSROOT/lib/wasm64-emscripten/libz.a" \
   `# -include cstdlib: LLVM 20 libc++ no longer includes <cstdlib> through <string>, <stdexcept>` \

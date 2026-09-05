@@ -146,10 +146,23 @@ AR="$ROOT/emsdk/upstream/bin/llvm-ar"
 # change to its own inputs. Deriving both from this variable makes that drift impossible.
 PYSIDE_MODULES="Core;Gui;Widgets;Network;Svg"
 
+# Which libshiboken the cached tree holds. It was built with shiboken's own default,
+# FORCE_LIMITED_API=yes (Py_LIMITED_API=0x030a0000), for as long as this script has
+# existed -- the =no below was only ever passed to the PySide configure. PySide 6.11.2
+# declares the limited-API buffer shims with C++ linkage on its own Pep_buffer struct,
+# and the link then wanted a PyObject_GetBuffer(_object*, Pep_buffer*, int) nothing
+# defines. A cached libshiboken carries PyInit for every module and would skip the
+# rebuild that fixes it, so the skip also requires this stamp.
+SHIBOKEN_STAMP="$ROOT/deps/wasm/shiboken6/.fcweb-shiboken-config"
+SHIBOKEN_CONFIG="limited-api=no"
 SKIP_BUILD=""
 missing=""
 if [ -n "$NM" ] && [ "$FCWEB_PYSIDE_REBUILD" != "1" ]; then
   SKIP_BUILD=1
+  if [ "$(cat "$SHIBOKEN_STAMP" 2>/dev/null)" != "$SHIBOKEN_CONFIG" ]; then
+    missing="$missing libshiboken($SHIBOKEN_CONFIG)"
+    SKIP_BUILD=""
+  fi
   for m in ${PYSIDE_MODULES//;/ }; do
     a="$ROOT/build-pyside-wasm/PySide6/Qt$m/Qt$m.abi3.a"
     if [ ! -s "$a" ] || ! "$NM" "$a" 2>/dev/null | grep -q "PyInit_Qt$m"; then
@@ -181,9 +194,19 @@ cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja
   -DPython_LIBRARY="$CPY/builddir/emscripten-mt/libpython3.13.a" -DPython_SOABI=cpython-313-wasm64-emscripten \
   `# See the QFP_NO_STRIP comment on the PySide configure below. Same reason here.` \
   -DQFP_NO_STRIP=ON -DCMAKE_STRIP=/usr/bin/true \
+  `# No limited API for libshiboken either. shiboken defaults FORCE_LIMITED_API to yes,` \
+  `# and only the PySide configure below ever said no -- so libshiboken carried the` \
+  `# Py_LIMITED_API=0x030a0000 stand-ins (the symbol-hijack class check-symbol-hijack.py` \
+  `# guards against) while PySide did not. At 6.11.2 those stand-ins are declared with` \
+  `# C++ linkage on a distinct Pep_buffer, and the link died on them. With the full API` \
+  `# there are no stand-ins at all: shiboken calls CPython, the same CPython everything` \
+  `# else in the monolith links. One Python, one API surface, no hijack to guard.` \
+  -DFORCE_LIMITED_API=no \
   -DCMAKE_INSTALL_PREFIX="$ROOT/deps/wasm/shiboken6" \
   -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions"
 ninja -C build-shiboken-wasm install
+mkdir -p "$ROOT/deps/wasm/shiboken6"
+echo "$SHIBOKEN_CONFIG" > "$SHIBOKEN_STAMP"
 
 # QtCore lists wrappers for three classes Qt-for-wasm has not got -- QProcess (a browser has
 # no subprocesses), QSystemSemaphore, and QTimeZone::OffsetData -- so the generator writes

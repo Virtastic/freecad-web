@@ -397,6 +397,13 @@ jobs:
             -DICU_EM_SYSROOT="${{ steps.icu.outputs.sysroot }}" \
             `# Pinned like configure-gui-weh.sh does: FindZLIB finds the port headers on its` \
             `# own but not the library, and stops the configure with "missing: ZLIB_LIBRARY".` \
+            `# -DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=ON: src/Mod/Fem/App/CMakeLists.txt does` \
+            `# find_package(OpenMP 4.0) and links OpenMP::OpenMP_CXX when found. Under emsdk 6.0.9` \
+            `# and cmake 4.2 the probe now succeeds (clang accepts -fopenmp), so FemMesh.cpp's` \
+            `# #pragma omp loops compiled to calls into an OpenMP runtime emscripten does not have:` \
+            `#     wasm-ld: error: Fem.a(FemMesh.cpp.o): undefined symbol: __kmpc_fork_call` \
+            `# Without the package the pragmas are ignored, which is what the wasm32 build had.` \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=ON \
             -DZLIB_INCLUDE_DIR="${{ steps.icu.outputs.sysroot }}/include" \
             -DZLIB_LIBRARY="${{ steps.icu.outputs.sysroot }}/lib/wasm64-emscripten/libz.a" \
             -DBoost_USE_STATIC_LIBS=ON -DBoost_USE_STATIC_RUNTIME=ON \
