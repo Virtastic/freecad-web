@@ -560,6 +560,8 @@ def apply(text, _passes=3, counting=True):
     if not counting:
         return text, st
     for name, old, new in COUNTING_PATCHES:
+        if 'growMemViews()' in text:
+            old, new = emsdk6_count(name, old, new)
         if new in text:
             st.append((name, 'already applied'))
         elif text.count(old) == 1:
@@ -695,6 +697,10 @@ def check_postconditions(text):
         n = text.count(t)
         if n:
             bad.append((t, 'Coin calls this; a throw here kills the viewport', n))
+        a = emsdk6(t)
+        n = text.count(a)
+        if n:
+            bad.append((a, 'Coin calls this; an abort here kills the whole program', n))
     if '__flushMerged' not in text:
         bad.append(('immediate-mode line batching', 'absent -- the heavy-scene draw-call reduction is not in this build', 1))
     # Every vertex writer must reserve headroom before it stores. A missing guard is not
@@ -853,6 +859,147 @@ def _to_wasm64(lit):
                   lambda m: '/%s%s' % (_SHIFT_DIV[m.group(1)], m.group(2)), lit)
 
 
+
+# ---- emsdk 6.0.9 ------------------------------------------------------------------------
+#
+# Measured on the first wasm64 FreeCAD.js this project ever linked (run 33961285555,
+# emsdk 6.0.9, -m64 -pthread with ALLOW_MEMORY_GROWTH). Five things differ from the
+# 3.1.70 glue the table was written against, and only the last needs hand-written text:
+#
+#   1. Every GL entry point is defined as _emscripten_glX and then aliased:
+#          var _emscripten_glBegin=mode=>{...};var _glBegin=_emscripten_glBegin;
+#      so an anchor on a definition head `var _glX=(...)=>{` must read `var _emscripten_glX=`.
+#      The alias line is NOT a head (it is followed by an identifier), and is left alone.
+#   2. With memory growth and pthreads the heap views are re-fetched at every access:
+#          HEAPF32[param+12>>2]   ->   (growMemViews(),HEAPF32)[(param+12)/4]
+#      -- the growable accessor of old is gone, the index is a division (wasm64), and an
+#      index EXPRESSION is parenthesised. No HEAPU64[ appears in this glue at all (the views
+#      come through growMemViews), which is why growMemViews() is the detection tell.
+#   3. Unimplemented fixed-function corners abort instead of throwing:
+#          throw"glTexGeni: TODO"   ->   abort("glTexGeni: TODO")
+#      Same consequence for Coin -- worse, in fact: abort() takes the whole program, not
+#      just the viewport -- so those nine sites still become no-ops and the postconditions
+#      count the abort form too.
+#   4. A pointer parameter turns the arrow into a function with a coercion prologue:
+#          function _emscripten_glDrawElements(mode,count,type,indices,start,end){
+#              indices=bigintToI53Checked(indices);...
+#      (the same shape the growable form had, with a different coercion).
+#   5. Five sites moved around the anchor: glMaterialfv is now followed by glMatrixMode
+#      rather than by its own alias, glColor3f is defined after the glColor4f alias, the
+#      GLImmediate.init() callback is followed by hoisted declarations, the index upload
+#      goes through webglBufferSubData(byteSize,ptr), and numIndexes is tested for truth.
+#
+# 1-4 are one mechanical derivation, checked by the selftest against strings copied from
+# that glue. 5 is a table of fixups by patch name, and one full override.
+_EMSDK6_HEAP_IDX = re.compile(r'HEAP(F32|F64|U8|U16|U32|8|16|32)\[([^\[\]]*?)(?:>>([123]))?\]')
+
+
+def _emsdk6_heap(m):
+    heap, expr, shift = m.group(1), m.group(2), m.group(3)
+    if shift:
+        if re.search(r'[+\-*]', expr):
+            expr = '(%s)' % expr
+        expr = expr + '/' + _SHIFT_DIV[shift]
+    return '(growMemViews(),HEAP%s)[%s]' % (heap, expr)
+
+
+def emsdk6(s):
+    """The same literal, as the emsdk 6.0.9 glue writes it (rules 1-4 above)."""
+    s = re.sub(r'var (_gl\w+)=(?=\(|[A-Za-z_$][\w$]*=>)', r'var _emscripten\1=', s)
+    s = _EMSDK6_HEAP_IDX.sub(_emsdk6_heap, s)
+    s = s.replace('HEAPF32.subarray(', '(growMemViews(),HEAPF32).subarray(')
+    s = re.sub(r'throw"(gl[^"]*)"(\+\w+)?',
+               lambda m: 'abort("%s"%s)' % (m.group(1), m.group(2) or ''), s)
+    return s
+
+
+# Rule 5: applied to the derived old/new/marker of the named patch, in order.
+_EMSDK6_FIXUPS = {
+    'getWasmTableEntry null-function guard': [
+        ('wasmTable.get(funcPtr)', 'wasmTable.get(BigInt(funcPtr))')],
+    'glColor drives material colour': [
+        (';var _glColor3f=', ';var _glColor4f=_emscripten_glColor4f;var _emscripten_glColor3f=')],
+    'glMaterialfv: EMISSION and AMBIENT_AND_DIFFUSE': [
+        ('}};var _emscripten_glMaterialfv=', '}}var _emscripten_glMatrixMode=')],
+    'init immediate mode on context switch (FCWEBMCC)': [
+        ('GLEmulation.init();for(var i=0;i<32;++i)', 'var _emscripten_glDrawArrays;')],
+    'line batching drain: glDrawElements': [
+        ('var _emscripten_glDrawElements=(mode,count,type,indices,start,end)=>{',
+         'function _emscripten_glDrawElements(mode,count,type,indices,start,end){'
+         'indices=bigintToI53Checked(indices);')],
+    'flush draws with the recorded index type': [
+        ('if(numIndexes>0){', 'if(numIndexes){')],
+}
+# The upload site changed shape entirely: the byte count is a variable and the copy goes
+# through webglBufferSubData(target,offset,byteSize,ptr), which copies raw heap bytes --
+# so a 32-bit index buffer needs only the doubled byte count, no second typed view.
+_EMSDK6_OVERRIDES = {
+    'flush uploads 32-bit client indices as 32-bit': (
+        'var byteSize=numProvidedIndexes<<1;var indexBuffer=GL.getTempIndexBuffer(byteSize);'
+        'GLctx.bindBuffer(GLctx.ELEMENT_ARRAY_BUFFER,indexBuffer);'
+        'webglBufferSubData(GLctx.ELEMENT_ARRAY_BUFFER,0,byteSize,ptr);',
+        'var __u32b=GLImmediate.__idxType===5125;'
+        'var byteSize=numProvidedIndexes<<(__u32b?2:1);var indexBuffer=GL.getTempIndexBuffer(byteSize);'
+        'GLctx.bindBuffer(GLctx.ELEMENT_ARRAY_BUFFER,indexBuffer);'
+        'webglBufferSubData(GLctx.ELEMENT_ARRAY_BUFFER,0,byteSize,ptr);'),
+}
+# The lenient counters, at the two sites whose 6.0.9 shape the derivation cannot reach
+# (a function with a coercion prologue; an arrow whose whole body is the call).
+_EMSDK6_COUNT_OVERRIDES = {
+    'count glTexGenfv': (
+        'function _emscripten_glTexGenfv(coord,pname,param){param=bigintToI53Checked(param);return 0}',
+        'function _emscripten_glTexGenfv(coord,pname,param){param=bigintToI53Checked(param);return %s}' % _count('glTexGenfv')),
+    'count glTexGeni': (
+        'var _emscripten_glTexGeni=(coord,pname,param)=>0;',
+        'var _emscripten_glTexGeni=(coord,pname,param)=>%s;' % _count('glTexGeni')),
+}
+
+
+def emsdk6_entry(entry):
+    """(old, new, marker) for one table entry, as the 6.0.9 glue has them."""
+    name = entry[0]
+    if name in _EMSDK6_OVERRIDES:
+        o = _EMSDK6_OVERRIDES[name]
+        return o[0], o[1], (o[2] if len(o) > 2 else o[1])
+    old, new = emsdk6(entry[1]), emsdk6(entry[2])
+    marker = emsdk6(entry[3]) if len(entry) > 3 else new
+    for a, b in _EMSDK6_FIXUPS.get(name, ()):
+        old, new, marker = old.replace(a, b), new.replace(a, b), marker.replace(a, b)
+    return old, new, marker
+
+
+def emsdk6_count(name, old, new):
+    if name in _EMSDK6_COUNT_OVERRIDES:
+        return _EMSDK6_COUNT_OVERRIDES[name]
+    return emsdk6(old), emsdk6(new)
+
+
+def _selftest_emsdk6():
+    # Derivations pinned to strings copied from the first wasm64 FreeCAD.js.
+    assert emsdk6('GLEmulation.materialShininess[0]=HEAPF32[param>>2]}else{throw"glMaterialfv: TODO: "+pname}') == \
+        'GLEmulation.materialShininess[0]=(growMemViews(),HEAPF32)[param/4]}else{abort("glMaterialfv: TODO: "+pname)}'
+    assert emsdk6('var currIndex=HEAPU16[ptr+i*2>>1];') == 'var currIndex=(growMemViews(),HEAPU16)[(ptr+i*2)/2];'
+    assert emsdk6('odelAmbient[3]=HEAPF32[param+12>>2]}') == 'odelAmbient[3]=(growMemViews(),HEAPF32)[(param+12)/4]}'
+    assert emsdk6('var _glEnd=()=>{GLImmediate.') == 'var _emscripten_glEnd=()=>{GLImmediate.'
+    assert emsdk6('var _glEnableClientState=cap=>{') == 'var _emscripten_glEnableClientState=cap=>{'
+    assert emsdk6('var _glColor4f=_emscripten_glColor4f;') == 'var _glColor4f=_emscripten_glColor4f;'
+    assert emsdk6('throw"glTexCoord3f: TODO"') == 'abort("glTexCoord3f: TODO")'
+    assert emsdk6('GLImmediate.vertexCounter/(GLImmediate.stride>>2)') == 'GLImmediate.vertexCounter/(GLImmediate.stride>>2)'
+    assert emsdk6_entry([e for e in PATCHES if e[0] == 'init immediate mode on context switch (FCWEBMCC)'][0])[0] == \
+        'GLImmediate.init());var _emscripten_glDrawArrays;'
+    # Every entry, in its 6.0.9 form, applies and is idempotent -- the same fixture the
+    # legacy form gets, built from the table itself.
+    src6 = 'growMemViews()' + ''.join(emsdk6_entry(e)[0] for e in PATCHES)
+    out6, st6 = apply(src6, counting=False)
+    bad6 = [(n, s) for n, s in st6 if s == 'NOT FOUND']
+    assert not bad6, ('emsdk6 form not matched: %r' % bad6)
+    assert all('emsdk6 form' in s or s == 'already applied' for _, s in st6), st6
+    assert apply(out6, counting=False)[0] == out6, 'emsdk6 form not idempotent'
+    # No postcondition count on this fixture: concatenating every anchor makes one vertex
+    # writer appear twice, exactly as the legacy fixture does. The real artifact is checked
+    # by --check in link-freecad.yml, and did pass: 1/6/1/3 on run 33961285555's glue.
+
+
 def _growable_replacement(new_lit, prologue):
     """The replacement, written the way a growable build writes it."""
     s = growable(new_lit)
@@ -879,6 +1026,8 @@ def _apply_once(text):
     # a BigInt and BigInt will not take >> with a Number operand. HEAPU64 is the cleanest
     # tell: 5 occurrences at wasm64, 0 at wasm32, growable or not.
     is_wasm64 = 'HEAPU64[' in text
+    # emsdk 6.0.9 re-fetches the heap views through growMemViews(); see emsdk6().
+    is_emsdk6 = 'growMemViews()' in text
     for entry in PATCHES:
         name, old, new = entry[0], entry[1], entry[2]
         # a 4th field is the text that proves the fix is in effect, for when a
@@ -886,6 +1035,17 @@ def _apply_once(text):
         marker = entry[3] if len(entry) > 3 else new
         if is_growable and old not in text:
             old, new, marker = growable(old), growable(new), growable(marker)
+        if is_emsdk6:
+            o6, n6, m6 = emsdk6_entry(entry)
+            if o6 in text:
+                text = text.replace(o6, n6, 1)
+                status.append((name, 'applied (emsdk6 form)'))
+                continue
+            # A one-character marker (the no-op `0`) proves nothing; leave those to the
+            # legacy arm below and to the postconditions, which count the abort forms.
+            if o6 != old and len(m6) > 1 and m6 in text:
+                status.append((name, 'already applied (emsdk6 form)'))
+                continue
         # Check for the UNPATCHED site first. Testing "is the replacement present"
         # first would misfire for short replacements -- "0;" occurs throughout
         # minified JS -- and silently skip a patch that was never applied.
@@ -981,6 +1141,7 @@ def main():
 
 
 def selftest():
+    _selftest_emsdk6()
     # Fixture is built from the patch table itself, so it cannot go stale as patches
     # are added. Each OLD string must be found and replaced exactly once.
     src = ''.join(e[1] for e in PATCHES)

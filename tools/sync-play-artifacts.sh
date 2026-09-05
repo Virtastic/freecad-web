@@ -17,11 +17,14 @@ BIN="$ROOT/build-freecad-gui-weh/bin"
 # budget, and guessing a new value before a single wasm64 link has been measured would
 # either mask the failure it exists to catch or fail a good build. RE-BASELINE IT from the
 # first green wasm64 link: set it a little above the real size, not to a round number.
+# MEASURED on that link (run 33961285555): FreeCAD.wasm is 196,115,387 bytes after
+# wasm-opt, so the ceiling is now 202,000,000 -- 3% above it, and still far below the
+# ~300 MB an un-optimised wasm64 link would weigh.
 # A correct link lands near 152 MB. 234 MB means wasm-opt did not run (or was killed
 # mid-link, which leaves the un-optimized intermediate sitting in bin/ looking finished).
 # Shipping that is a silent, large performance regression -- refuse it here.
 sz=$(stat -f %z "$BIN/FreeCAD.wasm" 2>/dev/null || stat -c %s "$BIN/FreeCAD.wasm")
-if [ "$sz" -gt 200000000 ]; then
+if [ "$sz" -gt 202000000 ]; then
   echo "FreeCAD.wasm is ${sz} bytes -- that is the pre-wasm-opt size. Re-run the link." >&2
   exit 1
 fi
