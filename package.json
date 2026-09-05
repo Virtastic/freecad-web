@@ -24,6 +24,6 @@
   },
   "homepage": "https://github.com/Virtastic/freecad-web#readme",
   "dependencies": {
-    "puppeteer-core": "^23.11.1"
+    "puppeteer-core": "^25.10.0"
   }
 }
