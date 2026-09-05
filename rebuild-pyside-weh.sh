@@ -164,7 +164,7 @@ if [ -n "$NM" ] && [ "$FCWEB_PYSIDE_REBUILD" != "1" ]; then
     SKIP_BUILD=""
   fi
   for m in ${PYSIDE_MODULES//;/ }; do
-    a="$ROOT/build-pyside-wasm/PySide6/Qt$m/Qt$m.abi3.a"
+    a="$ROOT/build-pyside-wasm/PySide6/Qt$m/Qt$m.cpython-313-wasm64-emscripten.a"
     if [ ! -s "$a" ] || ! "$NM" "$a" 2>/dev/null | grep -q "PyInit_Qt$m"; then
       missing="$missing Qt$m"
       SKIP_BUILD=""
@@ -181,6 +181,10 @@ fi
 if [ -z "$SKIP_BUILD" ]; then
 echo "=== SHIBOKEN (lib) ==="
 rm -rf build-shiboken-wasm
+# The install prefix too: a rebuild that changes the archive suffix (limited API on
+# vs off) leaves the old archives beside the new ones, and every check keyed on a
+# name then passes on the stale file. Seen after the switch to FORCE_LIMITED_API=no.
+rm -rf "$ROOT/deps/wasm/shiboken6"
 cmake -S deps/src/pyside-setup/sources/shiboken6 -B build-shiboken-wasm -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$TC" -DCMAKE_CROSSCOMPILING_EMULATOR="$NODE" \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
@@ -250,7 +254,7 @@ cmake -S deps/src/pyside-setup/sources/pyside6 -B build-pyside-wasm -G Ninja \
   `#     CMAKE_STRIP AND UNIX AND NOT APPLE AND NOT QFP_NO_STRIP AND NOT Debug` \
   `# (ShibokenHelpers.cmake:89). On this Linux runner CMAKE_STRIP is emstrip, which drops` \
   `# the symbol table outright: every archive member came back from llvm-nm as` \
-  `#     QtCore.abi3.a:qabstractanimation_wrapper.cpp.o: no symbols` \
+  `#     QtCore.cpython-313-wasm64-emscripten.a:qabstractanimation_wrapper.cpp.o: no symbols` \
   `# and PyInit_QtCore -- which MainGui.cpp puts in the inittab -- was simply gone from a` \
   `# build that had otherwise linked 694/694 cleanly. The guard is NOT APPLE, so this` \
   `# never fired on the macOS build machine the port was written on. BUILD-WEH.md already` \
@@ -316,16 +320,16 @@ check_mod() {   # <archive> <expected PyInit symbol>
 }
 # Every module in PYSIDE_MODULES, not the three this loop was written with. QtNetwork and
 # QtSvg were built, listed on the link line, and never once verified here -- so the link
-# was the first thing to notice that QtSvg.abi3.a carried no PyInit_QtSvg, two hours in.
+# was the first thing to notice that QtSvg.cpython-313-wasm64-emscripten.a carried no PyInit_QtSvg, two hours in.
 # That is the third hardcoded copy of this list to drift; there is now one list.
 for m in ${PYSIDE_MODULES//;/ }; do
-    check_mod "$ROOT/build-pyside-wasm/PySide6/Qt$m/Qt$m.abi3.a" "PyInit_Qt$m"
+    check_mod "$ROOT/build-pyside-wasm/PySide6/Qt$m/Qt$m.cpython-313-wasm64-emscripten.a" "PyInit_Qt$m"
 done
 # libpyside6 and libshiboken6 carry no PyInit_ of their own -- Shiboken's module init comes
 # from shibokenmodule's object file, which the link names directly -- so existence is all
 # there is to check for these two.
-for a in "$ROOT/build-pyside-wasm/libpyside/libpyside6.abi3.a" \
-         "$ROOT/deps/wasm/shiboken6/lib/libshiboken6.abi3.a"; do
+for a in "$ROOT/build-pyside-wasm/libpyside/libpyside6.cpython-313-wasm64-emscripten.a" \
+         "$ROOT/deps/wasm/shiboken6/lib/libshiboken6.cpython-313-wasm64-emscripten.a"; do
     if [ -s "$a" ]; then echo "  ok       ${a#$ROOT/}"
     else echo "  MISSING  ${a#$ROOT/}"; pyside_missing=1; fi
 done

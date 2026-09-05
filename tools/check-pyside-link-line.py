@@ -7,7 +7,7 @@
 Cross-checks three places that have to agree about which PySide6 modules this build has:
 
   * patches/freecad.patch  -- PyImport_AppendInittab("Qt<M>_fcweb", PyInit_Qt<M>)
-  * configure-gui-weh.sh   -- PySide6/Qt<M>/Qt<M>.abi3.a on the link line
+  * configure-gui-weh.sh   -- PySide6/Qt<M>/Qt<M>.cpython-313-wasm64-emscripten.a on the link line
   * rebuild-pyside-weh.sh  -- -DMODULES="...;Qt<M> without the Qt prefix..."
 
 WHY
@@ -51,7 +51,7 @@ def main():
               'stopped registering the bindings?' % PATCH)
         return 1
 
-    linked_in = {f: set(re.findall(r'PySide6/(Qt\w+)/Qt\w+\.abi3\.a', text))
+    linked_in = {f: set(re.findall(r'PySide6/(Qt\w+)/Qt\w+\.cpython-313-wasm64-emscripten\.a', text))
                  for f, text in line_files.items()}
     linked = set.intersection(*linked_in.values()) if linked_in else set()
     built = set()

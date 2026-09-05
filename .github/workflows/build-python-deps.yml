@@ -631,12 +631,12 @@ jobs:
           # installed anywhere -- so the gate has to look there too. QtCore/QtGui/QtWidgets
           # each carry a PyInit_ that MainGui.cpp puts in the inittab; rebuild-pyside-weh.sh
           # checks those symbols, this only confirms the files survived to the end of the job.
-          need build-pyside-wasm/PySide6/QtCore/QtCore.abi3.a       "PySide6 QtCore"
-          need build-pyside-wasm/PySide6/QtGui/QtGui.abi3.a         "PySide6 QtGui"
-          need build-pyside-wasm/PySide6/QtWidgets/QtWidgets.abi3.a "PySide6 QtWidgets"
-          need build-pyside-wasm/PySide6/QtNetwork/QtNetwork.abi3.a "PySide6 QtNetwork"
-          need build-pyside-wasm/libpyside/libpyside6.abi3.a        "libpyside6"
-          need deps/wasm/shiboken6/lib/libshiboken6.abi3.a          "libshiboken6"
+          need build-pyside-wasm/PySide6/QtCore/QtCore.cpython-313-wasm64-emscripten.a       "PySide6 QtCore"
+          need build-pyside-wasm/PySide6/QtGui/QtGui.cpython-313-wasm64-emscripten.a         "PySide6 QtGui"
+          need build-pyside-wasm/PySide6/QtWidgets/QtWidgets.cpython-313-wasm64-emscripten.a "PySide6 QtWidgets"
+          need build-pyside-wasm/PySide6/QtNetwork/QtNetwork.cpython-313-wasm64-emscripten.a "PySide6 QtNetwork"
+          need build-pyside-wasm/libpyside/libpyside6.cpython-313-wasm64-emscripten.a        "libpyside6"
+          need deps/wasm/shiboken6/lib/libshiboken6.cpython-313-wasm64-emscripten.a          "libshiboken6"
           n=$(ls -1 deps/wasm/lib/mpl-mod/*.a 2>/dev/null | wc -l | tr -d ' ')
           if [ "$n" -ge 8 ]; then echo "  ok       matplotlib ($n archives)"
           else echo "::error::matplotlib has $n archives, expected at least 8"; fail=1; fi
