@@ -40,6 +40,10 @@ on:
       # watching it meant a patch fix triggered only the COMPILE check and never a relink
       # -- the artifact would stay stale while CI went green.
       - 'patches/freecad.patch'
+      # apply.sh applies this one to the pyside-setup tree the Python-lane cache restores,
+      # and refuses a tree stamped with a different version of it -- so a change to the
+      # patch must re-run the link, or a rerun on an older commit fails at that refusal.
+      - 'patches/pyside-setup.patch'
       - 'patches/apply.sh'
       - 'toolchain/**'
       - 'tools/patch-freecad-js.py'
