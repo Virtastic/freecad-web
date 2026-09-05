@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Copyright (c) Virtastic -->
+<!-- The "Sharing" preferences page. Every value-bearing widget is a Gui::Pref* widget bound
+     to User parameter:BaseApp/Preferences/FCWeb/Sharing, so FreeCAD's own preference
+     machinery loads and saves it: this file has no code-behind. fcweb_share.tick() moves
+     the passwords OUT of the parameter tree the moment they are saved, because user.cfg
+     is a file the session publishes. -->
+<ui version="4.0">
+ <class>FcwebSharing</class>
+ <widget class="QWidget" name="FcwebSharing">
+  <property name="windowTitle"><string>Sharing</string></property>
+  <layout class="QVBoxLayout" name="outer">
+   <item>
+    <widget class="QGroupBox" name="gbShare">
+     <property name="title"><string>Share this session</string></property>
+     <layout class="QFormLayout" name="fShare">
+      <item row="0" column="0"><widget class="QLabel" name="lName"><property name="text"><string>Your name</string></property></widget></item>
+      <item row="0" column="1">
+       <widget class="Gui::PrefLineEdit" name="leName">
+        <property name="placeholderText"><string>Shown to others as “… is editing”</string></property>
+        <property name="prefEntry"><cstring>DisplayName</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="Gui::PrefCheckBox" name="cbEnabled">
+        <property name="text"><string>Share the active document as a live link</string></property>
+        <property name="prefEntry"><cstring>Enabled</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="2" column="0"><widget class="QLabel" name="lDoc"><property name="text"><string>Shared document</string></property></widget></item>
+      <item row="2" column="1">
+       <widget class="Gui::PrefLineEdit" name="leDoc">
+        <property name="readOnly"><bool>true</bool></property>
+        <property name="prefEntry"><cstring>PinnedDocument</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="3" column="0"><widget class="QLabel" name="lLink"><property name="text"><string>Share link</string></property></widget></item>
+      <item row="3" column="1">
+       <widget class="Gui::PrefLineEdit" name="leLink">
+        <property name="readOnly"><bool>true</bool></property>
+        <property name="placeholderText"><string>Appears here once sharing is on — select and copy</string></property>
+        <property name="prefEntry"><cstring>ShareLink</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="4" column="0"><widget class="QLabel" name="lEditor"><property name="text"><string>Current editor</string></property></widget></item>
+      <item row="4" column="1">
+       <widget class="Gui::PrefLineEdit" name="leEditor">
+        <property name="readOnly"><bool>true</bool></property>
+        <property name="prefEntry"><cstring>CurrentEditor</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
+       <widget class="Gui::PrefCheckBox" name="cbEnv">
+        <property name="text"><string>Include my settings, add-ons and macros (so it opens exactly as it does here)</string></property>
+        <property name="checked"><bool>true</bool></property>
+        <property name="prefEntry"><cstring>IncludeEnv</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="gbAccess">
+     <property name="title"><string>Who can open it</string></property>
+     <layout class="QFormLayout" name="fAccess">
+      <item row="0" column="0"><widget class="QLabel" name="lVpw"><property name="text"><string>Viewer password</string></property></widget></item>
+      <item row="0" column="1">
+       <widget class="Gui::PrefLineEdit" name="leViewerPw">
+        <property name="echoMode"><enum>QLineEdit::Password</enum></property>
+        <property name="placeholderText"><string>Blank: anyone with the link can view</string></property>
+        <property name="prefEntry"><cstring>ViewerPassword</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="1" column="0"><widget class="QLabel" name="lEpw"><property name="text"><string>Editor password</string></property></widget></item>
+      <item row="1" column="1">
+       <widget class="Gui::PrefLineEdit" name="leEditorPw">
+        <property name="echoMode"><enum>QLineEdit::Password</enum></property>
+        <property name="placeholderText"><string>Blank: nobody else can edit (view only)</string></property>
+        <property name="prefEntry"><cstring>EditorPassword</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="2" column="0"><widget class="QLabel" name="lExp"><property name="text"><string>Link expires</string></property></widget></item>
+      <item row="2" column="1">
+       <widget class="Gui::PrefComboBox" name="cbExpiry">
+        <property name="prefEntry"><cstring>ExpiryDays</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+        <item><property name="text"><string>Never (until I stop sharing)</string></property></item>
+        <item><property name="text"><string>After 7 days</string></property></item>
+        <item><property name="text"><string>After 30 days</string></property></item>
+        <item><property name="text"><string>After 90 days</string></property></item>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="gbMcp">
+     <property name="title"><string>AI assistant (MCP)</string></property>
+     <layout class="QFormLayout" name="fMcp">
+      <item row="0" column="0" colspan="2">
+       <widget class="Gui::PrefCheckBox" name="cbAgent">
+        <property name="text"><string>Allow an AI assistant to see and control this session</string></property>
+        <property name="prefEntry"><cstring>AllowAgent</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="1" column="0"><widget class="QLabel" name="lUrl"><property name="text"><string>MCP link</string></property></widget></item>
+      <item row="1" column="1">
+       <widget class="Gui::PrefLineEdit" name="leAgentUrl">
+        <property name="readOnly"><bool>true</bool></property>
+        <property name="placeholderText"><string>Paste this one link into your AI client — it is the whole setup</string></property>
+        <property name="prefEntry"><cstring>AgentUrl</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="Gui::PrefCheckBox" name="cbRegen">
+        <property name="text"><string>Make a new MCP link when I click OK (the old one stops working)</string></property>
+        <property name="prefEntry"><cstring>RegenerateAgent</cstring></property>
+        <property name="prefPath"><cstring>FCWeb/Sharing</cstring></property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QLabel" name="lNote">
+        <property name="wordWrap"><bool>true</bool></property>
+        <property name="text"><string>The assistant works inside this browser tab, sees what you see, and can edit whenever you hold control. Anyone with the MCP link can do the same — treat it like a password.</string></property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="vs"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget><class>Gui::PrefCheckBox</class><extends>QCheckBox</extends><header>Gui/PrefWidgets.h</header></customwidget>
+  <customwidget><class>Gui::PrefComboBox</class><extends>QComboBox</extends><header>Gui/PrefWidgets.h</header></customwidget>
+  <customwidget><class>Gui::PrefLineEdit</class><extends>QLineEdit</extends><header>Gui/PrefWidgets.h</header></customwidget>
+ </customwidgets>
+</ui>

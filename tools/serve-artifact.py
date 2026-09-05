@@ -17,6 +17,7 @@ runs in CI, so the server it depends on cannot live in an ignored directory.
 import functools
 import http.server
 import os
+import tempfile
 import socketserver
 import sys
 
@@ -76,9 +77,54 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # Stand in for nginx's /share/, /api/ and /mcp/ too, so the boot gate exercises the
+    # REAL session protocol same-origin rather than a mock. Same rationale as PROXY_HOSTS:
+    # if this and infra/nginx.conf ever disagree, the gate passes against a server
+    # production does not have. Optional: without infra/session/share.py the paths 404,
+    # which is also how an origin without the container behaves.
+    def _serve_session(self, method):
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location(
+            'fcweb_share_core', os.path.join(here, '..', 'infra', 'session', 'share.py'))
+        if spec is None or not os.path.exists(spec.origin):
+            self.send_response(404); self.end_headers(); return
+        core = sys.modules.get('fcweb_share_core')
+        if core is None:
+            core = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(core)
+            sys.modules['fcweb_share_core'] = core
+            core.CFG.update(core._cfg())
+            core.CFG['dir'] = os.environ.get('FCWEB_SHARE_DIR') or tempfile.mkdtemp(prefix='fcweb-share-')
+            os.makedirs(core.CFG['dir'], exist_ok=True)
+        n = int(self.headers.get('Content-Length') or 0)
+        body = self.rfile.read(n) if n else b''
+        st, h, b = core.handle(method, self.path, dict(self.headers), body)
+        self.send_response(st)
+        for k, v in h.items():
+            self.send_header(k, v)
+        self.send_header('Content-Length', str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def _is_session(self):
+        return self.path.startswith(('/share/', '/api/', '/mcp/'))
+
+    def do_PUT(self):
+        if self._is_session():
+            return self._serve_session('PUT')
+        self.send_response(405); self.end_headers()
+
+    def do_DELETE(self):
+        if self._is_session():
+            return self._serve_session('DELETE')
+        self.send_response(405); self.end_headers()
+
     def do_GET(self):
         if self.path.startswith('/proxy/'):
             return self._serve_proxy(self.path.split('?')[0])
+        if self._is_session():
+            return self._serve_session('GET')
         return super().do_GET()
 
     def send_head(self):
@@ -91,6 +137,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-Encoding', 'gzip')
 
     def do_POST(self):
+        if self._is_session():
+            return self._serve_session('POST')
         # The shell beacons anonymous counters to /t. Answering 204 keeps a harmless
         # telemetry call from showing up as a red 501 in a gate log, where every error
         # line costs someone time to rule out.

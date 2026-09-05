@@ -669,7 +669,7 @@ window.fcwebNotify = function (text, kind, actions) {
 // stops the browser evicting a user's documents when the disk gets tight, so making the
 // app installable is a data-safety feature before it is a convenience.
 (function () {
-  if ('serviceWorker' in navigator) {
+  if ('serviceWorker' in navigator && !/[?&]s=[0-9a-f]{32}/.test(location.search)) {   // not in session mode
     window.addEventListener('load', function () {
       navigator.serviceWorker.register('/sw.js').then(function (r) {
         console.log('[fcweb] service worker registered, scope ' + r.scope);
@@ -1000,6 +1000,626 @@ window.fcwebNotify = function (text, kind, actions) {
       }).catch(function () {});
     }, 60000);
   });
+})();
+</script>
+<script>
+/* FCWEB shared sessions -- the page half.
+   Protocol: infra/session/share.py. FreeCAD half: play-gui/am/fcweb_share.py.
+
+   Two modes. NORMAL: the owner's own IDBFS home; this block publishes the pinned document
+   and the environment and holds the admin key. SESSION (?s=<id>): before qtLoad runs, the
+   pre-boot below joins, fetches the environment bundle, asks consent for add-ons, fetches
+   and unpacks them, and hands init() a Map of files to write in preRun. The visitor's own
+   home is never mounted (tools/patch-freecad-js.py: the pre-js reads Module.fcwebSessionMode).
+
+   Everything that talks to FreeCAD goes through window.__fcRunPyGuarded (never re-enters
+   CPython while a call is suspended) and files under /tmp (MEMFS, never persisted). Every
+   failure reaches the user as a toast carrying the server's hint; nothing is swallowed. */
+(function () {
+  'use strict';
+  var TICK = 3000, LIVE_MS = 5000, STATE_MS = 2000, RELAY_WAIT = 25;
+  var SID_RE = /(?:^|[?&])s=([0-9a-f]{32})/;
+  var STATE = '/tmp/fcweb_share.json', CTL = '/tmp/fcweb_share_ctl.json', PWFILE = '/tmp/fcweb_share_pw',
+      REQ = '/tmp/fcweb_share_req', STAGE = '/tmp/_fcsession', MCP = '/tmp/fcmcp';
+  var S = window.__fcSession = {
+    mode: SID_RE.test(location.search || '') ? 'session' : 'normal',
+    id: null, key: null, client: null, edit: null, role: null, holder: false, name: '',
+    v: 0, applied: 0, envv: 0, doc: '', owner: '', health: null, agentUrl: '', tab: null,
+    lastPublished: 0, ended: false, unavailable: false, contact: true, holderName: null,
+    silent: false, watching: 0, note: '', actingAs: 'human', pendingName: null, cam: '',
+    preFiles: null, pre: null, ctlSent: '', st: null, everHolder: false, divergePrompted: false
+  };
+  var RING = [];
+
+  // ---- plumbing -------------------------------------------------------------------
+  function log(sub, msg, err) {
+    RING.push({ t: Date.now(), sub: sub, msg: String(msg), err: !!err });
+    if (RING.length > 200) RING.shift();
+    try { append('[share:' + sub + '] ' + msg, err ? 'err' : undefined); } catch (e) {}
+  }
+  function beacon(e, k) { try { window.fcwebEvent && window.fcwebEvent(e, k); } catch (x) {} }
+  function toast(t, k, a) { try { window.fcwebNotify && window.fcwebNotify(t, k, a); } catch (e) {} }
+  function boot(msg) { try { __setBoot(msg); } catch (e) {} }
+  function hdrs(extra) {
+    var h = {};
+    if (S.client) h['X-Fcweb-Client'] = S.client;
+    if (S.edit) h['X-Fcweb-Edit'] = S.edit;
+    if (S.key) h['X-Fcweb-Key'] = S.key;
+    if (extra) Object.keys(extra).forEach(function (k) { h[k] = extra[k]; });
+    return h;
+  }
+  async function api(method, path, body, extra) {
+    var r;
+    try { r = await fetch(path, { method: method, headers: hdrs(extra), body: body, cache: 'no-store' }); }
+    catch (e) { var ne = new Error('cannot reach the session service'); ne.code = 'network'; throw ne; }
+    var j = null;
+    if ((r.headers.get('content-type') || '').indexOf('json') >= 0) { try { j = await r.json(); } catch (e) {} }
+    if (!r.ok && r.status !== 304) {
+      var e2 = new Error((j && j.hint) || ('HTTP ' + r.status)); e2.code = (j && j.code) || ('http_' + r.status);
+      e2.status = r.status; e2.req = r.headers.get('X-Fcweb-Req'); throw e2;
+    }
+    return { status: r.status, json: j, res: r };
+  }
+  function fs() { var m = window.fcInstance; return m && m.FS ? m.FS : null; }
+  function ready() { var m = window.fcInstance; return !!(window.__fcAppReady && m && m.FS && window.__fcRunPyGuarded && !window.__fcPyBusy); }
+  function readText(p) { try { return new TextDecoder().decode(fs().readFile(p)); } catch (e) { return null; } }
+  function writeText(p, s) { try { fs().mkdirTree(p.slice(0, p.lastIndexOf('/'))); } catch (e) {} fs().writeFile(p, new TextEncoder().encode(s)); }
+  function unlink(p) { try { fs().unlink(p); } catch (e) {} }
+  function py(src) { try { window.__fcRunPyGuarded(src); return true; } catch (e) { log('py', e, true); return false; } }
+  function pyCall(expr) { return py('import fcweb_share as _fs\ntry: ' + expr + '\nexcept Exception as _e: import sys; sys.__stderr__.write("[fcweb] share: %r\\n" % (_e,))'); }
+  function safeName(n) { return String(n || 'shared.FCStd').replace(/[^\w .\-]/g, '_'); }
+  function hex(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); return Array.prototype.map.call(a, function (b) { return (b + 256).toString(16).slice(1); }).join(''); }
+  async function idOf(key) {
+    var d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+    return Array.prototype.map.call(new Uint8Array(d), function (b) { return (b + 256).toString(16).slice(1); }).join('').slice(0, 32);
+  }
+  function shareLink() { return location.origin + location.pathname + '?s=' + S.id; }
+  function ago(t) { var s = Math.max(0, (Date.now() / 1000) - t); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
+  function fail(sub, e, beaconName) {
+    log(sub, (e && e.code ? e.code + ': ' : '') + (e && e.message ? e.message : e) + (e && e.req ? ' [req ' + e.req + ']' : ''), true);
+    if (beaconName) beacon(beaconName, e && e.code ? String(e.code).slice(0, 32) : 'other');
+  }
+
+  // ---- zip reader: stored + deflate, the two methods GitHub emits --------------------
+  async function unzip(buf, onFile) {
+    var dv = new DataView(buf), u8 = new Uint8Array(buf), n = buf.byteLength, eocd = -1;
+    for (var i = n - 22; i >= Math.max(0, n - 65558); i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+    if (eocd < 0) throw new Error('not a zip');
+    var count = dv.getUint16(eocd + 10, true), off = dv.getUint32(eocd + 16, true), files = 0;
+    for (var k = 0; k < count; k++) {
+      if (dv.getUint32(off, true) !== 0x02014b50) throw new Error('bad central directory');
+      var method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true),
+          nlen = dv.getUint16(off + 28, true), elen = dv.getUint16(off + 30, true), clen = dv.getUint16(off + 32, true),
+          lho = dv.getUint32(off + 42, true), name = new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nlen));
+      off += 46 + nlen + elen + clen;
+      if (name.endsWith('/')) continue;
+      var ln = dv.getUint16(lho + 26, true), le = dv.getUint16(lho + 28, true), start = lho + 30 + ln + le;
+      var raw = u8.subarray(start, start + csize), data;
+      if (method === 0) data = raw.slice();
+      else if (method === 8) data = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+      else throw new Error('unsupported zip method ' + method + ' in ' + name);
+      onFile(name, data); files++;
+    }
+    return files;
+  }
+  async function fetchAddonZip(a, files) {
+    var url = '/proxy/codeload/' + a.repo + '/zip/' + (a.ref || 'HEAD'), buf = null, cache = null;
+    try { cache = await caches.open('fcweb-addons'); var hit = await cache.match(url); if (hit) buf = await hit.arrayBuffer(); } catch (e) {}
+    if (!buf) {
+      var r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' fetching ' + a.repo);
+      buf = await r.arrayBuffer();
+      try { cache && cache.put(url, new Response(buf.slice(0), { headers: { 'Content-Type': 'application/zip' } })); } catch (e) {}
+    }
+    var mod = (a.name || a.repo.split('/')[1]).replace(/[^\w.\-]/g, '_');
+    return unzip(buf, function (name, data) {
+      var rest = name.indexOf('/') >= 0 ? name.slice(name.indexOf('/') + 1) : name;   // strip <repo>-<ref>/
+      if (rest) files.set('/home/web_user/.local/share/FreeCAD/Mod/' + mod + '/' + rest, data);
+    });
+  }
+
+  // ---- pre-boot: session mode -----------------------------------------------------
+  window.__fcSessionPreboot = async function () {
+    var m = SID_RE.exec(location.search || '');
+    if (!m) return null;
+    S.id = m[1];
+    try { var meta = document.createElement('meta'); meta.name = 'robots'; meta.content = 'noindex'; document.head.appendChild(meta); } catch (e) {}
+    var ss = null; try { ss = window.sessionStorage; } catch (e) {}
+    var name = (ss && ss.getItem('fcweb.name')) || '', pw = (ss && ss.getItem('fcweb.pw.' + S.id)) || '',
+        epw = (ss && ss.getItem('fcweb.epw.' + S.id)) || '';
+    boot('Joining shared session…');
+    var join = null;
+    for (var attempt = 0; attempt < 4 && !join; attempt++) {
+      if (!name) { name = window.prompt('Your name (shown to others in this session):', 'Guest') || 'Guest'; ss && ss.setItem('fcweb.name', name); }
+      try {
+        join = (await api('POST', '/share/' + S.id + '/join', JSON.stringify({ name: name, viewer_pw: pw, editor_pw: epw }), { 'Content-Type': 'application/json' })).json;
+      } catch (e) {
+        if (e.code === 'password_required' && attempt < 3) {
+          pw = window.prompt('This shared session needs a password:', '') || '';
+          if (!pw) { beacon('session_join_fail', 'password_required'); throw e; }
+          ss && ss.setItem('fcweb.pw.' + S.id, pw);
+          continue;
+        }
+        beacon('session_join_fail', e.code); throw e;
+      }
+    }
+    S.client = join.client; S.edit = join.edit; S.role = join.role; S.name = join.name; S.owner = join.owner;
+    S.doc = join.document; S.v = join.v; S.envv = join.env_v; S.holderName = join.holder;
+    beacon('session_join', S.role);
+    var who = S.owner ? S.owner + "'s session" : 'shared session';
+    boot('Joining ' + who + ' · ' + (S.doc || 'document') + (join.addons && join.addons.length ? ' · ' + join.addons.length + ' add-on(s)' : ''));
+    var files = new Map(), enc = new TextEncoder(), env = {};
+    try { env = (await api('GET', '/share/' + S.id + '/env')).json || {}; } catch (e) { fail('env', e); }
+    if (env.cfg) files.set('/home/web_user/.config/FreeCAD/user.cfg', enc.encode(env.cfg));
+    Object.keys(env.macros || {}).forEach(function (k) { files.set('/home/web_user/.FreeCAD/Macro/' + k.replace(/[^\w.\-]/g, '_'), enc.encode(env.macros[k])); });
+    var addons = (env.addons || []).filter(function (a) { return a.repo; }), skipped = (env.addons || []).filter(function (a) { return !a.repo; });
+    var installed = 0, failed = [], declined = false;
+    if (addons.length) {
+      var names = addons.map(function (a) { return a.name || a.repo; }).join(', ');
+      // A native confirm, pre-FreeCAD: nothing here can crash. Add-ons are CODE from GitHub,
+      // so a shared link never installs them without this click.
+      if (window.confirm('This session uses ' + addons.length + ' add-on(s): ' + names + '.\n\nInstall them into a temporary workspace that disappears when you close this tab? (They are code fetched from GitHub.)\n\nOK = open with them.   Cancel = open without them; the geometry is still visible, only add-on features are missing.')) {
+        for (var i = 0; i < addons.length; i++) {
+          var a = addons[i];
+          try { boot('Fetching add-on ' + (a.name || a.repo) + '…'); var nf = await fetchAddonZip(a, files); installed++; log('env', 'addon ' + a.repo + '@' + (a.ref || 'HEAD') + ': ' + nf + ' files, unpacked before boot'); }
+          catch (e) { failed.push(a.repo); fail('env', e); }
+        }
+      } else { declined = true; }
+    }
+    if (S.v > 0) {
+      boot('Downloading ' + (S.doc || 'document') + '…');
+      var rr = await fetch('/share/' + S.id, { headers: hdrs(), cache: 'no-store' });
+      if (rr.ok) files.set('/home/web_user/' + safeName(S.doc), new Uint8Array(await rr.arrayBuffer()));
+      else log('env', 'document download HTTP ' + rr.status, true);
+    }
+    files.set('/home/web_user/.fcweb-session', enc.encode(JSON.stringify({ id: S.id, owner: S.owner, v: S.v, env_v: S.envv })));
+    S.preFiles = files; S.pre = { addons: addons.length, installed: installed, failed: failed, skipped: skipped, declined: declined, cfg: !!env.cfg, macros: Object.keys(env.macros || {}).length };
+    boot('Starting FreeCAD in ' + who + '…');
+    return { files: files };
+  };
+  // Called from the page's preRun with the Module (the config object qtloader passes to the
+  // factory -- Module["FS"] is exported and already initialised at preRun time).
+  window.__fcSessionWrite = function (Module) {
+    var F = Module && Module.FS, files = S.preFiles, n = 0;
+    if (!F || !files) return 0;
+    files.forEach(function (bytes, path) {
+      try { F.mkdirTree(path.slice(0, path.lastIndexOf('/'))); } catch (e) {}
+      try { F.writeFile(path, bytes); n++; } catch (e) { log('env', 'write ' + path + ': ' + e, true); }
+    });
+    var p = S.pre || {};
+    log('env', 'session mode: own home NOT mounted, env v' + S.envv + ' materialized (' + n + ' files, cfg ' + (p.cfg ? 'yes' : 'no') + ', ' + p.installed + '/' + p.addons + ' addons, ' + p.macros + ' macros)');
+    return n;
+  };
+
+  // ---- banner + diagnostics -------------------------------------------------------
+  var bar = null, barText = null, barAct = null, barBtns = null;
+  function ensureBar() {
+    if (bar) return bar;
+    bar = document.createElement('div'); bar.id = 'fcweb-session-bar';
+    bar.style.cssText = 'position:fixed;left:50%;top:6px;transform:translateX(-50%);z-index:2147483000;display:flex;gap:10px;align-items:center;' +
+      'background:#243043;border:1px solid #3c5578;color:#e8e8e8;border-radius:8px;padding:6px 12px;font:12px -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:min(900px,92vw)';
+    barText = document.createElement('span'); barText.style.whiteSpace = 'nowrap';
+    barAct = document.createElement('span'); barAct.style.cssText = 'opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40vw';
+    barBtns = document.createElement('span'); barBtns.style.cssText = 'display:flex;gap:6px';
+    bar.appendChild(barText); bar.appendChild(barAct); bar.appendChild(barBtns);
+    document.body.appendChild(bar);
+    return bar;
+  }
+  function btn(label, fn) {
+    var b = document.createElement('button'); b.textContent = label;
+    b.style.cssText = 'background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);color:#e8e8e8;border-radius:6px;padding:3px 8px;font:11px inherit;cursor:pointer';
+    b.addEventListener('click', function () { try { fn(b); } catch (e) { fail('ui', e); } });
+    return b;
+  }
+  function renderBar() {
+    if (!S.id || (S.mode === 'normal' && !S.st)) return;
+    ensureBar();
+    var bg = '#243043', bd = '#3c5578', text;
+    if (S.ended) { text = 'This session has ended'; bg = '#4a3a1c'; bd = '#8a6d2f'; }
+    else if (!S.contact) { text = 'Lost contact with the session — retrying. Your view may be out of date.'; bg = '#4a3a1c'; bd = '#8a6d2f'; }
+    else if (S.holder) text = 'You are editing' + (S.actingAs === 'agent' ? ' (your assistant is working)' : '') + ' · ' + S.watching + ' in session';
+    else if (S.holderName && !S.silent) text = (S.actingAs === 'agent' ? S.holderName + "'s assistant" : S.holderName) + ' is editing · live · ' + S.watching + ' in session';
+    else text = 'Shared by ' + (S.owner || 'someone') + (S.t ? ' · last updated ' + ago(S.t) : '') + (S.watching > 1 ? ' · ' + S.watching + ' in session' : '');
+    bar.style.background = bg; bar.style.borderColor = bd;
+    barText.textContent = text;
+    barAct.textContent = S.note ? '“' + S.note + '”' : '';
+    barAct.title = S.note || '';
+    while (barBtns.firstChild) barBtns.removeChild(barBtns.firstChild);
+    if (S.mode === 'session') barBtns.appendChild(btn('Download .FCStd', downloadCopy));
+    if (S.mode === 'normal' && S.id) barBtns.appendChild(btn('Copy link', function (b) { copy(shareLink(), b); }));
+    if (S.role !== 'viewer' && !S.holder && !S.ended && S.contact) barBtns.appendChild(btn('Request control', function () { requestControl(false); }));
+    if (S.holder && S.mode === 'session') barBtns.appendChild(btn('Release', releaseControl));
+    barBtns.appendChild(btn('Diagnostics', showDiag));
+  }
+  function copy(text, b) {
+    var done = function () { if (b) { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy link'; }, 1500); } };
+    try { navigator.clipboard.writeText(text).then(done, function () { window.prompt('Copy this link:', text); }); } catch (e) { window.prompt('Copy this link:', text); }
+  }
+  function redact(s) { return String(s).replace(/\/mcp\/([0-9a-f]{32})\/[0-9a-f]{32,64}/g, '/mcp/$1/<redacted>').replace(/"(viewer_pw|editor_pw|ViewerPassword|EditorPassword)":"[^"]*"/g, '"$1":"<redacted>"'); }
+  function showDiag() {
+    var host = document.getElementById('fcweb-diag');
+    if (host) { host.remove(); return; }
+    host = document.createElement('div'); host.id = 'fcweb-diag';
+    host.style.cssText = 'position:fixed;right:14px;top:48px;z-index:2147483100;width:min(560px,92vw);max-height:60vh;overflow:auto;background:#1e1e2e;color:#cfd3dc;border:1px solid #3c5578;border-radius:8px;padding:10px;font:11px ui-monospace,Consolas,monospace';
+    var head = document.createElement('div'); head.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:6px';
+    var title = document.createElement('b'); title.textContent = 'Session diagnostics · ' + (S.id ? S.id.slice(0, 8) : 'no session') + ' · role ' + (S.role || '-') + ' · v' + S.v;
+    head.appendChild(title);
+    head.appendChild(btn('Copy for bug report', function (b) {
+      var lines = RING.map(function (r) { return new Date(r.t).toISOString() + ' ' + (r.err ? 'ERR ' : '    ') + r.sub + ': ' + r.msg; });
+      var pyErr = (window.__fcPyErrors || []).slice(-5).map(function (x) { return 'PYERR ' + String(x).slice(0, 300); });
+      copy(redact(['fcweb session diagnostics', 'build ' + (window.FCWEB_BUILD || '?'), 'mode ' + S.mode + ' role ' + S.role + ' holder ' + S.holder + ' v' + S.v + ' applied ' + S.applied].concat(lines, pyErr).join('\n')), b);
+    }));
+    head.appendChild(btn('Close', function () { host.remove(); }));
+    host.appendChild(head);
+    var pre = document.createElement('pre'); pre.style.cssText = 'white-space:pre-wrap;margin:0';
+    pre.textContent = RING.map(function (r) { return new Date(r.t).toLocaleTimeString() + ' ' + (r.err ? '✖ ' : '  ') + r.sub + ': ' + redact(r.msg); }).join('\n') || '(nothing yet)';
+    host.appendChild(pre);
+    document.body.appendChild(host);
+  }
+  async function downloadCopy() {
+    var name = safeName(S.doc), bytes = null;
+    try { bytes = fs().readFile('/home/web_user/' + name); } catch (e) { toast('The document is not on disk yet.', 'warn'); return; }
+    var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' })); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 15000);
+    beacon('session_join', 'download');
+  }
+
+  // ---- talking to the FreeCAD half -------------------------------------------------
+  function sendCtl() {
+    if (!fs()) return;
+    var c = JSON.stringify({ session: S.id, role: S.role, holder: S.holder, name: S.name, unavailable: S.unavailable });
+    if (c !== S.ctlSent) { writeText(CTL, c); S.ctlSent = c; }
+  }
+  function setParam(k, v) { pyCall('_fs.set_param(' + JSON.stringify(k) + ', ' + (typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(v)) + ')'); }
+  function setReadonly(on) { pyCall('_fs.set_readonly(' + (on ? 'True' : 'False') + ')'); }
+  function becomeHolder(on, why) {
+    if (S.holder === on) return;
+    S.holder = on; if (on) S.everHolder = true;
+    sendCtl();
+    setParam('CurrentEditor', on ? 'You' : (S.holderName || ''));
+    if (S.mode === 'session' || S.id) setReadonly(!on);
+    log('control', on ? 'you have control (' + why + ')' : 'control ' + why);
+    if (on) toast('You have control of the shared session.', 'info');
+    renderBar();
+  }
+
+  // ---- apply an incoming version (non-holders) ---------------------------------------
+  var applying = false;
+  async function applyVersion(meta) {
+    if (applying || !ready()) return;
+    applying = true;
+    try {
+      var r = await fetch('/share/' + S.id, { headers: hdrs(), cache: 'no-store' });
+      if (!r.ok) throw Object.assign(new Error('document HTTP ' + r.status), { code: 'http_' + r.status });
+      var bytes = new Uint8Array(await r.arrayBuffer());
+      var name = safeName(meta.n || S.doc), path = '/home/web_user/' + name;
+      try { fs().mkdirTree('/home/web_user'); } catch (e) {}
+      fs().writeFile(path, bytes);
+      var lbl = JSON.stringify(name.replace(/\.FCStd$/i, ''));
+      py([
+        'import FreeCAD as _App, FreeCADGui as _Gui, sys as _s, fcweb_share as _fs',
+        '_cam = ' + JSON.stringify(meta.cam || ''),
+        '_old = getattr(_App, "_fcweb_shared_doc", None)',
+        'if _old and _old in _App.listDocuments():',
+        '    try: _App.closeDocument(_old)',
+        '    except Exception: pass',
+        '_d = _App.openDocument(' + JSON.stringify(path) + ')',
+        '_App._fcweb_shared_doc = _d.Name',
+        '_fs.pin(_d.Name)',
+        '_fs.set_readonly(' + (S.holder ? 'False' : 'True') + ')',
+        'if _cam:',
+        '    try: _Gui.ActiveDocument.ActiveView.setCamera(_cam)',
+        '    except Exception: pass',
+        '_s.__stderr__.write("[fcweb] share applied v' + meta.v + '\\n"); _s.__stderr__.flush()'
+      ].join('\n'));
+      S.applied = meta.v; S.doc = meta.n || S.doc;
+      log('apply', 'applied v' + meta.v + ' (' + bytes.length + ' bytes)');
+    } catch (e) { fail('apply', e, 'apply_fail'); }
+    finally { applying = false; }
+  }
+  function applyCamera(cam) {
+    if (!cam || cam === S.cam || !ready()) return;
+    S.cam = cam;
+    py('import FreeCADGui as _Gui\ntry: _Gui.ActiveDocument.ActiveView.setCamera(' + JSON.stringify(cam) + ')\nexcept Exception: pass');
+  }
+
+  // ---- control ---------------------------------------------------------------------
+  var askedToast = false;
+  async function requestControl(force) {
+    if (!S.edit) { toast('Only editors can take control. Ask the sender for the editor password.', 'warn'); return; }
+    try {
+      var r = await api('POST', '/share/' + S.id + '/control/request', JSON.stringify({ force: !!force }), { 'Content-Type': 'application/json' });
+      if (force) beacon('control_force');
+      if (r.json.granted) { becomeHolder(true, force ? 'taken' : 'granted'); await poll(); }
+      else toast('Waiting for ' + (r.json.holder || 'the editor') + ' to hand over…', 'info');
+    } catch (e) { fail('control', e); toast(e.message, 'error'); }
+  }
+  async function releaseControl() {
+    try { await api('POST', '/share/' + S.id + '/control/release', '{}', { 'Content-Type': 'application/json' }); becomeHolder(false, 'released'); await poll(); }
+    catch (e) { fail('control', e); toast(e.message, 'error'); }
+  }
+  async function grant(deny) {
+    try { await api('POST', '/share/' + S.id + '/control/grant', JSON.stringify({ deny: !!deny }), { 'Content-Type': 'application/json' }); if (!deny) becomeHolder(false, 'handed over'); await poll(); }
+    catch (e) { fail('control', e); }
+  }
+
+  // ---- the one poll everyone runs ------------------------------------------------------
+  var pollFails = 0;
+  async function poll() {
+    if (!S.id || S.ended) return;
+    var j;
+    try { j = (await api('GET', '/share/' + S.id + '/v')).json; pollFails = 0; if (!S.contact) { S.contact = true; log('poll', 'contact restored'); } }
+    catch (e) {
+      if (e.status === 404) { S.ended = true; renderBar(); toast('This shared session has ended. ' + (e.message || ''), 'warn'); log('poll', 'ended: ' + e.code, true); return; }
+      if (e.status === 401 && S.mode === 'normal') { S.id = null; return; }
+      if (++pollFails >= 3 && S.contact) { S.contact = false; renderBar(); }
+      fail('poll', e); return;
+    }
+    S.v = j.v; S.t = j.t; S.watching = j.watching; S.note = j.note || ''; S.actingAs = j.acting_as || 'human';
+    S.owner = j.owner || S.owner; S.doc = j.n || S.doc; S.envv = j.env_v;
+    S.holderName = j.holder ? j.holder.name : null; S.silent = !!(j.holder && j.holder.silent);
+    var iAmHolder = !!(j.you && j.you.holder);
+    if (iAmHolder !== S.holder) {
+      if (!iAmHolder && S.everHolder) {
+        // Displaced (force, auto-grant, or owner reclaim): detach rather than overwrite.
+        py('import FreeCAD as _App, fcweb_share as _fs, sys as _s\n_d = _App.listDocuments().get(' + JSON.stringify(S.pinned || '') + ')\nif _d is not None and _d.Modified:\n    _d.Label = _d.Label.replace(" (read-only)", "") + " (my changes)"\n    _App._fcweb_shared_doc = None\n    _s.__stderr__.write("[fcweb] detached as \\"%s\\"\\n" % _d.Label)\n');
+        toast((S.holderName || 'Someone') + ' took control. Your unpublished changes are kept as a separate document.', 'warn');
+      }
+      becomeHolder(iAmHolder, iAmHolder ? 'granted' : 'taken by ' + (S.holderName || 'someone'));
+    }
+    if (S.holder && j.pending && j.pending.name && !askedToast) {
+      askedToast = true;
+      toast(j.pending.name + ' is asking for control of the shared session.', 'info', [
+        { label: 'Grant', onClick: function () { askedToast = false; grant(false); } },
+        { label: 'Deny', onClick: function () { askedToast = false; grant(true); } }]);
+    }
+    if (!j.pending) askedToast = false;
+    if (!S.holder) {
+      if (j.v > S.applied) await applyVersion(j);
+      else if (j.cam) applyCamera(j.cam);
+    }
+    if (S.mode === 'normal' && S.holder && j.v > S.lastPublished && S.lastPublished > 0 && !S.divergePrompted && !S.silent) {
+      // Someone published while we were away: never silently overwrite either side.
+      S.divergePrompted = true;
+      toast((S.holderName && S.holderName !== S.name ? S.holderName : 'Someone') + ' updated this session while you were away (v' + j.v + ', ' + ago(j.t) + ').', 'warn', [
+        { label: 'Load their version', onClick: function () { S.applied = 0; S.holder = false; applyVersion(j).then(function () { S.lastPublished = j.v; setParam('LastPublished', j.v); becomeHolder(true, 'reloaded theirs'); }); } },
+        { label: 'Keep mine as a copy', onClick: function () { py('import FreeCAD as _App\n_d=_App.listDocuments().get(' + JSON.stringify(S.pinned || '') + ')\nif _d: _d.Label = _d.Label + " (my copy)"'); S.lastPublished = j.v; setParam('LastPublished', j.v); } }]);
+    }
+    renderBar();
+  }
+
+  // ---- publishing (holders) and the environment (admin) ----------------------------
+  var lastLive = 0;
+  async function publishIfStaged(st) {
+    if (!S.holder || !S.edit) return;
+    var pend = readText(STAGE + '/doc.pending');
+    if (!pend) return;
+    var meta = {}; try { meta = JSON.parse(pend); } catch (e) {}
+    var bytes; try { bytes = fs().readFile(STAGE + '/doc.FCStd'); } catch (e) { return; }
+    unlink(STAGE + '/doc.pending');
+    try {
+      var r = await api('PUT', '/share/' + S.id, bytes, { 'X-Fcweb-Name': safeName(meta.name || S.doc) });
+      S.v = S.lastPublished = S.applied = r.json.v; S.pubFails = 0;
+      setParam('LastPublished', r.json.v);
+      log('publish', 'pushed v' + r.json.v + ' (' + safeName(meta.name || S.doc) + ', ' + bytes.length + ' bytes)');
+      renderBar();
+    } catch (e) {
+      fail('publish', e, 'publish_fail');
+      if (++S.pubFails === 3) toast('Your shared session has stopped updating (' + e.message + '). Others are seeing an old copy.', 'error');
+    }
+  }
+  async function publishEnv() {
+    if (S.role !== 'admin' || !S.key) return;
+    var env = readText(STAGE + '/env.json'); if (!env) return;
+    unlink(STAGE + '/env.json');
+    if (env.indexOf('WriteKey') >= 0 || env.indexOf('AgentUrl') >= 0) { log('env', 'REFUSED to publish: bundle still contains secrets', true); return; }
+    try { var r = await api('PUT', '/share/' + S.id + '/env', env, { 'Content-Type': 'application/json' }); log('env', 'env published as env_v' + r.json.env_v + ' (' + env.length + ' bytes)'); }
+    catch (e) { fail('env', e); }
+  }
+  async function live(st, note, acting) {
+    if (!S.holder || !S.edit) return;
+    try { await api('PUT', '/share/' + S.id + '/live', JSON.stringify({ cam: (st && st.cam) || S.cam || '', note: note, acting_as: acting || 'human' }), { 'Content-Type': 'application/json' }); }
+    catch (e) { if (e.code === 'not_holder') { becomeHolder(false, 'lost (server)'); } else fail('live', e); }
+  }
+
+  // ---- owner: create / resume / settings ---------------------------------------------
+  async function ownerEnsure(st) {
+    if (S.id) return;
+    if (S.unavailable) { if (!S.warnedUnavail) { S.warnedUnavail = true; toast('Sharing is not available on this site: it does not run the session service. Ask the operator to start it with `docker compose --profile share up -d`.', 'warn'); } return; }
+    var key = st.key, id = st.session;
+    if (!key) { key = hex(16); id = await idOf(key); }
+    try {
+      var j = (await api('POST', '/share/' + id + '/join', JSON.stringify({ name: st.name || 'Owner' }), { 'Content-Type': 'application/json', 'X-Fcweb-Key': key })).json;
+      S.id = id; S.key = key; S.client = j.client; S.edit = j.edit; S.role = 'admin'; S.name = j.name; S.owner = j.name;
+      S.lastPublished = st.last_published || 0; S.v = j.v; S.applied = j.v;
+      if (!st.key) { setParam('SessionId', id); setParam('WriteKey', key); log('share', 'created session ' + id.slice(0, 8)); }
+      else log('share', 'resumed session ' + id.slice(0, 8) + ' from saved settings (server v' + j.v + ', mine v' + S.lastPublished + ')');
+      setParam('ShareLink', shareLink());
+      sendCtl();
+      becomeHolder(!!(j.holder === j.name || !j.holder), 'owner');
+      if (!S.holder) requestControl(false);
+      toast('Sharing ' + (st.pinned || 'this document') + '. Anyone with the link sees it, now or later.', 'info', [
+        { label: 'Copy link', onClick: function (b) { copy(shareLink(), b); } },
+        { label: 'Stop', onClick: stopSharing }]);
+      copy(shareLink());
+      poll();
+    } catch (e) {
+      fail('share', e, 'session_join_fail');
+      if (e.code === 'network' || e.status === 502) { S.unavailable = true; sendCtl(); }
+      toast('Could not start sharing: ' + e.message, 'error');
+    }
+  }
+  async function stopSharing() {
+    if (!S.id || !S.key) return;
+    try { await api('DELETE', '/share/' + S.id); } catch (e) { fail('share', e); }
+    setParam('Enabled', false); setParam('ShareLink', ''); setParam('AgentUrl', ''); setParam('SessionId', ''); setParam('WriteKey', '');
+    S.id = null; S.holder = false; S.agentUrl = ''; S.tab = null; sendCtl();
+    if (bar) { bar.remove(); bar = null; }
+    log('share', 'stopped sharing');
+    toast('Stopped sharing. The link no longer works.', 'info');
+  }
+  async function ownerSettings(st) {
+    if (!S.id || !S.key) return;
+    if (st.pw_pending) {
+      var pw = readText(PWFILE); unlink(PWFILE);
+      if (pw) { try { var p = JSON.parse(pw); await api('PUT', '/share/' + S.id + '/passwords', JSON.stringify({ viewer: p.ViewerPassword || '', editor: p.EditorPassword || '' }), { 'Content-Type': 'application/json' }); log('share', 'passwords updated'); } catch (e) { fail('share', e); toast(e.message, 'error'); } }
+    }
+    var days = [0, 7, 30, 90][st.expiry_days] || 0;
+    if (days !== S.expDays) {
+      S.expDays = days;
+      try { await api('PUT', '/share/' + S.id + '/expiry', JSON.stringify({ expires: days ? Math.floor(Date.now() / 1000) + days * 86400 : null }), { 'Content-Type': 'application/json' }); log('share', days ? 'expires in ' + days + ' days' : 'no expiry'); } catch (e) { fail('share', e); }
+    }
+    if (st.agent && (!st.agent_url || st.regen_agent)) {
+      try {
+        var r = await api('POST', '/share/' + S.id + '/agent');
+        var url = r.json.url.startsWith('/') ? location.origin + r.json.url : r.json.url;
+        setParam('AgentUrl', url); S.agentUrl = url; S.tab = null;
+        log('mcp', 'MCP endpoint armed: /mcp/' + S.id.slice(0, 8) + '/' + url.slice(-32, -28) + '…');
+        toast('AI assistant enabled. Paste the MCP link from Edit → Share Session into your AI client.', 'info', [{ label: 'Copy MCP link', onClick: function (b) { copy(url, b); } }]);
+      } catch (e) { fail('mcp', e); toast(e.message, 'error'); }
+    } else if (!st.agent && st.agent_url) {
+      try { await api('DELETE', '/share/' + S.id + '/agent'); } catch (e) { fail('mcp', e); }
+      setParam('AgentUrl', ''); S.agentUrl = ''; S.tab = null; log('mcp', 'MCP endpoint closed');
+    } else if (st.agent && st.agent_url) { S.agentUrl = st.agent_url; }
+  }
+
+  // ---- MCP relay: this tab runs the tools -------------------------------------------
+  var relayBusy = false;
+  async function relayLoop() {
+    if (!S.agentUrl || !S.id || relayBusy) return;
+    var tok = S.agentUrl.split('/').pop();
+    if (!S.tab) {
+      try { S.tab = (await api('POST', '/api/s/' + S.id + '/attach', null, { 'X-Fcweb-Agent': tok })).json.tab; log('mcp', 'tab attached as relay target'); }
+      catch (e) { fail('mcp', e); return; }
+    }
+    relayBusy = true;
+    try {
+      var r = await api('GET', '/api/s/' + S.id + '/cmd?wait=' + RELAY_WAIT, null, { 'X-Fcweb-Tab': S.tab });
+      if (r.status === 200 && r.json) await runCmd(r.json, tok);
+    } catch (e) {
+      if (e.code === 'stale_tab') { S.tab = null; log('mcp', 're-attaching (stale tab)'); }
+      else fail('mcp', e);
+      await new Promise(function (res) { setTimeout(res, 2000); });
+    } finally { relayBusy = false; }
+  }
+  async function runCmd(cmd, tok) {
+    var t0 = Date.now(), res = { id: cmd.id, ok: false, code: 'no_tab_result', hint: 'The tab produced no result.' };
+    beacon('mcp_cmd', cmd.kind);
+    try {
+      while (!ready()) await new Promise(function (r) { setTimeout(r, 100); });
+      try { fs().mkdirTree(MCP); } catch (e) {}
+      if (cmd.args && cmd.args.bytes_b64) { fs().writeFile(MCP + '/' + cmd.id + '.in', Uint8Array.from(atob(cmd.args.bytes_b64), function (c) { return c.charCodeAt(0); })); delete cmd.args.bytes_b64; }
+      writeText(MCP + '/' + cmd.id + '.json', JSON.stringify({ kind: cmd.kind, args: cmd.args || {} }));
+      if (cmd.kind === 'screenshot') {
+        var shot = await capture((cmd.args && cmd.args.region) || 'viewport', (cmd.args && cmd.args.max_px) || 1280);
+        res = { id: cmd.id, ok: true, result: shot };
+      } else {
+        pyCall('_fs.run_agent(' + JSON.stringify(cmd.id) + ')');
+        for (var i = 0; i < 1200; i++) {
+          var txt = readText(MCP + '/' + cmd.id + '.result.json');
+          if (txt) { res = JSON.parse(txt); break; }
+          await new Promise(function (r) { setTimeout(r, 100); });
+        }
+        if (res.ok && res.result && res.result.file) {
+          try { var b = fs().readFile(res.result.file); res.result.bytes_b64 = btoa(Array.prototype.map.call(b, function (c) { return String.fromCharCode(c); }).join('')); unlink(res.result.file); delete res.result.file; } catch (e) {}
+        }
+        if (res.ok && res.mutating) {
+          var note = (cmd.args && cmd.args.note) || (cmd.kind === 'eval' ? String((cmd.args || {}).code || '').split('\n')[0].slice(0, 120) : cmd.kind);
+          toast('Assistant: ' + note, 'info');
+          pyCall('_fs.publish(True)');
+          await publishIfStaged(S.st);
+          await live(S.st, note, 'agent');
+        }
+      }
+      unlink(MCP + '/' + cmd.id + '.json'); unlink(MCP + '/' + cmd.id + '.result.json');
+    } catch (e) { res = { id: cmd.id, ok: false, code: 'tab_error', error: String(e), hint: 'The tab hit an error running this tool; see Diagnostics.' }; fail('mcp', e, 'mcp_cmd_fail'); }
+    if (!res.ok) beacon('mcp_cmd_fail', res.code);
+    log('mcp', cmd.kind + ' ' + (res.ok ? 'ok' : 'FAIL ' + res.code) + ' ' + (Date.now() - t0) + 'ms' + (res.ok && res.mutating ? ' → published v' + S.v : ''));
+    try { await api('POST', '/api/s/' + S.id + '/result', JSON.stringify(res), { 'Content-Type': 'application/json', 'X-Fcweb-Tab': S.tab }); }
+    catch (e) { fail('mcp', e); }
+  }
+  // Screenshot: what the human sees. 'viewport' reads keepFbo (the page's held copy of the
+  // last complete composited 3D frame); 'window' reads the default framebuffer in the same
+  // task as the present quad. Neither touches FreeCAD's offscreen saveImage path, which has a
+  // measured material-corruption bug. The compositor answers via window.__fcCaptureReq.
+  function capture(region, maxPx) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { window.__fcCaptureReq = null; reject(new Error('no frame was presented within 3 s (is the 3D view up?)')); }, 3000);
+      window.__fcCaptureReq = { region: region, done: function (w, h, rgba) {
+        clearTimeout(t); window.__fcCaptureReq = null;
+        if (!w || !h) { reject(new Error('readback failed: the compositor had no frame')); return; }
+        try {
+          var scale = Math.min(1, maxPx / Math.max(w, h)), ow = Math.max(1, Math.round(w * scale)), oh = Math.max(1, Math.round(h * scale));
+          var c = document.createElement('canvas'); c.width = w; c.height = h; var ctx = c.getContext('2d');
+          var img = ctx.createImageData(w, h), row = w * 4, lum = 0;
+          for (var y = 0; y < h; y++) img.data.set(rgba.subarray((h - 1 - y) * row, (h - y) * row), y * row);   // GL is y-up
+          for (var i = 0; i < rgba.length; i += 4 * 97) lum += rgba[i] + rgba[i + 1] + rgba[i + 2];
+          ctx.putImageData(img, 0, 0);
+          var out = c; if (scale < 1) { out = document.createElement('canvas'); out.width = ow; out.height = oh; out.getContext('2d').drawImage(c, 0, 0, ow, oh); }
+          var png = out.toDataURL('image/png');
+          resolve({ format: 'png', width: ow, height: oh, region: region, mean_luminance: Math.round(lum / (rgba.length / (4 * 97)) / 3), png_b64: png.slice(png.indexOf(',') + 1) });
+        } catch (e) { reject(e); }
+      } };
+    });
+  }
+
+  // ---- the state poll: what the FreeCAD half tells us ---------------------------------
+  var lastStateRaw = '';
+  async function stateTick() {
+    if (!ready()) return;
+    if (S.mode === 'normal' && S.health === null) {
+      S.health = false;
+      try { var h = (await api('GET', '/share/health')).json; S.health = h; log('share', 'backend v' + h.v + ', ' + h.n + ' session(s), ' + Math.round(h.used / 1048576) + ' MB of ' + Math.round(h.quota / 1073741824) + ' GB used, max ' + h.max_mb + ' MB per document'); }
+      catch (e) { S.unavailable = true; log('share', 'no backend (' + e.message + ') — sharing is off on this site'); }
+      sendCtl();
+    }
+    var raw = readText(STATE); if (!raw) return;
+    var st; try { st = JSON.parse(raw); } catch (e) { return; }
+    S.st = st; S.pinned = st.pinned; if (st.cam) S.cam = st.cam;
+    if (raw !== lastStateRaw) {
+      lastStateRaw = raw;
+      if (S.mode === 'normal') {
+        if (st.enabled && !S.id) await ownerEnsure(st);
+        else if (!st.enabled && S.id && S.key) await stopSharing();
+        if (S.id) { S.name = st.name || S.name; await ownerSettings(st); }
+      }
+      if (st.revert && !S.holder && S.id) { log('control', 'read-only edit reverted', true); toast('This session is read-only for you — use Edit → Request Control to make changes.', 'warn'); S.applied = 0; }
+    }
+    var req = readText(REQ);
+    if (req) { unlink(REQ); if (req === 'request') requestControl(false); else if (req === 'force') requestControl(true); else if (req === 'release') releaseControl(); }
+    if (S.id && S.holder) {
+      await publishIfStaged(st);
+      if (S.role === 'admin') await publishEnv();
+      if (Date.now() - lastLive > LIVE_MS) { lastLive = Date.now(); await live(st, '', 'human'); }
+    }
+  }
+
+  // ---- boot: session mode wiring --------------------------------------------------------
+  var booted = false;
+  function onReadySession() {
+    if (booted || !ready() || S.mode !== 'session') return;
+    booted = true;
+    sendCtl();
+    var p = S.pre || {};
+    setReadonly(true);
+    pyCall('_fs.pin(' + JSON.stringify((S.doc || 'shared').replace(/\.FCStd$/i, '')) + ') or [_fs.pin(n) for n in list(__import__("FreeCAD").listDocuments())[:1]]');
+    py('import FreeCAD as _App, os as _os\n_p = "/home/web_user/' + safeName(S.doc) + '"\nif _os.path.exists(_p) and not _App.listDocuments():\n    _d = _App.openDocument(_p); _App._fcweb_shared_doc = _d.Name\n    import fcweb_share as _fs; _fs.pin(_d.Name); _fs.set_readonly(True)\nimport sys as _s; _s.__stderr__.write("[fcweb] share applied v' + S.v + '\\n")');
+    S.applied = S.v;
+    py('import FreeCAD as _App, sys as _s\n_u = _App.ParamGet("User parameter:BaseApp/Preferences/Units")\n_s.__stderr__.write("[fcweb] units=%d decimals=%d from session\\n" % (_u.GetInt("UserSchema", 0), _u.GetInt("Decimals", 2)))');
+    var msg = 'You are viewing ' + (S.owner ? S.owner + "'s" : 'a shared') + ' session';
+    if (p.declined) msg += '. Add-ons were skipped, so add-on features are missing; the geometry is still here';
+    else if (p.failed && p.failed.length) msg += '. ' + p.failed.length + ' add-on(s) failed to install: ' + p.failed.join(', ');
+    if (p.skipped && p.skipped.length) msg += '. ' + p.skipped.length + ' add-on(s) could not travel (no repository URL): ' + p.skipped.map(function (x) { return x.name; }).join(', ');
+    toast(msg + '.', p.declined || (p.failed && p.failed.length) ? 'warn' : 'info');
+    log('env', 'addons: ' + p.addons + ' required, ' + p.installed + ' unpacked before boot' + (p.failed && p.failed.length ? ', ' + p.failed.length + ' failed' : ''));
+    renderBar();
+    poll();
+  }
+
+  setInterval(function () { stateTick().catch(function (e) { fail('tick', e); }); }, STATE_MS);
+  setInterval(function () { onReadySession(); if (S.id && ready()) poll().catch(function (e) { fail('poll', e); }); }, TICK);
+  setInterval(function () { if (S.mode === 'normal' && S.agentUrl && ready()) relayLoop().catch(function (e) { fail('mcp', e); }); }, 1000);
+  window.fcwebShareRequest = requestControl; window.fcwebShareRelease = releaseControl; window.fcwebShareStop = stopSharing; window.fcwebShareDiag = showDiag;
 })();
 </script>
 <script>
@@ -1361,7 +1981,18 @@ window.fcRunPy = fcRunPy;
        __fcDataBytes = await __engineFetch(DATA_URL, 'data', (n,_t,cached) => {
          __dataGot = n; if (!cached) __fromCache = false; __report(); });
      } catch(e){ append('engine prefetch failed: '+e,'err'); }
-     const instance = window.fcInstance = await qtLoad({
+     // Shared sessions: in session mode (?s=<id>) join, fetch the environment bundle and the
+     // add-ons BEFORE boot, then write them in preRun. See the session block above.
+     const __sess = await (window.__fcSessionPreboot
+       ? window.__fcSessionPreboot().catch(function (e) {
+           append('[share:join] ' + (e && e.message ? e.message : e), 'err');
+           window.__fcSessionJoinError = e; return null; })
+       : null);
+     if (window.__fcSessionJoinError) {
+       try { window.fcwebNotify && window.fcwebNotify('Could not join the shared session: ' +
+         (window.__fcSessionJoinError.message || 'unknown error') + ' Opening FreeCAD normally instead.', 'error'); } catch (e) {}
+     }
+     const __cfg = {
        wasmBinary: __fcWasmBytes,
        // Hand emscripten the package we already fetched (and cached). Returning null
        // makes it fall back to fetching the URL itself, so a prefetch failure degrades
@@ -1475,7 +2106,12 @@ window.fcRunPy = fcRunPy;
          entryFunction: window.FreeCAD_entry,
          containerElements: [screen],
        }
-     });
+     };
+     if (__sess && __sess.files) {
+       __cfg.fcwebSessionMode = true;   // the patched pre-js reads this and skips the IDBFS home mount
+       __cfg.preRun = [function () { window.__fcSessionWrite(__cfg); }];
+     }
+     const instance = window.fcInstance = await qtLoad(__cfg);
    } catch(e){ append('qtLoad failed: '+e,'err'); if(e&&e.stack) append(e.stack,'err'); }
  }
 </script>
@@ -1800,6 +2436,7 @@ window.fcRunPy = fcRunPy;
         m.stringToUTF8(src,q,n); fcRunPy(m,q);
       }catch(e){}
     }
+    window.__fcRunPyGuarded = runPy;   // shared sessions reuse this rather than re-deriving the malloc dance
     // Autosave is driven by EDITS, not by a clock, and lives in its own directory.
     //
     // Three defects were measured here, each of which lost a user's work outright:
@@ -2074,6 +2711,9 @@ window.fcRunPy = fcRunPy;
 
     var AUTOSAVE_PY = "import FreeCAD as _App\n" +
       "try: _App._fcweb_saver.save()\n" +
+      "except Exception: pass\n" +
+      // Shared sessions ride the same tick: publish, camera, menu re-insert, password sweep.
+      "try:\n import fcweb_share as _fs; _fs.tick()\n" +
       "except Exception: pass\n";
     var AUTOSAVE_FORCE = "import FreeCAD as _App\n" +
       "try: _App._fcweb_saver.save(True)\n" +
@@ -2832,6 +3472,22 @@ window.fcRunPy = fcRunPy;
             gl.uniform1f(p.flip, 1.0);   // our composite is GL-rendered: y-up
             gl.bindTexture(gl.TEXTURE_2D, keepTex);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
+            if (window.__fcCaptureReq) {
+              // fc_screenshot: read back what was JUST presented. 'window' = the default
+              // framebuffer in the same task as the quad (before the browser invalidates it:
+              // no preserveDrawingBuffer); 'viewport' = keepFbo, the page's held composite.
+              // Never FreeCAD's offscreen saveImage path (measured material-corruption bug).
+              var __req = window.__fcCaptureReq; window.__fcCaptureReq = null;
+              try {
+                var __cw, __ch;
+                if (__req.region === 'window' || !keepFbo) { gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); __cw = W; __ch = H; }
+                else { gl.bindFramebuffer(gl.READ_FRAMEBUFFER, keepFbo); __cw = keepSz[0]; __ch = keepSz[1]; }
+                var __px = new Uint8Array(__cw * __ch * 4);
+                gl.readPixels(0, 0, __cw, __ch, gl.RGBA, gl.UNSIGNED_BYTE, __px);
+                gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+                __req.done(__cw, __ch, __px);
+              } catch (__ex) { try { __req.done(0, 0, new Uint8Array(0)); } catch (_) {} }
+            }
           }
           gl.useProgram(sProg); gl.bindVertexArray(sVao);
           gl.activeTexture(sAct); gl.bindTexture(gl.TEXTURE_2D, sTex);
@@ -3055,7 +3711,8 @@ window.fcRunPy = fcRunPy;
   //
   // These are plain files under play-gui/am/ COPYed into the image, so changing one is an
   // image rebuild (seconds) rather than a relink (~2 h).
-  var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_install.py', 'fcweb_am_boot.py'];
+  var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_install.py', 'fcweb_am_boot.py',
+                    'fcweb_share.py', 'fcweb_share.ui'];   // shared sessions: the FreeCAD-side half + its preferences page
   var amOverlayDone = false;
   async function installAmOverlay(){
     if(amOverlayDone || !ready()) return;

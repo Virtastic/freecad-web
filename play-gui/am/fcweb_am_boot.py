@@ -352,6 +352,14 @@ def install():
     print("[fcweb] addon-manager overlay active on /fcweb-am")
     sys.stdout.flush()
 
+    # Shared sessions: the preferences page, the Edit-menu commands and the observer.
+    # Independent of the Addon Manager; failure here must not take the AM patches down.
+    try:
+        import fcweb_share
+        fcweb_share.install()
+    except Exception as e:
+        print("[fcweb] sharing overlay FAILED: %r" % (e,))
+
     try:
         from PySideWrapper import QtCore
     except ImportError:
