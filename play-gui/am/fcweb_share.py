@@ -763,8 +763,10 @@ def run_agent(cid):
             res.update(code='not_holder',
                        hint='Request control first: fc_control_request(), then retry.')
         else:
-            if _obs is not None and kind in MUTATING:
-                _obs.guard = False       # the holder's own agent is not an intruder
+            if _obs is not None and kind in MUTATING and _obs.guard:
+                # CTL says this tab holds control but the tick has not unlocked yet (an
+                # agent edit can land within a tick of taking control): reconcile now.
+                set_readonly(False)
             out = _tool(kind, args)
             res.update(ok=True, result=out, mutating=kind in MUTATING)
             if kind in MUTATING and _obs is not None:
