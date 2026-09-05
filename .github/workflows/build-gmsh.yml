@@ -170,11 +170,15 @@ jobs:
             if(!WebAssembly.validate(b)){console.error("::error::gmsh.wasm does not validate");process.exit(1);}
             console.log("  gmsh.wasm VALID, "+(b.length/1048576).toFixed(1)+" MB");
           '
-          # The version the module reports is the version this lane pinned, or the wrong
-          # source was built.
-          v=$(strings play-gui/gmsh.wasm | grep -oE "4\.[0-9]+\.[0-9]+-git-[0-9a-f]+" | head -1 || true)
-          echo "  version string in the module: ${v:-(none found)}"
-          case "$v" in *-git-${GMSH_SHA:0:7}*) echo "  ok  matches the pinned commit";; *) echo "::error::module version '$v' is not the pinned commit ${GMSH_SHA:0:7}"; exit 1;; esac
+          # The version the module reports must be the version of the pinned source. Only the
+          # numeric part can be compared: gmsh derives its "-git-<sha>" suffix from `git rev-parse`
+          # in the build's working tree, and a tarball has no .git, so the suffix comes out as
+          # THIS repository's commit (the first run reported 4.13.1-git-9b2c772 -- 9b2c772 being
+          # freecad-web's own HEAD). The pinned sha is what the fetch step verified by hash.
+          want=$(sed -nE 's/^set\(GMSH_(MAJOR|MINOR|PATCH)_VERSION ([0-9]+)\)/\2/p' deps/src/gmsh/CMakeLists.txt | paste -sd .)
+          v=$(strings play-gui/gmsh.wasm | grep -oE "4[.][0-9]+[.][0-9]+(-git-[0-9a-f]+)?" | head -1 || true)
+          echo "  version string in the module: ${v:-(none found)}; pinned source: $want"
+          case "$v" in "$want"|"$want"-git-*) echo "  ok  matches the pinned source";; *) echo "::error::module version '$v' is not the pinned source version '$want'"; exit 1;; esac
 
       # Self-hosted only: keep the module on the box, outside the workspace, for the release
       # step (tools/publish-release.sh reuses gmsh.js/gmsh.wasm staged next to the engine).
