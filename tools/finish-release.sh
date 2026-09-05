@@ -59,7 +59,7 @@ say "publishing $TAG"
 bash tools/publish-release.sh "$RUN" "$TAG" || { say "publish failed"; exit 1; }
 
 say "released $TAG. Production is a separate step, on purpose:"
-say "    ci/jenkins/smoke-test.sh http://192.168.1.131:8084   # after the Jenkins deploy"
+say "    ci/jenkins/smoke-test.sh http://192.168.1.137:8084   # after the Jenkins deploy"
 say "    git push origin main:ovhcloud                        # then production"
 say "and once it is live, check it from outside:"
 say "    bash ci/jenkins/smoke-test.sh https://freecad.virtastic.app"

@@ -16,11 +16,9 @@
 #
 # READ THIS BEFORE INSTALLING
 # ---------------------------
-# The `ubuntu` account is SHARED by three runners registered to three different scopes:
-#
-#     /home/ubuntu/actions-runner-virtastic  -> github.com/Virtastic
-#     /home/ubuntu/actions-runner            -> github.com/Nostalgia-Lab
-#     /home/ubuntu/actions-runner-stavridis  -> github.com/dumpster-TechOps/Stavridis-Resume
+# The `ubuntu` account is SHARED by three runners registered to three different scopes;
+# `/home/ubuntu/actions-runner-virtastic` is this repo's, the other two belong to unrelated
+# projects.
 #
 # So narrowing `ubuntu`'s sudo narrows it for ALL THREE. This file covers what freecad-web
 # needs and nothing else; the other two repos' deploys must be audited the same way before

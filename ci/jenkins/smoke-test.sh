@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) Virtastic
 # Post-deploy contract test against a deployed freecad origin (or the container port directly).
-# Usage: smoke-test.sh <base-url>     e.g. smoke-test.sh http://192.168.1.131:8084
+# Usage: smoke-test.sh <base-url>     e.g. smoke-test.sh http://192.168.1.137:8084
 set -uo pipefail
 BASE="${1:?usage: smoke-test.sh <base-url>}"; BASE="${BASE%/}"
 FAILED=0

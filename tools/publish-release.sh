@@ -30,7 +30,7 @@ trap 'rm -rf "$WORK"' EXIT
 # overwrites. Yesterday that was solved by copying the files off the box by hand and then
 # having no way to feed them to this script. Now there is one:
 #
-#     scp -i ~/Documents/SSH/ovh_nostalgia #         'ubuntu@$ORIGIN_IP:/home/ubuntu/actions-runner-virtastic/_work/freecad-web/freecad-web/build-freecad-gui-weh/bin/FreeCAD.*' ./rescued/
+#     scp -i ~/.ssh/<origin-key> #         'ubuntu@$ORIGIN_IP:/home/ubuntu/actions-runner-virtastic/_work/freecad-web/freecad-web/build-freecad-gui-weh/bin/FreeCAD.*' ./rescued/
 #     bash tools/publish-release.sh ./rescued build-20260826-something
 #
 # A release must never be cut from a directory nobody has gated. That is true of the
@@ -133,5 +133,5 @@ gh release create "$TAG" \
 
 echo "== done. Next:"
 echo "   1. Jenkins: Build Now on FreeCAD-Web-Test (or the curl trigger via the builder)"
-echo "   2. smoke:   ci/jenkins/smoke-test.sh http://192.168.1.131:8084"
+echo "   2. smoke:   ci/jenkins/smoke-test.sh http://192.168.1.137:8084"
 echo "   3. prod:    git push origin main:ovhcloud   (deploy-ovh.yml picks up this release)"
