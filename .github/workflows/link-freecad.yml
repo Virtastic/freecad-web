@@ -213,11 +213,23 @@ jobs:
         id: store-probe
         run: |
           set -euo pipefail
-          if [ -d "$BUILDTREE_STORE/build-freecad-gui-weh" ]; then
-            echo "  store is populated"
+          # The store is keyed by nothing, and -m64 reaches the compiler through EMCC_CFLAGS,
+          # which is not on the command line ninja compares -- so a tree compiled for the
+          # other pointer width restores as "up to date" and the link fails on mixed targets
+          # hours later. The save step stamps the store with DEPS_KEY (toolchain, ABI, every
+          # dependency version); a store carrying any other stamp is discarded here.
+          stamp="$(cat "$BUILDTREE_STORE/.abi" 2>/dev/null || true)"
+          if [ -d "$BUILDTREE_STORE/build-freecad-gui-weh" ] && [ "$stamp" = "$DEPS_KEY" ]; then
+            echo "  store is populated ($stamp)"
             echo "need_cache=0" >> "$GITHUB_OUTPUT"
           else
-            echo "  store is empty -- seeding once from actions/cache"
+            if [ -d "$BUILDTREE_STORE/build-freecad-gui-weh" ]; then
+              echo "  store holds a tree stamped '${stamp:-<none>}', this build is '$DEPS_KEY' -- discarding it"
+              rm -rf "$BUILDTREE_STORE"
+            else
+              echo "  store is empty"
+            fi
+            echo "  seeding once from actions/cache"
             echo "need_cache=1" >> "$GITHUB_OUTPUT"
           fi
 
@@ -229,9 +241,9 @@ jobs:
             build-freecad-gui-weh
             freecad-gui-install
             weh-objs
-          key: fcweb-fclink-${{ hashFiles('patches/freecad.patch', 'configure-gui-weh.sh') }}
+          key: fcweb-fclink-${{ env.DEPS_KEY }}-${{ hashFiles('patches/freecad.patch', 'configure-gui-weh.sh') }}
           restore-keys: |
-            fcweb-fclink-
+            fcweb-fclink-${{ env.DEPS_KEY }}-
 
       - name: Restore the FreeCAD build and install trees
         id: fccache
@@ -1070,6 +1082,8 @@ jobs:
               echo "  stored $d"
             fi
           done
+          echo "$DEPS_KEY" > "$store/.abi"
+          echo "  store stamped $DEPS_KEY"
           echo "  store: $(du -sh "$store" 2>/dev/null | cut -f1) at $store"
           df -h "$store" | tail -1
 
