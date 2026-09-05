@@ -64,15 +64,19 @@ jobs:
 
       - name: Preflight -- is this machine able to build at all?
         run: |
+          # node is NOT a runner requirement: it comes from the toolchain (emsdk), and the
+          # steps that use it source toolchain/env.sh first. The first run of this lane
+          # failed here for the lack of a system node -- the same mistake build-ccx.yml
+          # had made in the other direction, skipping its decks for the same reason.
           miss=""
-          for t in cmake ninja python3 curl tar node; do
+          for t in cmake ninja python3 curl tar; do
             command -v "$t" >/dev/null 2>&1 || miss="$miss $t"
           done
           if [ -n "$miss" ]; then
             echo "::error::this runner cannot build:$miss"
             exit 1
           fi
-          echo "  cmake $(cmake --version | head -1 | awk '{print $3}'), ninja $(ninja --version), node $(node --version)"
+          echo "  cmake $(cmake --version | head -1 | awk '{print $3}'), ninja $(ninja --version)"
           df -h / | tail -1 | sed 's/^/  disk: /'
 
       - name: Cache emsdk
