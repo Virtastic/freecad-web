@@ -975,7 +975,15 @@ jobs:
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
           echo "  box has ${memgb}G; giving the gate ${cap}G"
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
+          # PYTHONDONTWRITEBYTECODE: this container runs as root with the workspace bind-mounted,
+          # and the gate imports infra/session/share.py through serve-artifact.py. CPython then
+          # writes infra/session/__pycache__/*.pyc owned by root into the checkout, and the NEXT
+          # run's actions/checkout cannot delete it:
+          #     File was unable to be removed Error: EACCES: permission denied, unlink
+          #     '.../infra/session/__pycache__/share.cpython-312.pyc'
+          # Every job on the runner failed at checkout until those two paths were removed by hand.
+          # Nothing here needs the bytecode cache, so do not produce it.
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
 
       # RENDERING, which has never been gated. Separate from the run above because it needs
       # the 3D pipeline, and that one deliberately runs ?no3d -- headless GL is not the GL a
@@ -999,7 +1007,7 @@ jobs:
           set -e
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/render.txt
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/render.txt
 
       # THE GATES RUN AFTER "What came out", so their results could never appear in it.
       # This one runs last and appends what the gates actually measured.
@@ -1046,7 +1054,7 @@ jobs:
           set -e
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8798 --timeout 900 --scenario project3d --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/project3d.txt
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8798 --timeout 900 --scenario project3d --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/project3d.txt
 
       - name: What the gates measured
         if: always()
