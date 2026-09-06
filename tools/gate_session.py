@@ -321,7 +321,13 @@ def scenario_control(ctx, url, args, fail):
             print('==> a viewer cannot take control without the editor password')
         s3.page.close()
     # 3. force: Bob edits, owner forces immediately; Bob's unpublished edit must survive
-    s2.page.evaluate("window.prompt = function () { return 'e1'; }")   # Bob learns the editor password
+    # Step 2b handed control back to the owner, so Bob must hold it again before an
+    # unpublished edit of his is his to lose. He learns the editor password and takes it.
+    s2.page.evaluate("window.prompt = function () { return 'e1'; }")
+    s2.page.evaluate('window.fcwebShareRequest(true)')
+    if not _wait_state(s2, lambda x: x.get('holder'), 30):
+        fail('Bob could not take control back with the editor password')
+    time.sleep(3)                     # let the unlock reconcile in the interpreter tick
     s2.run_python("import FreeCAD as A\nfor _d in A.listDocuments().values():\n    _b=_d.getObject('Box')\n    if _b: _b.Length = 26; _d.recompute()")
     time.sleep(0.5)
     s1.page.evaluate('window.fcwebShareRequest(true)')
