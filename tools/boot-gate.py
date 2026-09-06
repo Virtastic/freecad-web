@@ -1332,6 +1332,25 @@ class Session:
                 pass            # navigation/teardown races are not verdicts
             time.sleep(2)
         self.elapsed = time.time() - t0
+        # Ready is Qt's signal (qt.onLoaded), not FreeCAD's. FreeCAD's GUI startup continues
+        # afterwards, and until it has activated a workbench, creating a document takes a path
+        # that traps inside Coin: View3DInventorViewer::init -> SoBase::addName ->
+        # cc_memalloc_allocate, "memory access out of bounds". Measured on the wasm64 build --
+        # dispatching at Ready+0s traps every time, at Ready+2s it passes every time, and that
+        # is exactly the difference between this gate and a human driving the app. The page
+        # publishes __fcWorkReady once FreeCAD reports an active workbench; wait for it, but
+        # never let a missing flag hold the gate (it self-releases after two minutes there).
+        if self.ready:
+            deadline = time.time() + Session.left(150.0)
+            while time.time() < deadline:
+                try:
+                    if self.page.evaluate('!!window.__fcWorkReady'):
+                        break
+                except Exception:
+                    pass
+                if self.fatals():
+                    break
+                time.sleep(1)
         if self.ready and Session.first_ready is None:
             Session.first_ready = self.elapsed
         return self.ready

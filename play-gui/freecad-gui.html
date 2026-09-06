@@ -2026,6 +2026,44 @@ window.fcRunPy = fcRunPy;
    setTimeout(()=>clearInterval(iv), 60000);
  })();
 
+ // __fcAppReady is Qt's signal, not FreeCAD's: qt.onLoaded fires once the application object
+ // is up, while FreeCAD's own GUI startup runs on afterwards. Until it has activated a
+ // workbench, creating a document takes a path that traps inside Coin --
+ //     View3DInventorViewer::init -> SoBase::addName -> cc_memalloc_allocate
+ //     RuntimeError: memory access out of bounds
+ // Measured on this build: at Ready+0s activeWorkbench() raises "No active workbench" and the
+ // Part::Box smoke test traps every time; at Ready+2s it returns NoneWorkbench and the same
+ // test passes every time. That race is why the boot gate failed while the app was fine when
+ // driven by hand -- the gate dispatches the instant the overlay says Ready.
+ //
+ // So publish a second flag meaning "can actually do work". Anything that creates documents --
+ // the boot gate, an autosave restore, a deep link -- should wait for this one, not Ready.
+ (function(){
+   const WORK_PY=[
+     "import FreeCADGui as _g, sys as _s",
+     "_wb=None",
+     "try:",
+     " _wb=_g.activeWorkbench()",
+     "except Exception:",
+     " _wb=None",
+     "if _wb is not None:",
+     " _s.__stderr__.write('FCWORKREADY\\n'); _s.__stderr__.flush()",
+     ""].join("\n");
+   const iv3=setInterval(()=>{
+     try{
+       if(window.__fcWorkReady){ clearInterval(iv3); return; }
+       const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
+       if(window.__fcPyBusy) return;   // don't re-enter CPython while a call is suspended
+       if(/FCWORKREADY/.test(logEl.textContent||'')){
+         window.__fcWorkReady=true; clearInterval(iv3); return; }
+       const n=new TextEncoder().encode(WORK_PY).length+1, q=m._malloc(n);
+       m.stringToUTF8(WORK_PY,q,n); fcRunPy(m,q);
+     }catch(e){}
+   },300);
+   // Never block forever on a signal that never comes: after 2 minutes let callers proceed.
+   setTimeout(()=>{ window.__fcWorkReady=true; clearInterval(iv3); }, 120000);
+ })();
+
  // Close the Report view once the app is actually up. It is a developer panel and upstream
  // FreeCAD ships it closed; it opens here because nothing in this build has ever saved a
  // window layout, so Qt restores the compiled-in default and a first-time visitor gets a
