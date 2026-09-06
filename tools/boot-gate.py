@@ -2971,6 +2971,7 @@ def scenario_project3d(ctx, url, args, fail):
 # in_all is False for render (needs the 3D pipeline, and "all" runs ?no3d) and for upgrade
 # (rewrites the serve tree under itself).
 import gate_session as _gs   # the shared-session scenarios live beside this file
+import gate_session_edges as _gse
 
 SCENARIOS = (
     # name            function                in_all  what a pass actually means
@@ -3019,6 +3020,8 @@ SCENARIOS = (
      'serves the whole tool surface over MCP from the URL the page shows, editing live for a viewer'),
     ('env',           _gs.scenario_env,       False,
      'carries units and macros to a visitor with the owner offline, touching nothing the visitor owns'),
+    ('edges',         _gse.scenario_edges,    False,
+     'survives a dead link, gates on the viewer password, collapses the bar, redacts diagnostics, ends cleanly'),
 )
 
 # Nothing below may name a scenario this table does not.

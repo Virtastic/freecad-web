@@ -486,6 +486,21 @@ def scenario_env(ctx, url, args, fail):
     time.sleep(6)          # let autosave + IDBFS persist the visitor's own work
     v0.page.close()
     # the owner: imperial units, 4 decimals, a macro; share with the environment
+    ADDON = 'shaise/FreeCAD_SheetMetal'          # small, has package.xml with a repository URL
+    s1 = S(ctx, url, args.timeout)
+    if not s1.load():
+        fail('owner never reached Ready'); return None
+    s1.page.evaluate('window.fcInstallAddon(%r)' % ADDON)
+    t0 = time.time(); have = False
+    while time.time() - t0 < 180 and not have:
+        have = s1.page.evaluate('(() => { try { return window.fcInstance.FS.readdir("/home/web_user/.local/share/FreeCAD/Mod").some(n => /SheetMetal/i.test(n)); } catch (e) { return false; } })()')
+        time.sleep(3)
+    if not have:
+        fail('the owner could not install %s through the proxy (network?)' % ADDON)
+    else:
+        print('==> owner installed %s in %.0fs' % (ADDON, time.time() - t0))
+    time.sleep(6)                               # IDBFS flush, so the reboot below still has it
+    s1.page.close()
     s1, sid = _owner_up(ctx, url, args, fail, extra=(
         "A.ParamGet('User parameter:BaseApp/Preferences/Units').SetInt('UserSchema', 2)\n"
         "A.ParamGet('User parameter:BaseApp/Preferences/Units').SetInt('Decimals', 4)\n"
@@ -516,11 +531,16 @@ def scenario_env(ctx, url, args, fail):
     if not s2.load():
         fail('visitor never reached Ready in session mode (%s)' % s2.phase())
         return None
-    if not _wait(s2, 'session mode: own home NOT mounted', 30):
+    mat = _wait(s2, 'session mode: own home NOT mounted', 30)
+    if not mat:
         fail('session mode did not materialize (isolation lost)')
+    else:
+        print('==> ' + mat)
+        if '1/1 addons' not in mat:
+            fail('the add-on was not unpacked before boot: %s' % mat)
     line = _wait(s2, 'units=', 60, 'console')
     print('==> ' + (line or 'no units line'))
-    s2.run_python("import FreeCAD as A, os, sys\n_u=A.ParamGet('User parameter:BaseApp/Preferences/Units')\nsys.__stderr__.write('GATE_ENV ' + repr({'schema': _u.GetInt('UserSchema', 0), 'decimals': _u.GetInt('Decimals', 2), 'probe': A.ParamGet('User parameter:BaseApp/Preferences/GateProbe').GetString('Mine', ''), 'docs': sorted(A.listDocuments()), 'macro': os.path.exists(os.path.join(A.getUserMacroDir(True), 'GateMacro.FCMacro'))}) + '\\n')")
+    s2.run_python("import FreeCAD as A, os, sys\n_u=A.ParamGet('User parameter:BaseApp/Preferences/Units')\nsys.__stderr__.write('GATE_ENV ' + repr({'schema': _u.GetInt('UserSchema', 0), 'decimals': _u.GetInt('Decimals', 2), 'probe': A.ParamGet('User parameter:BaseApp/Preferences/GateProbe').GetString('Mine', ''), 'docs': sorted(A.listDocuments()), 'macro': os.path.exists(os.path.join(A.getUserMacroDir(True), 'GateMacro.FCMacro')), 'sheetmetal': any('SheetMetal' in w for w in __import__('FreeCADGui').listWorkbenches())}) + '\\n')")
     r = s2.wait_for('GATE_ENV', 60)
     if not isinstance(r, dict):
         fail('no environment report from inside the session')
@@ -530,6 +550,10 @@ def scenario_env(ctx, url, args, fail):
             fail('the owner\'s units did not travel: schema %r decimals %r' % (r['schema'], r['decimals']))
         if not r['macro']:
             fail('the macro did not travel')
+        if not r.get('sheetmetal'):
+            fail('the add-on workbench is not registered at first boot in the session')
+        else:
+            print('==> SheetMetal workbench present at first boot, from the bundle')
         if r['probe']:
             fail('ISOLATION FAILED: the visitor\'s own setting is visible inside the session')
         if 'MyOwnWork' in r['docs']:
