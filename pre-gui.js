@@ -42,7 +42,18 @@ Module['preRun'].push(function () {
     // Disable with ?noidbfs (e.g. for pristine-boot tests). Node builds skip it.
     try {
       var qs2 = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
+      // Shared sessions: with ?s=<id> the page fetches the session's environment and
+      // writes it into the FS from its own preRun, BEFORE main() reads user.cfg and Mod.
+      // The visitor's own IDBFS home must not be mounted over that -- their documents and
+      // settings stay unreachable from a link someone sent them, which is the whole
+      // isolation story. The page sets this on the Module before qtLoad.
+      //
+      // tools/patch-freecad-js.py carries the same change POST-link, because pre-gui.js is
+      // --pre-js and baked into FreeCAD.js: every build older than this line needs it
+      // patched in. That site detects this form and reports 'already applied', so once a
+      // link carries this natively the patch is an idempotent no-op.
       var wantIdb = (typeof window !== 'undefined') && !qs2.has('noidbfs') &&
+                    !Module.fcwebSessionMode &&
                     typeof IDBFS !== 'undefined';
       if (wantIdb) {
         FS.mount(IDBFS, {}, '/home/web_user');
