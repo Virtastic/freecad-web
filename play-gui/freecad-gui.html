@@ -2026,6 +2026,74 @@ window.fcRunPy = fcRunPy;
    setTimeout(()=>clearInterval(iv), 60000);
  })();
 
+ // Close the Report view once the app is actually up. It is a developer panel and upstream
+ // FreeCAD ships it closed; it opens here because nothing in this build has ever saved a
+ // window layout, so Qt restores the compiled-in default and a first-time visitor gets a
+ // wall of boot log where the model tree should be.
+ //
+ // Not in either block above: both run as soon as getMainWindow() is non-null, and FreeCAD
+ // re-shows the dock later during GUI init -- measured, the flag was set and the panel came
+ // back anyway. After __fcAppReady the hide sticks. A user who opens it from View > Panels
+ // keeps it after that window.
+ (function(){
+     const RPT_PY=[
+       "import FreeCAD as _f, FreeCADGui as _g, sys as _s",
+       "_mw=_g.getMainWindow()",
+       "try:",
+       " _p=_f.ParamGet('User parameter:BaseApp/MainWindow/DockWindows/Report view')",
+       " _p.SetBool('Enabled', False)",
+       "except Exception: pass",
+       "if _mw is not None:",
+       " from PySide6 import QtWidgets as _qw",
+       " for _d in _mw.findChildren(_qw.QDockWidget):",
+       "  if _d.objectName()=='Report view' and _d.isVisible(): _d.hide()",
+       ""].join("\n");
+   const iv=setInterval(()=>{
+     try{
+       const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
+       if(window.__fcPyBusy) return;   // don't re-enter CPython while a call is suspended
+       // No completion marker: FreeCAD re-shows this dock during GUI init, so hiding once
+       // is not enough. Re-assert while it keeps coming back, then stop -- bounded below,
+       // so a user who opens it themselves keeps it after that window.
+       const n=new TextEncoder().encode(RPT_PY).length+1, q=m._malloc(n);
+       m.stringToUTF8(RPT_PY,q,n); fcRunPy(m,q);
+     }catch(e){}
+   },500);
+   setTimeout(()=>clearInterval(iv), 20000);   // bounded: stop re-asserting after 20s
+ })();
+
+ // One window-state cycle once the app has settled. At startup Qt sizes the window
+ // canvas with the device pixel ratio but creates the widget backing store before that
+ // ratio is known, so on a HiDPI display the app paints its CSS-pixel size into a
+ // device-pixel canvas and fills only 1/dpr of the window: at dpr 1.5, 1400x900 painted
+ // into a 2085x1304 canvas, the rest blank. Measured on this build -- a real viewport
+ // resize fixes it permanently; a container nudge and QWidget::resize() do not;
+ // showNormal()+showFullScreen() does. Timing matters as much as the call: in the early
+ // fullscreen block, or half a second after ready, it does not stick.
+ (function(){
+   const DPR_PY=[
+     "import FreeCAD as _f, FreeCADGui as _g",
+     "_mw=_g.getMainWindow()",
+     "if _mw is not None and not getattr(_f,'_fcweb_dpr_done',False):",
+     " _mw.showNormal(); _mw.showFullScreen(); _f._fcweb_dpr_done=True",
+     ""].join("\n");
+   let armed=false;
+   const iv2=setInterval(()=>{
+     try{
+       const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
+       if(!armed){ armed=true; setTimeout(()=>{
+         try{
+           const mm=window.fcInstance;
+           if(!mm||window.__fcPyBusy) return;   // a dropped call here just leaves the old size
+           const n=new TextEncoder().encode(DPR_PY).length+1, q=mm._malloc(n);
+           mm.stringToUTF8(DPR_PY,q,n); fcRunPy(mm,q);
+         }catch(e){}
+       }, 5000); clearInterval(iv2); }
+     }catch(e){}
+   },500);
+   setTimeout(()=>clearInterval(iv2), 120000);
+ })();
+
  // The HTML dialog bridge that used to live here has been REMOVED: Qt's own dialogs
  // work natively on this build, so routing them through HTML was costing fidelity for
  // no reason. Re-verified before deleting it (scratchpad/nativedlg.js, nativeexec.js,
