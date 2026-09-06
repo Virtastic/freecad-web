@@ -590,7 +590,7 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
       ].join('\n');
       var n = new TextEncoder().encode(py).length + 1, q = m._malloc(n);
       m.stringToUTF8(py, q, n);
-      (window.fcRunPy || function (mm, pp) { mm._fcweb_run_python(BigInt(pp)); mm._free(pp); })(m, q);
+      (window.fcRunPy || function (mm, pp) { fcwebCallPy(mm, pp); mm._free(pp); })(m, q);
       return true;
     } catch (e) { return false; }
   };
@@ -1890,6 +1890,36 @@ window.fcwebNotify = function (text, kind, actions) {
 // in flight (including while suspended); periodic callers below skip their tick
 // while it's set, so nothing re-enters the interpreter concurrently.
 window.__fcPyBusy = window.__fcPyBusy || false;
+// The page and the engine leapfrog each other during the wasm64 migration, so the
+// argument form of fcweb_run_python is DETECTED rather than assumed.
+//
+// fcweb_run_python is a JSPI export. emscripten 6.0.9 wraps those with
+// WebAssembly.promising but leaves them OUT of the pointer-signature conversion every
+// other export gets, so on wasm64 the pointer reaches the wasm as a raw i64 and a Number
+// throws "Cannot convert N to a BigInt" (link 33969348139's boot gate). On wasm32 the
+// mirror image is true: a BigInt throws "Cannot convert a BigInt value to a number", and
+// a page built for wasm64 boots to Ready and then loses EVERY Python call -- autosave,
+// dialogs, sessions -- which is what a hardcoded BigInt() did against the shipped engine.
+//
+// Both are a TypeError raised at argument conversion, BEFORE any Python runs, so the
+// first call is a free probe: try, and on TypeError retry the other form and remember.
+// Later calls go straight to the right one. Delete this and hardcode BigInt once every
+// engine this page can meet is wasm64.
+window.__fcPyBigInt = null;   // null = not yet known, false = Number, true = BigInt
+function fcwebCallPy(m, ptr) {
+  if (window.__fcPyBigInt === null) {
+    try {
+      var r0 = m._fcweb_run_python(ptr);
+      window.__fcPyBigInt = false;
+      return r0;
+    } catch (e) {
+      if (!(e instanceof TypeError)) { throw e; }   // a real failure, not the ABI
+      window.__fcPyBigInt = true;
+    }
+  }
+  return m._fcweb_run_python(window.__fcPyBigInt ? BigInt(ptr) : ptr);
+}
+window.fcwebCallPy = fcwebCallPy;
 function fcRunPy(m, ptr){
   var r;
   window.__fcPyBusy = true;
@@ -1898,7 +1928,7 @@ function fcRunPy(m, ptr){
   // other export gets, so on wasm64 the argument reaches the wasm as a raw i64 and a
   // Number throws "Cannot convert N to a BigInt" (link 33969348139's boot gate).
   // BigInt(BigInt) is a no-op, so this also survives the day emscripten converts it.
-  try { r = m._fcweb_run_python(BigInt(ptr)); }
+  try { r = fcwebCallPy(m, ptr); }
   catch(e){ window.__fcPyBusy = false; m._free(ptr); throw e; }
   if (r && typeof r.then === 'function') {
     r.then(()=>{ m._free(ptr); window.__fcPyBusy = false; },
@@ -3829,7 +3859,7 @@ window.fcRunPy = fcRunPy;
     // off while this (possibly long, JSPI-suspending) op runs, and frees the ptr
     // only when the call actually settles (a raw finally-free would free it while a
     // suspended call still holds it). File open/save go through here.
-    (window.fcRunPy||function(mm,pp){ mm._fcweb_run_python(BigInt(pp)); mm._free(pp); })(m,q);
+    (window.fcRunPy||function(mm,pp){ fcwebCallPy(mm, pp); mm._free(pp); })(m,q);
     return true; }
   // ---- Addon Manager overlay -------------------------------------------------------
   // FreeCAD's Addon Manager cannot run here as shipped: its workers are QThreads, and
@@ -4305,7 +4335,7 @@ window.fcRunPy = fcRunPy;
              + "\nif _w is not None:\n    _w.close()\n";
       var n=new TextEncoder().encode(code).length+1;
       var q=m._malloc(n); m.stringToUTF8(code,q,n);
-      (window.fcRunPy||function(mm,pp){mm._fcweb_run_python(BigInt(pp));mm._free(pp);})(m,q);
+      (window.fcRunPy||function(mm,pp){fcwebCallPy(mm,pp);mm._free(pp);})(m,q);
     }catch(err){}
   }
 })();
