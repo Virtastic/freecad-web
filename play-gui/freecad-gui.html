@@ -1248,12 +1248,12 @@ window.fcwebNotify = function (text, kind, actions) {
       bar.style.top = '0'; bar.style.padding = '1px 10px'; bar.style.borderRadius = '0 0 8px 8px'; bar.style.borderTop = 'none';
       bar.style.cursor = 'pointer'; bar.title = text + ' — click to show the session bar'; bar.onclick = toggleBar;
       barText.textContent = S.ended ? 'session ended' : (!S.contact ? 'session: lost contact' : (S.holder ? 'sharing' : 'shared session'));
-      barText.style.fontSize = '11px'; barAct.hidden = true; barBtns.hidden = true; barHide.hidden = true;
+      barText.style.fontSize = '11px'; barAct.style.display = 'none'; barBtns.style.display = 'none'; barHide.style.display = 'none';   // inline display beats [hidden]
       return;
     }
     bar.style.top = '6px'; bar.style.padding = '6px 12px'; bar.style.borderRadius = '8px'; bar.style.borderTop = '';
     bar.style.cursor = ''; bar.title = ''; bar.onclick = null;
-    barText.style.fontSize = ''; barAct.hidden = false; barBtns.hidden = false; barHide.hidden = false; barHide.textContent = '\u2715';
+    barText.style.fontSize = ''; barAct.style.display = ''; barBtns.style.display = 'flex'; barHide.style.display = ''; barHide.textContent = '\u2715';
     barText.textContent = text;
     barAct.textContent = S.note ? '“' + S.note + '”' : '';
     barAct.title = S.note || '';
