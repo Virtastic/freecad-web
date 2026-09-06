@@ -171,6 +171,10 @@ fi
 # a false record. To genuinely change the main stack, append it to the END of the link
 # line and re-run the gates -- and see the -s STACK_SIZE note in
 # scratchpad/linkcmds/fc-linkcmd-weh.sh, which is the command that actually ships.
+#
+# That is what happened for wasm64: the shipped link line now ends with
+# -s STACK_SIZE=32MB, because 5 MB of 64-bit frames is not enough to initialise a PySide
+# binding module. The reasoning is recorded there, at the flag that decides it.
 
 # numpy C-extension static libs (built by configure-numpy.sh into deps/wasm/lib/numpy-mod).
 # Module libs first (provide PyInit_*), then support libs (npymath/mtargets/dispatch/highway).

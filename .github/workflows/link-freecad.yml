@@ -63,6 +63,9 @@ on:
       - 'play-gui/qtloader.js'
       - 'tools/boot-gate.py'
       - 'tools/check-payload-packages.py'
+      # The preloaded Python glue: patches/apply.sh copies it into deps/wasm/pyside-pkg,
+      # which this link preloads, so a change to it ships only through a relink.
+      - 'patches/pyside-pkg-glue/**'
   workflow_dispatch:
     inputs:
       rebuild:
