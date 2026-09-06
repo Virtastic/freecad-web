@@ -2114,6 +2114,18 @@ window.fcRunPy = fcRunPy;
      "_mw=_g.getMainWindow()",
      "if _mw is not None and not getattr(_f,'_fcweb_dpr_done',False):",
      " _mw.showNormal(); _mw.showFullScreen(); _f._fcweb_dpr_done=True",
+     // The same dispatch installs a guard. Opening a document takes the window OUT of
+     // fullscreen -- measured, 1400x900 fullscreen becomes 933x600 with Qt's frame back, on
+     // every document open -- and nothing restores it. A Qt-side timer costs nothing (no
+     // JS->Python call per tick) and re-asserts only when the state has actually slipped.
+     " from PySide6 import QtCore as _qc",
+     " def _fcweb_keep_fs():",
+     "  try:",
+     "   _w=_g.getMainWindow()",
+     "   if _w is not None and not _w.isFullScreen(): _w.showFullScreen()",
+     "  except Exception: pass",
+     " _t=_qc.QTimer(); _t.timeout.connect(_fcweb_keep_fs); _t.start(1000)",
+     " _f._fcweb_fs_timer=_t",
      ""].join("\n");
    let armed=false;
    const iv2=setInterval(()=>{

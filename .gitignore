@@ -104,3 +104,6 @@ ci/jenkins/config.env
 # Local run overrides (FCWEB_PORT / FCWEB_IMAGE) read by docker-compose.yml.
 .env
 
+# The boot gate assembles this tree beside the sources (workflow and local docker runs
+# alike); it holds a 200 MB engine copy and is never part of the repo.
+/gate-serve/

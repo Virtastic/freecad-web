@@ -306,6 +306,15 @@ jobs:
       - name: Every workflow run block is valid shell
         run: python3 tools/check-workflow-shell.py
 
+      # The page dispatches Python into the embedded interpreter as JS string arrays.
+      # Nothing compiles those: a JS linter sees string literals, a Python linter never
+      # opens the HTML, and a broken payload fails silently -- the startup step it was
+      # meant to perform simply never happens. Both the Report-view close and the window
+      # geometry fix were written, shipped into the page, and did nothing until each was
+      # traced by hand.
+      - name: Every Python payload in the page compiles
+        run: python3 tools/check-page-python.py
+
       # A patch that nothing applies is not a fix, however carefully it is written.
       # patches/vtk-expat-wasm-xmlsize.patch sat in the tree for months, named in the deps
       # cache key so a change to it would rebuild VTK, with a comment describing exactly

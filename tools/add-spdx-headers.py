@@ -34,6 +34,8 @@ STYLES = {
 SKIP_DIRS = {
     '.git', 'node_modules', 'deps', 'build', 'dist', 'LICENSES',
     'build-artifact-serve', 'patches', '__pycache__', 'src',
+    # the boot gate's assembled tree: an engine copy, not authored files
+    'gate-serve',
     # one-off forensic scripts, never distributed and never part of a build
     'scratchpad',
 }
