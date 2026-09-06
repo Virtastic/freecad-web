@@ -564,16 +564,19 @@ def scenario_env(ctx, url, args, fail):
             fail('the owner\'s units did not travel: schema %r decimals %r' % (r['schema'], r['decimals']))
         if not r['macro']:
             fail('the macro did not travel')
-        print('==> session Mod: %r' % r.get('mod'))
-        missing = owner_wb - set(r.get('wb', []))
+        sess_wb = set(r.get('wb', []))
+        print('==> session Mod: %r; workbenches owner=%d session=%d, new in session: %r'
+              % (r.get('mod'), len(owner_wb), len(sess_wb), sorted(sess_wb - owner_wb)))
+        missing = owner_wb - sess_wb
         if not set(r.get('mod', [])) >= added:
             fail('the add-on directory did not travel: session Mod %r, expected %r'
                  % (r.get('mod'), sorted(added)))
         elif missing:
             fail('workbenches the owner had are not registered in the session: %r' % sorted(missing))
+        elif not (sess_wb - owner_wb):
+            fail('the add-on travelled but registered no workbench: the owner installed it into a running FreeCAD (so its list is stock), and the session had the files before boot, so the session must gain one. Session workbenches: %r' % sorted(sess_wb))
         else:
-            print('==> the add-on and every one of the owner\'s %d workbenches are registered at first boot'
-                  % len(owner_wb))
+            print('==> add-on usable at first boot: %r registered from the bundle, plus all %d of the owner\'s workbenches' % (sorted(sess_wb - owner_wb), len(owner_wb)))
         if r['probe']:
             fail('ISOLATION FAILED: the visitor\'s own setting is visible inside the session')
         if 'MyOwnWork' in r['docs']:
