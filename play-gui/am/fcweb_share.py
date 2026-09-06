@@ -36,7 +36,11 @@ PWFILE = '/tmp/fcweb_share_pw'      # passwords, handed to the page once, mode 0
 REQ = '/tmp/fcweb_share_req'        # menu commands -> page: share|request|force|release
 STAGE = '/tmp/_fcsession'           # the session's own save path
 MCP = '/tmp/fcmcp'                  # relay command/result files
-SETTLE_S = 2.0                      # publish only after edits have settled this long
+SETTLE_S = 0.6                      # publish once edits have been still this long
+# Why not zero: a burst of edits (or an import) would otherwise be saved on the very
+# next tick, and for a 443k-triangle document that save blocks the UI for 1.7-2.6 s
+# (measured 2026-09-02, the same reason the autosaver settles). 0.6 s is short enough
+# to feel immediate and long enough that a drag is still one publish, not thirty.
 
 _last_state = None
 _obs = None

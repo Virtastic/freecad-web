@@ -464,7 +464,10 @@ def scenario_mcp(ctx, url, args, fail):
     if not _wait(s2, 'share applied v%d' % (v_before + 1), 20, 'console'):
         fail('the viewer did not see the assistant\'s edit within ~one poll tick')
     else:
-        print('==> assistant edit reached the viewer in %.1fs' % (time.time() - t0))
+        dt = time.time() - t0
+        print('==> assistant edit reached the viewer in %.1fs' % dt)
+        if dt > 4.0:
+            fail('an assistant edit took %.1fs to reach a viewer; the cadence budgets ~2s' % dt)
     st = _wait_state(s2, lambda x: 'stretched the box' in (x.get('note') or ''), 15)
     if not st:
         fail('the assistant\'s note never reached the viewer\'s activity line')

@@ -1021,7 +1021,13 @@ window.fcwebNotify = function (text, kind, actions) {
    failure reaches the user as a toast carrying the server's hint; nothing is swallowed. */
 (function () {
   'use strict';
-  var TICK = 3000, LIVE_MS = 5000, STATE_MS = 2000, RELAY_WAIT = 25;
+  // Cadence. An idle session sends nothing: the publisher only uploads when the pinned
+  // document's bytes changed, and a poll is a ~300-byte JSON, so a fast tick costs
+  // nothing while nobody is editing. End-to-end latency is roughly
+  //     settle (fcweb_share.SETTLE_S) + the 1.5 s interpreter tick + STATE_MS + TICK
+  // and the gate prints the measured figure, so change these and read it rather than
+  // assuming. RELAY_WAIT is the MCP long-poll and is unrelated to how fast edits land.
+  var TICK = 1000, LIVE_MS = 2000, STATE_MS = 500, RELAY_WAIT = 25;
   var SID_RE = /(?:^|[?&])s=([0-9a-f]{32})/;
   var STATE = '/tmp/fcweb_share.json', CTL = '/tmp/fcweb_share_ctl.json', PWFILE = '/tmp/fcweb_share_pw',
       REQ = '/tmp/fcweb_share_req', STAGE = '/tmp/_fcsession', MCP = '/tmp/fcmcp';
