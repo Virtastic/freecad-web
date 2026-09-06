@@ -224,6 +224,13 @@ def _activity(m, s, cid, event):
 
 
 def _grant(s, cid, m, how):
+    # Holding control IS the right to publish, so a client granted it gets an edit token
+    # even if they never presented the editor password: a human decided to hand it over.
+    c = s['clients'].get(cid)
+    if c is not None and not c.get('edit'):
+        tok = secrets.token_hex(16)
+        s['edits'][tok] = cid
+        c['edit'] = tok
     s['holder'] = cid
     s['holder_seen'] = _now()
     s['pending'] = None
@@ -255,6 +262,7 @@ HINTS = {
     'too_big': 'The document is over the size limit for this server.',
     'quota': 'The server is out of space; the operator can raise FCWEB_SHARE_MAX_GB.',
     'already_pending': 'Someone else is already asking for control. Try again in a moment.',
+    'no_holder_to_grant': 'Nobody is holding control right now, so there is no one to grant it. The editor password lets you take it yourself.',
     'no_tab': 'No browser tab is attached to this session. Open the session and tick "Allow an AI assistant" in Edit > Share Session.',
     'busy': 'One command at a time. Wait for the previous call to return.',
     'bad_request': 'The request body was not what this endpoint expects.',
@@ -395,7 +403,10 @@ def _route(method, path, fullpath, h, body):
             'pending': {'name': _name(s, s['pending'])} if s['pending'] else None,
             'watching': _watching(s), 'expires': m['expires'], 'owner': m.get('owner', ''),
             'you': {'holder': client is not None and cid == s['holder'],
-                    'role': client['role'] if client else 'admin'}})
+                    'role': client['role'] if client else 'admin',
+                    # their own capability, returned only to them: granted control
+                    # mints a token, and this is how the tab picks it up
+                    'edit': client.get('edit') if client else None}})
 
     if method == 'GET' and sub == '':
         try:
@@ -461,24 +472,34 @@ def _route(method, path, fullpath, h, body):
 
     # ---- control -------------------------------------------------------------------
     if method == 'POST' and sub == '/control/request':
-        if editor_cid is None:
-            return _fail(403, 'not_editor')
+        # ANYONE in the session may ask -- the current holder decides. The editor
+        # password is what lets you TAKE control instead of asking: immediately when
+        # control is free, and over a live holder's head with force.
+        if not client:
+            return _fail(401, 'not_joined')
         try:
             b = json.loads(body or b'{}')
         except Exception:
             return _fail(400, 'bad_request')
-        if s['holder'] == editor_cid:
-            return _json(200, {'granted': True, 'already': True})
+        force = bool(b.get('force'))
+        if s['holder'] == cid:
+            return _json(200, {'granted': True, 'already': True, 'edit': client.get('edit')})
         free = s['holder'] is None or s['holder'] not in s['clients'] \
             or _now() - s['holder_seen'] > HOLDER_SILENCE_S
-        if free or b.get('force'):
-            _grant(s, editor_cid, m, 'took control' if b.get('force') and not free else 'granted control')
+        if force and editor_cid is None:
+            return _fail(403, 'not_editor')
+        if force or (free and editor_cid is not None):
+            _grant(s, cid, m, 'took control' if force and not free else 'granted control')
             _save_meta(i, m)
-            return _json(200, {'granted': True, 'forced': bool(b.get('force')) and not free})
-        if s['pending'] and s['pending'] != editor_cid and s['pending'] in s['clients']:
+            return _json(200, {'granted': True, 'forced': force and not free,
+                               'edit': s['clients'][cid].get('edit')})
+        if free:
+            # no live holder, so no one can answer: the editor password is the way in
+            return _fail(409, 'no_holder_to_grant')
+        if s['pending'] and s['pending'] != cid and s['pending'] in s['clients']:
             return _fail(409, 'already_pending')
-        s['pending'] = editor_cid
-        _activity(m, s, editor_cid, 'asked for control')
+        s['pending'] = cid
+        _activity(m, s, cid, 'asked for control')
         _save_meta(i, m)
         return _json(202, {'granted': False, 'holder': _name(s, s['holder'])})
 
@@ -732,8 +753,20 @@ def selftest():
     cy, cedit = j['client'], j['edit']
     assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)[1]['watching'] == 3
 
-    # control: viewer cannot request or force; editor queues; holder grants
+    # control: ANYONE in the session may ask -- the holder decides. Only the editor
+    # password TAKES: force over a live holder, or straight through when control is free.
     assert call('POST', '/share/%s/control/request' % sid, {'force': True}, X_Fcweb_Client=bob)[0] == 403
+    st, j, _, _ = call('POST', '/share/%s/control/request' % sid, {}, X_Fcweb_Client=bob)
+    assert st == 202 and j['granted'] is False, j          # a plain viewer CAN ask
+    assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)[1]['pending']['name'] == 'Bob'
+    assert call('POST', '/share/%s/control/grant' % sid, {}, X_Fcweb_Edit=oedit)[1]['holder'] == 'Bob'
+    you = call('GET', '/share/%s/v' % sid, X_Fcweb_Client=bob)[1]['you']
+    assert you['holder'] is True and you['edit'], 'a granted viewer must receive an edit token'
+    assert call('PUT', '/share/' + sid, b'BOB', X_Fcweb_Edit=you['edit'])[1]['v'] == 2
+    assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=cy)[1]['you']['edit'] != you['edit']
+    # hand it back to the owner and carry on with the editor paths
+    assert call('POST', '/share/%s/control/request' % sid, {'force': True}, X_Fcweb_Edit=oedit)[1]['granted'] is True
+    assert call('PUT', '/share/' + sid, b'ONE', X_Fcweb_Edit=oedit)[1]['v'] == 3
     st, j, _, _ = call('POST', '/share/%s/control/request' % sid, {}, X_Fcweb_Edit=cedit)
     assert st == 202 and j['granted'] is False
     assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)[1]['pending']['name'] == 'Cy'
@@ -741,7 +774,7 @@ def selftest():
     assert call('GET', '/share/' + sid, X_Fcweb_Client=bob)[3] == b'ONE'         # bytes unchanged
     assert call('POST', '/share/%s/control/grant' % sid, {}, X_Fcweb_Edit=cedit)[0] == 409
     assert call('POST', '/share/%s/control/grant' % sid, {}, X_Fcweb_Edit=oedit)[1]['holder'] == 'Cy'
-    assert call('PUT', '/share/' + sid, b'TWO', X_Fcweb_Edit=cedit)[1]['v'] == 2
+    assert call('PUT', '/share/' + sid, b'TWO', X_Fcweb_Edit=cedit)[1]['v'] == 4
     assert call('PUT', '/share/' + sid, b'LATE', X_Fcweb_Edit=oedit)[0] == 409  # displaced -> refused
     assert call('GET', '/share/' + sid, X_Fcweb_Client=bob)[3] == b'TWO'
     # force: editor seizes from an active holder immediately
@@ -752,6 +785,8 @@ def selftest():
     # release, then auto-grant after silence
     assert call('POST', '/share/%s/control/release' % sid, {}, X_Fcweb_Edit=cedit)[0] == 409
     assert call('POST', '/share/%s/control/release' % sid, {}, X_Fcweb_Edit=oedit)[0] == 200
+    st, j, _, _ = call('POST', '/share/%s/control/request' % sid, {}, X_Fcweb_Client=bob)
+    assert st == 409 and j['code'] == 'no_holder_to_grant', j   # nobody to answer a viewer
     assert call('POST', '/share/%s/control/request' % sid, {}, X_Fcweb_Edit=cedit)[1]['granted'] is True
     clock[0] += HOLDER_SILENCE_S + 1
     assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)[1]['holder']['silent'] is True

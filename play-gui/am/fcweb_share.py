@@ -314,7 +314,9 @@ class _Cmd(object):
             return False
         if self.req == 'release':
             return bool(c.get('holder'))
-        return c.get('role') in ('editor', 'admin') and not c.get('holder')
+        # Anyone in the session may ask for control; the holder decides. The editor
+        # password is only needed to TAKE it, which the toast offers separately.
+        return not c.get('holder')
 
     def Activated(self):
         if self.req == 'share':

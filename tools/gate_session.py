@@ -263,7 +263,7 @@ def scenario_control(ctx, url, args, fail):
         return s1
     if not _wait(s1, 'share: passwords updated', 40):
         fail('the editor password never reached the server')
-    s2 = _viewer(ctx, url, sid, args, epw='e1')
+    s2 = _viewer(ctx, url, sid, args)          # a plain viewer: no editor password
     if not s2.load() or not _wait(s2, 'share applied v', 90, 'console'):
         fail('viewer never applied v1')
         return s1
@@ -275,7 +275,9 @@ def scenario_control(ctx, url, args, fail):
         fail('a read-only viewer changed the shared document and it stuck: %r' % v)
     else:
         print('==> read-only edit did not stick (guard reverted to the session version)')
-    # 2. request -> grant on the owner's side (a real click on the toast)
+    # 2. a PLAIN VIEWER asks (no editor password) and the owner grants with a real click
+    if _state(s2).get('role') != 'viewer':
+        fail('the second browser should have joined as a viewer, got %r' % _state(s2).get('role'))
     s2.page.evaluate('window.fcwebShareRequest(false)')
     try:
         s1.page.click('text=Grant', timeout=20000)
@@ -288,7 +290,7 @@ def scenario_control(ctx, url, args, fail):
     st1 = _wait_state(s1, lambda x: not x.get('holder'), 30)
     if not st1:
         fail('the owner still believes it holds control after handing over')
-    print('==> handover: Bob holds control, owner read-only')
+    print('==> handover: a viewer with no editor password now holds control')
     time.sleep(5)          # two interpreter ticks: the unlock is reconciled there
     s2.run_python("import FreeCAD as A\nfor _d in A.listDocuments().values():\n    _b=_d.getObject('Box')\n    if _b: _b.Length = 25; _d.recompute()")
     if not _wait(s2, 'publish: pushed v', 40):
@@ -300,7 +302,26 @@ def scenario_control(ctx, url, args, fail):
         fail('the owner did not get Bob\'s edit (volumes %r)' % {k: x['volume'] for k, x in v.items()})
     else:
         print('==> Bob\'s edit reached the owner: volume 15000.0')
+    # 2b. a viewer cannot TAKE control: forcing without the editor password is refused,
+    #     and the session's holder does not move.
+    s1.page.evaluate('window.fcwebShareRequest(true)')     # owner takes it back to set up
+    _wait_state(s1, lambda x: x.get('holder'), 30)
+    s3 = _viewer(ctx, url, sid, args, name='Eve')          # another plain viewer
+    if s3.load():
+        _wait(s3, 'share applied v', 90, 'console')
+        s3.page.evaluate('window.__fcNoPrompt = true')
+        s3.page.evaluate('window.prompt = function () { return null; }')   # decline the password
+        s3.page.evaluate('window.fcwebShareRequest(true)')
+        time.sleep(6)
+        if _state(s3).get('holder'):
+            fail('a viewer took control without the editor password')
+        elif not _state(s1).get('holder'):
+            fail('the owner lost control to a viewer who could not force')
+        else:
+            print('==> a viewer cannot take control without the editor password')
+        s3.page.close()
     # 3. force: Bob edits, owner forces immediately; Bob's unpublished edit must survive
+    s2.page.evaluate("window.prompt = function () { return 'e1'; }")   # Bob learns the editor password
     s2.run_python("import FreeCAD as A\nfor _d in A.listDocuments().values():\n    _b=_d.getObject('Box')\n    if _b: _b.Length = 26; _d.recompute()")
     time.sleep(0.5)
     s1.page.evaluate('window.fcwebShareRequest(true)')

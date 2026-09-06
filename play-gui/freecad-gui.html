@@ -1271,7 +1271,10 @@ window.fcwebNotify = function (text, kind, actions) {
     while (barBtns.firstChild) barBtns.removeChild(barBtns.firstChild);
     if (S.mode === 'session') barBtns.appendChild(btn('Download .FCStd', downloadCopy));
     if (S.mode === 'normal' && S.id) barBtns.appendChild(btn('Copy link', function (b) { copy(shareLink(), b); }));
-    if (S.role !== 'viewer' && !S.holder && !S.ended && S.contact) barBtns.appendChild(btn('Request control', function () { requestControl(false); }));
+    if (!S.holder && !S.ended && S.contact) {
+      barBtns.appendChild(btn('Request control', function () { requestControl(false); }));
+      barBtns.appendChild(btn('Take control', function () { requestControl(true); }));
+    }
     if (S.holder && S.mode === 'session') barBtns.appendChild(btn('Release', releaseControl));
     barBtns.appendChild(btn('Diagnostics', showDiag));
   }
@@ -1394,23 +1397,39 @@ window.fcwebNotify = function (text, kind, actions) {
   // ---- control ---------------------------------------------------------------------
   var askedToast = false;
   async function requestControl(force) {
-    if (!S.edit) {
-      // A viewer who knows the editor password becomes an editor here: re-join with it.
-      var epw = window.prompt('Enter the editor password to take control:', '');
-      if (!epw) return;
-      try {
-        var jj = (await api('POST', '/share/' + S.id + '/join', JSON.stringify({ name: S.name || 'Guest', viewer_pw: (function () { try { return sessionStorage.getItem('fcweb.pw.' + S.id) || ''; } catch (e) { return ''; } })(), editor_pw: epw }), { 'Content-Type': 'application/json' })).json;
-        if (!jj.edit) { toast('That is not the editor password.', 'error'); return; }
-        S.client = jj.client; S.edit = jj.edit; S.role = jj.role; try { sessionStorage.setItem('fcweb.epw.' + S.id, epw); } catch (e) {}
-        sendCtl(); log('control', 'upgraded to editor');
-      } catch (e) { fail('control', e); toast(e.message, 'error'); return; }
-    }
+    // Anyone in the session may ask -- the holder decides. The editor password is only
+    // needed to TAKE control: over a live holder's head, or when nobody is holding it.
+    if (force && !S.edit && !(await becomeEditor('Enter the editor password to take control:'))) { return; }
     try {
       var r = await api('POST', '/share/' + S.id + '/control/request', JSON.stringify({ force: !!force }), { 'Content-Type': 'application/json' });
       if (force) beacon('control_force');
+      if (r.json.edit) { S.edit = r.json.edit; sendCtl(); }
       if (r.json.granted) { becomeHolder(true, force ? 'taken' : 'granted'); await poll(); }
-      else toast('Waiting for ' + (r.json.holder || 'the editor') + ' to hand over…', 'info');
-    } catch (e) { fail('control', e); toast(e.message, 'error'); }
+      else { toast('Waiting for ' + (r.json.holder || 'the editor') + ' to hand over…', 'info'); }
+    } catch (e) {
+      fail('control', e);
+      if (e.code === 'no_holder_to_grant' && !S.edit) {
+        // nobody can answer the request, so offer the one route that works
+        toast(e.message, 'warn', [{ label: 'Enter editor password', onClick: async function () {
+          if (await becomeEditor('Enter the editor password to take control:')) { requestControl(true); }
+        } }]);
+      } else { toast(e.message, 'error'); }
+    }
+  }
+  // Re-join with the editor password to obtain an edit token, keeping our name and seat.
+  async function becomeEditor(prompt) {
+    var epw = window.prompt(prompt, '');
+    if (!epw) { return false; }
+    try {
+      var vpw = '';
+      try { vpw = sessionStorage.getItem('fcweb.pw.' + S.id) || ''; } catch (e) {}
+      var jj = (await api('POST', '/share/' + S.id + '/join', JSON.stringify({ name: S.name || 'Guest', viewer_pw: vpw, editor_pw: epw }), { 'Content-Type': 'application/json' })).json;
+      if (!jj.edit) { toast('That is not the editor password.', 'error'); return false; }
+      S.client = jj.client; S.edit = jj.edit; S.role = jj.role;
+      try { sessionStorage.setItem('fcweb.epw.' + S.id, epw); } catch (e) {}
+      sendCtl(); log('control', 'upgraded to editor');
+      return true;
+    } catch (e) { fail('control', e); toast(e.message, 'error'); return false; }
   }
   async function releaseControl() {
     try { await api('POST', '/share/' + S.id + '/control/release', '{}', { 'Content-Type': 'application/json' }); becomeHolder(false, 'released'); await poll(); }
@@ -1437,6 +1456,9 @@ window.fcwebNotify = function (text, kind, actions) {
     S.owner = j.owner || S.owner; S.doc = j.n || S.doc; S.envv = j.env_v;
     S.holderName = j.holder ? j.holder.name : null; S.silent = !!(j.holder && j.holder.silent);
     var iAmHolder = !!(j.you && j.you.holder);
+    // Granted control mints an edit token for us even if we never had the editor
+    // password; this is where a plain viewer picks it up.
+    if (j.you && j.you.edit && j.you.edit !== S.edit) { S.edit = j.you.edit; sendCtl(); }
     if (iAmHolder !== S.holder) {
       if (!iAmHolder && S.everHolder) {
         // Displaced (force, auto-grant, or owner reclaim): the interpreter's tick detaches any
