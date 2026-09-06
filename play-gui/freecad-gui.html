@@ -1202,7 +1202,13 @@ window.fcwebNotify = function (text, kind, actions) {
   };
 
   // ---- banner + diagnostics -------------------------------------------------------
-  var bar = null, barText = null, barAct = null, barBtns = null;
+  var bar = null, barText = null, barAct = null, barBtns = null, barHide = null;
+  var barHidden = false; try { barHidden = localStorage.getItem('fcweb.sessionbar') === 'hidden'; } catch (e) {}
+  function toggleBar() {
+    barHidden = !barHidden;
+    try { localStorage.setItem('fcweb.sessionbar', barHidden ? 'hidden' : 'shown'); } catch (e) {}
+    renderBar();
+  }
   function ensureBar() {
     if (bar) return bar;
     bar = document.createElement('div'); bar.id = 'fcweb-session-bar';
@@ -1211,7 +1217,12 @@ window.fcwebNotify = function (text, kind, actions) {
     barText = document.createElement('span'); barText.style.whiteSpace = 'nowrap';
     barAct = document.createElement('span'); barAct.style.cssText = 'opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40vw';
     barBtns = document.createElement('span'); barBtns.style.cssText = 'display:flex;gap:6px';
-    bar.appendChild(barText); bar.appendChild(barAct); bar.appendChild(barBtns);
+    barHide = document.createElement('button'); barHide.title = 'Hide the session bar (click the tab at the top edge to bring it back)';
+    barHide.style.cssText = 'background:none;border:none;color:#cfcfcf;font-size:15px;line-height:1;cursor:pointer;padding:0 2px';
+    // stopPropagation: collapsing installs a click-to-restore handler on the bar itself, and the
+    // same event would bubble into it and toggle straight back
+    barHide.addEventListener('click', function (e) { e.stopPropagation(); toggleBar(); });
+    bar.appendChild(barText); bar.appendChild(barAct); bar.appendChild(barBtns); bar.appendChild(barHide);
     document.body.appendChild(bar);
     return bar;
   }
@@ -1231,6 +1242,18 @@ window.fcwebNotify = function (text, kind, actions) {
     else if (S.holderName && !S.silent) text = (S.actingAs === 'agent' ? S.holderName + "'s assistant" : S.holderName) + ' is editing · live · ' + S.watching + ' in session';
     else text = 'Shared by ' + (S.owner || 'someone') + (S.t ? ' · last updated ' + ago(S.t) : '') + (S.watching > 1 ? ' · ' + S.watching + ' in session' : '');
     bar.style.background = bg; bar.style.borderColor = bd;
+    if (barHidden) {
+      // a slim tab hugging the top edge: still shows the one word that matters, and the
+      // colour still says live / stale / lost. One click brings the bar back.
+      bar.style.top = '0'; bar.style.padding = '1px 10px'; bar.style.borderRadius = '0 0 8px 8px'; bar.style.borderTop = 'none';
+      bar.style.cursor = 'pointer'; bar.title = text + ' — click to show the session bar'; bar.onclick = toggleBar;
+      barText.textContent = S.ended ? 'session ended' : (!S.contact ? 'session: lost contact' : (S.holder ? 'sharing' : 'shared session'));
+      barText.style.fontSize = '11px'; barAct.hidden = true; barBtns.hidden = true; barHide.hidden = true;
+      return;
+    }
+    bar.style.top = '6px'; bar.style.padding = '6px 12px'; bar.style.borderRadius = '8px'; bar.style.borderTop = '';
+    bar.style.cursor = ''; bar.title = ''; bar.onclick = null;
+    barText.style.fontSize = ''; barAct.hidden = false; barBtns.hidden = false; barHide.hidden = false; barHide.textContent = '\u2715';
     barText.textContent = text;
     barAct.textContent = S.note ? '“' + S.note + '”' : '';
     barAct.title = S.note || '';
