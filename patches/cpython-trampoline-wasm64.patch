@@ -1,0 +1,43 @@
+wasm64: CPython 3.13.3's reflection trampoline dispatches on parameter count alone and
+calls every target through a PyObject*-returning type. On wasm64 a pointer is i64, so a
+function returning int -- a getset setter, via descr_set_trampoline_call -- has a different
+wasm type and call_indirect traps with 'function signature mismatch' on the first setattr
+after Ready (link 33969348139). pre-gui.js's wasm parser reports int-returning functions
+with bit 4 set on the count; these cases call them through the matching type. CPython 3.14
+replaced this trampoline with a wasm-gc one that reads the target's type at run time.
+
+--- a/Python/emscripten_trampoline.c
++++ b/Python/emscripten_trampoline.c
+@@ -65,6 +65,16 @@
+ typedef PyObject* (*one_arg)(PyObject*);
+ typedef PyObject* (*two_arg)(PyObject*, PyObject*);
+ typedef PyObject* (*three_arg)(PyObject*, PyObject*, PyObject*);
++// FCWEB wasm64: a pointer is i64 there, so a function returning int -- a getset
++// setter, reached through descr_set_trampoline_call -- has a different wasm type
++// from one returning PyObject*, and call_indirect through the pointer-returning
++// type above traps with "function signature mismatch". (On wasm32 both were i32.)
++// The harness's wasm parser (pre-gui.js, fcweb_install_pyem_countargs) reports
++// such functions with bit 4 set on the parameter count; these are their types.
++typedef int (*zero_arg_int)(void);
++typedef int (*one_arg_int)(PyObject*);
++typedef int (*two_arg_int)(PyObject*, PyObject*);
++typedef int (*three_arg_int)(PyObject*, PyObject*, PyObject*);
+ 
+ 
+ PyObject*
+@@ -82,6 +92,15 @@
+             return ((two_arg)func)(self, args);
+         case 3:
+             return ((three_arg)func)(self, args, kw);
++        // int-returning (bit 4): the caller casts the result back to int.
++        case 0x10:
++            return (PyObject*)(intptr_t)((zero_arg_int)func)();
++        case 0x11:
++            return (PyObject*)(intptr_t)((one_arg_int)func)(self);
++        case 0x12:
++            return (PyObject*)(intptr_t)((two_arg_int)func)(self, args);
++        case 0x13:
++            return (PyObject*)(intptr_t)((three_arg_int)func)(self, args, kw);
+         default:
+             PyErr_SetString(PyExc_SystemError,
+                             "Handler takes too many arguments");

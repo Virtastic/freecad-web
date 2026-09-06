@@ -171,6 +171,8 @@ apply_one pyside-setup  pyside-setup.patch \
   'sources/pyside6/cmake/Macros/PySideModules.cmake::--clang-option=--target=wasm64-unknown-emscripten'
 apply_one occt          occt.patch
 apply_one cpython       cpython-ctypes-wasm.patch
+# Independent hunks on the same file (the switch, not the EM_JS); either order applies.
+apply_one cpython       cpython-trampoline-wasm64.patch
 apply_one numpy         numpy.patch
 apply_one coin3d        coin3d.patch
 # Never applied until now, and it shows: opening the shipped FEMExample.FCStd traps with

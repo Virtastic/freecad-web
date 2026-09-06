@@ -1229,7 +1229,7 @@ DISPATCH_JS = """(code) => {
   const n = new TextEncoder().encode(code).length + 1;
   const q = m._malloc(n);
   m.stringToUTF8(code, q, n);
-  (window.fcRunPy || function (mm, pp) { mm._fcweb_run_python(pp); mm._free(pp); })(m, q);
+  (window.fcRunPy || function (mm, pp) { mm._fcweb_run_python(BigInt(pp)); mm._free(pp); })(m, q);
   return 'dispatched';
 }"""
 

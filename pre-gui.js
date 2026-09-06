@@ -146,7 +146,13 @@ Module.fcweb_install_pyem_countargs = function(wasmBytes) {
       var id = b[pos++]; var size = u32(); var end = pos + size;
       if (id === 1) { // Type
         var nt = u32();
-        for (var i=0;i<nt;i++){ var form=b[pos++]; /*0x60*/ var np=u32(); pos+=np; var nr=u32(); pos+=nr; typeParams.push(np); }
+        // Per type: the parameter count, plus bit 4 when the RESULT is a 32-bit int (valtype
+        // 0x7f). On wasm64 a pointer is i64, so a function returning int -- a getset setter
+        // -- has a different wasm type from one returning PyObject*, and CPython's trampoline
+        // must call it through the int-returning signature or call_indirect traps with
+        // 'function signature mismatch' (the first setattr after Ready, link 33969348139).
+        // On wasm32 both were i32 and the count alone was enough.
+        for (var i=0;i<nt;i++){ var form=b[pos++]; /*0x60*/ var np=u32(); pos+=np; var nr=u32(); var r0=nr?b[pos]:0; pos+=nr; typeParams.push(np | ((nr===1 && r0===0x7f) ? 0x10 : 0)); }
       } else if (id === 2) { // Import
         var ni = u32();
         for (var j=0;j<ni;j++){ var ml=u32(); pos+=ml; var fl=u32(); pos+=fl; var kind=b[pos++];
@@ -165,7 +171,12 @@ Module.fcweb_install_pyem_countargs = function(wasmBytes) {
           if (flags===0){ // e: expr, then vec(funcidx)
             // expr: skip until 0x0b (end); typically i32.const N; end
             var base=0;
-            if (b[pos]===0x41){ pos++; base=u32(); } // i32.const
+            // i32.const on a 32-bit table, i64.const (0x42) on wasm64's 64-bit table. Missing the
+            // second left base at 0: every arity came from the NEXT table entry, and CPython's
+            // direct call_indirect trapped 'function signature mismatch' on the first method call
+            // after Ready (local boot of link 33969348139). The offset is 1, whose signed and
+            // unsigned LEB encodings coincide.
+            if (b[pos]===0x41 || b[pos]===0x42){ pos++; base=u32(); }
             while(b[pos]!==0x0b) pos++; pos++; // end
             var nfn=u32();
             for (var e=0;e<nfn;e++){ elemMap[base+e]=u32(); }
@@ -229,7 +240,10 @@ Module.preRun.push(function(){
       Module.__fcwebEvent = event;
       var r;
       try {
-        r = dispatch(this.handler);
+        // BigInt: a JSPI export takes its pointer as a raw i64 on wasm64 (emscripten's
+        // signature conversion skips promising exports); BigInt(BigInt) is a no-op if the
+        // handler already arrives as one through Embind.
+        r = dispatch(BigInt(this.handler));
       } catch (e) {
         if (typeof err === 'function') { err('[fcweb] event handler threw: ' + e); }
         return;
@@ -262,10 +276,10 @@ Module.postRun.push(function(){
     var parsed = Module.PyEM_CountArgs; if (typeof parsed !== 'function') return;
     var checked = 0, mismatch = 0, step = Math.max(1, (wasmTable.length / 3000) | 0);
     for (var i = 1; i < wasmTable.length && checked < 3000; i += step) {
-      var f; try { f = wasmTable.get(i); } catch (e) { continue; }
+      var f; try { f = wasmTable.get(BigInt(i)); } catch (e) { continue; }  // 64-bit table index on wasm64
       if (!f || typeof f.length !== 'number') continue;
       checked++;
-      if (parsed(i) !== f.length) mismatch++;
+      if ((parsed(i) & 0xf) !== f.length) mismatch++;  // low 4 bits: the count; bit 4: int result
     }
     if (typeof err === 'function')
       err('[fcweb] PyEM_CountArgs selfcheck checked=' + checked + ' mismatch=' + mismatch);
