@@ -443,10 +443,17 @@ def scenario_mcp(ctx, url, args, fail):
         fail('fc_console_tail -> %r' % r)
     r = tool('fc_screenshot', {'region': 'viewport'}, 30)
     if getattr(args, 'with_3d', False):
+        w = tool('fc_screenshot', {'region': 'window'}, 30)
         if not r.get('ok') or r.get('mean_luminance', 0) <= 0:
             fail('fc_screenshot with 3D on: %r' % {k: r.get(k) for k in ('ok', 'code', 'hint', 'mean_luminance')})
+        elif not r.get('cropped'):
+            fail('fc_screenshot(viewport) did not crop to the 3D view: %r' % {k: r.get(k) for k in ('width', 'height', 'cropped')})
+        elif not w.get('ok') or (w['width'], w['height']) == (r['width'], r['height']):
+            fail('viewport and window returned the same frame: %r vs %r'
+                 % ((r['width'], r['height']), (w.get('width'), w.get('height'))))
         else:
-            print('==> fc_screenshot: %dx%d, luminance %d' % (r['width'], r['height'], r['mean_luminance']))
+            print('==> fc_screenshot: viewport %dx%d (cropped, luminance %d), window %dx%d'
+                  % (r['width'], r['height'], r['mean_luminance'], w['width'], w['height']))
     else:
         if r.get('ok') or not r.get('hint'):
             fail('fc_screenshot under ?no3d must fail honestly with a hint: %r' % str(r)[:200])

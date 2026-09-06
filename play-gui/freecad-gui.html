@@ -1696,19 +1696,28 @@ window.fcwebNotify = function (text, kind, actions) {
   function capture(region, maxPx) {
     return new Promise(function (resolve, reject) {
       var t = setTimeout(function () { window.__fcCaptureReq = null; reject(new Error('no frame was presented within 3 s (is the 3D view up?)')); }, 3000);
-      window.__fcCaptureReq = { region: region, done: function (w, h, rgba) {
+      window.__fcCaptureReq = { region: region, done: function (w, h, rgba, crop) {
         clearTimeout(t); window.__fcCaptureReq = null;
         if (!w || !h) { reject(new Error('readback failed: the compositor had no frame')); return; }
         try {
-          var scale = Math.min(1, maxPx / Math.max(w, h)), ow = Math.max(1, Math.round(w * scale)), oh = Math.max(1, Math.round(h * scale));
-          var c = document.createElement('canvas'); c.width = w; c.height = h; var ctx = c.getContext('2d');
-          var img = ctx.createImageData(w, h), row = w * 4, lum = 0;
-          for (var y = 0; y < h; y++) img.data.set(rgba.subarray((h - 1 - y) * row, (h - y) * row), y * row);   // GL is y-up
-          for (var i = 0; i < rgba.length; i += 4 * 97) lum += rgba[i] + rgba[i + 1] + rgba[i + 2];
+          var c = document.createElement('canvas'); c.width = w; c.height = h;
+          var ctx = c.getContext('2d'), img = ctx.createImageData(w, h), row = w * 4;
+          for (var y = 0; y < h; y++) { img.data.set(rgba.subarray((h - 1 - y) * row, (h - y) * row), y * row); }   // GL is y-up
           ctx.putImageData(img, 0, 0);
-          var out = c; if (scale < 1) { out = document.createElement('canvas'); out.width = ow; out.height = oh; out.getContext('2d').drawImage(c, 0, 0, ow, oh); }
+          var sx = crop ? crop[0] : 0, sy = crop ? crop[1] : 0, sw = crop ? crop[2] : w, sh = crop ? crop[3] : h;
+          var scale = Math.min(1, maxPx / Math.max(sw, sh));
+          var ow = Math.max(1, Math.round(sw * scale)), oh = Math.max(1, Math.round(sh * scale));
+          var out = document.createElement('canvas'); out.width = ow; out.height = oh;
+          var octx = out.getContext('2d');
+          octx.drawImage(c, sx, sy, sw, sh, 0, 0, ow, oh);
+          // Luminance of what is actually RETURNED, not of the frame it was cut from: a
+          // black image is then a number the caller can act on rather than a guess.
+          var d = octx.getImageData(0, 0, ow, oh).data, lum = 0, n = 0;
+          for (var i = 0; i < d.length; i += 4 * 37) { lum += d[i] + d[i + 1] + d[i + 2]; n++; }
           var png = out.toDataURL('image/png');
-          resolve({ format: 'png', width: ow, height: oh, region: region, mean_luminance: Math.round(lum / (rgba.length / (4 * 97)) / 3), png_b64: png.slice(png.indexOf(',') + 1) });
+          resolve({ format: 'png', width: ow, height: oh, region: region, cropped: !!crop,
+                    mean_luminance: Math.round(lum / Math.max(1, n) / 3),
+                    png_b64: png.slice(png.indexOf(',') + 1) });
         } catch (e) { reject(e); }
       } };
     });
@@ -3667,20 +3676,28 @@ window.fcRunPy = fcRunPy;
             gl.bindTexture(gl.TEXTURE_2D, keepTex);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             if (window.__fcCaptureReq) {
-              // fc_screenshot: read back what was JUST presented. 'window' = the default
-              // framebuffer in the same task as the quad (before the browser invalidates it:
-              // no preserveDrawingBuffer); 'viewport' = keepFbo, the page's held composite.
-              // Never FreeCAD's offscreen saveImage path (measured material-corruption bug).
+              // fc_screenshot: read back what was JUST presented, from the default
+              // framebuffer and in the same task as the quad -- before the browser
+              // invalidates it (the canvas has no preserveDrawingBuffer). Never through
+              // FreeCAD's offscreen saveImage, which has a measured bug where that render
+              // corrupts the live viewport's material state.
+              //
+              // region 'window' is the whole frame -- tree, property editor, task panel.
+              // 'viewport' crops to the 3D widget's on-screen rect, which only Qt knows
+              // and publishes as FCRECT; without one yet, it honestly returns the frame.
               var __req = window.__fcCaptureReq; window.__fcCaptureReq = null;
               try {
-                var __cw, __ch;
-                if (__req.region === 'window' || !keepFbo) { gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); __cw = W; __ch = H; }
-                else { gl.bindFramebuffer(gl.READ_FRAMEBUFFER, keepFbo); __cw = keepSz[0]; __ch = keepSz[1]; }
-                var __px = new Uint8Array(__cw * __ch * 4);
-                gl.readPixels(0, 0, __cw, __ch, gl.RGBA, gl.UNSIGNED_BYTE, __px);
+                var __px = new Uint8Array(W * H * 4);
                 gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
-                __req.done(__cw, __ch, __px);
-              } catch (__ex) { try { __req.done(0, 0, new Uint8Array(0)); } catch (_) {} }
+                gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, __px);
+                var __crop = null, __R = window.__fcWidgetRect, __cv = gl.canvas;
+                if (__req.region !== 'window' && __R && __R.length === 4 && __R[2] > 10 && __R[3] > 10) {
+                  var __sx = W / (__cv.clientWidth || W), __sy = H / (__cv.clientHeight || H);
+                  __crop = [Math.max(0, Math.round(__R[0] * __sx)), Math.max(0, Math.round(__R[1] * __sy)),
+                            Math.min(W, Math.round(__R[2] * __sx)), Math.min(H, Math.round(__R[3] * __sy))];
+                }
+                __req.done(W, H, __px, __crop);
+              } catch (__ex) { try { __req.done(0, 0, new Uint8Array(0), null); } catch (_) {} }
             }
           }
           gl.useProgram(sProg); gl.bindVertexArray(sVao);

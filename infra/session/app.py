@@ -126,9 +126,13 @@ async def fc_status() -> dict:
 
 @mcp.tool()
 async def fc_screenshot(region: str = 'viewport', max_px: int = 1280) -> dict:
-    """What the person sees. region='viewport' is the 3D view; 'window' is the whole FreeCAD
-    window (tree, property editor, task panel, report view). Returns PNG as png_b64 plus
-    width/height and mean_luminance (0 means a black frame: nothing is drawn yet)."""
+    """What the person sees, as a PNG in png_b64.
+
+    region='viewport' crops to the 3D view alone -- use it to look at the model.
+    region='window' is the whole FreeCAD window: tree, property editor, task panel,
+    report view. Also returns width/height, cropped (false means no 3D view rect was
+    available yet, so you got the whole frame), and mean_luminance -- 0 is a black
+    image, which means nothing has been drawn rather than that the model is missing."""
     return await _call('screenshot', {'region': region, 'max_px': int(max_px)}, 20)
 
 
