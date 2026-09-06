@@ -21,6 +21,7 @@ import urllib.error
 import urllib.request
 
 GROUP = 'User parameter:BaseApp/Preferences/FCWeb/Sharing'
+MOD_JS = ('(() => { try { return window.fcInstance.FS.readdir("/home/web_user/.local/share/FreeCAD/Mod").filter(n => n !== "." && n !== ".."); } catch (e) { return []; } })()')
 
 MAKE_DOC_PY = r'''
 import FreeCAD as App, sys
@@ -490,15 +491,20 @@ def scenario_env(ctx, url, args, fail):
     s1 = S(ctx, url, args.timeout)
     if not s1.load():
         fail('owner never reached Ready'); return None
+    before = set(s1.page.evaluate(MOD_JS))
     s1.page.evaluate('window.fcInstallAddon(%r)' % ADDON)
-    t0 = time.time(); have = False
-    while time.time() - t0 < 180 and not have:
-        have = s1.page.evaluate('(() => { try { return window.fcInstance.FS.readdir("/home/web_user/.local/share/FreeCAD/Mod").some(n => /SheetMetal/i.test(n)); } catch (e) { return false; } })()')
+    t0 = time.time(); added = set()
+    while time.time() - t0 < 240 and not added:
+        added = set(s1.page.evaluate(MOD_JS)) - before
         time.sleep(3)
-    if not have:
-        fail('the owner could not install %s through the proxy (network?)' % ADDON)
+    if not added:
+        fail('the owner could not install %s through the proxy (network?); Mod holds %r'
+             % (ADDON, sorted(before)))
     else:
-        print('==> owner installed %s in %.0fs' % (ADDON, time.time() - t0))
+        print('==> owner installed %s in %.0fs as %r' % (ADDON, time.time() - t0, sorted(added)))
+    s1.run_python("import FreeCADGui as G, sys\nsys.__stderr__.write('GATE_WB ' + repr({'wb': sorted(G.listWorkbenches())}) + '\\n')")
+    owner_wb = set((s1.wait_for('GATE_WB', 60) or {}).get('wb', []))
+    print('==> owner workbenches: %d' % len(owner_wb))
     time.sleep(6)                               # IDBFS flush, so the reboot below still has it
     s1.page.close()
     s1, sid = _owner_up(ctx, url, args, fail, extra=(
@@ -540,7 +546,7 @@ def scenario_env(ctx, url, args, fail):
             fail('the add-on was not unpacked before boot: %s' % mat)
     line = _wait(s2, 'units=', 60, 'console')
     print('==> ' + (line or 'no units line'))
-    s2.run_python("import FreeCAD as A, os, sys\n_u=A.ParamGet('User parameter:BaseApp/Preferences/Units')\nsys.__stderr__.write('GATE_ENV ' + repr({'schema': _u.GetInt('UserSchema', 0), 'decimals': _u.GetInt('Decimals', 2), 'probe': A.ParamGet('User parameter:BaseApp/Preferences/GateProbe').GetString('Mine', ''), 'docs': sorted(A.listDocuments()), 'macro': os.path.exists(os.path.join(A.getUserMacroDir(True), 'GateMacro.FCMacro')), 'sheetmetal': any('SheetMetal' in w for w in __import__('FreeCADGui').listWorkbenches())}) + '\\n')")
+    s2.run_python("import FreeCAD as A, os, sys\n_u=A.ParamGet('User parameter:BaseApp/Preferences/Units')\nsys.__stderr__.write('GATE_ENV ' + repr({'schema': _u.GetInt('UserSchema', 0), 'decimals': _u.GetInt('Decimals', 2), 'probe': A.ParamGet('User parameter:BaseApp/Preferences/GateProbe').GetString('Mine', ''), 'docs': sorted(A.listDocuments()), 'macro': os.path.exists(os.path.join(A.getUserMacroDir(True), 'GateMacro.FCMacro')), 'wb': sorted(__import__('FreeCADGui').listWorkbenches()), 'mod': sorted(os.listdir(os.path.join(A.getUserAppDataDir(), 'Mod'))) if os.path.isdir(os.path.join(A.getUserAppDataDir(), 'Mod')) else []}) + '\\n')")
     r = s2.wait_for('GATE_ENV', 60)
     if not isinstance(r, dict):
         fail('no environment report from inside the session')
@@ -550,10 +556,16 @@ def scenario_env(ctx, url, args, fail):
             fail('the owner\'s units did not travel: schema %r decimals %r' % (r['schema'], r['decimals']))
         if not r['macro']:
             fail('the macro did not travel')
-        if not r.get('sheetmetal'):
-            fail('the add-on workbench is not registered at first boot in the session')
+        print('==> session Mod: %r' % r.get('mod'))
+        missing = owner_wb - set(r.get('wb', []))
+        if not set(r.get('mod', [])) >= added:
+            fail('the add-on directory did not travel: session Mod %r, expected %r'
+                 % (r.get('mod'), sorted(added)))
+        elif missing:
+            fail('workbenches the owner had are not registered in the session: %r' % sorted(missing))
         else:
-            print('==> SheetMetal workbench present at first boot, from the bundle')
+            print('==> the add-on and every one of the owner\'s %d workbenches are registered at first boot'
+                  % len(owner_wb))
         if r['probe']:
             fail('ISOLATION FAILED: the visitor\'s own setting is visible inside the session')
         if 'MyOwnWork' in r['docs']:
