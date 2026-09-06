@@ -209,3 +209,9 @@ actionable; "3D view is janky" is not.
   Sharing is turn-taking, not concurrent editing: one person edits, everyone else watches
   live (following the editor's camera) and can take control. The AI over MCP acts inside a
   live browser tab and inherits its rights; with no tab open, every tool says `no_tab`.
+
+- Shared sessions were verified against the **wasm32** engine that v1.0.0 and play-gui
+  actually hold. `dev` has since moved the page to wasm64 (`BigInt` pointers) ahead of any
+  published wasm64 link, so the page on `dev` -- session code or not -- cannot run against
+  the released artifacts until that link ships. When it does, re-run
+  `boot-gate.py --scenario share|mcp|control|env|edges` before believing sharing still works.
