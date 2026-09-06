@@ -241,12 +241,20 @@ def snapshot_env():
 
 def _prov():
     v = App.Version()
-    try:
-        mdir = os.path.relpath(App.getUserMacroDir(True), os.path.expanduser('~')).replace(os.sep, '/')
-    except Exception:
-        mdir = '.FreeCAD/Macro'
+    # FreeCAD 1.1 keeps the user's directories under a VERSIONED name
+    # (.local/share/FreeCAD/v1-1/Mod, .config/FreeCAD/v1-1). Never hardcode them: ask
+    # FreeCAD and send the answer, so the page writes where this build actually reads.
+    def rel(path, fallback):
+        try:
+            return os.path.relpath(path, os.path.expanduser('~')).replace(os.sep, '/').strip('/')
+        except Exception:
+            return fallback
+    mdir = rel(App.getUserMacroDir(True), '.FreeCAD/Macro')
+    cdir = rel(App.getUserConfigDir(), '.config/FreeCAD')
+    moddir = rel(os.path.join(App.getUserAppDataDir(), 'Mod'), '.local/share/FreeCAD/Mod')
     return {'freecad': '.'.join(str(x) for x in v[:3]), 'build': os.environ.get('FCWEB_BUILD', ''),
-            'owner': _p().GetString('DisplayName', ''), 'macro_dir': mdir}
+            'owner': _p().GetString('DisplayName', ''), 'macro_dir': mdir,
+            'cfg_dir': cdir, 'mod_dir': moddir}
 
 
 # --------------------------------------------------------------------------- read-only

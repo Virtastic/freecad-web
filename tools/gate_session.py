@@ -21,7 +21,9 @@ import urllib.error
 import urllib.request
 
 GROUP = 'User parameter:BaseApp/Preferences/FCWeb/Sharing'
-MOD_JS = ('(() => { try { return window.fcInstance.FS.readdir("/home/web_user/.local/share/FreeCAD/Mod").filter(n => n !== "." && n !== ".."); } catch (e) { return []; } })()')
+MOD_PY = ('import FreeCAD as A, os, sys\n'
+          '_m = os.path.join(A.getUserAppDataDir(), "Mod")\n'
+          'sys.__stderr__.write("GATE_MOD_%d " + repr({"mod": _m, "dirs": sorted(os.listdir(_m)) if os.path.isdir(_m) else []}) + "\\n")')
 
 MAKE_DOC_PY = r'''
 import FreeCAD as App, sys
@@ -491,11 +493,17 @@ def scenario_env(ctx, url, args, fail):
     s1 = S(ctx, url, args.timeout)
     if not s1.load():
         fail('owner never reached Ready'); return None
-    before = set(s1.page.evaluate(MOD_JS))
+    def mod_dirs(sess):
+        _probe_n[0] += 1
+        sess.run_python(MOD_PY % _probe_n[0])
+        r = sess.wait_for('GATE_MOD_%d' % _probe_n[0], 60)
+        return set((r or {}).get('dirs', []))
+
+    before = mod_dirs(s1)
     s1.page.evaluate('window.fcInstallAddon(%r)' % ADDON)
     t0 = time.time(); added = set()
     while time.time() - t0 < 240 and not added:
-        added = set(s1.page.evaluate(MOD_JS)) - before
+        added = mod_dirs(s1) - before
         time.sleep(3)
     if not added:
         fail('the owner could not install %s through the proxy (network?); Mod holds %r'

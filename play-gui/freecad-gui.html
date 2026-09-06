@@ -1111,7 +1111,7 @@ window.fcwebNotify = function (text, kind, actions) {
     }
     return files;
   }
-  async function fetchAddonZip(a, files) {
+  async function fetchAddonZip(a, files, modDir) {
     var url = '/proxy/codeload/' + a.repo + '/zip/' + (a.ref || 'HEAD'), buf = null, cache = null;
     try { cache = await caches.open('fcweb-addons'); var hit = await cache.match(url); if (hit) buf = await hit.arrayBuffer(); } catch (e) {}
     if (!buf) {
@@ -1123,7 +1123,7 @@ window.fcwebNotify = function (text, kind, actions) {
     var mod = (a.name || a.repo.split('/')[1]).replace(/[^\w.\-]/g, '_');
     return unzip(buf, function (name, data) {
       var rest = name.indexOf('/') >= 0 ? name.slice(name.indexOf('/') + 1) : name;   // strip <repo>-<ref>/
-      if (rest) files.set('/home/web_user/.local/share/FreeCAD/Mod/' + mod + '/' + rest, data);
+      if (rest) files.set(modDir + '/' + mod + '/' + rest, data);
     });
   }
 
@@ -1159,8 +1159,15 @@ window.fcwebNotify = function (text, kind, actions) {
     boot('Joining ' + who + ' · ' + (S.doc || 'document') + (join.addons && join.addons.length ? ' · ' + join.addons.length + ' add-on(s)' : ''));
     var files = new Map(), enc = new TextEncoder(), env = {};
     try { env = (await api('GET', '/share/' + S.id + '/env')).json || {}; } catch (e) { fail('env', e); }
-    if (env.cfg) files.set('/home/web_user/.config/FreeCAD/user.cfg', enc.encode(env.cfg));
-    var macroDir = '/home/web_user/' + ((env.provenance && env.provenance.macro_dir) || '.FreeCAD/Macro').replace(/^\/+|\/+$/g, '');
+    // FreeCAD 1.1 versions these paths (.config/FreeCAD/v1-1, .local/share/FreeCAD/v1-1/Mod),
+    // so the bundle carries them: writing to a hardcoded path put the add-ons somewhere
+    // FreeCAD never looks, and the session opened without them.
+    var prov = env.provenance || {};
+    function homeDir(v, fallback) { return '/home/web_user/' + String(v || fallback).replace(/^\/+|\/+$/g, ''); }
+    var cfgDir = homeDir(prov.cfg_dir, '.config/FreeCAD');
+    var macroDir = homeDir(prov.macro_dir, '.FreeCAD/Macro');
+    var modDir = homeDir(prov.mod_dir, '.local/share/FreeCAD/Mod');
+    if (env.cfg) files.set(cfgDir + '/user.cfg', enc.encode(env.cfg));
     Object.keys(env.macros || {}).forEach(function (k) { files.set(macroDir + '/' + k.replace(/[^\w.\-]/g, '_'), enc.encode(env.macros[k])); });
     var addons = (env.addons || []).filter(function (a) { return a.repo; }), skipped = (env.addons || []).filter(function (a) { return !a.repo; });
     var installed = 0, failed = [], declined = false;
@@ -1171,7 +1178,7 @@ window.fcwebNotify = function (text, kind, actions) {
       if (window.confirm('This session uses ' + addons.length + ' add-on(s): ' + names + '.\n\nInstall them into a temporary workspace that disappears when you close this tab? (They are code fetched from GitHub.)\n\nOK = open with them.   Cancel = open without them; the geometry is still visible, only add-on features are missing.')) {
         for (var i = 0; i < addons.length; i++) {
           var a = addons[i];
-          try { boot('Fetching add-on ' + (a.name || a.repo) + '…'); var nf = await fetchAddonZip(a, files); installed++; log('env', 'addon ' + a.repo + '@' + (a.ref || 'HEAD') + ': ' + nf + ' files, unpacked before boot'); }
+          try { boot('Fetching add-on ' + (a.name || a.repo) + '…'); var nf = await fetchAddonZip(a, files, modDir); installed++; log('env', 'addon ' + a.repo + '@' + (a.ref || 'HEAD') + ': ' + nf + ' files -> ' + modDir); }
           catch (e) { failed.push(a.repo); fail('env', e); }
         }
       } else { declined = true; }
