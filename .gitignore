@@ -107,3 +107,4 @@ ci/jenkins/config.env
 # The boot gate assembles this tree beside the sources (workflow and local docker runs
 # alike); it holds a 200 MB engine copy and is never part of the repo.
 /gate-serve/
+/gate-serve-sh/
