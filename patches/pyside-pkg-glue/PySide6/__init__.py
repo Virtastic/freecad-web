@@ -13,6 +13,11 @@ __version_info__ = (6, 11, 2, "", "")
 __all__ = ["QtCore", "QtGui", "QtWidgets", "QtNetwork", "QtSvg"]
 __path__ = []  # mark as package
 
+# shiboken6 first: creating any Qt enum runs libshiboken's _init_enum(), which imports
+# "shiboken6.Shiboken". Importing it here means that name is already registered, so the
+# first QtCore enum does not start a nested shiboken6 import from inside this one.
+import shiboken6  # noqa: F401,E402
+
 # Order matters: QtGui pulls in QtCore, QtWidgets pulls in both.
 QtCore = importlib.import_module("QtCore_fcweb")
 sys.modules["PySide6.QtCore"] = QtCore
