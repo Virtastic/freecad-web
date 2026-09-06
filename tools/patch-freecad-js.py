@@ -98,6 +98,25 @@ import pathlib
 
 PATCHES = [
     (
+        'glGetString returns its cached pointer as a BigInt',
+        # LEGACY_GL_EMULATION replaces glGetString AFTER emscripten wrapped the real one
+        # for wasm64. The wrapped original computes a Number, caches THAT, and converts
+        # only on the way out:
+        #     ...GL.stringCache[name_]=ret}return ret})();return BigInt(ret)
+        # so the cache holds Numbers. The emulation's own early return hands that Number
+        # straight back to wasm, where the import is declared i64:
+        #     TypeError: Cannot convert 75079704 to a BigInt
+        #         at QRhiGles2::create(QFlags<QRhi::Flag>)
+        # The first call for a given name goes through the original and works; every
+        # later one throws -- which is why boot survives and the app dies the moment
+        # anything builds a second GL surface: opening a document (QuarterWidget) or
+        # Edit > Preferences (the backing store's RHI).
+        '_glGetString=_emscripten_glGetString=name_=>{'
+        'if(GL.stringCache[name_])return GL.stringCache[name_];',
+        '_glGetString=_emscripten_glGetString=name_=>{'
+        'if(GL.stringCache[name_])return BigInt(GL.stringCache[name_]);',
+    ),
+    (
         'getCurTexUnit null-guard',
         'function getCurTexUnit(){return s_texUnits[s_activeTexture]}',
         'function getCurTexUnit(){if(!s_texUnits)return{enabled_tex1D:false,'
