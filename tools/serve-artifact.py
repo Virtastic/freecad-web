@@ -48,6 +48,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         'objects': 'objects.githubusercontent.com',
         'wiki': 'wiki.freecad.org',
         'docs': 'freecad.org',
+        # The Addon Manager pings this on open and its startup sequence waits for the
+        # answer. Without the route here the app rewrites correctly and the stand-in
+        # answers 403, which looks exactly like an application fault and is not one.
+        'addons': 'addons.freecad.org',
     }
 
     def _serve_proxy(self, path):
