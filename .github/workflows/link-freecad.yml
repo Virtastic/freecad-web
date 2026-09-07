@@ -33,6 +33,16 @@ on:
     paths:
       - '.github/workflows/link-freecad.yml'
       - 'build-weh-objs.sh'
+      # The sources that script compiles, not just the script. A fix inside one of
+      # the JSPI bridges -- the pointer-width bug that stopped gmsh from ever being
+      # reached lived in fcweb_gmsh_module.cpp -- would otherwise change a file the
+      # link builds and trigger no link, which is precisely the shape of a fix that
+      # ships as a no-op.
+      - 'fcweb_ccx_module.cpp'
+      - 'fcweb_dlg_module.cpp'
+      - 'fcweb_gmsh_module.cpp'
+      - 'spe_sanitize.cpp'
+      - 'wasm_event_dispatch.cpp'
       - 'configure-gui-weh.sh'
       - 'scratchpad/linkcmds/fc-linkcmd-weh.sh'
       - 'scratchpad/stage-jspi.sh'
