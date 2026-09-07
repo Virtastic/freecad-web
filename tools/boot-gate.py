@@ -110,19 +110,30 @@ except Exception as _e:
     _s.__stderr__.flush()
 '''
 
+# One import per dispatch, and ifcopenshell last on purpose.
+#
+# These used to run in a single loop that reported once at the end. An import that takes
+# the renderer down -- ifcopenshell's schema registry does exactly that on wasm64 -- then
+# lost the whole result: the modules already imported successfully went unreported along
+# with the ones never reached, and the log said only that the scenario died. Dispatching
+# one at a time, and printing the name BEFORE dispatching it, means a crash names its own
+# module and everything checked before it stays on the record. Ordering the fragile one
+# last is not hiding it -- it still fails the run -- it just stops one broken package from
+# deciding whether the other six were tested.
+IMPORT_MODULES = ('numpy', 'matplotlib', 'PIL', 'pivy.coin', 'femmesh.gmshtools', 'Draft',
+                  'ifcopenshell')
+
 IMPORTS_PY = r'''
-# The inittab is a promise; an import is the delivery. Every one of these has its C
-# half linked into the binary, and each needs a Python package on the filesystem to be
-# reachable. Shipping one half of numpy is the same as shipping none of it.
+# The inittab is a promise; an import is the delivery. This one has its C half linked into
+# the binary, and needs a Python package on the filesystem to be reachable. Shipping one
+# half of numpy is the same as shipping none of it.
 import sys as _s
-_res = {}
-for _n in ('numpy', 'matplotlib', 'PIL', 'ifcopenshell', 'pivy.coin', 'femmesh.gmshtools', 'Draft'):
-    try:
-        __import__(_n)
-        _res[_n] = 'ok'
-    except Exception as _e:
-        _res[_n] = type(_e).__name__
-_s.__stderr__.write('FCIMPORTS ' + repr(_res) + chr(10))
+try:
+    __import__(%(name)r)
+    _v = 'ok'
+except Exception as _e:
+    _v = type(_e).__name__
+_s.__stderr__.write('FCIMPORTS ' + repr({%(name)r: _v}) + chr(10))
 _s.__stderr__.flush()
 '''
 
@@ -1942,13 +1953,19 @@ def scenario_imports(ctx, url, args, fail):
     if not s.load():
         fail('imports scenario: never reached Ready (overlay: %s)' % s.phase())
         return s
-    s.run_python(IMPORTS_PY)
-    r = s.wait_for('FCIMPORTS', 120)
-    if not isinstance(r, dict):
-        fail('the import probe produced no result')
-        return s
-    print('==> imports: %s' % r)
-    broken = sorted(k for k, v in r.items() if v != 'ok')
+    res = {}
+    for _name in IMPORT_MODULES:
+        # Printed before the dispatch, so that if this import is the one that kills the
+        # renderer the log still says which one it was.
+        print('==> importing %s' % _name, flush=True)
+        s.run_python(IMPORTS_PY % {'name': _name})
+        r = s.wait_for('FCIMPORTS', 120)
+        if not isinstance(r, dict):
+            fail('the import probe produced no result for %s' % _name)
+            return s
+        res.update(r)
+        print('==> imports: %s' % r)
+    broken = sorted(k for k, v in res.items() if v != 'ok')
     if broken:
         fail('these cannot be imported: %s -- their C extensions are linked into the '
              'binary but the Python package is not on the filesystem, so the workbenches '
