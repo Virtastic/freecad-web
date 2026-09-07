@@ -52,6 +52,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # answer. Without the route here the app rewrites correctly and the stand-in
         # answers 403, which looks exactly like an application fault and is not one.
         'addons': 'addons.freecad.org',
+        # The overlay's own key for the same host as `docs`. play-gui/am/fcweb_am_boot.py
+        # points www.freecad.org here on purpose: /proxy/docs/ carries a cached 301 and a
+        # different key is what bypasses it. addon_stats.json comes through this one.
+        'docswww': 'www.freecad.org',
     }
 
     def _serve_proxy(self, path):
@@ -66,10 +70,35 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(b'proxy: destination not allowed\n')
             return
         try:
-            conn = http.client.HTTPSConnection(host, timeout=30)
-            conn.request('GET', '/' + tail, headers={'User-Agent': 'fcweb-gate'})
-            resp = conn.getresponse()
-            body = resp.read(8 * 1024 * 1024)
+            # Follow redirects, as nginx's proxy_pass does in production. Without this the
+            # stand-in returns the 30x itself and the caller sees no body: measured as
+            # "only 9 of 24 addon READMEs loaded", which reads as a proxy or header
+            # regression in the app and is nothing of the sort -- GitHub redirects a great
+            # many raw README URLs.
+            body = None
+            for _hop in range(5):
+                conn = http.client.HTTPSConnection(host, timeout=30)
+                conn.request('GET', '/' + tail, headers={'User-Agent': 'fcweb-gate'})
+                resp = conn.getresponse()
+                if resp.status in (301, 302, 303, 307, 308):
+                    loc = resp.getheader('Location') or ''
+                    resp.read()
+                    conn.close()
+                    if not loc:
+                        break
+                    if loc.startswith('http'):
+                        from urllib.parse import urlsplit
+                        parts = urlsplit(loc)
+                        host, tail = parts.netloc, parts.path.lstrip('/')
+                        if parts.query:
+                            tail += '?' + parts.query
+                    else:
+                        tail = loc.lstrip('/')
+                    continue
+                body = resp.read(8 * 1024 * 1024)
+                break
+            if body is None:
+                body = b''
         except Exception as exc:
             self.send_response(502)
             self.end_headers()

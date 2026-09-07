@@ -198,15 +198,15 @@ document.addEventListener('DOMContentLoaded', function () {
 // XMLHttpRequest and fetch are where Qt, python-requests and urllib all end up, so doing it
 // here catches every path at once. Only these exact hosts are touched.
 (function () {
+  // ONLY the host the application's own rewrite misses.
+  //
+  // Everything else already goes through FreeCAD's NetworkManager, which is overlay-aware:
+  // play-gui/am/fcweb_am_boot.py's _fix_proxy_host_map points www.freecad.org at its own
+  // key, docswww, deliberately -- /proxy/docs/ carries a poisoned cached 301 and
+  // /proxy/docswww/ is a different cache key that bypasses it. A transport-layer rewrite
+  // that also claimed www.freecad.org would undo that on its way out, which is exactly
+  // what it did: addon_stats.json stopped arriving.
   var HOSTS = {
-    'github.com': 'github',
-    'api.github.com': 'api',
-    'codeload.github.com': 'codeload',
-    'raw.githubusercontent.com': 'raw',
-    'objects.githubusercontent.com': 'objects',
-    'wiki.freecad.org': 'wiki',
-    'freecad.org': 'docs',
-    'www.freecad.org': 'docs',
     'addons.freecad.org': 'addons'
   };
   function proxied(url) {
