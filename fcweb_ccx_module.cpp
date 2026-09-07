@@ -18,11 +18,20 @@
 
 // Runs ccx on `inpPath` (a full path in FreeCAD's FS) and writes the results next to it.
 // Returns ccx's exit code, or -1 if the bridge is missing.
+// wasm64: EM_ASYNC_JS builds a WebAssembly.Suspending import, and those are not given
+// emscripten's signature conversion -- a `const char*` parameter arrives as a raw i64, i.e.
+// a BigInt, and a `char*` result has to go back the same way. UTF8ToString does pointer
+// arithmetic, so passing the BigInt straight in throws
+//     TypeError: Cannot mix BigInt and other types, use explicit conversions
+// from inside the body, where the bridge's own catch turns it into a plain non-zero return.
+// That is what the FEM gate's "gmsh (wasm): returned 1" was, and every bridge here has
+// the same shape. Number() is correct on both targets: it
+// converts a BigInt and leaves a Number alone.
 EM_ASYNC_JS(int, fcweb_ccx_run_js, (const char* inpPath), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
     if (!g || typeof g.fcwebCcxRun !== 'function') { return -1; }
     try {
-        var rc = await g.fcwebCcxRun(UTF8ToString(inpPath));
+        var rc = await g.fcwebCcxRun(UTF8ToString(Number(inpPath)));
         return rc | 0;
     } catch (e) {
         try { console.error('[fcweb] ccx run failed', e); } catch (_) {}
@@ -32,16 +41,16 @@ EM_ASYNC_JS(int, fcweb_ccx_run_js, (const char* inpPath), {
 
 EM_ASYNC_JS(char*, fcweb_ccx_version_js, (), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
-    if (!g || typeof g.fcwebCcxVersion !== 'function') { return 0; }
+    if (!g || typeof g.fcwebCcxVersion !== 'function') { return BigInt(0); }
     try {
         var v = await g.fcwebCcxVersion();
-        if (v === null || v === undefined) { return 0; }
+        if (v === null || v === undefined) { return BigInt(0); }
         var s = String(v);
         var len = lengthBytesUTF8(s) + 1;
         var buf = _malloc(len);          // caller (C) frees
         stringToUTF8(s, buf, len);
-        return buf;
-    } catch (e) { return 0; }
+        return BigInt(buf);
+    } catch (e) { return BigInt(0); }
 });
 
 // _fcwebccx.run(inp_path) -> int return code

@@ -26,10 +26,20 @@
 // (Module.qtAsyncifyWakeUp) rather than emscripten_sleep — the latter shares
 // emscripten's global asyncify bookkeeping and does not resume from a second
 // concurrent promising call while the Qt main loop is parked.
+// wasm64: EM_ASYNC_JS builds a WebAssembly.Suspending import, and those are not given
+// emscripten's signature conversion -- a `const char*` parameter arrives as a raw i64, i.e.
+// a BigInt, and a `char*` result has to go back the same way. UTF8ToString does pointer
+// arithmetic, so passing the BigInt straight in throws
+//     TypeError: Cannot mix BigInt and other types, use explicit conversions
+// from inside the body, where the bridge's own catch turns it into a plain non-zero return.
+// That is what the FEM gate's "gmsh (wasm): returned 1" was, and every bridge here has
+// the same shape. Number() is correct on both targets: it
+// converts a BigInt and leaves a Number alone.
 EM_ASYNC_JS(int, fcweb_html_confirm, (const char* title, const char* text, const char* buttons), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
     g.__fcDlgBodyRan = (g.__fcDlgBodyRan | 0) + 1;
-    var t = UTF8ToString(title), msg = UTF8ToString(text), bs = UTF8ToString(buttons);
+    var t = UTF8ToString(Number(title)), msg = UTF8ToString(Number(text)),
+        bs = UTF8ToString(Number(buttons));
     if (g && typeof g.fcwebConfirm === 'function') {
         var idx = await g.fcwebConfirm(t, msg, bs);
         return idx | 0;
@@ -42,15 +52,16 @@ EM_ASYNC_JS(int, fcweb_html_confirm, (const char* title, const char* text, const
 // window.fcwebPrompt(title, text, default) -> Promise<string|null> lives in the harness.
 EM_ASYNC_JS(char*, fcweb_html_prompt, (const char* title, const char* text, const char* deflt), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
-    var t = UTF8ToString(title), msg = UTF8ToString(text), d = UTF8ToString(deflt);
-    if (!g || typeof g.fcwebPrompt !== 'function') return 0;
+    var t = UTF8ToString(Number(title)), msg = UTF8ToString(Number(text)),
+        d = UTF8ToString(Number(deflt));
+    if (!g || typeof g.fcwebPrompt !== 'function') return BigInt(0);
     var v = await g.fcwebPrompt(t, msg, d);
-    if (v === null || v === undefined) return 0;   // cancelled
+    if (v === null || v === undefined) return BigInt(0);   // cancelled
     var s = String(v);
     var len = lengthBytesUTF8(s) + 1;
     var buf = _malloc(len);          // caller (C) frees
     stringToUTF8(s, buf, len);
-    return buf;
+    return BigInt(buf);
 });
 
 // Python: _fcwebdlg.prompt(title, text, default="") -> str | None (None == cancel)
@@ -72,7 +83,7 @@ static PyObject* fcwebdlg_prompt(PyObject* /*self*/, PyObject* args)
 // 0xRRGGBB, or -1 if cancelled. Suspends (JSPI) until submit/cancel.
 EM_ASYNC_JS(int, fcweb_html_color, (const char* title, int initial), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
-    var t = UTF8ToString(title);
+    var t = UTF8ToString(Number(title));
     if (!g || typeof g.fcwebColor !== 'function') return -1;
     var v = await g.fcwebColor(t, initial | 0);
     return (v === null || v === undefined) ? -1 : (v | 0);
