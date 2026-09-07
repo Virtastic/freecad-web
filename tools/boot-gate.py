@@ -749,8 +749,34 @@ _s.__stderr__.flush()
 # This reads framebuffer 0. With ?pixelgate=1 the context is created with
 # preserveDrawingBuffer, so the composited frame is still there to be read.
 READ_CANVAS_JS = r"""(() => {
-  const gl = window.__fcPixelGl;
-  if (!gl) return JSON.stringify({error: 'pixelgate did not install (is ?pixelgate=1 set?)'});
+  // Pick the canvas the USER is looking at, not the last one to bind a framebuffer.
+  //
+  // window.__fcPixelGl is set by the pixelgate hook from whichever context most recently
+  // bound a non-default framebuffer, and that is often not the window: Qt makes offscreen
+  // surfaces with canvases of their own that never enter the document. Measured on the
+  // first build with the GL-context fix, this read a 1x1 canvas and reported one distinct
+  // colour -- a blank-window verdict against a canvas nobody can see, while the page's real
+  // 1280x720 canvas was live and the screenshot had grown from 99 KB to 131 KB.
+  //
+  // getContext() on a canvas that already has one returns THAT context, so the live window
+  // context can be found from the DOM directly. Qt 6.5+ hangs the whole screen off a shadow
+  // root, hence the recursive walk.
+  const found = [];
+  const walk = (root) => root.querySelectorAll('*').forEach((el) => {
+    if (el.tagName === 'CANVAS') found.push(el);
+    if (el.shadowRoot) walk(el.shadowRoot);
+  });
+  walk(document);
+  let gl = null, best = 0;
+  for (const c of found) {
+    let ctx = null;
+    try { ctx = c.getContext('webgl2') || c.getContext('webgl'); } catch (e) { ctx = null; }
+    if (!ctx) continue;
+    const area = (ctx.drawingBufferWidth || 0) * (ctx.drawingBufferHeight || 0);
+    if (area > best) { best = area; gl = ctx; }
+  }
+  if (!gl) { gl = window.__fcPixelGl; }
+  if (!gl) return JSON.stringify({error: 'no webgl canvas on the page, and pixelgate did not install (is ?pixelgate=1 set?)'});
   const l = document.getElementById('load'); if (l) l.style.display = 'none';
   const prev = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
   try {
