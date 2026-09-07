@@ -1068,6 +1068,29 @@ jobs:
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
           docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8798 --timeout 900 --scenario project3d --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/project3d.txt
 
+      # Both gates above read Coin's framebuffer, which is the right place to ask whether
+      # the scene graph drew and the wrong place to ask whether anyone can SEE it. Qt
+      # composites the widget UI through its own RHI GL context; when that stops presenting
+      # the page is black and Coin's framebuffer is still perfect. That is exactly what
+      # Qt 6.11 did on this port, and every gate was green while the window was empty.
+      #
+      # This one screenshots the page, which is the compositor's own output, and judges the
+      # image. continue-on-error while it earns its thresholds: they are a first estimate of
+      # what "a painted FreeCAD window" measures, and a rendering gate that blocks a release
+      # on its first miscalibration gets deleted rather than fixed. The numbers are printed
+      # either way, which is what calibrates them.
+      - name: Is there actually a window on the page?
+        id: uipaint
+        timeout-minutes: 25
+        continue-on-error: true
+        if: ${{ always() && hashFiles('gate-serve/FreeCAD.wasm') != '' }}
+        run: |
+          set -o pipefail
+          set -e
+          memgb=$(free -g | awk '/^Mem:/{print $2}')
+          cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8799 --timeout 900 --scenario ui --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/ui.txt
+
       - name: What the gates measured
         if: always()
         run: |

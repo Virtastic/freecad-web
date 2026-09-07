@@ -315,6 +315,13 @@ jobs:
       - name: Every Python payload in the page compiles
         run: python3 tools/check-page-python.py
 
+      # The ui scenario decides whether the application painted a window by decoding a
+      # screenshot, with a PNG reader written by hand because the gate container has
+      # nothing installed but playwright. A bug in that reader would not look like a
+      # decoder error -- it would look like a rendering verdict.
+      - name: The gate's PNG reader still reads PNGs
+        run: python3 tools/check-png-stats.py
+
       # A patch that nothing applies is not a fix, however carefully it is written.
       # patches/vtk-expat-wasm-xmlsize.patch sat in the tree for months, named in the deps
       # cache key so a change to it would rebuild VTK, with a comment describing exactly

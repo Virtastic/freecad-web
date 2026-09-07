@@ -2454,6 +2454,92 @@ def scenario_addonmgr(ctx, url, args, fail):
     return s
 
 
+def png_stats(data):
+    """Width, height, distinct colours and painted fraction of a PNG, with no dependencies.
+
+    Playwright hands back PNG bytes and the gate container has nothing but playwright
+    installed, so this decodes them: 8-bit truecolour or truecolour-with-alpha, which is
+    what Chrome produces. Returns None if it is anything else, so a caller can say "could
+    not read it" rather than assert something about pixels it never saw.
+    """
+    import struct
+    import zlib
+
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        return None
+    pos = 8
+    width = height = depth = colour = None
+    idat = []
+    while pos + 8 <= len(data):
+        length, kind = struct.unpack('>I4s', data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b'IHDR':
+            width, height, depth, colour = struct.unpack('>IIBB', body[:10])
+            if depth != 8 or colour not in (2, 6):
+                return None
+        elif kind == b'IDAT':
+            idat.append(body)
+        elif kind == b'IEND':
+            break
+    if width is None or not idat:
+        return None
+
+    channels = 3 if colour == 2 else 4
+    stride = width * channels
+    raw_px = zlib.decompress(b''.join(idat))
+    out = bytearray(stride * height)
+    prev = bytearray(stride)
+    src = 0
+    for y in range(height):
+        ftype = raw_px[src]
+        src += 1
+        line = bytearray(raw_px[src:src + stride])
+        src += stride
+        if ftype == 1:
+            for i in range(channels, stride):
+                line[i] = (line[i] + line[i - channels]) & 0xFF
+        elif ftype == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif ftype == 3:
+            for i in range(stride):
+                left = line[i - channels] if i >= channels else 0
+                line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif ftype == 4:
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b = prev[i]
+                c = prev[i - channels] if i >= channels else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pred) & 0xFF
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+
+    # Sample rather than count every pixel: a 1400x900 frame is 1.26M pixels and this runs
+    # in a container that is already tight on time. Every 7th pixel is ~180k samples, which
+    # is far more than enough to tell a painted UI from a blank one.
+    colours = {}
+    dark = 0
+    total = 0
+    for i in range(0, width * height, 7):
+        o = i * channels
+        px = (out[o], out[o + 1], out[o + 2])
+        colours[px] = colours.get(px, 0) + 1
+        if px[0] + px[1] + px[2] < 60:
+            dark += 1
+        total += 1
+    top = max(colours.values()) if colours else 0
+    return {
+        'w': width, 'h': height,
+        'distinct': len(colours),
+        'dark': round(dark / float(total or 1), 3),
+        'dominant': round(top / float(total or 1), 3),
+    }
+
+
 def scenario_render(ctx, url, args, fail):
     """RELEASE-PLAN V6: the viewport draws a shaded solid, not a blank or a silhouette.
 
@@ -3009,6 +3095,74 @@ def scenario_project3d(ctx, url, args, fail):
 import gate_session as _gs   # the shared-session scenarios live beside this file
 import gate_session_edges as _gse
 
+
+def scenario_ui(ctx, url, args, fail):
+    """The PAGE has a user interface on it -- judged from a screenshot, not from Coin.
+
+    Every other rendering check reads Coin's framebuffer, which is exactly the wrong place
+    to look for the fault this exists to catch. Qt composites the widget UI through its own
+    RHI GL context; when that context stops presenting, Coin's framebuffer stays perfect and
+    the page stays black. Qt 6.11 did precisely that on this port -- it refused to re-home a
+    native WebGL context onto the surface a recreated window had, reported the refusal as
+    permanent device loss, and never drew again -- and the whole gate passed while a user
+    looked at an empty window.
+
+    A Playwright screenshot is the compositor's own output, so it is the only measurement
+    here that sees what a person sees. It asserts a SHAPE, like its neighbours: enough
+    distinct colours to be a UI rather than a fill, and no single colour covering nearly
+    everything.
+    """
+    if args.base_url:
+        base = args.base_url.rstrip('/')
+    else:
+        base = 'http://127.0.0.1:%d/%s' % (args.port, args.page)
+    print('==> ui: %s' % base)
+    s = Session(ctx, base, args.timeout)
+    if not s.load():
+        fail('ui scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+
+    def shot(label):
+        time.sleep(4)
+        try:
+            stats = png_stats(s.page.screenshot(type='png'))
+        except Exception as exc:
+            fail('ui scenario: could not screenshot the page %s -- %s' % (label, exc))
+            return None
+        if stats is None:
+            fail('ui scenario: the screenshot was not an 8-bit PNG this can read')
+            return None
+        print('==> ui %s: %dx%d, %d distinct colours, %.1f%% dark, dominant colour %.1f%%'
+              % (label, stats['w'], stats['h'], stats['distinct'],
+                 100 * stats['dark'], 100 * stats['dominant']))
+        return stats
+
+    before = shot('at startup')
+    if before is None:
+        return s
+    # An empty window is not a small number of colours, it is a handful: the measured
+    # failure was a page of one flat colour with a few frame lines. A real FreeCAD window
+    # has toolbars, icons and text.
+    if before['distinct'] < 60 or before['dominant'] > 0.97:
+        fail('the window is not painted at startup: %d distinct colours, one of them over '
+             '%.0f%% of the frame. Coin can be drawing perfectly and this still fail -- it '
+             'is the widget compositor that is not presenting.'
+             % (before['distinct'], 100 * before['dominant']))
+
+    s.run_python(PROJECT3D_PY)
+    if not s.wait_for('FCPROJ3D', 300):
+        fail('ui scenario: the project never opened, so the after-shot would say nothing')
+        return s
+    after = shot('with a document open')
+    if after is None:
+        return s
+    if after['distinct'] < 60 or after['dominant'] > 0.97:
+        fail('the window stopped being painted once a 3D view existed: %d distinct colours, '
+             'one of them over %.0f%% of the frame. This is the Qt compositing failure, not '
+             'a scene-graph failure.' % (after['distinct'], 100 * after['dominant']))
+    return s
+
+
 SCENARIOS = (
     # name            function                in_all  what a pass actually means
     ('boot',          scenario_boot,          True,
@@ -3045,6 +3199,8 @@ SCENARIOS = (
      'opens a real project with 3D on and actually draws it'),
     ('render',        scenario_render,        False,
      'draws a shaded solid in the 3D viewport'),
+    ('ui',            scenario_ui,            False,
+     'shows a painted window on the page, not just a scene graph in a framebuffer'),
     ('upgrade',       scenario_upgrade,       False,
      'survives an engine upgrade with the documents intact'),
     # Shared sessions (tools/gate_session.py). Two browser contexts each, so not in "all".
