@@ -3123,6 +3123,14 @@ def scenario_ui(ctx, url, args, fail):
         return s
 
     def shot(label):
+        # The loading overlay sits on top of everything and is full of text and colour, so
+        # a screenshot taken with it up would report a beautifully painted window over a
+        # dead one. project3d hides it for the same reason before its own capture.
+        try:
+            s.page.evaluate("() => { const l = document.getElementById('load');"
+                            "        if (l) l.style.display = 'none'; }")
+        except Exception:
+            pass
         time.sleep(4)
         try:
             stats = png_stats(s.page.screenshot(type='png'))
