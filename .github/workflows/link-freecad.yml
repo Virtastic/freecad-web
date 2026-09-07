@@ -998,8 +998,14 @@ jobs:
       # continue-on-error while it earns trust: it is a new measurement on a software
       # rasteriser, and a rendering gate that blocks a release on its first flake gets
       # deleted rather than fixed.
+      # Runs whether or not the boot gate passed, as long as there is a tree to run
+      # against. These two ARE the rendering measurement, and skipping them on an
+      # unrelated gate failure is how a build whose only defect was an IfcOpenShell
+      # import reported nothing at all about whether it drew anything. The run still
+      # fails on the gate; this just stops one broken subsystem from hiding the rest.
       - name: Does the 3D viewport actually draw anything?
         id: render
+        if: ${{ always() && hashFiles('gate-serve/FreeCAD.wasm') != '' }}
         timeout-minutes: 25
         continue-on-error: true
         run: |
@@ -1046,8 +1052,14 @@ jobs:
       # because continue-on-error rewrites the conclusion, and only `outcome` carried the
       # truth. A gate whose failure is displayed as success is worse than no gate,
       # because it is trusted.
+      # Runs whether or not the boot gate passed, as long as there is a tree to run
+      # against. These two ARE the rendering measurement, and skipping them on an
+      # unrelated gate failure is how a build whose only defect was an IfcOpenShell
+      # import reported nothing at all about whether it drew anything. The run still
+      # fails on the gate; this just stops one broken subsystem from hiding the rest.
       - name: Does a real project actually reach the canvas?
         id: project3d
+        if: ${{ always() && hashFiles('gate-serve/FreeCAD.wasm') != '' }}
         timeout-minutes: 25
         run: |
           set -o pipefail

@@ -3232,7 +3232,21 @@ def main():
                 page goes immediately.
                 """
                 watchdog_scenario[0] = name
-                sess = fn(ctx, url, args, fail)
+                try:
+                    sess = fn(ctx, url, args, fail)
+                except Exception as exc:
+                    # A renderer crash raises out of whichever page call was in flight, and
+                    # it used to take the whole gate with it: main() unwound and every later
+                    # scenario went unrun, so one broken subsystem hid every other signal --
+                    # including the rendering checks, which come last. That is how a build
+                    # whose ONLY defect was an IfcOpenShell import spent a week reporting
+                    # nothing about whether it drew anything. Record the crash as the failure
+                    # it is and go on to the next scenario. The run still fails; it just says
+                    # more. The page is gone, so there are no logs to harvest from it.
+                    fail('scenario %s did not finish -- %s: %s'
+                         % (name, type(exc).__name__,
+                            (str(exc).splitlines() or [''])[0][:200]))
+                    return over_budget(name)
                 try:
                     dump.append((sess.lines(), sess.console, sess.errors()))
                 except Exception:
