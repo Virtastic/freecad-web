@@ -117,6 +117,38 @@ PATCHES = [
         'if(GL.stringCache[name_])return BigInt(GL.stringCache[name_]);',
     ),
     (
+        'glShaderSource length array is GLint, not pointer-sized',
+        # emscripten reads the `const GLint *length` argument of glShaderSource with the
+        # POINTER stride and the POINTER width -- src/lib/libwebgl.js, GL.getSource:
+        #     var len = length ? {{{ makeGetValue('length', 'i*' + POINTER_SIZE, '*') }}}
+        # At wasm32 that is a 4-byte read with a 4-byte stride, which is exactly what an
+        # array of GLint is, so it has always been right by accident. At wasm64 it becomes
+        # an 8-byte read with an 8-byte stride over 4-byte elements: chunk 0 gets
+        # len[0] | len[1] << 32, and the later chunks read past the end of the array.
+        #
+        # Qt is the caller that notices. QOpenGLShader::compileSourceCode (qtbase 6.11.2,
+        # qopenglshaderprogram.cpp:659) hands the version directive, a #line directive and
+        # the shader body over as three chunks with a QVarLengthArray<GLint> of lengths:
+        #     glShaderSource(id, sourceChunks.size(), sourceChunks.data(),
+        #                    sourceChunkLengths.data());
+        # so every shader Qt builds arrives truncated:
+        #     QOpenGLShader::compile(Fragment): ERROR: -1:-1: "" : Missing main()
+        #     Fragment shader for blitShaderProg (MainFragmentShader &
+        #     ImageSrcFragmentShader) failed to compile
+        # and Qt dumps a "problematic source" that is the preamble, then #line 1, then
+        # nothing. With no blit and no simple program the widget layer never reaches the
+        # window: menus, docks and toolbars go black the moment a 3D view forces an
+        # OpenGL surface, while the 3D view itself keeps drawing, because Coin is
+        # fixed-function and compiles no shaders at all. That split is why every gate
+        # stayed green -- they photograph the viewport, which is the half that works.
+        #
+        # The marker is the 4-byte stride, so a wasm32 glue, which already reads it that
+        # way, reports "already applied" instead of a missing site.
+        'var len=length?Number(HEAPU64[length+i*8>>3]):undefined;',
+        'var len=length?HEAPU32[length+i*4>>2]:undefined;',
+        'length+i*4',
+    ),
+    (
         # Shared sessions (see infra/session/): when the page joins a session it materializes
         # an EPHEMERAL home before main() and must stop pre-gui.js from mounting the visitor's
         # own IDBFS home over it. pre-gui.js is --pre-js, baked in at link time, so until the
@@ -731,6 +763,12 @@ def check_postconditions(text):
         n = text.count(a)
         if n:
             bad.append((a, 'Coin calls this; an abort here kills the whole program', n))
+    n = text.count('HEAPU64)[(length+i*8)/8]') + text.count('HEAPU64[length+i*8>>3]')
+    if n:
+        bad.append(('glShaderSource length array read 64 bits at a time',
+                    'Qt hands its shaders over in chunks with a GLint[] of lengths; read '
+                    'this way they arrive truncated and the widget layer goes black as '
+                    'soon as a 3D view exists', n))
     if '__flushMerged' not in text:
         bad.append(('immediate-mode line batching', 'absent -- the heavy-scene draw-call reduction is not in this build', 1))
     # Every vertex writer must reserve headroom before it stores. A missing guard is not
@@ -921,7 +959,7 @@ def _to_wasm64(lit):
 #
 # 1-4 are one mechanical derivation, checked by the selftest against strings copied from
 # that glue. 5 is a table of fixups by patch name, and one full override.
-_EMSDK6_HEAP_IDX = re.compile(r'HEAP(F32|F64|U8|U16|U32|8|16|32)\[([^\[\]]*?)(?:>>([123]))?\]')
+_EMSDK6_HEAP_IDX = re.compile(r'HEAP(F32|F64|U8|U16|U32|U64|8|16|32)\[([^\[\]]*?)(?:>>([123]))?\]')
 
 
 def _emsdk6_heap(m):

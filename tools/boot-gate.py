@@ -1225,6 +1225,16 @@ FATAL = re.compile(
     r'_PyThreadState_Attach|failed to initialize importlib|memory access out of bounds',
     re.I)
 
+# Not fatal in the abort sense -- the engine runs on, and Python keeps answering -- but
+# fatal to everything the user can see. Qt draws the widget layer with the GL2 paint
+# engine; with no blit and no simple program the menus, docks and toolbars never reach the
+# window, while the 3D view keeps drawing because Coin is fixed-function and compiles no
+# shaders. Only Qt's own wording is matched, so a Coin shader node cannot trip it.
+SHADER_FAIL = re.compile(
+    r'(?:Vertex|Fragment) shader for \w+ .*failed to compile'
+    r'|must contain objects to form both'
+    r'|QOpenGLShader::compile\(')
+
 # The shell routes the engine's stdout/stderr into its own DOM log, not the console, so a
 # console-only gate would miss both the smoke result AND any Python fatal. Every line does
 # pass through window.fcwebLogRing, so define that as a property BEFORE the page loads:
@@ -3525,9 +3535,19 @@ def main():
                             (str(exc).splitlines() or [''])[0][:200]))
                     return over_budget(name)
                 try:
-                    dump.append((sess.lines(), sess.console, sess.errors()))
+                    _lines = sess.lines()
+                    dump.append((_lines, sess.console, sess.errors()))
                 except Exception:
+                    _lines = []
                     dump.append(([], [], []))
+                # See SHADER_FAIL: the render checks below photograph the viewport, which
+                # is the half of the window that still draws when Qt's paint-engine
+                # programs fail. This is the half they cannot see.
+                _sh = [c for c in _lines if SHADER_FAIL.search(c)]
+                if _sh:
+                    fail('%s: %d shader compile/link failure(s) -- Qt cannot paint its '
+                         'widget layer, so the window goes black around a viewport that '
+                         'still draws. First: %s' % (name, len(_sh), _sh[0][:200]))
                 try:
                     sess.page.close()
                 except Exception:
