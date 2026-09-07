@@ -3685,6 +3685,34 @@ window.fcRunPy = fcRunPy;
           if (widget && widget.tex && widget.tex.__fcDead) { widget.tex = null; widget = null; }
           var gl = widget && widget.gl;
           if (!gl) { for (k in REG) { if (REG[k].gl) { gl = REG[k].gl; break; } } }
+          // REG holds only offscreen contexts -- Qt makes QOpenGLWidget's context current
+          // on a QOffscreenSurface whose canvas is 1x1, and that is the context that lands
+          // here. Everything below sizes itself against this gl, so a 1x1 one means the
+          // canvas-sized UI texture in UPL can never match and this pass starves: measured
+          // at 2540 consecutive frames returning with nothing presented, on a canvas that
+          // shows an undrawn frame as solid black. Take the context that owns the visible
+          // canvas instead; getContext hands back the one already created for it.
+          //
+          // This did not bite while Qt's own shaders were broken: Qt painted the widget
+          // layer by another route then, and this pass was not what reached the canvas.
+          // Fixing glShaderSource made this the only route, which is why the window went
+          // black on a build whose shaders had just started working.
+          if (gl && gl.drawingBufferWidth <= 1) {
+            // Qt 6.5+ hangs the whole screen off ONE shadow root, so the canvas is not
+            // reachable from document.querySelectorAll -- hence the walk.
+            var dom = null;
+            (function walk(r) {
+              r.querySelectorAll('*').forEach(function (el) {
+                if (el.tagName === 'CANVAS'
+                    && (!dom || el.width * el.height > dom.width * dom.height)) dom = el;
+                if (el.shadowRoot) walk(el.shadowRoot);
+              });
+            })(document);
+            try {
+              var dgl = dom && dom.getContext('webgl2');
+              if (dgl) gl = dgl;
+            } catch (e) { /* incompatible context on that canvas: keep what we had */ }
+          }
           if (!gl) { inPresent = false; return; }
           // The raster UI: newest canvas-sized uploaded texture.
           var ui = null, i, t;
