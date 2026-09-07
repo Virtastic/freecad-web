@@ -5834,29 +5834,3 @@ diff -ruNp a/src/Mod/TechDraw/Gui/CommandExtensionDims.cpp b/src/Mod/TechDraw/Gu
          std::string sAlpha = std::to_string((int)alpha);
          std::string formatSpec = dim->FormatSpec.getStrValue();
          formatSpec = formatSpec + " x" + sAlpha + "°";
-diff --git a/src/Mod/AddonManager/addonmanager_freecad_interface.py b/src/Mod/AddonManager/addonmanager_freecad_interface.py
---- a/src/Mod/AddonManager/addonmanager_freecad_interface.py
-+++ b/src/Mod/AddonManager/addonmanager_freecad_interface.py
-@@ -133,6 +133,22 @@ except ImportError:
-             file.open(QtCore.QFile.ReadOnly)
-             window = loader.load(file)
-             file.close()
-+            # FCWEB: a dialog here must not suspend on a callback stack.
-+            #
-+            # AddonManager.launch() ends in self.dialog.exec(). On wasm QDialog::exec()
-+            # suspends through JSPI, and only fcweb_run_python stacks may suspend --
-+            # launch() is reached from the connection checker's success signal, which is a
-+            # network callback. That suspend is illegal: the engine traps with `unwind` and
-+            # the Addon Manager never finishes starting. Measured on the wasm64 build; the
-+            # same trap ends every attempt to open it.
-+            #
-+            # exec()'s return value is used in exactly one place that matters here
-+            # (addonmanager_firstrun compares it to Accepted, and that dialog is not on this
-+            # path), and every control in these .ui files is wired through signals, so show()
-+            # is equivalent for them. Native builds are untouched.
-+            import sys as _sys      # not imported at module scope in this file
-+            if _sys.platform == "emscripten":
-+                window.exec = window.show
-             return window
- 
-         def addPreferencePage(_options_class, _name: str):

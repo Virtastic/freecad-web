@@ -70,6 +70,9 @@ on:
       # relinked nothing shipped nothing (the wasm64 BigInt event-dispatch fix).
       - 'pre-gui.js'
       - 'play-gui/freecad-gui.html'
+      # The Addon Manager overlay the page fetches at startup. A change to one of
+      # these changes what the application runs, so it has to relink.
+      - 'play-gui/am/**'
       - 'play-gui/qtloader.js'
       - 'tools/boot-gate.py'
       - 'tools/check-payload-packages.py'
@@ -961,6 +964,19 @@ jobs:
             fi
             echo "  $f: $(stat -c%s gate-serve/$f) bytes"
           done
+
+          # The Addon Manager overlay. play-gui/am/ holds five modules the page fetches
+          # from am/ at startup and imports as fcweb_am_boot: two forks of upstream workers
+          # off QThread, the async HTTP primitive they are built on, and the class patches
+          # that rebuild the connection checker and open AddonManager.ui non-modally.
+          # nginx serves them in production; the gate served NOTHING, so every fetch 404'd
+          # and the addonmgr scenario has been exercising an unpatched Addon Manager for its
+          # whole life -- reported as "it opened and then stopped responding". With them
+          # served it lists 433 addons, completes all seven startup phases, and installs and
+          # removes an addon.
+          mkdir -p gate-serve/am
+          cp play-gui/am/*.py play-gui/am/*.ui gate-serve/am/
+          echo "  addon overlay: $(ls gate-serve/am | wc -l) file(s) staged"
 
           ver=$(grep -v '^#' patches/freecad.version | grep -v '^$' | head -1)
           echo "expecting App.Version() $ver"
