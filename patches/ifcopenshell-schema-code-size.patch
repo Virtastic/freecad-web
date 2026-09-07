@@ -1,0 +1,32 @@
+diff --git a/src/ifcparse/CMakeLists.txt b/src/ifcparse/CMakeLists.txt
+--- a/src/ifcparse/CMakeLists.txt
++++ b/src/ifcparse/CMakeLists.txt
+@@ -31,6 +31,28 @@ endforeach()
+ 
+ set(IFCPARSE_FILES ${IFCPARSE_CPP_FILES} ${IFCPARSE_H_FILES})
+ 
++# FCWEB: build the generated per-schema tables for SIZE, not for speed.
++#
++# Ifc<schema>-schema.cpp holds one generated function that constructs an entire IFC schema --
++# around 1200 declarations with their attributes, written out as straight-line code. At -O2
++# those become the three largest functions in the whole wasm module: 1.0, 1.2 and 1.4 MB of
++# bytecode each, out of a 116 MB code section.
++#
++# Size is the problem because the engine compiles a function when it is first called, and
++# that compile is what the memory goes on. Measured on the browser build: schema_by_name()
++# takes the renderer from 1.9 GB to a 5.6 GB peak and comes back on wasm32, where the
++# largest of these is 1.05 MB. On wasm64 every pointer in the same code is twice as wide,
++# the largest is 1.43 MB, and the identical call reaches 8 GB and the renderer is killed --
++# no trap, no exception and nothing in the log, because the memory belongs to the engine and
++# not to the program. The allocation is transient in both cases; it is the peak that decides.
++#
++# These functions run once, at startup, and are never hot, so nothing is lost by compiling
++# them small. Everything else in IfcParse keeps the project's optimisation settings.
++foreach(schema ${SCHEMA_VERSIONS})
++    set_source_files_properties(Ifc${schema}-schema.cpp PROPERTIES
++        COMPILE_OPTIONS "-Oz;-fno-inline")
++endforeach()
++
+ add_library(IfcParse ${IFCPARSE_FILES})
+ set_target_properties(IfcParse PROPERTIES COMPILE_FLAGS -DIFC_PARSE_EXPORTS VERSION "${PROJECT_VERSION}" SOVERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
+ 

@@ -139,8 +139,11 @@ for a in $(find "$BUILD" -name '*.a' | sort); do
     esac
     cp "$a" "$DW/lib/ifc-mod/"
 done
-# v1 staged an enumerated subset; v2 stages every archive the build produced.
-echo 2 > "$DW/lib/ifc-mod/.staged"
+# v1 staged an enumerated subset; v2 stages every archive the build produced. v3 is the
+# first build with patches/ifcopenshell-schema-code-size.patch, which compiles the generated
+# per-schema tables at -Oz: the marker is what makes the lane rebuild rather than reuse the
+# archives it already has, since the guard in build-python-deps.yml skips on the marker.
+echo 3 > "$DW/lib/ifc-mod/.staged"
 echo "IfcOpenShell staged to $DW/lib/ifc-mod:"
 ls -la "$DW/lib/ifc-mod" | sed 's/^/    /'
 "$NM" "$WRAP" 2>/dev/null | grep ' T PyInit' | sed 's/^/  /' || true

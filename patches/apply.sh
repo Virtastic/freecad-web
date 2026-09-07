@@ -175,6 +175,11 @@ apply_one cpython       cpython-ctypes-wasm.patch
 apply_one cpython       cpython-trampoline-wasm64.patch
 apply_one numpy         numpy.patch
 apply_one coin3d        coin3d.patch
+# Compiles the generated per-schema tables for size. Their populate functions are the
+# three largest in the whole wasm module, the engine compiles one when it is first
+# called, and that compile is what kills the renderer on wasm64: schema_by_name()
+# peaks at 5.6 GB on wasm32 and comes back, and reaches 8 GB here and does not.
+apply_one ifcopenshell  ifcopenshell-schema-code-size.patch
 # Never applied until now, and it shows: opening the shipped FEMExample.FCStd traps with
 # "RuntimeError: unreachable" inside vtkXMLParser::GetXMLByteIndex, which is precisely the
 # failure this patch's own comment describes. It was written, committed, and named in the
