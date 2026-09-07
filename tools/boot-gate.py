@@ -3430,6 +3430,31 @@ def main():
                 }
             ctx = engine.launch_persistent_context(profile, headless=True,
                                                    args=launch_args, **kw)
+
+            # The browser is recycled between scenarios; see recycle() below. Held in a
+            # dict so run_scenario reads the CURRENT one rather than closing over the
+            # first.
+            browser = {'ctx': ctx}
+
+            def recycle():
+                """Close the browser and reopen it on the same profile directory.
+
+                Memory, not correctness. One scenario crashed in each of five consecutive
+                runs and it was a different one each time -- addoninstall, swigbridge,
+                examples, fem, swigbridge -- while every one of them passed run on its own.
+                Fifteen scenarios through one browser is the common factor, and the ones
+                that die are the ones that run late.
+
+                The profile DIRECTORY is what carries IndexedDB, which is the only reason
+                this context is persistent, so reopening on the same directory keeps what
+                `restore` needs and drops what nothing needs.
+                """
+                try:
+                    browser['ctx'].close()
+                except Exception:
+                    pass
+                browser['ctx'] = engine.launch_persistent_context(
+                    profile, headless=True, args=launch_args, **kw)
             print('==> %s (scenario: %s)' % (url, args.scenario))
             # A watchdog that asks the page NOTHING.
             #
@@ -3485,7 +3510,7 @@ def main():
                 """
                 watchdog_scenario[0] = name
                 try:
-                    sess = fn(ctx, url, args, fail)
+                    sess = fn(browser['ctx'], url, args, fail)
                 except Exception as exc:
                     # A renderer crash raises out of whichever page call was in flight, and
                     # it used to take the whole gate with it: main() unwound and every later
@@ -3507,6 +3532,7 @@ def main():
                     sess.page.close()
                 except Exception:
                     pass        # restore/upgrade/addoninstall close their own first page
+                recycle()
                 return over_budget(name)
 
             for _name, _fn, _in_all, _label in SCENARIOS:
@@ -3519,7 +3545,7 @@ def main():
                     continue
                 ran.append(_label)
                 out_of_time = run_scenario(_name, _fn)
-            ctx.close()
+            browser['ctx'].close()
     finally:
         if server is not None:
             server.terminate()
