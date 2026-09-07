@@ -1,0 +1,161 @@
+diff --git a/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.cpp b/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.cpp
+--- a/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.cpp
++++ b/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.cpp
+@@ -21,7 +21,7 @@ EMSCRIPTEN_BINDINGS(qwasmopenglcontext)
+ 
+ QT_BEGIN_NAMESPACE
+ 
+-QHash<QPlatformSurface *, EMSCRIPTEN_WEBGL_CONTEXT_HANDLE> QWasmOpenGLContext::s_contexts;
++QMultiHash<QPlatformSurface *, QWasmOpenGLContext *> QWasmOpenGLContext::s_contexts;
+ 
+ QWasmOpenGLContext::QWasmOpenGLContext(QOpenGLContext *context)
+     : m_actualFormat(context->format())
+@@ -38,7 +38,7 @@ QWasmOpenGLContext::QWasmOpenGLContext(Q
+ 
+ QWasmOpenGLContext::~QWasmOpenGLContext()
+ {
+-    destroyWebGLContext(m_contextOwningSurface);
++    releaseWebGLContext();
+ }
+ 
+ bool QWasmOpenGLContext::isOpenGLVersionSupported(QSurfaceFormat format)
+@@ -55,9 +55,27 @@ void QWasmOpenGLContext::destroyWebGLCon
+ {
+     if (surface == nullptr)
+         return;
+-    int context = s_contexts.take(surface);
+-    if (context)
+-        destroyWebGLContext(context);
++
++    // FCWEB: the canvas is going away, so every native context on it goes with it -- and each owner
++    // has to be told, or it keeps a handle that no longer resolves and reports itself lost
++    // for the rest of its life instead of making a fresh context on its next surface.
++    const QList<QWasmOpenGLContext *> owners = s_contexts.values(surface);
++    s_contexts.remove(surface);
++    for (QWasmOpenGLContext *owner : owners) {
++        destroyWebGLContext(owner->m_context);
++        owner->m_context = 0;
++        owner->m_contextOwningSurface = nullptr;
++    }
++}
++
++void QWasmOpenGLContext::releaseWebGLContext()
++{
++    if (!m_context)
++        return;
++    s_contexts.remove(m_contextOwningSurface, this);
++    destroyWebGLContext(m_context);
++    m_context = 0;
++    m_contextOwningSurface = nullptr;
+ }
+ 
+ void QWasmOpenGLContext::destroyWebGLContext(EMSCRIPTEN_WEBGL_CONTEXT_HANDLE contextHandle)
+@@ -140,29 +158,35 @@ bool QWasmOpenGLContext::makeCurrent(QPl
+     // from this function in order to signal context loss to calling code.
+     m_madeCurrentSurface = surface;
+ 
+-    // The native webgl context is tied to a single surface, and can't
+-    // be made current for a different surface.
+-    if (m_contextOwningSurface && m_contextOwningSurface != surface)
+-        return false;
++    const bool isOffscreen = surface->surface()->surfaceClass() == QSurface::Offscreen;
+ 
+-    // Return existing context or crate a new one.
+-    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context;
+-    if (m_contextOwningSurface && s_contexts.contains(m_contextOwningSurface)) {
+-        context = s_contexts.value(surface);
+-    } else {
++    // FCWEB: a native webgl context is tied to one canvas, but a QOpenGLContext outlives the
++    // surface it was first made current on: QWidget destroys and recreates a window's
++    // platform window when its surface type changes from Raster to OpenGL, which is what
++    // happens the first time an application shows a 3D view. Re-home the native context onto
++    // the new surface, as Qt did up to 6.9. Refusing instead makes QRhiGles2 read the refusal
++    // as permanent device loss -- it prints "QRhiGles2: Context is lost.", sets contextLost
++    // and never retries -- and the widget compositor stops presenting for the rest of the
++    // session, leaving a window that is painted but never shown.
++    //
++    // Offscreen surfaces are the exception, and the same one Qt 6.9 made: one that took a
++    // context of its own would strand the window's, so it borrows the context that exists.
++    if (m_context && m_contextOwningSurface != surface && !isOffscreen)
++        releaseWebGLContext();
++
++    if (!m_context) {
++        const auto canvasId = isOffscreen
++                ? static_cast<QWasmOffscreenSurface *>(surface)->id()
++                : static_cast<QWasmWindow *>(surface)->canvasSelector();
++
++        m_context = createEmscriptenContext(canvasId, m_actualFormat);
++        if (m_context == 0)
++            return false;
+         m_contextOwningSurface = surface;
+-        bool isOffscreen = surface->surface()->surfaceClass() == QSurface::Offscreen;
+-        auto canvasId = isOffscreen ? static_cast<QWasmOffscreenSurface *>(surface)->id() :
+-                                      static_cast<QWasmWindow *>(surface)->canvasSelector();
+-
+-        context = createEmscriptenContext(canvasId, m_actualFormat);
+-        s_contexts.insert(surface, context);
++        s_contexts.insert(surface, this);
+     }
+ 
+-    if (context == 0)
+-        return false;
+-
+-    return emscripten_webgl_make_context_current(context) == EMSCRIPTEN_RESULT_SUCCESS;
++    return emscripten_webgl_make_context_current(m_context) == EMSCRIPTEN_RESULT_SUCCESS;
+ }
+ 
+ void QWasmOpenGLContext::swapBuffers(QPlatformSurface *surface)
+@@ -189,24 +213,14 @@ bool QWasmOpenGLContext::isValid() const
+     if (!isOpenGLVersionSupported(m_actualFormat))
+         return false;
+ 
+-    // We get isValid() calls before we see the surface and are able to
+-    // create a native context, which means that "no context" is a valid state.
+-    if (!m_contextOwningSurface)
++    // FCWEB: we get isValid() calls before we see a surface and are able to create a native
++    // context, which means that "no context" is a valid state. It is also the state left
++    // behind when the owning canvas was destroyed: the next makeCurrent() creates a fresh
++    // context on whatever surface it is handed, so that is not a loss either.
++    if (!m_context)
+         return true;
+ 
+-    // The native webgl context is tied to a single canvas. If the last
+-    // makeCurrent() targeted a surface other than the owning one then the
+-    // context is lost. Note that doneCurrent() clears m_madeCurrentSurface;
+-    // that is not a context loss - the context can be made current again on
+-    // its owning surface.
+-    if (m_madeCurrentSurface && m_madeCurrentSurface != m_contextOwningSurface)
+-        return false;
+-
+-    // If the owning surfce/canvas has been deleted then this context is invalid
+-    if (!s_contexts.contains(m_contextOwningSurface))
+-        return false;
+-
+-    return !emscripten_is_webgl_context_lost(s_contexts.value(m_contextOwningSurface));
++    return !emscripten_is_webgl_context_lost(m_context);
+ }
+ 
+ QFunctionPointer QWasmOpenGLContext::getProcAddress(const char *procName)
+diff --git a/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.h b/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.h
+--- a/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.h
++++ b/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.h
+@@ -38,11 +38,18 @@ private:
+     static bool isOpenGLVersionSupported(QSurfaceFormat format);
+     EMSCRIPTEN_WEBGL_CONTEXT_HANDLE createEmscriptenContext(const std::string &canvasSelector, QSurfaceFormat format);
+     static void destroyWebGLContext(EMSCRIPTEN_WEBGL_CONTEXT_HANDLE contextHandle);
++    void releaseWebGLContext();
+ 
+     QSurfaceFormat m_actualFormat;
+     QPlatformSurface *m_madeCurrentSurface = nullptr;
+     QPlatformSurface *m_contextOwningSurface = nullptr;
+-    static QHash<QPlatformSurface *, EMSCRIPTEN_WEBGL_CONTEXT_HANDLE> s_contexts;
++    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE m_context = 0;
++
++    // FCWEB: which contexts are bound to which surface. A surface can carry more than one -- the
++    // widget compositor's and a QOpenGLWidget's, for instance -- so this is a multi-hash,
++    // and it maps to the owning context rather than to a bare handle: each owner destroys
++    // only the handle it created, and is told when the canvas underneath it goes away.
++    static QMultiHash<QPlatformSurface *, QWasmOpenGLContext *> s_contexts;
+ };
+ 
+ QT_END_NAMESPACE

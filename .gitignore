@@ -108,3 +108,6 @@ ci/jenkins/config.env
 # alike); it holds a 200 MB engine copy and is never part of the repo.
 /gate-serve/
 /gate-serve-sh/
+
+# hand-assembled diagnostic serve trees (gate-serve with instrumented glue)
+/scratchpad/glserve/

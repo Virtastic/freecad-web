@@ -27,6 +27,17 @@ name: build Qt 6.11 for wasm (EH + JSPI)
 # document, not captured from the machine that built production. Treat the output as "a Qt
 # that should be compatible", and confirm against deps-versions.txt when it exists.
 on:
+  # Same reasoning as link-freecad.yml: GitHub only offers workflow_dispatch once the file is
+  # on the DEFAULT branch, and this one lives on the port branch, so on dev the dispatch
+  # button does not exist and a Qt patch could never actually be built. The filter is the
+  # narrowest thing that makes that possible -- the Qt patches and this file, nothing else --
+  # because this is the longest job in the repository and the Virtastic runner takes one job
+  # at a time. Drop the push trigger when the branch merges.
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/build-qt-wasm.yml'
+      - 'patches/qt-*.patch'
   workflow_dispatch:
     inputs:
       runner:
@@ -46,7 +57,7 @@ jobs:
     # repository (2-3 h) and the Virtastic runner takes one job at a time, so dispatching it
     # queues every other Virtastic deploy behind it for that whole window. That is the trade
     # being made deliberately: hosted minutes were the scarce resource, deploy latency is not.
-    runs-on: ${{ inputs.runner == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'ubuntu-latest' && 'ubuntu-latest' || fromJSON('["self-hosted","ovh","virtastic"]') }}
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -55,13 +66,13 @@ jobs:
       # database. The `|| true` here would have swallowed the mistake rather than prevented
       # it, so the guard is the `if`, not the error handling.
       - name: Free disk
-        if: ${{ inputs.runner != 'vps' }}
+        if: ${{ inputs.runner == 'ubuntu-latest' }}
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
           df -h / | sed 's/^/  /'
 
       - name: Disk before (self-hosted)
-        if: ${{ inputs.runner == 'vps' }}
+        if: ${{ inputs.runner != 'ubuntu-latest' }}
         run: |
           echo "  building on $(hostname) -- NOT deleting anything on this box"
           df -h / | sed 's/^/  /'
@@ -89,7 +100,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: qt/6.11.2/wasm_mt_weh
-          key: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v1
+          key: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v2
 
       - name: Install emsdk 6.0.9
         run: |
@@ -185,14 +196,27 @@ jobs:
           # patch names that type at each crossing. Four sites exist across all 64 wasm
           # sources; the read-only ones (.as<size_t>, .as<intptr_t>) compile fine and the
           # one in qwasmscreen is made symmetric anyway so write and read agree on BigInt.
-          if patch -p1 -d qt-src --dry-run -F0 -i "$PWD/patches/qt-wasm-embind-int64.patch" > /tmp/qtlogs/02b-patch.txt 2>&1; then
-            patch -p1 -d qt-src -F0 -i "$PWD/patches/qt-wasm-embind-int64.patch" >> /tmp/qtlogs/02b-patch.txt 2>&1
-            echo "  applied patches/qt-wasm-embind-int64.patch"
-          else
-            echo "::error::patches/qt-wasm-embind-int64.patch does not apply cleanly to Qt 6.11.2 -- tree may be at the wrong version"
-            cat /tmp/qtlogs/02b-patch.txt; exit 1
+          # The loop is over the glob rather than a list of names -- the shape the ccx lane
+          # uses, and the one that cannot go stale: a new patches/qt-*.patch is picked up by
+          # code that already exists.
+          shopt -s nullglob
+          applied=0
+          for qp in patches/qt-*.patch; do
+            if patch -p1 -d qt-src --dry-run -F0 -i "$PWD/$qp" >> /tmp/qtlogs/02b-patch.txt 2>&1; then
+              patch -p1 -d qt-src -F0 -i "$PWD/$qp" >> /tmp/qtlogs/02b-patch.txt 2>&1
+              echo "  applied $qp"
+              applied=$((applied + 1))
+            else
+              echo "::error::$qp does not apply cleanly to Qt 6.11.2 -- tree may be at the wrong version"
+              cat /tmp/qtlogs/02b-patch.txt; exit 1
+            fi
+          done
+          if [ "$applied" = 0 ]; then
+            echo "::error::no patches/qt-*.patch was applied -- the glob matched nothing"
+            exit 1
           fi
           grep -c "static_cast<int64_t>" qt-src/qtbase/src/plugins/platforms/wasm/qwasmscreen.cpp | sed "s/^/  int64 crossings now in qwasmscreen.cpp: /"
+          grep -c "FCWEB" qt-src/qtbase/src/plugins/platforms/wasm/qwasmopenglcontext.cpp | sed "s/^/  FCWEB notes now in qwasmopenglcontext.cpp: /"
 
       # Only the modules FreeCAD actually links. Building all of Qt here would add hours for
       # things this app never loads.
