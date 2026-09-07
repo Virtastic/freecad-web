@@ -77,26 +77,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # many raw README URLs.
             body = None
             for _hop in range(5):
+                # try/finally on EVERY path. An earlier version closed the connection only
+                # on the redirect branch and let the final response break out with the
+                # socket still open; across the Addon Manager's two dozen README fetches
+                # that exhausted the stand-in's descriptors, and three later scenarios
+                # failed with "never reached Ready" because they could not fetch the wasm.
                 conn = http.client.HTTPSConnection(host, timeout=30)
-                conn.request('GET', '/' + tail, headers={'User-Agent': 'fcweb-gate'})
-                resp = conn.getresponse()
-                if resp.status in (301, 302, 303, 307, 308):
-                    loc = resp.getheader('Location') or ''
-                    resp.read()
+                try:
+                    conn.request('GET', '/' + tail, headers={'User-Agent': 'fcweb-gate'})
+                    resp = conn.getresponse()
+                    if resp.status in (301, 302, 303, 307, 308):
+                        loc = resp.getheader('Location') or ''
+                        resp.read()
+                        if not loc:
+                            break
+                        if loc.startswith('http'):
+                            from urllib.parse import urlsplit
+                            parts = urlsplit(loc)
+                            host, tail = parts.netloc, parts.path.lstrip('/')
+                            if parts.query:
+                                tail += '?' + parts.query
+                        else:
+                            tail = loc.lstrip('/')
+                        continue
+                    body = resp.read(8 * 1024 * 1024)
+                    break
+                finally:
                     conn.close()
-                    if not loc:
-                        break
-                    if loc.startswith('http'):
-                        from urllib.parse import urlsplit
-                        parts = urlsplit(loc)
-                        host, tail = parts.netloc, parts.path.lstrip('/')
-                        if parts.query:
-                            tail += '?' + parts.query
-                    else:
-                        tail = loc.lstrip('/')
-                    continue
-                body = resp.read(8 * 1024 * 1024)
-                break
             if body is None:
                 body = b''
         except Exception as exc:
