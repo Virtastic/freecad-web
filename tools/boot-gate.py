@@ -133,7 +133,7 @@ try:
     _v = 'ok'
 except Exception as _e:
     _v = type(_e).__name__
-_s.__stderr__.write('FCIMPORTS ' + repr({%(name)r: _v}) + chr(10))
+_s.__stderr__.write('FCIMPORTS_%(name)s ' + repr({%(name)r: _v}) + chr(10))
 _s.__stderr__.flush()
 '''
 
@@ -1985,7 +1985,12 @@ def scenario_imports(ctx, url, args, fail):
         # renderer the log still says which one it was.
         print('==> importing %s' % _name, flush=True)
         s.run_python(IMPORTS_PY % {'name': _name})
-        r = s.wait_for('FCIMPORTS', 120)
+        # The marker carries the module name because wait_for() scans the accumulated log
+        # from the beginning and returns the FIRST match: with one shared marker, all seven
+        # dispatches read back whatever the first one wrote. The run that caught this
+        # printed "{'numpy': 'ok'}" seven times, once per module, and would have called a
+        # broken import clean.
+        r = s.wait_for('FCIMPORTS_%s' % _name, 120)
         if not isinstance(r, dict):
             fail('the import probe produced no result for %s' % _name)
             return s
@@ -3079,29 +3084,42 @@ def scenario_project3d(ctx, url, args, fail):
         except Exception as e:
             print('==> project3d: draw counter read failed (%s)' % e)
 
+    # GROUND TRUTH, and the assertion -- the screenshot, not the readback above.
+    #
+    # readPixels on the window canvas is not trustworthy here, and the run that proved it
+    # said so in its own log: the canvas read 1200x700 with ONE distinct colour, 100% black,
+    # while a screenshot of that same canvas in that same run had 412. The hook that forces
+    # preserveDrawingBuffer only reaches contexts created through the patched getContext,
+    # and the log notes "pixelgate gl canvas is NOT among the page canvases" -- so the frame
+    # has already been presented and the drawing buffer is gone by the time it is read. An
+    # assertion that fails on a painted window is worse than no assertion, because the next
+    # person spends the day on the wrong thing. The canvas numbers stay, as a diagnostic.
     shot = None
+    stats = None
     try:
         os.makedirs('/tmp/fclogs', exist_ok=True)
         shot = '/tmp/fclogs/project3d.png'
-        s.page.screenshot(path=shot, full_page=False)
-        size = os.path.getsize(shot)
-        print('==> project3d: SCREENSHOT %s, %d bytes' % (shot, size))
-        # A 1200x700 PNG of one flat colour lands around 5-10 KB. Anything with real
-        # geometry in it is far larger. This is a smell test, not the assertion.
-        if size < 20000:
-            print('==> project3d: that is small enough to be a flat rectangle')
+        png = s.page.screenshot(full_page=False)
+        with open(shot, 'wb') as fh:
+            fh.write(png)
+        stats = png_stats(png)
+        print('==> project3d: SCREENSHOT %s, %d bytes' % (shot, len(png)))
+        if stats:
+            print('==> project3d: the PAGE has %d distinct colours, %.1f%% dark, '
+                  'dominant colour %.1f%%'
+                  % (stats['distinct'], 100 * stats['dark'], 100 * stats['dominant']))
     except Exception as e:
         print('==> project3d: screenshot failed (%s)' % e)
 
-    if canvas.get('distinct', 0) < 8:
-        fail('project3d scenario: the CANVAS has only %d distinct colours after opening %s. '
-             'Coin may have rendered fine into its own buffer -- what reaches the user is '
-             'blank. Look for "Feedback loop formed between Framebuffer and active Texture".'
-             % (canvas.get('distinct', 0), r.get('file')))
-    elif canvas.get('dominantIsDark') and canvas.get('dominantPct', 0) > 90:
-        fail('project3d scenario: %.1f%% of the CANVAS is the near-black colour %s after '
-             'opening %s. This is the black-viewport failure exactly.'
-             % (canvas.get('dominantPct'), canvas.get('dominant'), r.get('file')))
+    if stats is None:
+        fail('project3d scenario: could not read the screenshot, so nothing here judged '
+             'whether %s reached the screen' % r.get('file'))
+    elif stats['distinct'] < 60 or stats['dominant'] > 0.97:
+        fail('project3d scenario: the PAGE is blank after opening %s -- %d distinct '
+             'colours, one of them %.0f%% of the frame. Coin rendered into its own buffer '
+             '(%d colours there); what reaches the user did not.'
+             % (r.get('file'), stats['distinct'], 100 * stats['dominant'],
+                frame.get('distinct', 0)))
     return s
 
 
