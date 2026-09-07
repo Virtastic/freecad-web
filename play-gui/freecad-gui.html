@@ -186,6 +186,62 @@ document.addEventListener('DOMContentLoaded', function () {
 // Blocking HTML confirm used by the JSPI dialog bridge (_fcwebdlg.confirm ->
 // fcweb_html_confirm EM_ASYNC_JS -> here). Returns a Promise resolving to the
 // clicked button index; the wasm side suspends (JSPI) until then.
+// ---- proxy rewrite, at the transport layer --------------------------------
+// Requests to these hosts cannot succeed cross-origin: the page is COEP:require-corp, so
+// the browser refuses them and the caller sees "HTTP status code 0" or a CORS error. The
+// app rewrites them onto /proxy/<key>/ in FreeCAD's NetworkManager, but only requests built
+// by NetworkManager.__create_request go through it -- and the Addon Manager's status ping
+// does not. Measured: FCWEB_PROXY_HOSTS holds addons.freecad.org, fcweb_proxy_url resolves
+// it to /proxy/addons/status, and a wrapper on that function recorded zero calls while the
+// request still left as an absolute URL and the startup sequence hung waiting for it.
+//
+// XMLHttpRequest and fetch are where Qt, python-requests and urllib all end up, so doing it
+// here catches every path at once. Only these exact hosts are touched.
+(function () {
+  var HOSTS = {
+    'github.com': 'github',
+    'api.github.com': 'api',
+    'codeload.github.com': 'codeload',
+    'raw.githubusercontent.com': 'raw',
+    'objects.githubusercontent.com': 'objects',
+    'wiki.freecad.org': 'wiki',
+    'freecad.org': 'docs',
+    'www.freecad.org': 'docs',
+    'addons.freecad.org': 'addons'
+  };
+  function proxied(url) {
+    var u;
+    try { u = new URL(String(url), location.href); } catch (e) { return null; }
+    if (u.origin === location.origin) { return null; }
+    var key = HOSTS[u.hostname.toLowerCase()];
+    if (!key) { return null; }
+    return '/proxy/' + key + u.pathname + u.search;
+  }
+  var xhrOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    var to = proxied(url);
+    if (to) {
+      try { console.log('[fcweb] proxying ' + url + ' -> ' + to); } catch (e) {}
+      arguments[1] = to;
+    }
+    return xhrOpen.apply(this, arguments);
+  };
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function (input, init) {
+      try {
+        var url = (typeof input === 'string') ? input : (input && input.url);
+        var to = proxied(url);
+        if (to) {
+          try { console.log('[fcweb] proxying ' + url + ' -> ' + to); } catch (e) {}
+          input = (typeof input === 'string') ? to : new Request(to, input);
+        }
+      } catch (e) {}
+      return origFetch.call(this, input, init);
+    };
+  }
+})();
+
 // ---- gmsh bridge ---------------------------------------------------------
 // gmsh is a SEPARATE wasm module (play-gui/gmsh.wasm) with its own filesystem, loaded
 // the first time someone meshes so the 152 MB main binary does not grow. FreeCAD writes
