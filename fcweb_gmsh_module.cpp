@@ -22,15 +22,20 @@
 
 // Runs gmsh on `geoPath` (which Merges `brepPath`) and writes `unvPath`, all paths in
 // FreeCAD's FS. Returns 0 on success, non-zero on failure; -1 if the bridge is missing.
-// wasm64: EM_ASYNC_JS builds a WebAssembly.Suspending import, and those are not given
-// emscripten's signature conversion -- a `const char*` parameter arrives as a raw i64, i.e.
-// a BigInt, and a `char*` result has to go back the same way. UTF8ToString does pointer
-// arithmetic, so passing the BigInt straight in throws
+// wasm64: EM_ASYNC_JS builds a WebAssembly.Suspending import, and its ARGUMENTS are not
+// given emscripten's signature conversion -- a `const char*` parameter arrives as a raw
+// i64, i.e. a BigInt. UTF8ToString does pointer arithmetic, so passing the BigInt straight
+// in throws
 //     TypeError: Cannot mix BigInt and other types, use explicit conversions
 // from inside the body, where the bridge's own catch turns it into a plain non-zero return.
 // That is what the FEM gate's "gmsh (wasm): returned 1" was, and every bridge here has
 // the same shape. Number() is correct on both targets: it
 // converts a BigInt and leaves a Number alone.
+//
+// The RETURN is not symmetric, and assuming it was cost a build: converting the `char*`
+// results to BigInt as well crashed the renderer in the addoninstall scenario, which had
+// passed on the build immediately before. Emscripten's wrapper does convert the result. So
+// the arguments are raw and the result is not -- measured, not reasoned.
 EM_ASYNC_JS(int, fcweb_gmsh_run_js,
             (const char* geoPath, const char* brepPath, const char* unvPath, int verbosity), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
@@ -49,16 +54,16 @@ EM_ASYNC_JS(int, fcweb_gmsh_run_js,
 
 EM_ASYNC_JS(char*, fcweb_gmsh_version_js, (), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
-    if (!g || typeof g.fcwebGmshVersion !== 'function') { return BigInt(0); }
+    if (!g || typeof g.fcwebGmshVersion !== 'function') { return 0; }
     try {
         var v = await g.fcwebGmshVersion();
-        if (v === null || v === undefined) { return BigInt(0); }
+        if (v === null || v === undefined) { return 0; }
         var s = String(v);
         var len = lengthBytesUTF8(s) + 1;
         var buf = _malloc(len);          // caller (C) frees
         stringToUTF8(s, buf, len);
-        return BigInt(buf);
-    } catch (e) { return BigInt(0); }
+        return buf;
+    } catch (e) { return 0; }
 });
 
 // _fcwebgmsh.run(geo_path, brep_path, unv_path, verbosity=4) -> int return code
