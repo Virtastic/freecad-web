@@ -105,7 +105,7 @@ env:
   # otherwise delete the very thing this is meant to preserve.
   BUILDTREE_STORE: /home/ubuntu/.cache/fcweb-buildtree
   DEPS_KEY: v2-wasm64-emsdk6.0.9-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
-  QT_KEY: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v1
+  QT_KEY: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v2
   PYDEPS_KEY: v2-wasm64-emsdk6.0.9-cpython3.13.3-numpy2.1.3-mpl3.9.2
 
 jobs:
