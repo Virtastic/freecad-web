@@ -2094,6 +2094,18 @@ def scenario_addons(ctx, url, args, fail):
     if not s.load():
         fail('addons scenario: never reached Ready (overlay: %s)' % s.phase())
         return s
+    # Wait for startup to finish registering the proxy hosts before asking about
+    # them. The page registers addons.freecad.org from a timed warmup, so probing
+    # the moment Ready goes up is a race the gate loses intermittently -- it read as
+    # 'addons.freecad.org is not rewritten onto the proxy' on runs where the
+    # application was perfectly correct a second later. Bounded, and NOT fatal on
+    # timeout: if the marker never comes the assertion below still runs and still
+    # fails, so a genuinely unregistered host is caught exactly as before.
+    _deadline = time.time() + 90
+    while time.time() < _deadline:
+        if any('addons proxy host registered' in c for c in s.lines()):
+            break
+        time.sleep(1)
     s.run_python(ADDONS_PY)
     r = s.wait_for('FCADDONS', 180)
     if not isinstance(r, dict):

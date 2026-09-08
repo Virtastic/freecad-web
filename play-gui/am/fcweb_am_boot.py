@@ -271,7 +271,14 @@ def _fix_proxy_host_map():
     if not isinstance(hosts, dict):
         return "proxy host map unavailable"
     hosts["www.freecad.org"] = "docswww"
-    return "www.freecad.org -> docswww"
+    # addons.freecad.org too, and HERE rather than only in the page's startup
+    # warmup. The warmup runs on a timer and the Addon Manager can be opened before
+    # it lands; when that happens the ping goes cross-origin, COEP drops it, and the
+    # modal raised from the network callback takes the page down. This runs as part
+    # of the Addon Manager's own boot, so the host is registered on the one path
+    # that needs it, with no timing to lose.
+    hosts["addons.freecad.org"] = "addons"
+    return "www.freecad.org -> docswww, addons.freecad.org -> addons"
 
 
 def _fix_stats_url():
