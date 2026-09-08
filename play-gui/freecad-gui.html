@@ -3867,6 +3867,14 @@ window.fcRunPy = fcRunPy;
             // change, post-crash teardown). Binding a deleted one raises
             // INVALID_OPERATION and the UI layer draws garbage -- prune instead.
             if (t.__fcDead || t.__fcPage) { UPL.splice(i, 1); continue; }
+            // ...and from THIS context. A texture from another one cannot be bound here:
+            // it is a silent INVALID_OPERATION that leaves the previous texture bound and
+            // paints that instead (see bridgeWidget). With a dialog open Qt has more than
+            // one context uploading, and the console fills with exactly that warning.
+            // Every UPL member has __fcGl -- the same hook records both -- so this can
+            // only skip a texture that could never have been drawn anyway.
+            if (t.__fcGl && t.__fcGl !== gl) {
+              window.__fcUiXCtx = (window.__fcUiXCtx || 0) + 1; continue; }
             if (t.__fcSz && t.__fcSz[0] === gl.drawingBufferWidth
                          && t.__fcSz[1] === gl.drawingBufferHeight
                          && (!ui || (t.__fcUpl || 0) > (ui.__fcUpl || 0))) ui = t; }
@@ -3881,6 +3889,7 @@ window.fcRunPy = fcRunPy;
           // than showing half of this one.
           if (ui) { lastUi = ui; }
           else if (lastUi && !lastUi.__fcDead
+                   && !(lastUi.__fcGl && lastUi.__fcGl !== gl)
                    && lastUi.__fcSz && lastUi.__fcSz[0] === gl.drawingBufferWidth
                    && lastUi.__fcSz[1] === gl.drawingBufferHeight) { ui = lastUi; }
           // No live UI texture at all (Qt deleted it and has not uploaded the next one
