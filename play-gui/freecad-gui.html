@@ -3688,6 +3688,72 @@ window.fcRunPy = fcRunPy;
         }
       }
 
+      // THE 3D LAYER LIVES IN ANOTHER GL CONTEXT.
+      //
+      // Qt renders QOpenGLWidget on a context made current against a QOffscreenSurface
+      // whose canvas is 1x1, and uploads the window's raster into the VISIBLE canvas's
+      // context. Two WebGL contexts share nothing: bindTexture on a texture belonging to
+      // the other one is INVALID_OPERATION, which is SILENT and leaves the PREVIOUS
+      // texture bound. So the widget quad drew the UI texture into the viewport rect --
+      // the whole window, scaled and upside down, inside itself, with the scene nowhere.
+      // Measured: __fcXCtx=1, widget rect 1014x588, on a Part::Box exactly as on a 42 MB
+      // assembly. Every other counter in this pass looked healthy throughout, which is
+      // why it needed the flag rather than an eye.
+      //
+      // This became reachable when the display-context fallback above started presenting
+      // to the visible canvas. Before that this pass presented to the 1x1 context -- same
+      // context as the widget, so the bind worked, and nothing reached the screen at all.
+      //
+      // There is no GPU path between two WebGL contexts, so this is the CPU one. It runs
+      // once per 3D FRAME, not once per present: keyed on the blit stamp, so a 60 Hz
+      // present pass over a viewport redrawing at 1-10 Hz pays it 1-10 times a second,
+      // against the ~700 ms that redraw already costs. Skipped entirely when both live in
+      // the same context, which is every build where Qt's own compositing works.
+      var BR = { tex: null, gl: null, w: 0, h: 0, at: 0, buf: null };
+      function bridgeWidget(w, dgl) {
+        var sz = w.tex && w.tex.__fcSz;
+        if (!sz || sz[0] < 2 || sz[1] < 2 || !w.fb || !w.gl) return null;
+        var W = sz[0], H = sz[1];
+        if (BR.gl !== dgl) { BR.gl = dgl; BR.tex = null; }
+        if (BR.tex && BR.w === W && BR.h === H && BR.at === w.blitTo) return BR.tex;
+        var sgl = w.gl, n = W * H * 4;
+        try {
+          if (!BR.buf || BR.buf.length < n) BR.buf = new Uint8Array(n);
+          // Restore the source context's read binding: this pass is a guest there.
+          var prev = sgl.getParameter(sgl.READ_FRAMEBUFFER_BINDING);
+          sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, w.fb);
+          sgl.readPixels(0, 0, W, H, sgl.RGBA, sgl.UNSIGNED_BYTE, BR.buf);
+          sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, prev);
+        } catch (e) { window.__fcBridgeErr = String(e); return BR.tex; }
+        var fresh = !BR.tex || BR.w !== W || BR.h !== H;
+        if (!BR.tex) {
+          BR.tex = dgl.createTexture(); BR.tex.__fcPage = true;
+          dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_MIN_FILTER, dgl.LINEAR);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_MAG_FILTER, dgl.LINEAR);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_WRAP_S, dgl.CLAMP_TO_EDGE);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_WRAP_T, dgl.CLAMP_TO_EDGE);
+        } else {
+          dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
+        }
+        // readPixels hands back GL row order, bottom-up -- the same order the widget's own
+        // texture is in, so the quad's flip=1 stays correct. That only holds if the upload
+        // does not flip as well, and Qt is free to have left UNPACK_FLIP_Y_WEBGL on.
+        var pf = dgl.getParameter(dgl.UNPACK_FLIP_Y_WEBGL);
+        if (pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, false);
+        var view = BR.buf.length === n ? BR.buf : BR.buf.subarray(0, n);
+        // oTexImg/oTexSub, not the wrapped pair: this texture is the page's own and must
+        // never enter UPL, where it would compete to be chosen as the UI layer.
+        if (fresh) oTexImg.call(dgl, dgl.TEXTURE_2D, 0, dgl.RGBA, W, H, 0,
+                                dgl.RGBA, dgl.UNSIGNED_BYTE, view);
+        else oTexSub.call(dgl, dgl.TEXTURE_2D, 0, 0, 0, W, H,
+                          dgl.RGBA, dgl.UNSIGNED_BYTE, view);
+        if (pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, true);
+        BR.w = W; BR.h = H; BR.at = w.blitTo;
+        window.__fcBridged = (window.__fcBridged || 0) + 1;
+        return BR.tex;
+      }
+
       function progFor(gl) {
         if (gl.__fcPresProg) return gl.__fcPresProg;
         var vsrc = '#version 300 es\nout vec2 uv;\nuniform float uFlip;\nvoid main(){\n'
@@ -3787,6 +3853,13 @@ window.fcRunPy = fcRunPy;
             } catch (e) { /* incompatible context on that canvas: keep what we had */ }
           }
           if (!gl) { inPresent = false; return; }
+          // A texture belongs to the context that created it. If the widget FBO was
+          // made on Qt's offscreen context and gl is the visible canvas's, then
+          // binding widget.tex below is a silent INVALID_OPERATION -- the previously
+          // bound texture stays bound, and the widget quad paints THAT into the
+          // viewport rect instead. Recorded, not assumed: a wrong picture here is
+          // indistinguishable from a wrong flip or a wrong rect by eye.
+          window.__fcXCtx = (widget && widget.gl && widget.gl !== gl) ? 1 : 0;
           // The raster UI: newest canvas-sized uploaded texture.
           var ui = null, i, t;
           for (i = UPL.length - 1; i >= 0; i--) { t = UPL[i];
@@ -3912,12 +3985,18 @@ window.fcRunPy = fcRunPy;
             gl.uniform1f(p.flip, 0.0);   // QImage upload: already top-left origin
             gl.bindTexture(gl.TEXTURE_2D, ui);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
-            if (wUsable) {
+            // widget.tex is only bindable here when the widget shares this context; when
+            // it does not, bridgeWidget copies it across. A null means the copy failed and
+            // the frame keeps the UI layer alone -- never the wrong texture stretched over
+            // the viewport, which is what the failed bind used to produce.
+            var wtex = wUsable ? ((widget.gl === gl) ? widget.tex : bridgeWidget(widget, gl))
+                               : null;
+            if (wtex) {
               var r = widget.rect || window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
               gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
               gl.uniform1f(p.flip, 1.0);   // GL-rendered y-up: invert sampling so the nav
               // cube sits top-right, top faces shade light, and labels read forward
-              gl.bindTexture(gl.TEXTURE_2D, widget.tex);
+              gl.bindTexture(gl.TEXTURE_2D, wtex);
               gl.drawArrays(gl.TRIANGLES, 0, 6);
             }
             keepValid = true;             // this frame is complete and safe to re-present
@@ -3991,9 +4070,15 @@ window.fcRunPy = fcRunPy;
       // outside -- which is how the REG one survived. One accessor makes it checkable:
       // open and close documents, call this, and the numbers must come back down.
       window.__fcPresentStats = function () {
-        var n = 0, k;
-        for (k in REG) { n++; }
-        return { reg: n, upl: UPL.length, presented: window.__fcPresented || 0 };
+        // The SIZES too. A count cannot tell you WHICH framebuffer the widget quad
+        // draws from, and picking the wrong one puts the wrong picture in the
+        // viewport with every other number in this pass still looking healthy.
+        var n = 0, k, fbs = [], e;
+        for (k in REG) { n++; e = REG[k];
+          fbs.push({ sz: (e.tex && e.tex.__fcSz) || null,
+                     blitAge: e.blitTo ? Math.round(performance.now() - e.blitTo) : null }); }
+        return { reg: n, upl: UPL.length, presented: window.__fcPresented || 0,
+                 fbs: fbs, rect: window.__fcWidgetRect || null };
       };
       requestAnimationFrame(present);
       console.log('[fcweb] page present pass armed (threaded-Qt compose never executes its present)');
