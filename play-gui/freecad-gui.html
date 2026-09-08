@@ -3494,6 +3494,7 @@ window.fcRunPy = fcRunPy;
                 tex:  gl.getParameter(gl.TEXTURE_BINDING_2D),
                 act:  gl.getParameter(gl.ACTIVE_TEXTURE),
                 draw: gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING),
+                read: gl.getParameter(gl.READ_FRAMEBUFFER_BINDING),
                 vp:   Array.prototype.slice.call(gl.getParameter(gl.VIEWPORT)),
                 scissor: gl.isEnabled(gl.SCISSOR_TEST),
                 depth:   gl.isEnabled(gl.DEPTH_TEST),
@@ -3519,6 +3520,9 @@ window.fcRunPy = fcRunPy;
       track('bindFramebuffer', function (s, a) {
         // DRAW_FRAMEBUFFER (36009) and FRAMEBUFFER (36160) both set the draw binding.
         if (a[0] === 36009 || a[0] === 36160) s.draw = a[1];
+        // READ_FRAMEBUFFER (36008), and FRAMEBUFFER again, set the read binding --
+        // which is how the SOURCE of the native composite's blit is identified.
+        if (a[0] === 36008 || a[0] === 36160) s.read = a[1];
       });
       track('enable',  function (s, a) {
         if (a[0] === 3089) s.scissor = true; else if (a[0] === 2929) s.depth = true;
@@ -3612,8 +3616,15 @@ window.fcRunPy = fcRunPy;
       var lastBlit = null;                 // the REG entry the C++ composite blitted into last
       P2.blitFramebuffer = function () {
         try {
-          var db = shadowFor(this).draw;
+          var S = shadowFor(this), db = S.draw, rb = S.read;
           if (db && db.__fcId && REG[db.__fcId]) { REG[db.__fcId].blitTo = performance.now(); lastBlit = REG[db.__fcId]; }
+          // AND THE SOURCE. renderScene blits Coin's framebuffer INTO the
+          // QOpenGLWidget's, so blitTo marks Qt's destination -- which holds nothing
+          // at all when the blit is refused. What this pass wants to present is the
+          // SOURCE, the one Coin rendered into. Selecting on blitTo picked the empty
+          // destination and painted the whole viewport black, while Coin's own
+          // framebuffer sat in the registry carrying the scene and no stamp.
+          if (rb && rb.__fcId && REG[rb.__fcId]) { REG[rb.__fcId].blitFrom = performance.now(); }
         } catch (e) {}
         return oBlitFb.apply(this, arguments);
       };
@@ -3709,13 +3720,28 @@ window.fcRunPy = fcRunPy;
       // present pass over a viewport redrawing at 1-10 Hz pays it 1-10 times a second,
       // against the ~700 ms that redraw already costs. Skipped entirely when both live in
       // the same context, which is every build where Qt's own compositing works.
-      var BR = { tex: null, gl: null, w: 0, h: 0, at: 0, buf: null };
+      var BR = { tex: null, gl: null, w: 0, h: 0, at: 0, when: 0, buf: null };
+      // At most every BRIDGE_MS, and immediately when the blit stamp moves.
+      //
+      // Keying on the blit stamp ALONE froze the viewport. Measured over five document
+      // opens: one copy, total. Coin keeps rendering into the framebuffer but
+      // blitFramebuffer -- the only thing that stamps blitTo -- fires about once per
+      // document, and two of the three registered framebuffers never report a blit at
+      // all. So the first document looked right and every one after it showed the copy
+      // taken for the first: a frozen or blank 3D view that a page reload cleared.
+      //
+      // A stamp that is not reliably updated cannot be the only cache key. The viewport
+      // redraws at 1-10 Hz, so refreshing at 10 Hz costs at most 24 MB/s of readback and
+      // cannot fall behind by more than a frame.
+      var BRIDGE_MS = 100;
       function bridgeWidget(w, dgl) {
         var sz = w.tex && w.tex.__fcSz;
         if (!sz || sz[0] < 2 || sz[1] < 2 || !w.fb || !w.gl) return null;
         var W = sz[0], H = sz[1];
         if (BR.gl !== dgl) { BR.gl = dgl; BR.tex = null; }
-        if (BR.tex && BR.w === W && BR.h === H && BR.at === w.blitTo) return BR.tex;
+        var nowMs = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+        if (BR.tex && BR.w === W && BR.h === H && BR.at === w.blitTo
+            && (nowMs - BR.when) < BRIDGE_MS) return BR.tex;
         var sgl = w.gl, n = W * H * 4;
         try {
           if (!BR.buf || BR.buf.length < n) BR.buf = new Uint8Array(n);
@@ -3749,7 +3775,7 @@ window.fcRunPy = fcRunPy;
         else oTexSub.call(dgl, dgl.TEXTURE_2D, 0, 0, 0, W, H,
                           dgl.RGBA, dgl.UNSIGNED_BYTE, view);
         if (pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, true);
-        BR.w = W; BR.h = H; BR.at = w.blitTo;
+        BR.w = W; BR.h = H; BR.at = w.blitTo; BR.when = nowMs;
         window.__fcBridged = (window.__fcBridged || 0) + 1;
         return BR.tex;
       }
@@ -3810,6 +3836,12 @@ window.fcRunPy = fcRunPy;
         try {
           // The widget FBO: the one the C++ blit writes into most recently.
           var widget = null, k, e;
+          // Prefer a framebuffer that has been a blit SOURCE: that is Coin's own, the
+          // one carrying the rendered scene. Newest source wins.
+          var src = null;
+          for (k in REG) { e = REG[k];
+            if (!e.tex || !e.blitFrom || e.tex.__fcDead) continue;
+            if (!src || e.blitFrom > src.blitFrom) src = e; }
           for (k in REG) { e = REG[k];
             // The ACTIVE view is the largest recently-blitted framebuffer, not the most
             // recently blitted one: hidden MDI views of other documents also render
@@ -3822,6 +3854,7 @@ window.fcRunPy = fcRunPy;
             var wRecent = widget && performance.now() - widget.blitTo < 1500;
             if (!widget || (eRecent && !wRecent) || (eRecent === wRecent && (eA > wA || (eA === wA && e.blitTo > widget.blitTo)))) widget = e; }
           if (widget && widget.tex && widget.tex.__fcDead) { widget.tex = null; widget = null; }
+          if (src) { widget = src; }
           var gl = widget && widget.gl;
           if (!gl) { for (k in REG) { if (REG[k].gl) { gl = REG[k].gl; break; } } }
           // REG holds only offscreen contexts -- Qt makes QOpenGLWidget's context current
@@ -3953,12 +3986,27 @@ window.fcRunPy = fcRunPy;
           //
           // Bounded by HOLD_MAX: a viewport that is legitimately gone (last document
           // closed) must not freeze the UI, so after ~0.3s the UI-only compose goes ahead.
-          var wUsable = !!window.__fcNativeComposite &&
-                        !!(widget && (widget.rect || window.__fcWidgetRect));
+          var wHave = !!(widget && (widget.rect || window.__fcWidgetRect));
+          var wUsable = !!window.__fcNativeComposite && wHave;
           if (wUsable) { hadWidget = true; holdFrames = 0; }
           var holdThisFrame = (ui && !wUsable && hadWidget && !useKeep && keepValid &&
                                holdFrames < HOLD_MAX);
           if (holdThisFrame) { holdFrames++; }
+          // ONCE THE HOLD IS SPENT, DRAW THE 3D LAYER WE HAVE.
+          //
+          // __fcNativeComposite is republished by renderScene as that frame's BLIT
+          // RESULT, and the C++ publishes a failure on purpose so this pass can cover
+          // for it. Treating it as the gate on the widget layer inverts that: when the
+          // blit fails EVERY frame, the hold expires and the compositor settles into
+          // painting the UI alone -- a permanently black viewport with no error anywhere.
+          // Measured over five document opens: native True for the first, False for every
+          // one after, 2221 frames presented and the 3D layer bridged exactly once.
+          //
+          // The blit's failure says nothing about the framebuffer Coin rendered INTO,
+          // which is what this pass reads. So keep the hold for a genuinely transient
+          // stale frame -- that is what stops the black flash on a click -- and once the
+          // budget is spent, composite the layer rather than dropping it.
+          var wDraw = wUsable || (wHave && everLive && holdFrames >= HOLD_MAX);
           var composing = (ui && !holdThisFrame);
           // ?presentlog=1: one entry per frame, so a frame that came out wrong can be
           // identified instead of guessed at. A bad frame is 8-16 ms -- long enough to see
@@ -3998,8 +4046,8 @@ window.fcRunPy = fcRunPy;
             // it does not, bridgeWidget copies it across. A null means the copy failed and
             // the frame keeps the UI layer alone -- never the wrong texture stretched over
             // the viewport, which is what the failed bind used to produce.
-            var wtex = wUsable ? ((widget.gl === gl) ? widget.tex : bridgeWidget(widget, gl))
-                               : null;
+            var wtex = wDraw ? ((widget.gl === gl) ? widget.tex : bridgeWidget(widget, gl))
+                             : null;
             if (wtex) {
               var r = widget.rect || window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
               gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
@@ -4007,6 +4055,11 @@ window.fcRunPy = fcRunPy;
               // cube sits top-right, top faces shade light, and labels read forward
               gl.bindTexture(gl.TEXTURE_2D, wtex);
               gl.drawArrays(gl.TRIANGLES, 0, 6);
+              // Counted, because 'the viewport is black' has been THREE different
+              // bugs today and every one of them left this draw un-run while every
+              // other number in this pass looked healthy. A frame count says the
+              // compositor is alive; only this says the 3D layer is in the frame.
+              window.__fcWidgetDrawn = (window.__fcWidgetDrawn || 0) + 1;
             }
             keepValid = true;             // this frame is complete and safe to re-present
           }

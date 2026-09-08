@@ -2765,6 +2765,7 @@ def scenario_render(ctx, url, args, fail):
         print('==> render: leak sub-check skipped -- page predates __fcPresentStats')
         return s
     before = json.loads(raw_before)
+    drawn_before = s.page.evaluate('window.__fcWidgetDrawn || 0')
     s.run_python(LEAK_PY)
     if not s.wait_for('FCLEAK', 240):
         print('==> render: leak sub-check skipped -- the document cycle never finished')
@@ -2784,6 +2785,26 @@ def scenario_render(ctx, url, args, fail):
         fail('render: the texture upload list grew from %d to %d over 8 document '
              'open/close cycles -- dead textures are not pruned, and indexOf on this list '
              'is on the upload path' % (before.get('upl'), after.get('upl')))
+
+    # ---- IS THE 3D LAYER STILL IN THE FRAME AFTER ALL THAT? -------------------
+    #
+    # The same eight cycles that catch a registry leak also reproduce the way the
+    # viewport dies. Three separate bugs today ended with the 3D layer silently
+    # dropped from the composite -- a cross-context bind, a copy that refreshed only
+    # on a stamp that stops moving, and the compositor presenting the blit's
+    # DESTINATION instead of its source. Every one of them left the frame count, the
+    # registry sizes and this whole scenario healthy, because none of those look at
+    # whether the widget quad ran. __fcWidgetDrawn does, and costs an increment.
+    drawn_after = s.page.evaluate('window.__fcWidgetDrawn || 0')
+    if drawn_before is None:
+        print('==> render: widget-layer counter absent -- this page predates the check')
+    else:
+        print('==> render: widget layer composited %d times during the cycles'
+              % (drawn_after - drawn_before))
+        if drawn_after <= drawn_before:
+            fail('render: the 3D layer was composited ZERO times across 8 document '
+                 'open/close cycles -- the viewport is not in the frame, however '
+                 'healthy the frame count looks')
     return s
 
 
