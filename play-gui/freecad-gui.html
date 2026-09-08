@@ -3823,6 +3823,12 @@ window.fcRunPy = fcRunPy;
                           dgl.RGBA, dgl.UNSIGNED_BYTE, view);
         if (pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, true);
         BR.w = W; BR.h = H; BR.at = w.blitTo; BR.when = nowMs;
+        // Time it. An empty scene still costs 95-129 ms a frame with every object
+        // hidden, so the floor is per-frame overhead rather than geometry, and this
+        // readback -- 2.4 MB out of the GPU on the main thread -- is one of the few
+        // things in that path this code owns.
+        window.__fcBridgeMs = (window.__fcBridgeMs || 0) +
+          (((typeof performance !== 'undefined') ? performance.now() : Date.now()) - nowMs);
         window.__fcBridged = (window.__fcBridged || 0) + 1;
         return BR.tex;
       }
