@@ -3453,13 +3453,22 @@ def main():
             # per-Session capture cannot see a page that dies mid-scenario, which is
             # exactly the page whose output is worth having.
             crash_ring = []
+            crashed = [0]
+
+            def _on_crash():
+                crashed[0] += 1
+                crash_ring.append('*** RENDERER CRASHED ***')
+                print('--- the renderer died; last %d lines from the page ---'
+                      % min(25, len(crash_ring)), file=sys.stderr)
+                for c in crash_ring[-25:]:
+                    print('   %s' % c, file=sys.stderr)
 
             def watch(pg):
                 try:
                     pg.on('console', lambda m: crash_ring.append(
                         '%s %s' % (m.type, m.text[:200])))
                     pg.on('pageerror', lambda e: crash_ring.append('pageerror %s' % e))
-                    pg.on('crash', lambda p: crash_ring.append('*** RENDERER CRASHED ***'))
+                    pg.on('crash', lambda p: _on_crash())
                 except Exception:
                     pass
                 while len(crash_ring) > 400:
@@ -3541,6 +3550,7 @@ def main():
                      'work genuinely grew.' % (spent, args.budget, after))
                 return True
             dump = []
+            retried = {}
 
             def run_scenario(name, fn):
                 """Run one scenario, harvest its output, and CLOSE its page.
@@ -3553,9 +3563,32 @@ def main():
                 page goes immediately.
                 """
                 watchdog_scenario[0] = name
+                mark, crash_mark = len(failures), crashed[0]
                 try:
                     sess = fn(browser['ctx'], url, args, fail)
+                    # A scenario can CATCH its own renderer death and report it
+                    # as an ordinary failure (storage does). Treat that the same
+                    # as an exception: the test of whether this was the machine
+                    # is whether the renderer died, not how we found out.
+                    if crashed[0] > crash_mark and len(failures) > mark:
+                        raise RuntimeError('renderer died during %s' % name)
                 except Exception as exc:
+                    # The renderer was killed and the page never complained:
+                    # retry once, on a fresh browser, loudly. See the module
+                    # note -- a crash carrying any in-page error is NOT retried.
+                    quiet_death = (crashed[0] > crash_mark
+                                   and not any('pageerror' in c or 'Aborted' in c
+                                               or 'RuntimeError' in c
+                                               for c in crash_ring))
+                    if quiet_death and not retried.get(name):
+                        retried[name] = True
+                        del failures[mark:]
+                        print('!! %s: the renderer was killed with nothing wrong on'
+                              ' the page. Retrying it once on a fresh browser; a'
+                              ' second death fails the run.' % name,
+                              file=sys.stderr)
+                        recycle()
+                        return run_scenario(name, fn)
                     # A renderer crash raises out of whichever page call was in flight, and
                     # it used to take the whole gate with it: main() unwound and every later
                     # scenario went unrun, so one broken subsystem hid every other signal --
