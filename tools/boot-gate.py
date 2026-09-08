@@ -44,6 +44,7 @@ import argparse
 import base64
 import io
 import json
+import math
 import ast
 import os
 import re
@@ -409,6 +410,12 @@ try:
     doc = App.newDocument("RenderGate")
     b = doc.addObject("Part::Box", "Box")
     b.Length, b.Width, b.Height = 40.0, 25.0, 15.0
+    # A DISTINCTIVE colour, so the frame can be checked for the RIGHT picture and not
+    # merely a picture. Nothing else in the scene is near this hue: the 3D background
+    # is 247,247,247, the default shape colour is grey, highlight is (0,122,0) green
+    # and selection (59,91,219) blue. Shading scales a colour, it does not rotate it,
+    # so the hue DIRECTION survives lighting and is what gets asserted below.
+    b.ViewObject.ShapeColor = (0.0, 0.60, 0.90)
     doc.recompute()
     Gui.activeDocument().activeView().viewAxonometric()
     Gui.SendMsgToActiveView("ViewFit")
@@ -2762,6 +2769,45 @@ def scenario_render(ctx, url, args, fail):
         fail('render: the near box is hidden by the box BEHIND it (%d reddish px against '
              '%d greenish). Geometry is being drawn without depth testing -- solids render '
              'see-through and interiors show through exteriors.' % (red, green))
+
+    # ---- IS IT THE RIGHT PICTURE, OR JUST A PICTURE? -------------------------------
+    #
+    # Everything above answers "did something render". Nothing answered "did it render
+    # what the document says", and that gap shipped: ?vbofaces=1 was default ON for
+    # several commits while painting grey parts amber -- measured per object, declared
+    # (204,204,204) rendering as (255,190,49). Draw counts, frame counts, colour counts
+    # and the depth sub-check were all healthy throughout.
+    #
+    # The box declares (0, 153, 230). Lighting SCALES a colour without rotating it, so
+    # the hue direction is what survives shading and is what is compared here -- the
+    # same test that settled the vbofaces question, where the wrong colours sat at cos
+    # 0.96 and below while every correct one was 1.0000.
+    want = (0.0, 0.60, 0.90)
+    def _cos(rgb):
+        na = math.sqrt(sum(x * x for x in rgb))
+        nb = math.sqrt(sum(x * x for x in want))
+        if na < 1e-6 or nb < 1e-6:
+            return 0.0
+        return sum(a * b for a, b in zip(rgb, want)) / (na * nb)
+    best, best_px = 0.0, 0
+    for entry in (frame.get('top') or []):
+        try:
+            rgb = tuple(int(x) for x in entry[0].split(','))
+            px = entry[1]
+        except Exception:
+            continue
+        if rgb == (247, 247, 247) or sum(rgb) < 40:
+            continue                     # the 3D background, and the black edges
+        c = _cos(rgb)
+        if c > best:
+            best, best_px = c, px
+    print('==> render: best hue match to the declared colour %.4f (%d px)'
+          % (best, best_px))
+    if best < 0.98:
+        fail('render: the box declares (0,153,230) and nothing in the frame is that '
+             'hue -- best match %.4f. Something rendered, but not what the document '
+             'says: this is the check that ?vbofaces=1 painting grey parts amber got '
+             'past for several commits' % best)
 
     # ---- and do the page's GL registries stay bounded? ------------------------------
     raw_before = s.page.evaluate('() => window.__fcPresentStats ? '
