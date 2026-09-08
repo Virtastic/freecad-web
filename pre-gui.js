@@ -235,11 +235,26 @@ Module['preRun'].push(function () {
       // buffer. What differs is the SHADING: CoreXY comes out of the material uniform
       // instead of a_color even though its colour array is live.
       //
-      // Next step is therefore the renderer CACHE, not the geometry: record which
-      // program each stride-40 draw binds and whether that program was built with
-      // __fcCM true. A program compiled while COLOR was disabled and later reused for a
-      // draw that has it enabled would produce exactly this.
+      // AND THEN THE RENDERER CACHE WAS RULED OUT TOO. Tagging each program with the
+      // decision it was compiled with, both objects come back identical:
       //
+      //   CoreXY   ARRAY [204,204,204]  cmBuilt=True keyMask=7 liveMask=7
+      //   Plateau  ARRAY [0,255,255]    cmBuilt=True keyMask=7 liveMask=7
+      //
+      // Same program, same live attributes, each reading its own declared colour. And
+      // with CoreXY ISOLATED, a tally of EVERY draw -- not just the stride-40 face
+      // draw -- contains no amber at all; it is entry-for-entry identical to Plateau's
+      // apart from each object's own colour.
+      //
+      // So nothing draws CoreXY amber, yet it PHOTOGRAPHED as amber. The per-object
+      // test isolates objects one after another in a single session, which is exactly
+      // when the compositor serves a stale frame. That verdict was therefore measured
+      // through the multi-document staleness bug, and the wrong-colour claim is
+      // UNPROVEN -- as is the claim that this path is correct.
+      //
+      // It stays OFF until it can be judged on a build where the viewport is not
+      // stale. Re-run scratchpad/colour-per-object.py once the self-blit fix lands;
+      // that is the dependency, and the two questions are not independent.
       // ?vbofaces=1 turns it on to compare the two paths on one document.
       if (qs.get('vbofaces') === '1') { ENV.FCWEB_VBO_FACES = '1'; }
     } catch (e) {}
