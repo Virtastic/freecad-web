@@ -3455,6 +3455,38 @@ def main():
             crash_ring = []
             crashed = [0]
 
+            def _oom_kills():
+                """How many times this cgroup has had a process OOM-killed."""
+                try:
+                    with open('/sys/fs/cgroup/memory.events') as fh:
+                        for line in fh:
+                            if line.startswith('oom_kill '):
+                                return int(line.split()[1])
+                except Exception:
+                    pass
+                return -1
+
+            oom_at_start = _oom_kills()
+
+            def _why_died():
+                """Attribute a renderer death instead of guessing at it."""
+                now = _oom_kills()
+                if now > oom_at_start >= 0:
+                    return ('!! the kernel OOM-killed a process in this container '
+                            '(%d kill(s) so far). The wasm heap ceiling and the '
+                            'container cap are the two numbers to compare.'
+                            % (now - oom_at_start))
+                import glob
+                dumps = glob.glob(os.path.join(profile, '**', '*.dmp'), recursive=True)
+                if dumps:
+                    return ('!! the renderer SEGFAULTED -- %d crash dump(s), largest '
+                            '%d bytes. Not memory: this container has had no OOM '
+                            'kill. That is a real crash in the engine.'
+                            % (len(dumps), max(os.path.getsize(d) for d in dumps)))
+                return ('!! the renderer died with no OOM kill and no crash dump -- '
+                        'the process was terminated from outside (the box, or a '
+                        'watchdog), which is the one case that is not the build.')
+
             def _on_crash():
                 crashed[0] += 1
                 crash_ring.append('*** RENDERER CRASHED ***')
@@ -3573,22 +3605,12 @@ def main():
                     if crashed[0] > crash_mark and len(failures) > mark:
                         raise RuntimeError('renderer died during %s' % name)
                 except Exception as exc:
-                    # The renderer was killed and the page never complained:
-                    # retry once, on a fresh browser, loudly. See the module
-                    # note -- a crash carrying any in-page error is NOT retried.
-                    quiet_death = (crashed[0] > crash_mark
-                                   and not any('pageerror' in c or 'Aborted' in c
-                                               or 'RuntimeError' in c
-                                               for c in crash_ring))
-                    if quiet_death and not retried.get(name):
-                        retried[name] = True
-                        del failures[mark:]
-                        print('!! %s: the renderer was killed with nothing wrong on'
-                              ' the page. Retrying it once on a fresh browser; a'
-                              ' second death fails the run.' % name,
-                              file=sys.stderr)
-                        recycle()
-                        return run_scenario(name, fn)
+                    # NOT retried. Playwright says "Target crashed" only when the
+                    # renderer PROCESS died; an overloaded machine produces a timeout,
+                    # not a process death. So this is a segfault or an OOM kill, and
+                    # both are real. _why_died() below says which.
+                    if crashed[0] > crash_mark:
+                        print(_why_died(), file=sys.stderr)
                     # A renderer crash raises out of whichever page call was in flight, and
                     # it used to take the whole gate with it: main() unwound and every later
                     # scenario went unrun, so one broken subsystem hid every other signal --
