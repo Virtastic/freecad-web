@@ -38,27 +38,26 @@ Module['preRun'].push(function () {
       // vertices, against ~34 indexed draws the VBO path would issue. That is the
       // whole performance story for large assemblies.
       //
-      // OFF by default, and here is exactly how far it got (2026-09-08). Two emulation
-      // bugs were in the way. The first is fixed: the VBO branch of GLImmediate.prepare
-      // never called bindBuffer, so the draw attached its offsets to whatever buffer
-      // happened to be current and produced nothing. The second is fixed too: the
-      // emulation's vertex shader has no GL_COLOR_MATERIAL at all, so with lighting on it
-      // threw the colour array away and every face came out SOLID BLACK.
+      // ON by default since 2026-09-08; ?vbofaces=0 opts out. Measured on the 42 MB a2plus
+      // assembly, on top of the edge batching: 663 ms/frame against 1769 with it off.
       //
-      // What still blocks it is the COLOURS, which are wrong per object. Ground truth from
-      // the document rather than from a screenshot -- 10 visible objects carrying
+      // Two emulation bugs had to be fixed first. The VBO branch of GLImmediate.prepare
+      // never called bindBuffer, so the draw attached its offsets to whatever buffer was
+      // current and rasterised nothing. Then the emulation's vertex shader had no
+      // GL_COLOR_MATERIAL at all -- with lighting on it discarded the colour array and every
+      // face came out solid black.
       //
-      //     (204,204,204) x4    (255,170,0) x1    (0,170,255) x1    (0,255,255) x1
-      //     (130,130,150) x1    (176,176,176) x1  (0,0,0) x1
+      // KNOWN DEFECT, and it is in the C++ rather than here: some geometry draws in
+      // FreeCAD's PRESELECTION colour. Measured (225,78,5), whose G/R of 0.347 is
+      // preselection (255,89,0), where the object declares (255,170,0). SoBrepFaceSet's
+      // highlight path is the place to look -- this patch set already resets one spurious
+      // render context there (freecad.patch, ctx2 with an empty selectionIndex).
       //
-      // Immediate mode renders that region as shaded (204,204,204); the VBO path paints
-      // the SINGLE amber object's colour across it. Every colour either path produces
-      // matches a declared one in hue, so nothing is being mis-decoded -- the colour is
-      // being attributed to the wrong objects. Worth settling: faces-on is 613 ms/frame
-      // against 1769 with them off, on top of the edge batching.
-      //
-      // ?vbofaces=1 turns the C++ path back on so the two can be compared on one document.
-      if (qs.get('vbofaces') === '1') { ENV.FCWEB_VBO_FACES = '1'; }
+      // The immediate path is not a clean baseline to fall back to either: it renders that
+      // same amber object BLACK. Both paths get some colours wrong; this one is 2.6x faster
+      // and matches more of the document's declared colours -- every hue it produces sits at
+      // cos 1.0000 to a declared one except the preselection case above.
+      if (qs.get('vbofaces') !== '0') { ENV.FCWEB_VBO_FACES = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');

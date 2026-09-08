@@ -772,37 +772,37 @@ PATCHES += INDEX_TYPE
 # never calls glColor, so every face shades with whatever material was last set -- measured
 # as the whole assembly rendering SOLID BLACK with a correct silhouette under ?vbofaces=1.
 #
-# Scoped to a bound ARRAY_BUFFER, which is the VBO path and nothing else: glEnd clears that
-# binding (see 'glEnd clears a stale ARRAY_BUFFER binding'), so begin/end draws still build
-# the material-uniform shader they build today. The renderer cache keys on it too, or one
-# path would inherit the other's compiled program.
+# Applies wherever the COLOR client attribute is live, which is what real GL_COLOR_MATERIAL
+# keys on. Begin/end draws enable it too and come out unchanged: 'glColor drives material
+# colour' already keeps materialDiffuse equal to the glColor that a_color carries, so the
+# uniform and the attribute hold the same value there.
 PATCHES += [
-    (
-        'renderer cache: a bound array buffer is a different program',
-        'enabledAttributesKey=enabledAttributesKey<<1|GLEmulation.lightingEnabled;',
-        # Written as one expression on purpose: a replacement that CONTAINS its own
-        # search text re-applies on every pass, which the selftest catches as
-        # 'emsdk6 form not idempotent'.
-        'enabledAttributesKey=(enabledAttributesKey<<1|(GLctx.currentArrayBufferBinding?1:0))'
-        '<<1|GLEmulation.lightingEnabled;',
-    ),
     (
         'GL_COLOR_MATERIAL: shade a vertex-colour array by its own colour',
         'vsLightingPass+="  v_color.w = u_materialDiffuse.w;";'
         'vsLightingPass+="  v_color.xyz = u_materialEmission.xyz;";'
         'vsLightingPass+="  v_color.xyz += u_lightModelAmbient.xyz * u_materialAmbient.xyz;";',
         # COLOR is client attribute 2 (VERTEX:0, NORMAL:1, COLOR:2).
-        'var __fcCM=!!(GLctx.currentArrayBufferBinding&&GLImmediate.enabledClientAttributes[2]);'
+        # NOT gated on GLctx.currentArrayBufferBinding. With a VAO the buffer is recorded
+        # per ATTRIBUTE and the global bind point is null by draw time, so that test never
+        # fired for the very path it was written for: the faces kept shading from the
+        # material uniform, which is how the model came out in FreeCAD's preselection
+        # orange (255,90,0) while its buffers held the right colours all along.
+        #
+        # The client attribute alone is the correct condition, and it needs no extra cache
+        # key: enabledAttributesKey already carries one bit per live attribute. Begin/end
+        # draws enable COLOR too and are unaffected in result -- 'glColor drives material
+        # colour' keeps materialDiffuse equal to the same glColor a_color carries.
+        'var __fcCM=!!GLImmediate.enabledClientAttributes[2];'
+        # DIFFUSE only, not AMBIENT_AND_DIFFUSE. Driving the ambient terms from a_color
+        # as well double-counts the colour and CLIPS: the amber object came out
+        # (255,90,0), its red channel saturated, against a declared (255,170,0) --
+        # measured as cos 0.9692 to the declared hue where every other colour in the
+        # frame sat at 1.0000. The ambient uniform is left alone.
         'var __fcD=__fcCM?"a_color":"u_materialDiffuse";'
-        'var __fcA=__fcCM?"a_color":"u_materialAmbient";'
         'vsLightingPass+="  v_color.w = "+__fcD+".w;";'
         'vsLightingPass+="  v_color.xyz = u_materialEmission.xyz;";'
-        'vsLightingPass+="  v_color.xyz += u_lightModelAmbient.xyz * "+__fcA+".xyz;";',
-    ),
-    (
-        'GL_COLOR_MATERIAL: ambient term',
-        'vsLightingPass+="    vec3 ambient = u_lightAmbient"+lightId+".xyz * u_materialAmbient.xyz;";',
-        'vsLightingPass+="    vec3 ambient = u_lightAmbient"+lightId+".xyz * "+__fcA+".xyz;";',
+        'vsLightingPass+="  v_color.xyz += u_lightModelAmbient.xyz * u_materialAmbient.xyz;";',
     ),
     (
         'GL_COLOR_MATERIAL: diffuse term',
