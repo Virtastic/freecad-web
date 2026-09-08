@@ -224,6 +224,22 @@ Module['preRun'].push(function () {
       // with no ShapeColor are a2plus App::FeaturePython construction planes, not solids,
       // so the ten-object list above is the complete set of colour-bearing geometry.
       //
+      // NARROWED 2026-09-08, and the DATA IS NOT THE PROBLEM. Isolating one object at a
+      // time and reading the buffer its own draws fetch:
+      //
+      //   CoreXY   renders amber (wrong)   buffer holds [204,204,204]  correct
+      //   Plateau  renders cyan  (right)   buffer holds [0,255,255]    correct
+      //
+      // Both carry their own declared colour, at stride 40 offset 24, four floats,
+      // normalized -- so Coin writes the right colours and the VBO path reads the right
+      // buffer. What differs is the SHADING: CoreXY comes out of the material uniform
+      // instead of a_color even though its colour array is live.
+      //
+      // Next step is therefore the renderer CACHE, not the geometry: record which
+      // program each stride-40 draw binds and whether that program was built with
+      // __fcCM true. A program compiled while COLOR was disabled and later reused for a
+      // draw that has it enabled would produce exactly this.
+      //
       // ?vbofaces=1 turns it on to compare the two paths on one document.
       if (qs.get('vbofaces') === '1') { ENV.FCWEB_VBO_FACES = '1'; }
     } catch (e) {}
