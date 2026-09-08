@@ -3438,8 +3438,31 @@ def main():
                     'gfx.webrender.all': True,
                     'dom.webgpu.enabled': False,
                 }
-            ctx = engine.launch_persistent_context(profile, headless=True,
-                                                   args=launch_args, **kw)
+            # Every page's console, from birth, into a ring the harness owns. The
+            # per-Session capture cannot see a page that dies mid-scenario, which is
+            # exactly the page whose output is worth having.
+            crash_ring = []
+
+            def watch(pg):
+                try:
+                    pg.on('console', lambda m: crash_ring.append(
+                        '%s %s' % (m.type, m.text[:200])))
+                    pg.on('pageerror', lambda e: crash_ring.append('pageerror %s' % e))
+                    pg.on('crash', lambda p: crash_ring.append('*** RENDERER CRASHED ***'))
+                except Exception:
+                    pass
+                while len(crash_ring) > 400:
+                    crash_ring.pop(0)
+
+            def new_ctx():
+                c = engine.launch_persistent_context(profile, headless=True,
+                                                     args=launch_args, **kw)
+                c.on('page', watch)
+                for pg in c.pages:
+                    watch(pg)
+                return c
+
+            ctx = new_ctx()
 
             # The browser is recycled between scenarios; see recycle() below. Held in a
             # dict so run_scenario reads the CURRENT one rather than closing over the
@@ -3463,8 +3486,8 @@ def main():
                     browser['ctx'].close()
                 except Exception:
                     pass
-                browser['ctx'] = engine.launch_persistent_context(
-                    profile, headless=True, args=launch_args, **kw)
+                del crash_ring[:]
+                browser['ctx'] = new_ctx()
             print('==> %s (scenario: %s)' % (url, args.scenario))
             # A watchdog that asks the page NOTHING.
             #
@@ -3533,6 +3556,24 @@ def main():
                     fail('scenario %s did not finish -- %s: %s'
                          % (name, type(exc).__name__,
                             (str(exc).splitlines() or [''])[0][:200]))
+                    # What the page said on its way down. Without this a crashed
+                    # scenario reports one line and nothing else, which is how three
+                    # runs failed on three different scenarios and taught us nothing.
+                    if crash_ring:
+                        print('--- last %d lines from the page that crashed ---'
+                              % min(25, len(crash_ring)), file=sys.stderr)
+                        for c in crash_ring[-25:]:
+                            print('   %s' % c, file=sys.stderr)
+                    else:
+                        print('--- the page produced no console output at all ---',
+                              file=sys.stderr)
+                    # Recycle HERE too. The success path below does, and this one
+                    # did not: a scenario that died of a renderer crash handed the
+                    # very browser it just killed to the next one, which is the
+                    # worst moment to keep it. Nothing downstream can be trusted
+                    # after that, and a cascade of crashes reads as several broken
+                    # subsystems instead of one.
+                    recycle()
                     return over_budget(name)
                 try:
                     _lines = sess.lines()
