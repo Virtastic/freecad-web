@@ -2671,9 +2671,20 @@ def scenario_render(ctx, url, args, fail):
     if frac < 2.0:
         fail('render: only %.1f%% of the frame is non-background -- the viewport drew '
              'nothing, or the scene never reached this buffer' % frac)
-    elif frac > 95.0:
-        fail('render: %.1f%% of the frame is non-background -- that is a clear colour, '
-             'not a scene' % frac)
+    # RECALIBRATED 2026-09-08. The upper bound is here to catch a buffer filled with a
+    # CLEAR COLOUR and no scene, and it used to be safe to spell that as "nearly every
+    # pixel differs from the background" -- when the widget layer did not reach this
+    # frame, what was measured was a viewport with a model on it and 31.8% was typical.
+    # Now that the compositor presents the whole window (ac9e78d), the frame is a
+    # painted FreeCAD window and almost none of it is the clear colour, so this fired at
+    # 98.9% on a frame carrying 5233 distinct colours and a shaded box the depth
+    # sub-check could see. A clear colour is ONE colour; that is what to test.
+    top = frame.get('top', []) or []
+    dom_share = (top[0][1] / float(total)) if top and len(top[0]) > 1 else 0.0
+    if frac > 95.0 and (distinct < 64 or dom_share > 0.97):
+        fail('render: %.1f%% of the frame is non-background with only %d distinct '
+             'colours (dominant %.1f%%) -- that is a clear colour, not a scene'
+             % (frac, distinct, 100.0 * dom_share))
     # Flat shading, or a silhouette, collapses the colour count. A shaded solid with edges
     # produced 195 distinct colours when this was written.
     if distinct < 8:
