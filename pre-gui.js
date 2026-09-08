@@ -205,26 +205,27 @@ Module['preRun'].push(function () {
       // vertices, against ~34 indexed draws the VBO path would issue. That is the
       // whole performance story for large assemblies.
       //
-      // ON by default since 2026-09-08; ?vbofaces=0 opts out. Measured on the 42 MB a2plus
-      // assembly, on top of the edge batching: 663 ms/frame against 1769 with it off.
+      // OFF by default. It IS much faster -- 663 ms/frame against 1769 on the 42 MB a2plus
+      // assembly -- and two emulation bugs behind it are fixed (the VBO branch never called
+      // bindBuffer, then the shader had no GL_COLOR_MATERIAL so every face came out black).
+      // But it renders the WRONG COLOURS, and the measurement is per object rather than by
+      // eye: hide everything else, render, take the dominant colour, compare with that
+      // object's own ShapeColor, on both paths.
       //
-      // Two emulation bugs had to be fixed first. The VBO branch of GLImmediate.prepare
-      // never called bindBuffer, so the draw attached its offsets to whatever buffer was
-      // current and rasterised nothing. Then the emulation's vertex shader had no
-      // GL_COLOR_MATERIAL at all -- with lighting on it discarded the colour array and every
-      // face came out solid black.
+      //   object     declared          faces ON             faces OFF
+      //   CoreXY     (204,204,204)     (255,190,49) amber   (209,209,209)  correct
+      //   45Deg      (176,176,176)     (226,108,49) orange  (157,157,155)  correct
+      //   XAxis1     (130,130,150)     (25,25,25)           (133,133,154)  correct
+      //   Plateau    (0,255,255)       (49,236,234) ok      (0,238,235)    correct
       //
-      // KNOWN DEFECT, and it is in the C++ rather than here: some geometry draws in
-      // FreeCAD's PRESELECTION colour. Measured (225,78,5), whose G/R of 0.347 is
-      // preselection (255,89,0), where the object declares (255,170,0). SoBrepFaceSet's
-      // highlight path is the place to look -- this patch set already resets one spurious
-      // render context there (freecad.patch, ctx2 with an empty selectionIndex).
+      // The immediate path gets every one right; this path paints grey parts amber. I had
+      // this defaulted ON for a while on the strength of a crop comparison that could not
+      // tell which OBJECT owned which pixels -- isolating them settles it. The 24 objects
+      // with no ShapeColor are a2plus App::FeaturePython construction planes, not solids,
+      // so the ten-object list above is the complete set of colour-bearing geometry.
       //
-      // The immediate path is not a clean baseline to fall back to either: it renders that
-      // same amber object BLACK. Both paths get some colours wrong; this one is 2.6x faster
-      // and matches more of the document's declared colours -- every hue it produces sits at
-      // cos 1.0000 to a declared one except the preselection case above.
-      if (qs.get('vbofaces') !== '0') { ENV.FCWEB_VBO_FACES = '1'; }
+      // ?vbofaces=1 turns it on to compare the two paths on one document.
+      if (qs.get('vbofaces') === '1') { ENV.FCWEB_VBO_FACES = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');
