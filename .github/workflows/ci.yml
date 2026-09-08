@@ -45,6 +45,13 @@ jobs:
       - name: patch-freecad-js selftest
         run: python3 tools/patch-freecad-js.py --selftest
 
+      # boot-gate.py tolerates one renderer death per scenario, and only because the
+      # crash is a Chromium segfault at a fixed instruction offset with no newer
+      # browser to move to. This fails the moment there IS one, so the workaround
+      # cannot outlive its cause. An unreachable registry is not a build failure.
+      - name: A newer Playwright image would retire the renderer-death tolerance
+        run: python3 tools/check-playwright-current.py
+
       # Proves the patches are present in what production is actually serving. This is the
       # exact regression a relink causes, and it is invisible until the 3D view fails to come up.
       - name: Verify the deployed FreeCAD.js still carries the GL patches
