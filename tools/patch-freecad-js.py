@@ -881,9 +881,18 @@ def check_postconditions(text):
                     'survived its own replacement and was re-inserted per pass)' % ngrow,
                     ngrow))
     else:
+        # SIX vertex writers, plus ONE in __mrgPrep.
+        #
+        # The line batcher expands a strip into pairs in place, which needs headroom
+        # reserved exactly like a vertex writer does -- so it calls __grow() too, and
+        # that is a legitimate seventh guard rather than a stray one. This invariant
+        # failed the first link that ever contained it (34279403314): 'expected 6,
+        # found 7', on a build whose patches had all applied correctly.
         n = text.count('GLImmediate.__grow()')
-        if n != 6:
-            bad.append(('growable immediate guards', 'expected 6 vertex-writer guards, found %d' % n, n))
+        if n != 7:
+            bad.append(('growable immediate guards',
+                        'expected 7 -- six vertex writers plus __mrgPrep -- found %d' % n,
+                        n))
     if 'tempVertexBuffers1[idx]=[null]' not in text:
         bad.append(('oversize temp vertex buffer ring', 'absent -- an oversize batch dereferences undefined', 1))
     if text.count('__polyMode') < 2:
