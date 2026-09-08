@@ -2667,6 +2667,34 @@ def scenario_render(ctx, url, args, fail):
                   % _os.path.getsize('/tmp/fclogs/render-canvas.png'))
         except Exception as e:
             print('==> render: canvas diagnostic failed (%s)' % e)
+    # CAN THE 3D LAYER BE DRAWN AT ALL?
+    #
+    # Everything above reads __fcPixelFbos -- the framebuffer Coin renders INTO -- and is
+    # blind to what happens after. On 2026-09-08 the viewport stopped reaching the canvas
+    # for every document: Qt renders the widget on a second GL context, binding its texture
+    # on the display context is a SILENT INVALID_OPERATION, and the compositor drew
+    # whatever texture was last bound into the viewport rect -- the whole window, scaled
+    # and upside down, inside itself. This gate was green throughout.
+    #
+    # Comparing the two pictures does not work: a match scored 62.7% on the BROKEN tree
+    # and 55.8% on the fixed one, because __fcPixelFbos spans several contexts and a
+    # framebuffer from the wrong one cannot be bound to read in the first place. The
+    # condition itself is exact and free, so assert THAT: a widget on another context has
+    # to have been bridged, or nothing correct can be on screen.
+    try:
+        xc = s.page.evaluate('window.__fcXCtx')
+        br = s.page.evaluate('window.__fcBridged || 0')
+    except Exception as e:
+        xc, br = None, None
+        print('==> render: could not read the compositor flags (%s)' % e)
+    if xc is None:
+        print('==> render: __fcXCtx not published -- this page predates the check')
+    else:
+        print('==> render: widget on another GL context: %s, bridged frames: %s' % (xc, br))
+        if xc and not br:
+            fail('render: the 3D widget lives on another GL context and nothing bridged '
+                 'it -- bindTexture there fails silently, so the compositor is painting '
+                 'the last bound texture into the viewport rect, not the scene')
     if frame.get('error'):
         fail('render scenario: %s' % frame['error'])
         return s
@@ -2683,19 +2711,21 @@ def scenario_render(ctx, url, args, fail):
     if frac < 2.0:
         fail('render: only %.1f%% of the frame is non-background -- the viewport drew '
              'nothing, or the scene never reached this buffer' % frac)
-    # RECALIBRATED 2026-09-08. The upper bound is here to catch a buffer filled with a
-    # CLEAR COLOUR and no scene, and it used to be safe to spell that as "nearly every
-    # pixel differs from the background" -- when the widget layer did not reach this
-    # frame, what was measured was a viewport with a model on it and 31.8% was typical.
-    # Now that the compositor presents the whole window (ac9e78d), the frame is a
-    # painted FreeCAD window and almost none of it is the clear colour, so this fired at
-    # 98.9% on a frame carrying 5233 distinct colours and a shaded box the depth
-    # sub-check could see. A clear colour is ONE colour; that is what to test.
+    # RESTORED 2026-09-08, same day it was loosened. I widened this to let 98.9% pass,
+    # reasoning that the compositor now presents the whole window so the frame is a
+    # painted FreeCAD window rather than a viewport. That reading was a REAL BUG, and
+    # this check had caught it: the 3D view was not reaching the canvas at all and what
+    # this sampled was a framebuffer full of UI grey (dominant 240,240,240 at 263036 px,
+    # 0,0,0 at 202046). With the widget bridged the same measurement reads 58.9% and 422
+    # distinct colours -- so the original bound had plenty of room and never needed the
+    # escape hatch. Loosening a check that is firing correctly buys nothing but a later
+    # surprise.
     top = frame.get('top', []) or []
     dom_share = (top[0][1] / float(total)) if top and len(top[0]) > 1 else 0.0
-    if frac > 95.0 and (distinct < 64 or dom_share > 0.97):
-        fail('render: %.1f%% of the frame is non-background with only %d distinct '
-             'colours (dominant %.1f%%) -- that is a clear colour, not a scene'
+    if frac > 95.0:
+        fail('render: %.1f%% of the frame is non-background (%d distinct colours, '
+             'dominant %.1f%%) -- a fitted box leaves far more clear colour than that, '
+             'so this is not the viewport'
              % (frac, distinct, 100.0 * dom_share))
     # Flat shading, or a silhouette, collapses the colour count. A shaded solid with edges
     # produced 195 distinct colours when this was written.
