@@ -3012,12 +3012,12 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +            widgetFbo = (GLuint)fcGlw->defaultFramebufferObject();
 +        }
 +        while (glGetError() != GL_NO_ERROR) { }   // start from a clean slate
-+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fcFbo);
++        const bool fcSelfBlit = (fcFbo == widgetFbo);   // already in place
++        if (!fcSelfBlit) { glBindFramebuffer(GL_READ_FRAMEBUFFER, fcFbo);
 +        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, widgetFbo);
-+        glBlitFramebuffer(0, 0, fcVw, fcVh,
-+                          0, 0, fcVw, fcVh,
-+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
-+        const GLenum blitErr = glGetError();
++        glBlitFramebuffer(0, 0, fcVw, fcVh, 0, 0, fcVw, fcVh,
++                          GL_COLOR_BUFFER_BIT, GL_NEAREST); }
++        const GLenum blitErr = fcSelfBlit ? GL_NO_ERROR : glGetError();
 +        glBindFramebuffer(GL_FRAMEBUFFER, widgetFbo);
 +        //
 +        // ONLY claim the native composite if it actually worked.
