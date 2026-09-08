@@ -3612,6 +3612,41 @@ window.fcRunPy = fcRunPy;
         } catch (e) {}
         return oTexSub.apply(this, arguments);
       };
+      // WHICH FRAMEBUFFER IS COIN ACTUALLY DRAWING INTO?
+      //
+      // Every other way of answering this proved wrong. blitFrom is stamped from the
+      // page's SHADOW of the bindings, and the shadow disagrees with the driver: it named
+      // fb2 as the blit source while the real READ_FRAMEBUFFER_BINDING was fb17. And the
+      // blit itself is no guide at all -- from the second document onward the C++ blits a
+      // framebuffer TO ITSELF (fb17->fb17, fb21->fb21, measured), which is INVALID_OPERATION
+      // and is why __fcNativeComposite goes false. So the compositor was choosing a buffer
+      // nothing renders into, and the viewport kept showing the first document.
+      //
+      // Ask the driver instead, on a sample of draws. getParameter is a synchronous stall,
+      // so this runs once every SAMPLE_EVERY draws -- at the ~150 draws a frame this port
+      // now issues that is a couple of stalls per frame, against a wrong picture entirely.
+      var drawTick = 0, SAMPLE_EVERY = 64;
+      function noteSceneDraw(gl) {
+        if (inPresent) return;                 // this pass's own quad is not the scene
+        if ((++drawTick % SAMPLE_EVERY) !== 0) return;
+        try {
+          var fb = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+          if (fb && fb.__fcId && REG[fb.__fcId]) {
+            REG[fb.__fcId].drewAt = performance.now();
+            // AND the context doing it. REG.gl is whatever context CREATED the
+            // framebuffer, and Qt recreates contexts per view -- binding a
+            // framebuffer from another context is a silent INVALID_OPERATION that
+            // leaves the previous binding in place, so a readback through the wrong
+            // context returns some other buffer, identically, forever. That is what
+            // made three documents in a row read back byte-identical while Coin was
+            // demonstrably clearing and drawing this one.
+            REG[fb.__fcId].drewGl = gl;
+          }
+        } catch (e) {}
+      }
+      var oDrawArrays2 = P2.drawArrays, oDrawElements2 = P2.drawElements;
+      P2.drawArrays = function () { noteSceneDraw(this); return oDrawArrays2.apply(this, arguments); };
+      P2.drawElements = function () { noteSceneDraw(this); return oDrawElements2.apply(this, arguments); };
       var oBlitFb = P2.blitFramebuffer;
       var lastBlit = null;                 // the REG entry the C++ composite blitted into last
       P2.blitFramebuffer = function () {
@@ -3745,12 +3780,21 @@ window.fcRunPy = fcRunPy;
         var nowMs = (typeof performance !== 'undefined') ? performance.now() : Date.now();
         if (BR.tex && BR.w === W && BR.h === H && BR.at === w.blitTo
             && (nowMs - BR.when) < BRIDGE_MS) return BR.tex;
-        var sgl = w.gl, n = W * H * 4;
+        var sgl = w.drewGl || w.gl, n = W * H * 4;
         try {
           if (!BR.buf || BR.buf.length < n) BR.buf = new Uint8Array(n);
           // Restore the source context's read binding: this pass is a guest there.
           var prev = sgl.getParameter(sgl.READ_FRAMEBUFFER_BINDING);
           sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, w.fb);
+          // CHECK THE BIND TOOK. A framebuffer from another context is refused
+          // silently and the previous binding stays, so readPixels would quietly
+          // return a different buffer -- which is exactly how this pass presented
+          // the first document's frame for the rest of the session.
+          if (sgl.getParameter(sgl.READ_FRAMEBUFFER_BINDING) !== w.fb) {
+            sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, prev);
+            window.__fcBridgeBindFail = (window.__fcBridgeBindFail || 0) + 1;
+            return BR.tex;
+          }
           sgl.readPixels(0, 0, W, H, sgl.RGBA, sgl.UNSIGNED_BYTE, BR.buf);
           sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, prev);
         } catch (e) { window.__fcBridgeErr = String(e); return BR.tex; }
@@ -3839,12 +3883,18 @@ window.fcRunPy = fcRunPy;
         try {
           // The widget FBO: the one the C++ blit writes into most recently.
           var widget = null, k, e;
-          // Prefer a framebuffer that has been a blit SOURCE: that is Coin's own, the
-          // one carrying the rendered scene. Newest source wins.
+          // Prefer the framebuffer most recently DRAWN into -- observed from the driver,
+          // not inferred from a blit that may be a self-blit or a stale shadow. Falls back
+          // to the blit source, which is right while the native composite still works.
           var src = null;
           for (k in REG) { e = REG[k];
-            if (!e.tex || !e.blitFrom || e.tex.__fcDead) continue;
-            if (!src || e.blitFrom > src.blitFrom) src = e; }
+            if (!e.tex || !e.drewAt || e.tex.__fcDead) continue;
+            if (!src || e.drewAt > src.drewAt) src = e; }
+          if (!src) {
+            for (k in REG) { e = REG[k];
+              if (!e.tex || !e.blitFrom || e.tex.__fcDead) continue;
+              if (!src || e.blitFrom > src.blitFrom) src = e; }
+          }
           for (k in REG) { e = REG[k];
             // The ACTIVE view is the largest recently-blitted framebuffer, not the most
             // recently blitted one: hidden MDI views of other documents also render
@@ -4149,10 +4199,17 @@ window.fcRunPy = fcRunPy;
         if (!e || !e.gl || !e.fb) return { error: 'no source framebuffer picked yet' };
         var sz = e.tex && e.tex.__fcSz;
         if (!sz) return { error: 'source has no recorded size' };
-        var g = e.gl, W = Math.min(sz[0], 640), H = Math.min(sz[1], 360);
+        // Through the context that DRAWS, not the one that created it, and only if the
+        // bind takes -- reading through the creating context is what made this report
+        // byte-identical content for three different documents.
+        var g = e.drewGl || e.gl, W = Math.min(sz[0], 640), H = Math.min(sz[1], 360);
         try {
           var prev = g.getParameter(g.READ_FRAMEBUFFER_BINDING);
           g.bindFramebuffer(g.READ_FRAMEBUFFER, e.fb);
+          if (g.getParameter(g.READ_FRAMEBUFFER_BINDING) !== e.fb) {
+            g.bindFramebuffer(g.READ_FRAMEBUFFER, prev);
+            return { error: 'bind refused: this framebuffer belongs to another context' };
+          }
           var buf = new Uint8Array(W * H * 4);
           g.readPixels(0, 0, W, H, g.RGBA, g.UNSIGNED_BYTE, buf);
           g.bindFramebuffer(g.READ_FRAMEBUFFER, prev);
@@ -4179,6 +4236,7 @@ window.fcRunPy = fcRunPy;
                      sz: (e.tex && e.tex.__fcSz) || null,
                      blitAge: e.blitTo ? Math.round(performance.now() - e.blitTo) : null,
                      srcAge: e.blitFrom ? Math.round(performance.now() - e.blitFrom) : null,
+                     drewAge: e.drewAt ? Math.round(performance.now() - e.drewAt) : null,
                      picked: (BR.src === e) }); }
         return { reg: n, upl: UPL.length, presented: window.__fcPresented || 0,
                  fbs: fbs, rect: window.__fcWidgetRect || null };
