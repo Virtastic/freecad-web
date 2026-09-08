@@ -3603,7 +3603,8 @@ window.fcRunPy = fcRunPy;
       P2.texSubImage2D = function () {
         try {
           var t = shadowFor(this).tex;
-          if (t) { t.__fcUpl = performance.now(); if (UPL.indexOf(t) < 0) UPL.push(t); }
+          if (t) { t.__fcUpl = performance.now(); t.__fcGl = this;
+                   if (UPL.indexOf(t) < 0) UPL.push(t); }
         } catch (e) {}
         return oTexSub.apply(this, arguments);
       };
@@ -3638,6 +3639,54 @@ window.fcRunPy = fcRunPy;
       // value nothing read. At ~40 draws/frame that is 40 command-buffer flushes per
       // frame for nothing; the draw path is the hottest in the renderer and now has no
       // wrapper on it at all.
+
+      // Every OTHER top-level window's canvas. Qt gives a dialog its own canvas
+      // (measured: Preferences is 1024x620 beside the main 1280x720), and once a 3D view
+      // exists Qt's own compositing puts nothing on screen -- which is why this pass
+      // exists. It composited only the canvas it picked, so the dialog stayed at its
+      // cleared colour: alpha:false, nothing drawn, solid black, with the DOM title bar
+      // still drawn around it.
+      //
+      // A texture belongs to the context that created it; binding it anywhere else is the
+      // INVALID_OPERATION the console fills with. So each canvas is presented from a
+      // texture uploaded IN ITS OWN context, and canvases with none are left alone.
+      function presentOtherWindows(mainGl) {
+        var canvases = [];
+        (function walk(r) {
+          r.querySelectorAll('*').forEach(function (el) {
+            if (el.tagName === 'CANVAS') canvases.push(el);
+            if (el.shadowRoot) walk(el.shadowRoot);
+          });
+        })(document);
+        for (var ci = 0; ci < canvases.length; ci++) {
+          var g = null;
+          try { g = canvases[ci].getContext('webgl2'); } catch (e) { continue; }
+          if (!g || g === mainGl || !g.drawingBufferWidth || g.drawingBufferWidth <= 1) continue;
+          var best = null, t, i;
+          for (i = UPL.length - 1; i >= 0; i--) {
+            t = UPL[i];
+            if (!t || t.__fcDead || t.__fcPage || t.__fcGl !== g || !t.__fcSz) continue;
+            if (t.__fcSz[0] !== g.drawingBufferWidth || t.__fcSz[1] !== g.drawingBufferHeight) continue;
+            if (!best || (t.__fcUpl || 0) > (best.__fcUpl || 0)) best = t;
+          }
+          if (!best) continue;
+          var p = progFor(g);
+          if (!p) continue;
+          try {
+            g.bindFramebuffer(g.DRAW_FRAMEBUFFER, null);
+            g.viewport(0, 0, g.drawingBufferWidth, g.drawingBufferHeight);
+            g.disable(g.DEPTH_TEST); g.disable(g.BLEND); g.disable(g.SCISSOR_TEST);
+            g.useProgram(p.pr);
+            g.uniform1f(p.flip, 0.0);        // Qt's raster texture is y-down already
+            g.uniform1i(p.loc, 0);
+            g.activeTexture(g.TEXTURE0);
+            g.bindTexture(g.TEXTURE_2D, best);
+            g.bindVertexArray(p.vao);
+            g.drawArrays(g.TRIANGLES, 0, 6);
+            window.__fcPresentedAux = (window.__fcPresentedAux || 0) + 1;
+          } catch (e) { window.__fcAuxErr = String(e); }
+        }
+      }
 
       function progFor(gl) {
         if (gl.__fcPresProg) return gl.__fcPresProg;
@@ -3934,6 +3983,7 @@ window.fcRunPy = fcRunPy;
           if (sDep) gl.enable(gl.DEPTH_TEST);
           if (sBl) gl.enable(gl.BLEND);
           window.__fcPresented = (window.__fcPresented || 0) + 1;
+          presentOtherWindows(gl);
         } catch (ex) { window.__fcPresentErr = String(ex); }
         inPresent = false;
       }
