@@ -1572,7 +1572,12 @@ def _tick():
     try:
         import AddonManager
         cmd = getattr(AddonManager, "_fcweb_cmd", None)
-        if cmd is not None:
+        # item_model is built partway through the startup sequence, so it is None on the
+        # early ticks. Treating that as an error reported
+        # AttributeError('NoneType' object has no attribute 'repos') on tick 1 and stopped
+        # the timer -- a verdict on the FIRST 200 ms of a sequence that takes seconds.
+        # This never showed up before because the command did not exist to reach it.
+        if cmd is not None and getattr(cmd, "item_model", None) is not None:
             _out["addons"] = len(cmd.item_model.repos)
             _out["phasesLeft"] = len(cmd.startup_sequence)
             if _out["addons"] >= 100 and not cmd.startup_sequence:
