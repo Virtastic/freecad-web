@@ -660,6 +660,28 @@ def apply(text, _passes=3, counting=True):
     return text, st
 
 
+# TRIANGLE strips and fans are NOT batched here, and two attempts to add them FAILED.
+#
+# Expanding them into independent triangles the way lines are expanded is arithmetically
+# straightforward and measurably faster -- ArchDetail went 2437 -> 1064 draws/frame and
+# 700 -> 565 ms -- but it turns SOLID FACES INTO WIREFRAME on the immediate path: 57-87%
+# of pixels differ from the same document rendered without it. ?vbofaces=1 hides that
+# entirely, because the VBO face path does not go through immediate mode, and that is how
+# it shipped once (3480556, reverted in 73b7693) -- every check in the repo was running
+# with faces on by default at the time.
+#
+# The second attempt guessed at the vertex LAYOUT: __mrgCmp compares matrices and material
+# but never the attribute set, while __flushMerged draws the whole batch with the LAST
+# snapshot's -- harmless for lines, which all carry the same attributes, wrong for
+# triangles, where some primitives have normals and some do not. Refusing to merge across
+# a stride or attribute-set change did NOT fix it, so that is not the mechanism either.
+#
+# Whoever tries again: run the ?vbofaces=0 A/B FIRST (scratchpad/faces-ab.py) and find out
+# WHY the faces vanish before changing anything -- both attempts reasoned from a plausible
+# mechanism instead, and both were wrong. Worth knowing too that these files are no longer
+# call-bound: what remains is ~25-60 ms fixed plus ~50-85 ms of per-pixel rasterisation at
+# 1280x720, and fewer draw calls touches neither.
+#
 # ---- immediate-mode line batching -------------------------------------------------
 # Coin draws every EDGE as its own glBegin(GL_LINE_STRIP)/glEnd. On BIMExample that is
 # 80,030 of 86,122 draws -- 93 percent -- each carrying a full bufferSubData + attribute
