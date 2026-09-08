@@ -3720,7 +3720,7 @@ window.fcRunPy = fcRunPy;
       // present pass over a viewport redrawing at 1-10 Hz pays it 1-10 times a second,
       // against the ~700 ms that redraw already costs. Skipped entirely when both live in
       // the same context, which is every build where Qt's own compositing works.
-      var BR = { tex: null, gl: null, w: 0, h: 0, at: 0, when: 0, buf: null };
+      var BR = { tex: null, gl: null, w: 0, h: 0, at: 0, when: 0, buf: null, src: null };
       // At most every BRIDGE_MS, and immediately when the blit stamp moves.
       //
       // Keying on the blit stamp ALONE froze the viewport. Measured over five document
@@ -3739,6 +3739,9 @@ window.fcRunPy = fcRunPy;
         if (!sz || sz[0] < 2 || sz[1] < 2 || !w.fb || !w.gl) return null;
         var W = sz[0], H = sz[1];
         if (BR.gl !== dgl) { BR.gl = dgl; BR.tex = null; }
+        // A different source framebuffer is a different picture, whatever the
+        // clock says: switching documents must not show the old one's last frame.
+        if (BR.src !== w) { BR.src = w; BR.at = -1; BR.when = 0; }
         var nowMs = (typeof performance !== 'undefined') ? performance.now() : Date.now();
         if (BR.tex && BR.w === W && BR.h === H && BR.at === w.blitTo
             && (nowMs - BR.when) < BRIDGE_MS) return BR.tex;
