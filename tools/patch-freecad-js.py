@@ -757,6 +757,60 @@ INDEX_TYPE = [
 ]
 PATCHES += INDEX_TYPE
 
+# ---- GL_COLOR_MATERIAL, for the VBO face path only ---------------------------------
+#
+# The emulation's vertex shader writes `v_color = a_color` and then, whenever lighting is
+# on, THROWS IT AWAY:
+#
+#     v_color.xyz  = u_materialEmission.xyz;
+#     v_color.xyz += u_lightModelAmbient.xyz * u_materialAmbient.xyz;
+#     diffuse      = diffuseI * u_lightDiffuse0.xyz * u_materialDiffuse.xyz;
+#
+# There is no GL_COLOR_MATERIAL in it at all. Immediate mode survives that because Coin
+# calls glColor3f per face and this table's 'glColor drives material colour' feeds it into
+# materialDiffuse. SoBrepFaceSet's VBO path supplies colours as an interleaved ARRAY and
+# never calls glColor, so every face shades with whatever material was last set -- measured
+# as the whole assembly rendering SOLID BLACK with a correct silhouette under ?vbofaces=1.
+#
+# Scoped to a bound ARRAY_BUFFER, which is the VBO path and nothing else: glEnd clears that
+# binding (see 'glEnd clears a stale ARRAY_BUFFER binding'), so begin/end draws still build
+# the material-uniform shader they build today. The renderer cache keys on it too, or one
+# path would inherit the other's compiled program.
+PATCHES += [
+    (
+        'renderer cache: a bound array buffer is a different program',
+        'enabledAttributesKey=enabledAttributesKey<<1|GLEmulation.lightingEnabled;',
+        # Written as one expression on purpose: a replacement that CONTAINS its own
+        # search text re-applies on every pass, which the selftest catches as
+        # 'emsdk6 form not idempotent'.
+        'enabledAttributesKey=(enabledAttributesKey<<1|(GLctx.currentArrayBufferBinding?1:0))'
+        '<<1|GLEmulation.lightingEnabled;',
+    ),
+    (
+        'GL_COLOR_MATERIAL: shade a vertex-colour array by its own colour',
+        'vsLightingPass+="  v_color.w = u_materialDiffuse.w;";'
+        'vsLightingPass+="  v_color.xyz = u_materialEmission.xyz;";'
+        'vsLightingPass+="  v_color.xyz += u_lightModelAmbient.xyz * u_materialAmbient.xyz;";',
+        # COLOR is client attribute 2 (VERTEX:0, NORMAL:1, COLOR:2).
+        'var __fcCM=!!(GLctx.currentArrayBufferBinding&&GLImmediate.enabledClientAttributes[2]);'
+        'var __fcD=__fcCM?"a_color":"u_materialDiffuse";'
+        'var __fcA=__fcCM?"a_color":"u_materialAmbient";'
+        'vsLightingPass+="  v_color.w = "+__fcD+".w;";'
+        'vsLightingPass+="  v_color.xyz = u_materialEmission.xyz;";'
+        'vsLightingPass+="  v_color.xyz += u_lightModelAmbient.xyz * "+__fcA+".xyz;";',
+    ),
+    (
+        'GL_COLOR_MATERIAL: ambient term',
+        'vsLightingPass+="    vec3 ambient = u_lightAmbient"+lightId+".xyz * u_materialAmbient.xyz;";',
+        'vsLightingPass+="    vec3 ambient = u_lightAmbient"+lightId+".xyz * "+__fcA+".xyz;";',
+    ),
+    (
+        'GL_COLOR_MATERIAL: diffuse term',
+        'vsLightingPass+="    vec3 diffuse = diffuseI * u_lightDiffuse"+lightId+".xyz * u_materialDiffuse.xyz;";',
+        'vsLightingPass+="    vec3 diffuse = diffuseI * u_lightDiffuse"+lightId+".xyz * "+__fcD+".xyz;";',
+    ),
+]
+
 
 # Invariants a correctly patched file must satisfy, checked AFTER everything runs.
 #
