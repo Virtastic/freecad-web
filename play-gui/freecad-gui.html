@@ -4134,14 +4134,52 @@ window.fcRunPy = fcRunPy;
       // Both registries are closure-private, so a leak in them is unobservable from
       // outside -- which is how the REG one survived. One accessor makes it checkable:
       // open and close documents, call this, and the numbers must come back down.
+      // WHAT IS ACTUALLY IN THE FRAMEBUFFER THIS PASS PRESENTS?
+      //
+      // Four attempts at 'the viewport shows the previous document' have now died on the
+      // same gap: every instrument reported which framebuffer was chosen and how often it
+      // was copied, and none reported its CONTENT. Coin draws the new document into fb2,
+      // the bridge copies fb2, and the screen shows neither -- a set of facts that cannot
+      // all be true, so one of the measurements is describing something other than what I
+      // think it is. This reads the source directly and reports its dominant colours, which
+      // separates upstream (the framebuffer really holds the old scene) from downstream
+      // (it holds the new one and the copy or the quad loses it).
+      window.__fcProbeSrc = function () {
+        var e = BR.src;
+        if (!e || !e.gl || !e.fb) return { error: 'no source framebuffer picked yet' };
+        var sz = e.tex && e.tex.__fcSz;
+        if (!sz) return { error: 'source has no recorded size' };
+        var g = e.gl, W = Math.min(sz[0], 640), H = Math.min(sz[1], 360);
+        try {
+          var prev = g.getParameter(g.READ_FRAMEBUFFER_BINDING);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, e.fb);
+          var buf = new Uint8Array(W * H * 4);
+          g.readPixels(0, 0, W, H, g.RGBA, g.UNSIGNED_BYTE, buf);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, prev);
+          var hist = {}, i, k;
+          for (i = 0; i < buf.length; i += 64) {
+            k = buf[i] + ',' + buf[i + 1] + ',' + buf[i + 2];
+            hist[k] = (hist[k] || 0) + 1;
+          }
+          var keys = Object.keys(hist).sort(function (a, b) { return hist[b] - hist[a]; });
+          return { size: [W, H], distinct: keys.length,
+                   top: keys.slice(0, 5).map(function (x) { return x + ' x' + hist[x]; }) };
+        } catch (err) { return { error: String(err).slice(0, 120) }; }
+      };
       window.__fcPresentStats = function () {
         // The SIZES too. A count cannot tell you WHICH framebuffer the widget quad
         // draws from, and picking the wrong one puts the wrong picture in the
         // viewport with every other number in this pass still looking healthy.
         var n = 0, k, fbs = [], e;
         for (k in REG) { n++; e = REG[k];
-          fbs.push({ sz: (e.tex && e.tex.__fcSz) || null,
-                     blitAge: e.blitTo ? Math.round(performance.now() - e.blitTo) : null }); }
+          // blitFrom AND the id, not just blitTo. The source stamp is what selects the
+          // framebuffer this pass presents, so a report that omits it cannot answer the
+          // one question that matters when the viewport shows the wrong document.
+          fbs.push({ id: k,
+                     sz: (e.tex && e.tex.__fcSz) || null,
+                     blitAge: e.blitTo ? Math.round(performance.now() - e.blitTo) : null,
+                     srcAge: e.blitFrom ? Math.round(performance.now() - e.blitFrom) : null,
+                     picked: (BR.src === e) }); }
         return { reg: n, upl: UPL.length, presented: window.__fcPresented || 0,
                  fbs: fbs, rect: window.__fcWidgetRect || null };
       };
