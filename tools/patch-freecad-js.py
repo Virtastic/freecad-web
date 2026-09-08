@@ -252,6 +252,30 @@ PATCHES = [
         'GLImmediate.clientColor[3]=a}if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;GLEmulation.materialDiffuse[1]=g;GLEmulation.materialDiffuse[2]=b;GLEmulation.materialDiffuse[3]=a;GLEmulation.materialAmbient[0]=r;GLEmulation.materialAmbient[1]=g;GLEmulation.materialAmbient[2]=b;GLEmulation.materialAmbient[3]=a}};var _glColor3f=',
     ),
     (
+        'immediate renderer binds the app ARRAY_BUFFER before setting attributes',
+        # prepare() computes which buffer the client attributes live in, and when the
+        # application has one bound it takes that buffer -- but then never binds it:
+        #
+        #   if (!GLctx.currentArrayBufferBinding) { arrayBuffer = GL.getTempVertexBuffer(end) }
+        #   else                                  { arrayBuffer = GLctx.currentArrayBufferBinding }
+        #   if (!GLctx.currentArrayBufferBinding) { ...bindBuffer(ARRAY_BUFFER, arrayBuffer)... }
+        #
+        # The bind only happens on the client-array branch, so the VBO branch is trusting
+        # that the REAL binding still equals the shadow variable. In this build it does not
+        # have to: the immediate path binds its own temp vertex buffer, and 'glEnd clears a
+        # stale ARRAY_BUFFER binding' below unbinds behind it. vertexAttribPointer then
+        # attaches the offsets to whatever buffer happens to be current, which is how
+        # SoBrepFaceSet's VBO path "executes but rasterizes NOTHING" -- the comment its C++
+        # carries, and the reason every Part solid is forced onto immediate mode instead.
+        #
+        # Costs one bindBuffer per draw on a path that is currently unreachable, and makes
+        # the VBO branch state its own precondition instead of inheriting it.
+        'else{arrayBuffer=GLctx.currentArrayBufferBinding}',
+        'else{arrayBuffer=GLctx.currentArrayBufferBinding;'
+        'GLctx.bindBuffer(GLctx.ARRAY_BUFFER,GL.buffers[arrayBuffer]||null);'
+        'GLImmediate.lastArrayBuffer=arrayBuffer;}',
+    ),
+    (
         'glEnd clears a stale ARRAY_BUFFER binding',
         'GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);GLImmediate.flush();',
         'GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}GLImmediate.flush();',

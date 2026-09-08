@@ -31,6 +31,16 @@ Module['preRun'].push(function () {
       // tools/patch-freecad-js.py (INDEX_TYPE) fixes the emulation; ?vbo=0 opts back
       // into immediate mode for A/B and as the escape hatch.
       if (qs.get('vbo') !== '0') { ENV.FCWEB_VBO = '1'; }
+      // Part face sets specifically. SoBrepFaceSet::renderShape force-disables its
+      // VBO path on wasm because it rasterised NOTHING under LEGACY_GL_EMULATION,
+      // so every Part solid draws through immediate mode instead: measured at 47,000
+      // draw calls per frame on a 1.13M-triangle assembly, 99.8% of them under 100
+      // vertices, against ~34 indexed draws the VBO path would issue. That is the
+      // whole performance story for large assemblies.
+      //
+      // OFF by default: the emulation fix for it is not proven yet. ?vbofaces=1 turns
+      // the C++ path back on so the two can be compared on the same document.
+      if (qs.get('vbofaces') === '1') { ENV.FCWEB_VBO_FACES = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');

@@ -4897,7 +4897,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 +    // shows pure background — the fixed-function-emulation shader doesn't pick up
 +    // the interleaved VBO attributes/matrices). The immediate-mode glBegin/glVertex
 +    // path renders correctly (nav cube proves it), so force it.
-+    hasVBO = false;
++    if (!::getenv("FCWEB_VBO_FACES")) { hasVBO = false; }
 +#endif
      // Can we use vertex buffer objects?
      if (hasVBO) {
