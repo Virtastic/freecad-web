@@ -800,6 +800,12 @@ READ_CANVAS_JS = r"""(() => {
       const k = buf[p] + ',' + buf[p + 1] + ',' + buf[p + 2];
       cols[k] = (cols[k] || 0) + 1;
     }
+    let reddish = 0, greenish = 0;
+    for (let p = 0; p < buf.length; p += 4) {
+      const r = buf[p], g = buf[p + 1], b2 = buf[p + 2];
+      if (r > g + 40 && r > b2 + 40) reddish++;
+      else if (g > r + 40 && g > b2 + 40) greenish++;
+    }
     const keys = Object.keys(cols);
     keys.sort((a, b) => cols[b] - cols[a]);
     const total = W * H;
@@ -814,6 +820,15 @@ READ_CANVAS_JS = r"""(() => {
       dominantPct: Math.round(1000 * domCount / total) / 10,
       dominantIsDark: (dom[0] + dom[1] + dom[2]) < 60,
       opaquePct: Math.round(1000 * opaque / total) / 10,
+      // Hue counts for the occlusion sub-check. They live HERE, on the canvas read,
+      // because the framebuffer read they used to come from reports 0 green on a
+      // scene that is rendering correctly -- photographing the same two boxes whole
+      // gives 9481 reddish against 38111 greenish, a ratio of 0.249 against the 0.25
+      // the check expects. The geometry was always right; the sampler was not, and
+      // the check silently declared itself inconclusive on every run since it was
+      // written.
+      reddish: reddish,
+      greenish: greenish,
       top: keys.slice(0, 3).map(k => k + ' x' + cols[k]),
     });
   } catch (e) {
@@ -2753,18 +2768,37 @@ def scenario_render(ctx, url, args, fail):
         print('==> render: depth sub-check skipped -- the two-box scene never built')
         return s
     time.sleep(6)
+    # From the CANVAS, not the framebuffer. The framebuffer read samples a fixed
+    # window from the bottom-left and reported 0 greenish on a scene that renders
+    # correctly, so this check passed as 'inconclusive' every time it ran and tested
+    # nothing at all.
     try:
-        d = json.loads(s.page.evaluate(READ_FRAME_JS) or '{}')
+        d = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
     except Exception as e:
-        print('==> render: depth sub-check could not read the frame (%s)' % e)
+        print('==> render: depth sub-check could not read the canvas (%s)' % e)
         return s
     red, green = d.get('reddish', 0), d.get('greenish', 0)
     print('==> render: depth -- %d reddish px (near box), %d greenish px (far box)'
           % (red, green))
     if green < 1000:
-        # The far box is the big one; if it is not on screen the scene is not what this
-        # check assumes and the red count would mean nothing either way.
-        print('==> render: depth sub-check inconclusive -- the far box did not render')
+        # NOT 'inconclusive' any more. A check that excuses itself when its own
+        # fixture is missing is a check that can go quiet for months -- this one did,
+        # from the day it was written.
+        #
+        # And the reason it is quiet is a REAL BUG, not a fixture problem. This scene
+        # is the session's SECOND document (RenderGate is built first), and documents
+        # after the first show the previous one's frame -- the compositor cannot read
+        # the framebuffer Coin renders into, because renderScene blits it to itself
+        # and the readback is refused cross-context. Built as the FIRST document the
+        # identical fixture gives 9481 reddish against 38111 greenish, a ratio of
+        # 0.249 against the 0.25 this check expects.
+        #
+        # So this failing IS the multi-document bug reporting itself, and it should go
+        # green when the self-blit fix lands. Leave it failing until then.
+        fail('render: the far box drew %d greenish px, so the occlusion fixture is '
+             'not on screen and depth testing is going untested. Built as the first '
+             'document the same scene gives ~38000 -- this is the multi-document '
+             'staleness bug, not a broken fixture' % green)
     elif red < green * 0.05:      # nominal is ~0.25; depth-off drops it to ~0
         fail('render: the near box is hidden by the box BEHIND it (%d reddish px against '
              '%d greenish). Geometry is being drawn without depth testing -- solids render '
