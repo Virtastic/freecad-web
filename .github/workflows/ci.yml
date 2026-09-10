@@ -109,6 +109,16 @@ jobs:
           done
           exit $fail
 
+      # The edge expansion in patches/freecad.patch is the only non-trivial logic in that
+      # patch, nothing else in this repository executes it, and getting it wrong draws the
+      # WRONG LINES rather than crashing -- a diagonal across the model where two strips
+      # meet. This compiles the helper out of the shipping patch bytes and runs it.
+      - name: The edge expansion in freecad.patch does what it says
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          python3 tools/check-edge-expansion.py
+
       # gl_compat.h is GENERATED from gl_legacy_stubs.c: one declaration per entry point
       # the stub file defines. Regenerating here and diffing catches the case where someone
       # adds, removes or re-signs a stub and hand-edits the header (or forgets to).
