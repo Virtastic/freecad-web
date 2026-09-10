@@ -252,7 +252,25 @@ Module['preRun'].push(function () {
       // Shaded, and 23.99 MB of vertex data uploaded per frame attributed to LINES
       // against 0.00 MB for the faces. The patch expands the index list into
       // GL_LINES pairs once and caches it on the node. ?vboedges=0 opts out.
-      if (qs.get('vboedges') !== '0') { ENV.FCWEB_VBO_EDGES = '1'; }
+      //
+      // OPT-IN for now (?vboedges=1), because it is not yet colour-clean on
+      // documents whose neighbouring nodes have different materials. On the
+      // a2plus assembly, the Skyrim mesh and Part primitives it is PIXEL-IDENTICAL
+      // to immediate mode at 130 ms/frame against 1404. On draft_test_objects and
+      // BIMExample it is not: sending the node's material leaves Coin's lazy cache
+      // and GL disagreeing, so later nodes draw in the wrong colour. Draft loses
+      // 1510 of its 1535 purple annotation pixels; BIM's dominant surface goes from
+      // (167,166,159) to (216,215,209).
+      //
+      // Two attempts, both measured, neither sufficient: dropping the state
+      // push/pop around SoMaterialBundle::sendFirst changed nothing, and
+      // SoGLLazyElement::reset(DIFFUSE_MASK) after the draw made Coin re-send --
+      // but re-send the DEFAULT 204,204,204, on 378 draws of draft and 2451 of BIM,
+      // where immediate mode has 25,25,25 / 84,0,125 / 109,133,169. Whoever picks
+      // this up: the answer is in how the material BINDING is resolved, not in when
+      // the send happens -- Coin's SoIndexedLineSet computes findMaterialBinding
+      // first and this path does not.
+      if (qs.get('vboedges') === '1') { ENV.FCWEB_VBO_EDGES = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');
