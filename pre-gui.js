@@ -205,58 +205,45 @@ Module['preRun'].push(function () {
       // vertices, against ~34 indexed draws the VBO path would issue. That is the
       // whole performance story for large assemblies.
       //
-      // OFF by default. It IS much faster -- 663 ms/frame against 1769 on the 42 MB a2plus
-      // assembly -- and two emulation bugs behind it are fixed (the VBO branch never called
-      // bindBuffer, then the shader had no GL_COLOR_MATERIAL so every face came out black).
-      // But it renders the WRONG COLOURS, and the measurement is per object rather than by
-      // eye: hide everything else, render, take the dominant colour, compare with that
-      // object's own ShapeColor, on both paths.
+      // ON by default (2026-09-09). It is much faster, two emulation bugs behind it are
+      // fixed (the VBO branch never called bindBuffer; then the generated shader had no
+      // GL_COLOR_MATERIAL, so every face came out black), and the colour question that
+      // kept it off for a week is settled below.
       //
-      //   object     declared          faces ON             faces OFF
-      //   CoreXY     (204,204,204)     (255,190,49) amber   (209,209,209)  correct
-      //   45Deg      (176,176,176)     (226,108,49) orange  (157,157,155)  correct
-      //   XAxis1     (130,130,150)     (25,25,25)           (133,133,154)  correct
-      //   Plateau    (0,255,255)       (49,236,234) ok      (0,238,235)    correct
+      // Everything here was measured on a REAL GPU (RTX 4080, ANGLE/D3D11) with ONE
+      // document per browser. That is not a detail: every earlier verdict on this flag
+      // was taken from a session with several documents open, which is exactly when the
+      // compositor served a stale frame, so those measurements were of the bug.
       //
-      // The immediate path gets every one right; this path paints grey parts amber. I had
-      // this defaulted ON for a while on the strength of a crop comparison that could not
-      // tell which OBJECT owned which pixels -- isolating them settles it. The 24 objects
-      // with no ShapeColor are a2plus App::FeaturePython construction planes, not solids,
-      // so the ten-object list above is the complete set of colour-bearing geometry.
+      // SPEED, on the user's own 42 MB a2plus assembly:
       //
-      // NARROWED 2026-09-08, and the DATA IS NOT THE PROBLEM. Isolating one object at a
-      // time and reading the buffer its own draws fetch:
+      //   faces OFF   1404 ms/frame   109.9 MB uploaded per frame
+      //   faces ON     367 ms/frame    23.7 MB uploaded per frame
       //
-      //   CoreXY   renders amber (wrong)   buffer holds [204,204,204]  correct
-      //   Plateau  renders cyan  (right)   buffer holds [0,255,255]    correct
+      // 3.8x, and the mechanism is data movement rather than draw calls: both paths
+      // issue ~140 draws for the same 4.2M vertices, and the immediate path re-uploads
+      // the entire scene every single frame.
       //
-      // Both carry their own declared colour, at stride 40 offset 24, four floats,
-      // normalized -- so Coin writes the right colours and the VBO path reads the right
-      // buffer. What differs is the SHADING: CoreXY comes out of the material uniform
-      // instead of a_color even though its colour array is live.
+      // COLOUR, per object: the two paths agree. Identical hue counts pixel for pixel on
+      // four primary-coloured boxes and on AssemblyExample, and on the a2plus assembly
+      // 0.0% of pixels differ (191 of 921,600). What differs is SHADING -- a flat face
+      // reads (242,0,0) on the immediate path and (208,17,17) here: ~14% darker with a
+      // small ambient term, hue exact.
       //
-      // AND THEN THE RENDERER CACHE WAS RULED OUT TOO. Tagging each program with the
-      // decision it was compiled with, both objects come back identical:
+      // COLOUR, per FACE: the immediate path is the broken one. A cube with six
+      // different DiffuseColor entries, viewed from a corner:
       //
-      //   CoreXY   ARRAY [204,204,204]  cmBuilt=True keyMask=7 liveMask=7
-      //   Plateau  ARRAY [0,255,255]    cmBuilt=True keyMask=7 liveMask=7
+      //   faces OFF   the whole cube is RED          -- one colour for the whole object
+      //   faces ON    green / blue / cyan in thirds  -- the three faces actually visible
       //
-      // Same program, same live attributes, each reading its own declared colour. And
-      // with CoreXY ISOLATED, a tally of EVERY draw -- not just the stride-40 face
-      // draw -- contains no amber at all; it is entry-for-entry identical to Plateau's
-      // apart from each object's own colour.
+      // A default flip is a new code path (VBO-on once routed Mesh nodes onto emulation
+      // code that had never run), so one document per node class was checked in a fresh
+      // browser each: Part primitives with curved surfaces, an STL through Mesh,
+      // draft_test_objects and BIMExample all render with the same lit-pixel count in
+      // both modes.
       //
-      // So nothing draws CoreXY amber, yet it PHOTOGRAPHED as amber. The per-object
-      // test isolates objects one after another in a single session, which is exactly
-      // when the compositor serves a stale frame. That verdict was therefore measured
-      // through the multi-document staleness bug, and the wrong-colour claim is
-      // UNPROVEN -- as is the claim that this path is correct.
-      //
-      // It stays OFF until it can be judged on a build where the viewport is not
-      // stale. Re-run scratchpad/colour-per-object.py once the self-blit fix lands;
-      // that is the dependency, and the two questions are not independent.
-      // ?vbofaces=1 turns it on to compare the two paths on one document.
-      if (qs.get('vbofaces') === '1') { ENV.FCWEB_VBO_FACES = '1'; }
+      // ?vbofaces=0 is the escape hatch back to immediate mode.
+      if (qs.get('vbofaces') !== '0') { ENV.FCWEB_VBO_FACES = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');
