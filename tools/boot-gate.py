@@ -1599,6 +1599,13 @@ def _tick():
         # AttributeError('NoneType' object has no attribute 'repos') on tick 1 and stopped
         # the timer -- a verdict on the FIRST 200 ms of a sequence that takes seconds.
         # This never showed up before because the command did not exist to reach it.
+        # Say HOW FAR it got on every tick. The one failure this has produced
+        # (link 34349006695) reported {'error': 'the startup sequence never finished'}
+        # and nothing else, so there was no way to tell a slow catalogue download from a
+        # dialog that never constructed its command at all -- which is what an empty
+        # _out actually means. These two flags cost nothing and name the stage.
+        _out["cmd"] = cmd is not None
+        _out["model"] = cmd is not None and getattr(cmd, "item_model", None) is not None
         if cmd is not None and getattr(cmd, "item_model", None) is not None:
             _out["addons"] = len(cmd.item_model.repos)
             _out["phasesLeft"] = len(cmd.startup_sequence)
@@ -1611,7 +1618,8 @@ def _tick():
         _timer.stop()
         _report()
         return
-    if _state["ticks"] > 150:
+    if _state["ticks"] > 240:
+        _out["ticks"] = _state["ticks"]
         _out["error"] = "the startup sequence never finished"
         _timer.stop()
         _report()
@@ -2467,7 +2475,9 @@ def scenario_addonmgr(ctx, url, args, fail):
         return s
 
     s.run_python(ADDONMGR_OPEN_PY)
-    r = s.wait_for('FCADDONMGR', 240)
+    # Longer than the 240 ticks the startup timer allows itself, or this would time out
+    # first and report "stopped responding" for a sequence that was about to say why.
+    r = s.wait_for('FCADDONMGR', 300)
     if not isinstance(r, dict):
         fail('the Addon Manager never reported: it opened and then stopped responding, '
              'which is what an engine abort looks like from here')
