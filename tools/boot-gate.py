@@ -468,6 +468,39 @@ except Exception as _e:
 _s.__stderr__.flush()
 '''
 
+FACECUBE_PY = r'''
+# A cube with SIX DIFFERENT FACE COLOURS, built after the document cycles above.
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    import FreeCAD as App
+    import FreeCADGui as Gui
+
+    for _d in list(App.listDocuments()):
+        App.closeDocument(_d)
+    _doc = App.newDocument("FaceColour")
+    _b = _doc.addObject("Part::Box", "Cube")
+    _b.Length = _b.Width = _b.Height = 60.0
+    _doc.recompute()
+    _cols = [(1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0),
+             (1.0, 1.0, 0.0, 0.0), (1.0, 0.0, 1.0, 0.0), (0.0, 1.0, 1.0, 0.0)]
+    _n = len(_b.Shape.Faces)
+    _b.ViewObject.DiffuseColor = [_cols[_i % len(_cols)] for _i in range(_n)]
+    _doc.recompute()
+    _v = Gui.activeDocument().activeView()
+    _v.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+    for _i in range(3):
+        Gui.updateGui()
+    _out["faces"] = _n
+except Exception as _e:
+    _out["error"] = repr(_e)
+_s.__stderr__.write("FCFACECUBE " + repr(_out) + _NL)
+_s.__stderr__.flush()
+'''
+
 OCCLUDE_PY = r'''
 # Two boxes, one behind the other, to prove that depth testing is on.
 import sys as _s
@@ -2930,6 +2963,68 @@ def scenario_render(ctx, url, args, fail):
             fail('render: the 3D layer was composited ZERO times across 8 document '
                  'open/close cycles -- the viewport is not in the frame, however '
                  'healthy the frame count looks')
+
+    # ---- IS THE PICTURE THIS DOCUMENT'S, AND ARE ITS FACES ITS OWN COLOURS? --------
+    #
+    # Two failures this port has actually shipped, and one fixture catches both. After
+    # the eight document cycles above, build a cube with six different face colours:
+    #
+    #   * STALENESS. Every document after the first showed the FIRST one's frame for
+    #     two days, because Coin's private framebuffer was one process-wide static and
+    #     Qt gives each 3D view its own GL context. A stale canvas cannot contain this
+    #     cube's colours, and this is the ninth document of the session.
+    #   * PER-FACE COLOUR. The immediate face path paints the whole object in its FIRST
+    #     face's colour -- a six-colour cube comes out entirely red -- while the VBO
+    #     path (default since 2026-09-09) shows the three visible faces. Measured on an
+    #     RTX 4080: OFF gives one hue, ON gives green/blue/cyan in equal thirds.
+    s.run_python(FACECUBE_PY)
+    fc = s.wait_for('FCFACECUBE', 240)
+    if not isinstance(fc, dict) or fc.get('error') or not fc.get('faces'):
+        print('==> render: face-colour sub-check skipped -- the cube never built (%s)' % fc)
+        return s
+    time.sleep(6)
+    try:
+        rc2 = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
+        frame2 = json.loads(s.page.evaluate(READ_FRAME_JS) or '{}')
+    except Exception as e:
+        print('==> render: face-colour sub-check skipped -- could not read back (%s)' % e)
+        return s
+    green = rc2.get('greenish', 0)
+    print('==> render: the ninth document on the canvas -- %d greenish px (dominant %s)'
+          % (green, rc2.get('dominant')))
+    if green < 1000:
+        fail('render: a cube with a green face is the document on screen and the canvas '
+             'has %d greenish pixels. The frame belongs to an earlier document -- this '
+             'is the multi-document staleness bug' % green)
+    fams = set()
+    for entry in (frame2.get('top') or []):
+        try:
+            r, g, b = (int(x) for x in entry[0].split(','))
+            px = entry[1]
+        except Exception:
+            continue
+        if px < 500 or max(r, g, b) < 60:
+            continue
+        if g > r + 30 and b > r + 30:
+            fams.add('cyan' if abs(g - b) < 40 else ('green' if g > b else 'blue'))
+        elif g > r + 30 and g > b + 30:
+            fams.add('green')
+        elif b > r + 30 and b > g + 30:
+            fams.add('blue')
+        elif r > g + 30 and r > b + 30:
+            fams.add('red')
+    print('==> render: face colours in the frame: %s' % (sorted(fams) or 'none'))
+    if not fams:
+        # Distinguish the two ways this comes back empty. Nothing coloured at all is not
+        # "the colours collapsed", it is "there is no frame here to judge" -- which is
+        # what a framebuffer belonging to a dead context reads as.
+        fail('render: the frame carries no strong hue at all after building a '
+             'six-colour cube (top: %s). Either the frame could not be read or it is '
+             "not this document's frame" % (frame2.get('top'),))
+    elif len(fams) < 2:
+        fail('render: a cube with six different face colours renders in one hue (%s). '
+             'Per-face colour has collapsed to a single colour for the whole object, '
+             'which is what the immediate face path does' % sorted(fams))
     return s
 
 
