@@ -203,6 +203,17 @@ actionable; "3D view is janky" is not.
   pressure monitor divided by the heap's CURRENT size until 2026-09-02 and so announced
   "2 GB" long after the build had stopped being limited to it.
 - CalculiX solves are single-threaded, so large FEM jobs are slower than desktop
+- **Around the sixteenth document opened in one session, the browser starts taking WebGL
+  contexts away.** Qt gives every 3D view its own context and does not release it when the
+  view closes, so they accumulate one per document while the MDI window count stays flat
+  (measured 2026-09-09 on Chrome with an RTX 4080, scratchpad/gpu-context-churn.py:
+  contexts 4, 5, 6 ... 19 over nineteen documents, and from document 15 one
+  webglcontextlost per new document, never restored). Chrome caps a page at 16, and the
+  context it evicts can be the window's own -- after which the whole UI stops painting.
+  Reload to recover. Opening and closing that many documents without a reload is unusual,
+  which is why it survived this long; the fix is on the Qt side (the platform context is
+  destroyed with its surface, and the surface of a closed view is never destroyed) and is
+  not in this build.
 - Shared sessions and MCP exist only where the operator runs the optional `session` container
   (`docker compose --profile share up -d`). Without it, Edit → Share Session… says so and
   nothing else changes; a `?s=` link on such a site opens FreeCAD normally with one toast.
