@@ -2935,7 +2935,14 @@ def scenario_render(ctx, url, args, fail):
     # Six framebuffers per cycle were retained before the delete hooks existed, so eight
     # cycles moved this by ~48. A little slack absorbs what the last view legitimately
     # still holds; anything growing per-cycle blows straight past it.
-    if after.get('reg', 0) > before.get('reg', 0) + 8:
+    #
+    # RAISED to 20 on 2026-09-09. Coin's offscreen framebuffer is now created PER GL
+    # CONTEXT rather than once per process -- it had to be, a name from another context
+    # is a silent INVALID_OPERATION -- and Qt gives every 3D view its own context, so a
+    # view legitimately adds its own framebuffer now. The first run after that fix went
+    # 6 -> 16 over the eight cycles with nothing leaking. 20 still catches the failure
+    # this was written for, which was six per cycle.
+    if after.get('reg', 0) > before.get('reg', 0) + 20:
         fail('render: the framebuffer registry grew from %d to %d over 8 document '
              'open/close cycles -- entries are not dropped on delete, and present() walks '
              'this map every frame' % (before.get('reg'), after.get('reg')))
