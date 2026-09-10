@@ -5867,13 +5867,15 @@ diff -ruNp a/src/Mod/TechDraw/Gui/CommandExtensionDims.cpp b/src/Mod/TechDraw/Gu
 diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
-@@ -57,6 +57,117 @@
+@@ -57,6 +57,119 @@
  
  #include <Gui/Inventor/So3DAnnotation.h>
  
 +#if defined(__EMSCRIPTEN__)
 +#include <cstdlib>
 +#include <vector>
++#include <Inventor/elements/SoGLLazyElement.h>
++#include <Inventor/elements/SoLazyElement.h>
 +
 +// wasm: every edge in the scene is redrawn through immediate mode on EVERY frame --
 +// glBegin(GL_LINE_STRIP) and one glVertex3fv per index, all of it crossing the wasm/JS
@@ -5985,7 +5987,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
  
  using namespace PartGui;
  
-@@ -334,7 +445,55 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+@@ -334,7 +447,64 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
          state->pop();
      }
      else {
@@ -6025,12 +6027,21 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +            // inherited::GLRender does not push either; it just sends the material.
 +            SoMaterialBundle fcMb(action);
 +            fcMb.sendFirst();
++            // ... and TELL COIN the GL colour is no longer what it thinks. sendFirst
++            // leaves GL holding this node's first material while the lazy element's
++            // record says something else, so the next node's send is skipped as
++            // redundant and it inherits our colour. Measured: draft_test_objects loses
++            // 1510 of 1535 purple annotation pixels, and BIMExample's dominant surface
++            // goes from (167,166,159) to (216,215,209) -- every node downstream of an
++            // edge, in both directions. Resetting the diffuse bit makes Coin send it
++            // again, which is the symmetric reassert every external GL change needs.
 +            fcDrewEdges = fcwebDrawEdgeArray(this,
 +                                             this->getNodeId(),
 +                                             fcCoords ? fcCoords->getArrayPtr3() : nullptr,
 +                                             fcCoords ? fcCoords->getNum() : 0,
 +                                             fcCIdx,
 +                                             fcNumCIdx);
++            SoGLLazyElement::getInstance(state)->reset(state, SoLazyElement::DIFFUSE_MASK);
 +        }
 +        if (!fcDrewEdges) {
 +            inherited::GLRender(action);
