@@ -5985,7 +5985,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
  
  using namespace PartGui;
  
-@@ -334,7 +445,48 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+@@ -334,7 +445,55 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
          state->pop();
      }
      else {
@@ -6014,7 +6014,15 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +                                false,   // do NOT generate a normal cache: nothing here
 +                                fcNormalCacheUsed);   // unlocks it, and renderHighlight
 +                                                      // asks the same way
-+            state->push();
++            // NO state->push() around this. Pushing and popping restores the element
++            // VALUE while leaving the GL colour where sendFirst put it, so Coin's lazy
++            // cache compares the next node's material against a value that GL no longer
++            // holds and skips re-sending it -- every later node then draws in this
++            // node's colour. Measured on the linked engine by sampling the current
++            // colour at every draw: immediate mode shows 84,0,125 (Draft's annotation
++            // purple) on 42 draws and 109,133,169 on 798 of BIMExample's, and with the
++            // push/pop version both were ZERO and 1191 of 1240 draws were black.
++            // inherited::GLRender does not push either; it just sends the material.
 +            SoMaterialBundle fcMb(action);
 +            fcMb.sendFirst();
 +            fcDrewEdges = fcwebDrawEdgeArray(this,
@@ -6023,7 +6031,6 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +                                             fcCoords ? fcCoords->getNum() : 0,
 +                                             fcCIdx,
 +                                             fcNumCIdx);
-+            state->pop();
 +        }
 +        if (!fcDrewEdges) {
 +            inherited::GLRender(action);
