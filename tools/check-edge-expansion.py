@@ -40,7 +40,7 @@ typedef int GLsizei;
 typedef int64_t SbUniqueId;
 #define GL_NORMAL_ARRAY 0x8075
 #define GL_VERTEX_ARRAY 0x8074
-#define GL_N3F_V3F 0x2A25
+#define GL_V3F 0x2A16
 #define GL_LINES 0x0001
 
 static int g_drawCalls = 0;
@@ -92,34 +92,35 @@ int main()
         pts[i] = SbVec3f((float)i, 0.0F, 0.0F);
     }
     const int32_t idx[] = {0, 1, 2, -1, 3, 4, -1};
-    bool ok = fcwebDrawEdgeArray((const void*)1, 7, pts, 5, nullptr, idx, 7);
+    bool ok = fcwebDrawEdgeArray((const void*)1, 7, pts, 5, idx, 7);
     assert(ok);
     assert(g_drawCalls == 1);
     assert(g_lastCount == 6);
-    assert(g_lastFormat == GL_N3F_V3F);
+    assert(g_lastFormat == GL_V3F);
     const GLfloat* v = (const GLfloat*)g_lastPtr;
-    // N3F_V3F: three normal floats then three position floats, per vertex.
+    // GL_V3F: three position floats per vertex and nothing else. Coin sends line vertices
+    // with no normal attribute, and adding one makes the emulation light them.
     const float wantX[6] = {0.0F, 1.0F, 1.0F, 2.0F, 3.0F, 4.0F};
     for (int i = 0; i < 6; ++i) {
-        if (v[i * 6 + 3] != wantX[i]) {
-            printf("FAIL vertex %d x=%f want %f\n", i, (double)v[i * 6 + 3], (double)wantX[i]);
+        if (v[i * 3] != wantX[i]) {
+            printf("FAIL vertex %d x=%f want %f\n", i, (double)v[i * 3], (double)wantX[i]);
             return 1;
         }
     }
 
     // Same node, same id: the cache is reused and the draw is identical.
-    ok = fcwebDrawEdgeArray((const void*)1, 7, pts, 5, nullptr, idx, 7);
+    ok = fcwebDrawEdgeArray((const void*)1, 7, pts, 5, idx, 7);
     assert(ok && g_drawCalls == 2 && g_lastCount == 6);
 
     // An index past the end of the coordinate array is skipped, not dereferenced.
     const int32_t bad[] = {0, 99, 1, -1};
-    ok = fcwebDrawEdgeArray((const void*)2, 1, pts, 5, nullptr, bad, 4);
+    ok = fcwebDrawEdgeArray((const void*)2, 1, pts, 5, bad, 4);
     assert(ok);
     assert(g_lastCount == 2);
 
     // A strip with a single point has no segment: draw nothing rather than an empty array.
     const int32_t lone[] = {2, -1};
-    assert(!fcwebDrawEdgeArray((const void*)3, 1, pts, 5, nullptr, lone, 2));
+    assert(!fcwebDrawEdgeArray((const void*)3, 1, pts, 5, lone, 2));
 
     printf("edge expansion OK: %d draws, last count %d\n", g_drawCalls, g_lastCount);
     return 0;

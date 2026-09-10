@@ -5867,7 +5867,7 @@ diff -ruNp a/src/Mod/TechDraw/Gui/CommandExtensionDims.cpp b/src/Mod/TechDraw/Gu
 diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
-@@ -57,6 +57,119 @@
+@@ -57,6 +57,117 @@
  
  #include <Gui/Inventor/So3DAnnotation.h>
  
@@ -5882,12 +5882,20 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +// DrawStyle Shaded, and 23.99 MB of vertex data uploaded per frame against 0.00 MB for
 +// the faces, which already have an array path.
 +//
-+// So expand the index list into GL_LINES pairs ONCE and keep the result on the node.
-+// This is an interleaved client array drawn with one glDrawArrays -- exactly the shape
-+// of SoBrepFaceSet::renderSimpleArray, which is the version of this that already works
-+// under LEGACY_GL_EMULATION. It is deliberately NOT a GL buffer object: a buffer name
-+// means nothing in a context that did not create it, and Qt gives every 3D view its own
-+// context -- that is the bug that made every document after the first show a stale frame.
++// So expand the index list into GL_LINES pairs ONCE and keep the result on the node,
++// drawn as a client array with one glDrawArrays -- the shape of
++// SoBrepFaceSet::renderSimpleArray, which is the version of this that already works under
++// LEGACY_GL_EMULATION. It is deliberately NOT a GL buffer object: a buffer name means
++// nothing in a context that did not create it, and Qt gives every 3D view its own context
++// -- that is the bug that made every document after the first show a stale frame.
++//
++// POSITIONS ONLY, no normals. Coin sends line vertices without a normal attribute --
++// measured through GLImmediate.enabledClientAttributes, immediate mode draws 107 lines
++// with 0 normals on draft_test_objects and 183 with 0 on BIMExample. An earlier version
++// here sent them (from the face normal array, indexed by coordinate) and the emulation
++// duly LIT the lines: 83 of those 107 draws gained a normal, and draft's coloured-pixel
++// count fell from 2741 to 1040 while only 0.4% of pixels differed at all. Black edges,
++// which is most of them, hid it completely.
 +//
 +// The cache is a small fixed table rather than a map, so a document that is closed and
 +// reopened cannot grow it without bound; evicting a slot only costs one rebuild.
@@ -5898,8 +5906,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +    const void* node = nullptr;
 +    SbUniqueId nodeId = 0;
 +    int numIndices = 0;
-+    bool lit = false;
-+    std::vector<GLfloat> verts;   // interleaved N3F_V3F, two vertices per segment
++    std::vector<GLfloat> verts;   // GL_V3F, two vertices per segment
 +};
 +
 +FcEdgeArray fcEdgeArrays[64];
@@ -5909,7 +5916,6 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +                        SbUniqueId nodeId,
 +                        const SbVec3f* pts,
 +                        int numPts,
-+                        const SbVec3f* normals,
 +                        const int32_t* cindices,
 +                        int numcindices)
 +{
@@ -5933,8 +5939,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +    // well as a recycled address.
 +    if (slot->nodeId != nodeId || slot->numIndices != numcindices || slot->verts.empty()) {
 +        std::vector<GLfloat> v;
-+        v.reserve(static_cast<size_t>(numcindices) * 12);
-+        const SbVec3f up(0.0F, 0.0F, 1.0F);
++        v.reserve(static_cast<size_t>(numcindices) * 6);
 +        int i = 0;
 +        while (i < numcindices) {
 +            int32_t prev = -1;
@@ -5949,10 +5954,6 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +                if (prev >= 0) {
 +                    const int32_t pair[2] = {prev, idx};
 +                    for (const int32_t e : pair) {
-+                        const SbVec3f& n = normals ? normals[e] : up;
-+                        v.push_back(n[0]);
-+                        v.push_back(n[1]);
-+                        v.push_back(n[2]);
 +                        v.push_back(pts[e][0]);
 +                        v.push_back(pts[e][1]);
 +                        v.push_back(pts[e][2]);
@@ -5967,18 +5968,15 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +        slot->verts.swap(v);
 +        slot->nodeId = nodeId;
 +        slot->numIndices = numcindices;
-+        slot->lit = (normals != nullptr);
 +    }
-+    const GLsizei count = static_cast<GLsizei>(slot->verts.size() / 6);
++    const GLsizei count = static_cast<GLsizei>(slot->verts.size() / 3);
 +    if (count <= 0) {
 +        return false;
 +    }
-+    glEnableClientState(GL_NORMAL_ARRAY);
 +    glEnableClientState(GL_VERTEX_ARRAY);
-+    glInterleavedArrays(GL_N3F_V3F, 0, &(slot->verts[0]));
++    glInterleavedArrays(GL_V3F, 0, &(slot->verts[0]));
 +    glDrawArrays(GL_LINES, 0, count);
 +    glDisableClientState(GL_VERTEX_ARRAY);
-+    glDisableClientState(GL_NORMAL_ARRAY);
 +    return true;
 +}
 +}  // namespace
@@ -5987,7 +5985,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
  
  using namespace PartGui;
  
-@@ -334,7 +447,49 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+@@ -334,7 +445,48 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
          state->pop();
      }
      else {
@@ -6023,7 +6021,6 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +                                             this->getNodeId(),
 +                                             fcCoords ? fcCoords->getArrayPtr3() : nullptr,
 +                                             fcCoords ? fcCoords->getNum() : 0,
-+                                             fcNormals,
 +                                             fcCIdx,
 +                                             fcNumCIdx);
 +            state->pop();
