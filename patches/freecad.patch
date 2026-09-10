@@ -5864,3 +5864,176 @@ diff -ruNp a/src/Mod/TechDraw/Gui/CommandExtensionDims.cpp b/src/Mod/TechDraw/Gu
          std::string sAlpha = std::to_string((int)alpha);
          std::string formatSpec = dim->FormatSpec.getStrValue();
          formatSpec = formatSpec + " x" + sAlpha + "°";
+diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
+--- a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
++++ b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
+@@ -57,6 +57,119 @@
+ 
+ #include <Gui/Inventor/So3DAnnotation.h>
+ 
++#if defined(__EMSCRIPTEN__)
++#include <cstdlib>
++#include <vector>
++
++// wasm: every edge in the scene is redrawn through immediate mode on EVERY frame --
++// glBegin(GL_LINE_STRIP) and one glVertex3fv per index, all of it crossing the wasm/JS
++// boundary. On the a2plus assembly (42 MB, measured 2026-09-09 on an RTX 4080) that is
++// 96% of the frame: 431 ms/frame with edges against 16 ms for the same scene in
++// DrawStyle Shaded, and 23.99 MB of vertex data uploaded per frame against 0.00 MB for
++// the faces, which already have an array path.
++//
++// So expand the index list into GL_LINES pairs ONCE and keep the result on the node.
++// This is an interleaved client array drawn with one glDrawArrays -- exactly the shape
++// of SoBrepFaceSet::renderSimpleArray, which is the version of this that already works
++// under LEGACY_GL_EMULATION. It is deliberately NOT a GL buffer object: a buffer name
++// means nothing in a context that did not create it, and Qt gives every 3D view its own
++// context -- that is the bug that made every document after the first show a stale frame.
++//
++// The cache is a small fixed table rather than a map, so a document that is closed and
++// reopened cannot grow it without bound; evicting a slot only costs one rebuild.
++namespace
++{
++struct FcEdgeArray
++{
++    const void* node = nullptr;
++    SbUniqueId nodeId = 0;
++    int numIndices = 0;
++    bool lit = false;
++    std::vector<GLfloat> verts;   // interleaved N3F_V3F, two vertices per segment
++};
++
++FcEdgeArray fcEdgeArrays[64];
++int fcEdgeArrayNext = 0;
++
++bool fcwebDrawEdgeArray(const void* node,
++                        SbUniqueId nodeId,
++                        const SbVec3f* pts,
++                        int numPts,
++                        const SbVec3f* normals,
++                        const int32_t* cindices,
++                        int numcindices)
++{
++    if (!pts || !cindices || numPts <= 0 || numcindices < 2) {
++        return false;
++    }
++    FcEdgeArray* slot = nullptr;
++    for (auto& s : fcEdgeArrays) {
++        if (s.node == node) {
++            slot = &s;
++            break;
++        }
++    }
++    if (!slot) {
++        slot = &fcEdgeArrays[fcEdgeArrayNext++ & 63];
++        slot->node = node;
++        slot->nodeId = 0;
++        slot->verts.clear();
++    }
++    // Coin bumps a node's id on any field change, so this catches an edited shape as
++    // well as a recycled address.
++    if (slot->nodeId != nodeId || slot->numIndices != numcindices || slot->verts.empty()) {
++        std::vector<GLfloat> v;
++        v.reserve(static_cast<size_t>(numcindices) * 12);
++        const SbVec3f up(0.0F, 0.0F, 1.0F);
++        int i = 0;
++        while (i < numcindices) {
++            int32_t prev = -1;
++            while (i < numcindices) {
++                const int32_t idx = cindices[i++];
++                if (idx < 0) {
++                    break;
++                }
++                if (idx >= numPts) {
++                    continue;
++                }
++                if (prev >= 0) {
++                    const int32_t pair[2] = {prev, idx};
++                    for (const int32_t e : pair) {
++                        const SbVec3f& n = normals ? normals[e] : up;
++                        v.push_back(n[0]);
++                        v.push_back(n[1]);
++                        v.push_back(n[2]);
++                        v.push_back(pts[e][0]);
++                        v.push_back(pts[e][1]);
++                        v.push_back(pts[e][2]);
++                    }
++                }
++                prev = idx;
++            }
++        }
++        if (v.empty()) {
++            return false;
++        }
++        slot->verts.swap(v);
++        slot->nodeId = nodeId;
++        slot->numIndices = numcindices;
++        slot->lit = (normals != nullptr);
++    }
++    const GLsizei count = static_cast<GLsizei>(slot->verts.size() / 6);
++    if (count <= 0) {
++        return false;
++    }
++    glEnableClientState(GL_NORMAL_ARRAY);
++    glEnableClientState(GL_VERTEX_ARRAY);
++    glInterleavedArrays(GL_N3F_V3F, 0, &(slot->verts[0]));
++    glDrawArrays(GL_LINES, 0, count);
++    glDisableClientState(GL_VERTEX_ARRAY);
++    glDisableClientState(GL_NORMAL_ARRAY);
++    return true;
++}
++}  // namespace
++#endif
++
+ 
+ using namespace PartGui;
+ 
+@@ -334,7 +447,49 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+         state->pop();
+     }
+     else {
++#if defined(__EMSCRIPTEN__)
++        // wasm: draw the plain (unhighlighted, unselected) edges from a cached array
++        // instead of one glVertex3fv per index per frame. ?vboedges=0 opts out.
++        bool fcDrewEdges = false;
++        static const bool fcEdgeArrayOn = (::getenv("FCWEB_VBO_EDGES") != nullptr);
++        if (fcEdgeArrayOn) {
++            const SoCoordinateElement* fcCoords = nullptr;
++            const SbVec3f* fcNormals = nullptr;
++            const int32_t* fcCIdx = nullptr;
++            const int32_t* fcNIdx = nullptr;
++            const int32_t* fcTIdx = nullptr;
++            const int32_t* fcMIdx = nullptr;
++            int fcNumCIdx = 0;
++            SbBool fcNormalCacheUsed = false;
++            this->getVertexData(state,
++                                fcCoords,
++                                fcNormals,
++                                fcCIdx,
++                                fcNIdx,
++                                fcTIdx,
++                                fcMIdx,
++                                fcNumCIdx,
++                                false,   // do NOT generate a normal cache: nothing here
++                                fcNormalCacheUsed);   // unlocks it, and renderHighlight
++                                                      // asks the same way
++            state->push();
++            SoMaterialBundle fcMb(action);
++            fcMb.sendFirst();
++            fcDrewEdges = fcwebDrawEdgeArray(this,
++                                             this->getNodeId(),
++                                             fcCoords ? fcCoords->getArrayPtr3() : nullptr,
++                                             fcCoords ? fcCoords->getNum() : 0,
++                                             fcNormals,
++                                             fcCIdx,
++                                             fcNumCIdx);
++            state->pop();
++        }
++        if (!fcDrewEdges) {
++            inherited::GLRender(action);
++        }
++#else
+         inherited::GLRender(action);
++#endif
+     }
+ 
+     // Workaround for #0000433

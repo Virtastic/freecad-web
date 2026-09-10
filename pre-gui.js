@@ -244,6 +244,15 @@ Module['preRun'].push(function () {
       //
       // ?vbofaces=0 is the escape hatch back to immediate mode.
       if (qs.get('vbofaces') !== '0') { ENV.FCWEB_VBO_FACES = '1'; }
+      // Edges, the other 96%. With faces on a vertex array, EVERY remaining
+      // millisecond of a large assembly is the edge path: SoBrepEdgeSet redraws
+      // each edge through glBegin(GL_LINE_STRIP) and one glVertex3fv per index on
+      // every frame. Measured on an RTX 4080 with the 42 MB a2plus assembly:
+      // 431 ms/frame with edges, 16 ms/frame for the same scene in DrawStyle
+      // Shaded, and 23.99 MB of vertex data uploaded per frame attributed to LINES
+      // against 0.00 MB for the faces. The patch expands the index list into
+      // GL_LINES pairs once and caches it on the node. ?vboedges=0 opts out.
+      if (qs.get('vboedges') !== '0') { ENV.FCWEB_VBO_EDGES = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');
