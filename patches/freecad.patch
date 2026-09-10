@@ -2790,12 +2790,13 @@ diff -ruNp a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
 diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 --- a/src/Gui/View3DInventorViewer.cpp
 +++ b/src/Gui/View3DInventorViewer.cpp
-@@ -21,6 +21,9 @@
+@@ -21,6 +21,10 @@
   ***************************************************************************/
  
  #include <FCConfig.h>
 +#if defined(__EMSCRIPTEN__)
 +#include <emscripten.h>
++#include <emscripten/html5.h>   // emscripten_webgl_get_current_context
 +#endif
  
  #include <Inventor/SoFCPlacementIndicatorKit.h>
@@ -2849,7 +2850,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      printDimension();
  
      for (auto it : this->graphicsItems) {
-@@ -2522,6 +2560,61 @@ void View3DInventorViewer::renderScene()
+@@ -2522,6 +2560,90 @@ void View3DInventorViewer::renderScene()
      const SbViewportRegion vp = this->getSoRenderManager()->getViewportRegion();
      SbVec2s origin = vp.getViewportOriginPixels();
      SbVec2s size = vp.getViewportSizePixels();
@@ -2867,8 +2868,37 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // Persist the private-FBO GL objects across frames AND expose them to the
 +    // end-of-render composite step below (hoisted out of the lambda so the final
 +    // blit can read fcTex).
-+    static GLuint fcFbo = 0, fcTex = 0, fcDepth = 0;
-+    static int fcW = 0, fcH = 0;
++    // ONE SET PER GL CONTEXT. Qt for wasm gives every 3D view its own WebGL
++    // context -- an OffscreenCanvas each; measured 2026-09-09, opening three
++    // documents produced contexts 1, 3 and 4 -- and a framebuffer name means
++    // nothing outside the context that created it. ONE static set meant that from
++    // the SECOND document on, Coin bound the FIRST view's framebuffer: a SILENT
++    // INVALID_OPERATION which leaves the previous binding in place, so the
++    // composite below blitted the widget framebuffer to ITSELF, failed 0x502,
++    // published __fcNativeComposite = 0, and the page held a stale frame for the
++    // rest of the session. 176 such binds in one document; document 1 was always
++    // fine, which is what made it look like a compositor bug for two days.
++    struct FcFboSet { int ctx; GLuint fbo, tex, depth; int w, h; };
++    static FcFboSet fcSets[8] = {};
++    static int fcSetNext = 0;
++    const int fcCtxId = (int)emscripten_webgl_get_current_context();
++    FcFboSet* fcSet = nullptr;
++    for (auto& s : fcSets) {
++        if (s.ctx == fcCtxId) { fcSet = &s; break; }
++    }
++    for (auto& s : fcSets) {
++        if (!fcSet && s.ctx == 0) { s.ctx = fcCtxId; fcSet = &s; }
++    }
++    if (!fcSet) {                 // >8 contexts in one session: recycle round-robin
++        fcSet = &fcSets[fcSetNext % 8];
++        fcSetNext++;
++        *fcSet = FcFboSet{fcCtxId, 0, 0, 0, 0, 0};
++    }
++    GLuint& fcFbo = fcSet->fbo;
++    GLuint& fcTex = fcSet->tex;
++    GLuint& fcDepth = fcSet->depth;
++    int& fcW = fcSet->w;
++    int& fcH = fcSet->h;
 +    auto fcwebBindCoinFbo = [&]() {
 +        if (fcFbo == 0) {
 +            glGenFramebuffers(1, &fcFbo);
