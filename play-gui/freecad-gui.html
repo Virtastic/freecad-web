@@ -3967,8 +3967,14 @@ window.fcRunPy = fcRunPy;
             // only skip a texture that could never have been drawn anyway.
             if (t.__fcGl && t.__fcGl !== gl) {
               window.__fcUiXCtx = (window.__fcUiXCtx || 0) + 1; continue; }
-            if (t.__fcSz && t.__fcSz[0] === gl.drawingBufferWidth
-                         && t.__fcSz[1] === gl.drawingBufferHeight
+            // WITHIN TWO PIXELS, not equal. At devicePixelRatio 1.5 a 1707-px-wide window
+            // is 2560.5 device pixels: the canvas rounds to 2561 and Qt's backing texture
+            // to 2560, so an exact match never happens and the pass presents NOTHING --
+            // a black window with a fragment of the 3D quad in it, which is what the
+            // user's own Chrome showed on 2026-09-10. Every integer-sized test window
+            // (1280x720 at 1.0 and 1.5) matched exactly, which is how this shipped.
+            if (t.__fcSz && Math.abs(t.__fcSz[0] - gl.drawingBufferWidth) <= 2
+                         && Math.abs(t.__fcSz[1] - gl.drawingBufferHeight) <= 2
                          && (!ui || (t.__fcUpl || 0) > (ui.__fcUpl || 0))) ui = t; }
           // A frame with no UI layer must NOT be presented. Qt deletes and recreates
           // its backingstore texture during interaction (repaint churn, resize, DPR
@@ -3982,8 +3988,8 @@ window.fcRunPy = fcRunPy;
           if (ui) { lastUi = ui; }
           else if (lastUi && !lastUi.__fcDead
                    && !(lastUi.__fcGl && lastUi.__fcGl !== gl)
-                   && lastUi.__fcSz && lastUi.__fcSz[0] === gl.drawingBufferWidth
-                   && lastUi.__fcSz[1] === gl.drawingBufferHeight) { ui = lastUi; }
+                   && lastUi.__fcSz && Math.abs(lastUi.__fcSz[0] - gl.drawingBufferWidth) <= 2
+                   && Math.abs(lastUi.__fcSz[1] - gl.drawingBufferHeight) <= 2) { ui = lastUi; }
           // No live UI texture at all (Qt deleted it and has not uploaded the next one
           // yet -- a selection click re-rasterises the whole window and the main thread
           // stalls ~1 s on the 443k-triangle pick + rebuild). Painting nothing here lets
@@ -4108,8 +4114,32 @@ window.fcRunPy = fcRunPy;
             var wtex = wDraw ? ((widget.gl === gl) ? widget.tex : bridgeWidget(widget, gl))
                              : null;
             if (wtex) {
-              var r = widget.rect || window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
-              gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
+              var r = widget.rect || window.__fcWidgetRect;   // [x, y, w, h], top-left, Qt LOGICAL px
+              // The C++ multiplies by QOpenGLWidget::devicePixelRatio() meaning to publish
+              // device pixels, and on wasm that returns 1 while the window's ratio is 1.5:
+              // measured 2026-09-10, rect [0,24,1280,411] beside a 1920x616 widget
+              // framebuffer on a 1920x1080 canvas. Drawn as-is, the 3D layer landed at
+              // two-thirds size in the wrong place and the rest of Qt's widget hole stayed
+              // black -- the production screenshot. So scale by the canvas's own ratio of
+              // device to CSS pixels, exactly as the screenshot crop below already does.
+              // NOT by the picked texture's size over the rect: that ratio is only a unit
+              // conversion when the picked framebuffer IS the one the rect describes, and
+              // it is not always -- a hidden MDI view keeps rendering, is the most recently
+              // drawn framebuffer, and came out painted over the Start page at its own
+              // 600x450 (measured 2026-09-10, first version of this fix).
+              var __cv = gl.canvas;
+              var __sx = W / ((__cv && __cv.clientWidth) || W);
+              var __sy = H / ((__cv && __cv.clientHeight) || H);
+              var __rx = Math.round(r[0] * __sx), __ry = Math.round(r[1] * __sy);
+              var __rw = Math.round(r[2] * __sx), __rh = Math.round(r[3] * __sy);
+              // And only draw a framebuffer that is the size the rect says the visible
+              // widget is. The one that is not is a hidden view's, and painting it here
+              // puts a 3D scene over whatever the user is actually looking at.
+              var __wsz = (widget.tex && widget.tex.__fcSz) || null;
+              var __fits = !__wsz || (Math.abs(__wsz[0] - __rw) <= 8 && Math.abs(__wsz[1] - __rh) <= 8);
+              if (!__fits) { window.__fcWidgetSkipped = (window.__fcWidgetSkipped || 0) + 1; }
+              if (__fits) {
+              gl.viewport(__rx, H - __ry - __rh, __rw, __rh);
               gl.uniform1f(p.flip, 1.0);   // GL-rendered y-up: invert sampling so the nav
               // cube sits top-right, top faces shade light, and labels read forward
               gl.bindTexture(gl.TEXTURE_2D, wtex);
@@ -4119,6 +4149,7 @@ window.fcRunPy = fcRunPy;
               // other number in this pass looked healthy. A frame count says the
               // compositor is alive; only this says the 3D layer is in the frame.
               window.__fcWidgetDrawn = (window.__fcWidgetDrawn || 0) + 1;
+              }
             }
             keepValid = true;             // this frame is complete and safe to re-present
           }
