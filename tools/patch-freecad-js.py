@@ -193,12 +193,21 @@ PATCHES = [
         'if(func&&Asyncify.isAsyncExport(func)){wasmTableMirror[funcPtr]=func='
         'Asyncify.makeAsyncFunction(func)}}if(!func){return function(){return 0}}return func}',
     ),
+    # MIGRATION for an asset patched with the previous (wrong) mapping -- see the entry
+    # below. Anchors on the old replacement text and rewrites it; on a fresh link the
+    # primary entry produces the corrected text directly and this one reads as applied.
+    (
+        'glGet legacy fixed-function queries (migrate 2834/2850)',
+        'if(name_===2834){ret=1029}else if(name_===2850){ret=6914}else if(name_===3377){ret=8}',
+        'if(name_===2834){name_=33901}else if(name_===2850){name_=33902}else if(name_===2880){ret=6914}'
+        'else if(name_===3377){ret=8}',
+    ),
     (
         'glGet legacy fixed-function queries',
         'ret=name_==33307?3:0;break}if(ret===undefined){var result=GLctx.getParameter(name_);',
-        'ret=name_==33307?3:0;break}if(ret===undefined){if(name_===2834){ret=1029}'
-        'else if(name_===2850){ret=6914}else if(name_===3377){ret=8}'
-        'else if(name_===3121){ret=0}}if(ret===undefined){'
+        'ret=name_==33307?3:0;break}if(ret===undefined){if(name_===2834){name_=33901}'
+        'else if(name_===2850){name_=33902}else if(name_===2880){ret=6914}'
+        'else if(name_===3377){ret=8}else if(name_===3121){ret=0}}if(ret===undefined){'
         'var result=GLctx.getParameter(name_);',
     ),
     (
