@@ -1438,26 +1438,52 @@ class Session:
             return 'unknown'
 
     def run_python(self, code):
+        # Remember how many rejections the page had already recorded. __fcPyErrors is a
+        # session-long list, so without this a trap from an EARLIER scenario aborts the
+        # next wait_for that happens to look: link 34422883484 reported "the engine
+        # trapped while waiting for FCFEM" and gave up, while the FEM probe went on to
+        # finish correctly (ratio 0.9895, in the console dump at the end). The trap it
+        # read was somebody else's, and only the CPython frames of a stale entry.
+        self._errbase = len(self.trapped(0))
         return self.page.evaluate(DISPATCH_JS, code)
 
-    def trapped(self):
+    def trapped(self, base=None):
         """Did a python call reject? The shell records every rejection in __fcPyErrors.
 
         A wasm trap is not an exception: Python never unwinds, the marker never arrives,
         and from the page nothing happens at all. Without this a trapped engine costs the
         full wait -- fifteen minutes of CI to learn something the shell knew at once.
+
+        `base` is how many entries to ignore: everything the page had recorded before the
+        call being waited on. Pass 0 for the whole list.
         """
+        if base is None:
+            base = getattr(self, '_errbase', 0)
         try:
-            return [str(e) for e in (self.page.evaluate('window.__fcPyErrors || []') or [])]
+            all_errs = [str(e) for e in (self.page.evaluate('window.__fcPyErrors || []') or [])]
         except Exception:
             return []
+        return all_errs[base:]
 
     def wait_for(self, marker, seconds):
         deadline = time.time() + Session.left(seconds)
+        # A trap is a strong signal but not a verdict: a probe that hands its work to a
+        # timer or suspends through JSPI can record a rejection and STILL finish. Link
+        # 34422883484 failed as "the FEM probe produced no result" while that same page's
+        # console carried FCFEM with the right answer (ratio 0.9895) -- the gate gave up
+        # at the trap and the marker arrived afterwards. So on a trap, keep waiting -- for
+        # 300 s, because that run's FCFEM line landed minutes after the trap was recorded.
+        # A genuinely dead engine then costs five extra minutes; a false failure costs a
+        # two-and-a-half-hour relink, so the trade is not close.
+        trap_deadline = None
+        seen = None
         while time.time() < deadline:
             for c in self.lines():
                 m = re.search(re.escape(marker) + r' (\{.*\})', c)
                 if m:
+                    if seen:
+                        print('==> NOTE: %s arrived after a trap was recorded: %s'
+                              % (marker, seen.splitlines()[0]))
                     # The probes emit repr(dict), so parse it as a Python literal. JSON
                     # cannot: Python writes True, not true, and a dialog result is mostly
                     # booleans.
@@ -1465,8 +1491,12 @@ class Session:
                 if marker in c:
                     return True
             trap = self.trapped()
-            if trap:
+            if trap and trap_deadline is None:
+                seen = trap[0]
+                trap_deadline = min(deadline, time.time() + 300)
                 print('==> the engine trapped while waiting for %s: %s' % (marker, trap[0]))
+                print('==> still waiting up to 300s in case the probe finishes anyway')
+            if trap_deadline is not None and time.time() > trap_deadline:
                 return None
             time.sleep(2)
         return None
