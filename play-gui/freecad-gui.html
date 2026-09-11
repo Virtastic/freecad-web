@@ -3893,9 +3893,23 @@ window.fcRunPy = fcRunPy;
           // not inferred from a blit that may be a self-blit or a stale shadow. Falls back
           // to the blit source, which is right while the native composite still works.
           var src = null;
-          for (k in REG) { e = REG[k];
-            if (!e.tex || !e.drewAt || e.tex.__fcDead) continue;
-            if (!src || e.drewAt > src.drewAt) src = e; }
+          // THE VISIBLE VIEW FIRST. Hidden MDI views keep rendering, and "most recently
+          // drawn" can be one of them -- its frame then lands over whatever is on screen
+          // (measured 2026-09-10: a 600x450 view painted across the Start page). renderScene
+          // publishes the GL name of the framebuffer belonging to the view that is actually
+          // visible as __fcVisibleFbo; emscripten stores that name on the object (.name),
+          // so prefer the entry whose framebuffer carries it, and fall back to recency only
+          // when the app has not said.
+          var vis = window.__fcVisibleFbo;
+          if (vis) {
+            for (k in REG) { e = REG[k];
+              if (e.fb && e.fb.name === vis && e.tex && e.drewAt && !e.tex.__fcDead) { src = e; break; } }
+          }
+          if (!src) {
+            for (k in REG) { e = REG[k];
+              if (!e.tex || !e.drewAt || e.tex.__fcDead) continue;
+              if (!src || e.drewAt > src.drewAt) src = e; }
+          }
           if (!src) {
             for (k in REG) { e = REG[k];
               if (!e.tex || !e.blitFrom || e.tex.__fcDead) continue;
@@ -4132,13 +4146,12 @@ window.fcRunPy = fcRunPy;
               var __sy = H / ((__cv && __cv.clientHeight) || H);
               var __rx = Math.round(r[0] * __sx), __ry = Math.round(r[1] * __sy);
               var __rw = Math.round(r[2] * __sx), __rh = Math.round(r[3] * __sy);
-              // And only draw a framebuffer that is the size the rect says the visible
-              // widget is. The one that is not is a hidden view's, and painting it here
-              // puts a 3D scene over whatever the user is actually looking at.
-              var __wsz = (widget.tex && widget.tex.__fcSz) || null;
-              var __fits = !__wsz || (Math.abs(__wsz[0] - __rw) <= 8 && Math.abs(__wsz[1] - __rh) <= 8);
-              if (!__fits) { window.__fcWidgetSkipped = (window.__fcWidgetSkipped || 0) + 1; }
-              if (__fits) {
+              // NO size test between the framebuffer and the rect here. One was tried on
+              // 2026-09-10 to keep a hidden MDI view's frame off the Start page, and under
+              // AntiAliasing=4 at devicePixelRatio 1.5 it skipped 240 of 242 frames -- a
+              // black viewport, which is the worse of the two failures by a distance. The
+              // hidden-view case is handled at the pick instead: renderScene publishes the
+              // visible view's framebuffer name and the pick above prefers it.
               gl.viewport(__rx, H - __ry - __rh, __rw, __rh);
               gl.uniform1f(p.flip, 1.0);   // GL-rendered y-up: invert sampling so the nav
               // cube sits top-right, top faces shade light, and labels read forward
@@ -4149,7 +4162,6 @@ window.fcRunPy = fcRunPy;
               // other number in this pass looked healthy. A frame count says the
               // compositor is alive; only this says the 3D layer is in the frame.
               window.__fcWidgetDrawn = (window.__fcWidgetDrawn || 0) + 1;
-              }
             }
             keepValid = true;             // this frame is complete and safe to re-present
           }

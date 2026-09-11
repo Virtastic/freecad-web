@@ -2850,7 +2850,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      printDimension();
  
      for (auto it : this->graphicsItems) {
-@@ -2522,6 +2560,90 @@ void View3DInventorViewer::renderScene()
+@@ -2522,6 +2560,126 @@ void View3DInventorViewer::renderScene()
      const SbViewportRegion vp = this->getSoRenderManager()->getViewportRegion();
      SbVec2s origin = vp.getViewportOriginPixels();
      SbVec2s size = vp.getViewportSizePixels();
@@ -2878,7 +2878,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // published __fcNativeComposite = 0, and the page held a stale frame for the
 +    // rest of the session. 176 such binds in one document; document 1 was always
 +    // fine, which is what made it look like a compositor bug for two days.
-+    struct FcFboSet { int ctx; GLuint fbo, tex, depth; int w, h; };
++    struct FcFboSet { int ctx; GLuint fbo, tex, depth; int w, h; GLuint msFbo, msColor, msDepth; int msSamples; };
 +    static FcFboSet fcSets[8] = {};
 +    static int fcSetNext = 0;
 +    const int fcCtxId = (int)emscripten_webgl_get_current_context();
@@ -2892,13 +2892,29 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    if (!fcSet) {                 // >8 contexts in one session: recycle round-robin
 +        fcSet = &fcSets[fcSetNext % 8];
 +        fcSetNext++;
-+        *fcSet = FcFboSet{fcCtxId, 0, 0, 0, 0, 0};
++        *fcSet = FcFboSet{fcCtxId, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 +    }
 +    GLuint& fcFbo = fcSet->fbo;
 +    GLuint& fcTex = fcSet->tex;
 +    GLuint& fcDepth = fcSet->depth;
 +    int& fcW = fcSet->w;
 +    int& fcH = fcSet->h;
++    // ANTI-ALIASING, done where the scene is actually rendered. The preference
++    // (View/AntiAliasing) gives the QOpenGLWidget a multisampled backing framebuffer,
++    // and that is useless here twice over: Qt's own present of it never reaches the
++    // canvas, and WebGL refuses to blit INTO a multisampled framebuffer, so with
++    // AA=4 the composite below failed every frame (55 'Invalid operation on
++    // multisampled framebuffer' per session, measured 2026-09-10) while the picture
++    // stayed aliased. So render into a multisampled renderbuffer pair of our own and
++    // RESOLVE into fcTex, which is what the page composites. GL_MAX_SAMPLES bounds it.
++    int fcWantSamples = 0;
++    if (auto* fcGlwS = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
++        fcWantSamples = fcGlwS->format().samples();
++        GLint fcMaxS = 0;
++        glGetIntegerv(0x8D57 /* GL_MAX_SAMPLES */, &fcMaxS);
++        if (fcWantSamples > fcMaxS) { fcWantSamples = fcMaxS; }
++        if (fcWantSamples < 2) { fcWantSamples = 0; }
++    }
 +    auto fcwebBindCoinFbo = [&]() {
 +        if (fcFbo == 0) {
 +            glGenFramebuffers(1, &fcFbo);
@@ -2930,8 +2946,28 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +            glBindTexture(GL_TEXTURE_2D, 0);
 +            glBindRenderbuffer(GL_RENDERBUFFER, 0);
 +            fcW = fcVw; fcH = fcVh;
++            fcSet->msSamples = -1;   // storage below follows the new size
 +        }
-+        glBindFramebuffer(GL_FRAMEBUFFER, fcFbo);
++        if (fcWantSamples > 0) {
++            if (fcSet->msFbo == 0) {
++                glGenFramebuffers(1, &fcSet->msFbo);
++                glGenRenderbuffers(1, &fcSet->msColor);
++                glGenRenderbuffers(1, &fcSet->msDepth);
++            }
++            if (fcSet->msSamples != fcWantSamples) {
++                glBindRenderbuffer(GL_RENDERBUFFER, fcSet->msColor);
++                glRenderbufferStorageMultisample(GL_RENDERBUFFER, fcWantSamples, 0x8058 /* GL_RGBA8 */, fcVw, fcVh);
++                glBindRenderbuffer(GL_RENDERBUFFER, fcSet->msDepth);
++                glRenderbufferStorageMultisample(GL_RENDERBUFFER, fcWantSamples, GL_DEPTH_COMPONENT24, fcVw, fcVh);
++                glBindFramebuffer(GL_FRAMEBUFFER, fcSet->msFbo);
++                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, fcSet->msColor);
++                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fcSet->msDepth);
++                glBindRenderbuffer(GL_RENDERBUFFER, 0);
++                fcSet->msSamples = fcWantSamples;
++            }
++        }
++        const bool fcMs = (fcWantSamples > 0 && fcSet->msFbo != 0);
++        glBindFramebuffer(GL_FRAMEBUFFER, fcMs ? fcSet->msFbo : fcFbo);
 +        glViewport(0, 0, fcVw, fcVh);
 +        EM_ASM({ window.__fcCoinFbo = $0; window.__fcCoinW = $1; window.__fcCoinH = $2; },
 +               (int)fcFbo, fcVw, fcVh);
@@ -3001,7 +3037,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +2782,165 @@ void View3DInventorViewer::renderScene()
+@@ -2679,6 +2782,185 @@ void View3DInventorViewer::renderScene()
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -3042,7 +3078,21 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +            widgetFbo = (GLuint)fcGlw->defaultFramebufferObject();
 +        }
 +        while (glGetError() != GL_NO_ERROR) { }   // start from a clean slate
-+        const bool fcSelfBlit = (fcFbo == widgetFbo);   // already in place
++        if (fcWantSamples > 0 && fcSet->msFbo != 0) {
++            // Resolve the multisampled scene into fcTex, which is what the page reads.
++            glBindFramebuffer(GL_READ_FRAMEBUFFER, fcSet->msFbo);
++            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fcFbo);
++            glBlitFramebuffer(0, 0, fcVw, fcVh, 0, 0, fcVw, fcVh,
++                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
++        }
++        // Skip the copy when it is already in place -- and when the destination is
++        // multisampled, which WebGL refuses (INVALID_OPERATION, every frame, with
++        // AntiAliasing on). Nothing presents that framebuffer anyway; the page
++        // composites fcTex. Report it as a success so the page does not hold a frame.
++        glBindFramebuffer(GL_FRAMEBUFFER, widgetFbo);
++        GLint fcWidgetSamples = 0;
++        glGetIntegerv(GL_SAMPLES, &fcWidgetSamples);
++        const bool fcSelfBlit = (fcFbo == widgetFbo) || fcWidgetSamples > 0;
 +        if (!fcSelfBlit) { glBindFramebuffer(GL_READ_FRAMEBUFFER, fcFbo);
 +        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, widgetFbo);
 +        glBlitFramebuffer(0, 0, fcVw, fcVh, 0, 0, fcVw, fcVh,
@@ -3096,6 +3146,12 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +        // there fails to compile with "use of undeclared identifier $1".
 +        EM_ASM({ window.__fcWidgetRect = [$0].concat($1).concat($2).concat($3); },
 +               fcTl.x(), fcTl.y(), fcGlw2->width(), fcGlw2->height());
++        // And WHICH framebuffer is the visible view's. Hidden MDI views keep rendering
++        // through this same function, and the page's pick of 'most recently drawn'
++        // could land on one of them -- measured 2026-09-10 as a 600x450 view painted
++        // across the Start page. The GL name is what the page can match: emscripten
++        // keeps it on the WebGLFramebuffer object as .name.
++        EM_ASM({ window.__fcVisibleFbo = $0; }, (int)fcFbo);
 +    }
 +    //
 +    // FCWEB GL STATE RESET -- hand Qt back a context it recognises.

@@ -193,6 +193,66 @@ PATCHES = [
         'if(func&&Asyncify.isAsyncExport(func)){wasmTableMirror[funcPtr]=func='
         'Asyncify.makeAsyncFunction(func)}}if(!func){return function(){return 0}}return func}',
     ),
+    # A TEXTURE FROM ANOTHER CONTEXT IS NOT BOUND -- SKIP THE CALL RATHER THAN RAISE.
+    #
+    # Qt gives every 3D view its own WebGL context, and Qt's RHI compositor then binds
+    # each QOpenGLWidget's texture from the WINDOW's context: every one of those binds is
+    # a WebGL INVALID_OPERATION ('object does not belong to this context'), 17-71 per
+    # document opened, attributed by stack on 2026-09-10 to QRhiGles2::bindCombinedSampler
+    # and nothing else. That compose never presents anyway -- the page composites the
+    # window itself -- so the bind failing changes nothing except the console. The page
+    # already stamps every texture with the context that created it (__fcGl, the same
+    # tag its compositor keys on), so a bind from a different context can simply return:
+    # the previous binding stays, exactly as the refused call would have left it. The tag
+    # is set in GL.genObject too, because a texture that is only ever a framebuffer
+    # attachment never passes through an upload and would otherwise carry none.
+    (
+        'bindTexture: skip a texture from another context instead of raising',
+        'var _emscripten_glBindTexture=(target,texture)=>{GLctx.bindTexture(target,GL.textures[texture])};',
+        'var _emscripten_glBindTexture=(target,texture)=>{var __t=GL.textures[texture];'
+        'if(__t&&__t.__fcGl&&__t.__fcGl!==GLctx){GL.__fcXBind=(GL.__fcXBind|0)+1;GLctx.__fcNoTex=true;return}'
+        'GLctx.__fcNoTex=false;GLctx.bindTexture(target,__t)};',
+    ),
+    (
+        'genObject: stamp every GL object with the context that created it',
+        'genObject:(n,buffers,createFunction,objectTable)=>{for(var i=0;i<n;i++){var buffer=GLctx[createFunction]();var id=buffer&&GL.getNewId(objectTable);if(buffer){buffer.name=id;objectTable[id]=buffer}',
+        'genObject:(n,buffers,createFunction,objectTable)=>{for(var i=0;i<n;i++){var buffer=GLctx[createFunction]();var id=buffer&&GL.getNewId(objectTable);if(buffer){buffer.name=id;buffer.__fcGl=GLctx;objectTable[id]=buffer}',
+    ),
+    # THE SAME FOR PROGRAMS. Qt's RHI compositor (QRhiGles2::executeCommandBuffer) keeps
+    # the shader programs it built before the window's native WebGL context was recreated
+    # (the rehome patch swaps it when the first 3D view turns the surface into an OpenGL
+    # one), so every useProgram of them is refused and every uniform* that follows lands
+    # on a location 'not from the associated program': 476 warnings per session, stack-
+    # attributed 2026-09-10 to that one caller and nothing else. Its compose paints
+    # nothing here anyway -- the page composites the window -- so: tag programs with the
+    # context that made them, and on a foreign useProgram leave GL's binding alone and
+    # point emscripten's tracking at NO program. WebGL treats a uniform call with a null
+    # location as a no-op, silently, which is exactly the outcome the refused call had.
+    (
+        'createProgram: stamp the program with the context that created it',
+        'var program=GLctx.createProgram();program.name=id;program.maxUniformLength=',
+        'var program=GLctx.createProgram();program.name=id;program.__fcGl=GLctx;program.maxUniformLength=',
+    ),
+    (
+        'useProgram: a program from another context binds nothing and tracks as none',
+        'var _emscripten_glUseProgram=program=>{program=GL.programs[program];GLctx.useProgram(program);GLctx.currentProgram=program};',
+        'var _emscripten_glUseProgram=program=>{program=GL.programs[program];'
+        'if(program&&program.__fcGl&&program.__fcGl!==GLctx){GL.__fcXProg=(GL.__fcXProg|0)+1;GLctx.currentProgram=null;return}'
+        'GLctx.useProgram(program);GLctx.currentProgram=program};',
+    ),
+    # texParameter after a bind this glue refused: there is no texture on the target, so
+    # the call would raise 'no texture bound to target'. Skip it while the last bind on
+    # this context was a refused one; the next real bind clears the flag.
+    (
+        'texParameteri: no-op after a refused bind',
+        'var _emscripten_glTexParameteri=(x0,x1,x2)=>GLctx.texParameteri(x0,x1,x2);',
+        'var _emscripten_glTexParameteri=(x0,x1,x2)=>{if(GLctx.__fcNoTex)return;GLctx.texParameteri(x0,x1,x2)};',
+    ),
+    (
+        'texParameterf: no-op after a refused bind',
+        'var _emscripten_glTexParameterf=(x0,x1,x2)=>GLctx.texParameterf(x0,x1,x2);',
+        'var _emscripten_glTexParameterf=(x0,x1,x2)=>{if(GLctx.__fcNoTex)return;GLctx.texParameterf(x0,x1,x2)};',
+    ),
     # QT 6.11 QUEUES EVERY DOM EVENT FOR A SUSPENDED EVENT LOOP THIS APP NEVER HAS.
     #
     # Qt's pointer/key handler pushes the event onto qtSuspendResumeControl.pendingEvents
@@ -539,7 +599,19 @@ POLYGON_MODE += [
     (
         'glPolygonMode does not forward POINT to WEBGL_polygon_mode',
         'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode)GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
-        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode&&face===1032&&(pmode===6913||pmode===6914))GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
+        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode&&face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}catch(e){}};',
+    ),
+]
+
+# MIGRATION: an asset patched with the previous POINT form (every link up to and including
+# build-20260910) carries neither the anchor above nor its replacement. Rewrite that form in
+# place so the deploy-time re-run and a rescued release both come out identical to a fresh
+# link -- the tool fails closed on NOT FOUND, so without this it would write nothing.
+POLYGON_MODE += [
+    (
+        'glPolygonMode: migrate the previous forwarding condition',
+        '&&face===1032&&(pmode===6913||pmode===6914))GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
+        '&&face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}catch(e){}};',
     ),
 ]
 
