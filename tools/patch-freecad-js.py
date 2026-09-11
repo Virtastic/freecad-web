@@ -193,6 +193,25 @@ PATCHES = [
         'if(func&&Asyncify.isAsyncExport(func)){wasmTableMirror[funcPtr]=func='
         'Asyncify.makeAsyncFunction(func)}}if(!func){return function(){return 0}}return func}',
     ),
+    # QT 6.11 QUEUES EVERY DOM EVENT FOR A SUSPENDED EVENT LOOP THIS APP NEVER HAS.
+    #
+    # Qt's pointer/key handler pushes the event onto qtSuspendResumeControl.pendingEvents
+    # and then, with asyncify available, does NOTHING -- its own comment: 'Keep the event
+    # in the event queue to be processed on the next processEvents() call'. That drain
+    # lives in QEventDispatcherWasm::sendNativeEvents, which suspends the loop with JSPI
+    # and resumes it from the next DOM event. main() is not a promising export here, so
+    # that loop never suspends, control.resume is never set, and every mouse event since
+    # the 6.11 upgrade went into the queue and stayed there: measured 30 pending after one
+    # click and one drag, zero QEvents delivered, zero console output, Coin never asked.
+    # Forcing asyncifyEnabled=false in the live page made the same click select the box
+    # and the same drag rotate the camera (2026-09-10). So take the synchronous branch
+    # unconditionally -- the branch every pre-asyncify Qt build takes -- and deliver each
+    # event as it arrives. The resume path above it is untouched.
+    (
+        'Qt 6.11: deliver DOM events instead of queueing them for a loop that never suspends',
+        'else{if(control.asyncifyEnabled){}else{Module.qtSendPendingEvents()}}};control.eventHandlers[index]=handler',
+        'else{Module.qtSendPendingEvents()}};control.eventHandlers[index]=handler',
+    ),
     # MIGRATION for an asset patched with the previous (wrong) mapping -- see the entry
     # below. Anchors on the old replacement text and rewrites it; on a fresh link the
     # primary entry produces the corrected text directly and this one reads as applied.
