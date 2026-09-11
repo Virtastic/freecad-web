@@ -253,6 +253,22 @@ PATCHES = [
         'var _emscripten_glTexParameterf=(x0,x1,x2)=>GLctx.texParameterf(x0,x1,x2);',
         'var _emscripten_glTexParameterf=(x0,x1,x2)=>{if(GLctx.__fcNoTex)return;GLctx.texParameterf(x0,x1,x2)};',
     ),
+    # glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE) IS DROPPED ON THE FLOOR.
+    #
+    # emscripten's hook_texEnvf handles only GL_RGB_SCALE / GL_ALPHA_SCALE; every other pname
+    # hits `default:0`. GL allows the f variant for any enum-valued pname, and NaviCube.cpp
+    # uses it: glTexEnvi(..., GL_REPLACE) then glTexEnvf(..., GL_MODULATE) -- so the cube's
+    # label textures rendered in REPLACE, i.e. raw white glyphs instead of glyphs tinted with
+    # the emphasis colour: near-invisible on a light face (measured 2026-09-11: interior 245
+    # on a 247 face, and the mip filter made no difference). Route every pname that is not a
+    # scale through hook_texEnvi, which knows all of them.
+    (
+        'hook_texEnvf: forward enum pnames to hook_texEnvi',
+        'hook_texEnvf(target,pname,param){if(target!=GL_TEXTURE_ENV)return;var env=getCurTexUnit().env;switch(pname){case GL_RGB_SCALE:',
+        'hook_texEnvf(target,pname,param){if(target!=GL_TEXTURE_ENV)return;'
+        'if(pname!==GL_RGB_SCALE&&pname!==GL_ALPHA_SCALE){return GLImmediate.TexEnvJIT.hook_texEnvi(target,pname,param)}'
+        'var env=getCurTexUnit().env;switch(pname){case GL_RGB_SCALE:',
+    ),
     # QT 6.11 QUEUES EVERY DOM EVENT FOR A SUSPENDED EVENT LOOP THIS APP NEVER HAS.
     #
     # Qt's pointer/key handler pushes the event onto qtSuspendResumeControl.pendingEvents
