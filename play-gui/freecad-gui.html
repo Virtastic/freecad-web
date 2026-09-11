@@ -4316,6 +4316,24 @@ window.fcRunPy = fcRunPy;
                    top: keys.slice(0, 5).map(function (x) { return x + ' x' + hist[x]; }) };
         } catch (err) { return { error: String(err).slice(0, 120) }; }
       };
+      // A CONTEXT QT DESTROYED IS RELEASED HERE TOO. The glue calls this from
+      // GL.deleteContext. The browser reclaims a WebGL context only when nothing holds
+      // it, and REG/UPL/lastUi/lastBlit hold framebuffers and textures that hold the
+      // context: measured 2026-09-11, one live 1x1 context per closed document, forever,
+      // and Chrome evicts the oldest at 16 -- the visible view. Drop every reference.
+      window.__fcContextDeleted = function (gl) {
+        try {
+          var k, e, n = 0;
+          for (k in REG) { e = REG[k]; if (e && (e.gl === gl || e.drewGl === gl)) { if (e.tex) e.tex.__fcDead = true; delete REG[k]; n++; } }
+          for (var i = UPL.length - 1; i >= 0; i--) { if (UPL[i] && UPL[i].__fcGl === gl) { UPL[i].__fcDead = true; UPL.splice(i, 1); } }
+          if (lastUi && lastUi.__fcGl === gl) lastUi = null;
+          if (lastBlit && lastBlit.gl === gl) lastBlit = null;
+          if (BR && BR.src && BR.src.gl === gl) BR.src = null;
+          if (BR && BR.gl === gl) { BR.gl = null; BR.tex = null; BR.buf = null; }
+          try { delete gl.__fcPresProg; } catch (e2) {}
+          window.__fcCtxReleased = (window.__fcCtxReleased || 0) + 1;
+        } catch (e3) { window.__fcCtxReleaseErr = String(e3); }
+      };
       window.__fcPresentStats = function () {
         // The SIZES too. A count cannot tell you WHICH framebuffer the widget quad
         // draws from, and picking the wrong one puts the wrong picture in the

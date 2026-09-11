@@ -221,7 +221,7 @@ PATCHES = [
     # MIGRATION: build-20260911's link (commit 4b9de04) baked a useProgram guard that a later
     # measurement disproved (it never fired: GL.__fcXProg stayed 0 across every census). It
     # is inert but it is also a lie in the shipped glue; take it back out of any asset that
-    # carries it, and the program tag that only existed for it.
+    # carries it. (The program tag stays: the context sweep in deleteContext uses it.)
     (
         'useProgram: remove the disproved cross-context guard',
         'var _emscripten_glUseProgram=program=>{program=GL.programs[program];'
@@ -230,9 +230,14 @@ PATCHES = [
         'var _emscripten_glUseProgram=program=>{program=GL.programs[program];GLctx.useProgram(program);GLctx.currentProgram=program};',
     ),
     (
-        'createProgram: remove the tag that served the disproved guard',
-        'var program=GLctx.createProgram();program.name=id;program.__fcGl=GLctx;program.maxUniformLength=',
+        'createProgram: stamp the program with the context that created it',
         'var program=GLctx.createProgram();program.name=id;program.maxUniformLength=',
+        'var program=GLctx.createProgram();program.name=id;program.__fcGl=GLctx;program.maxUniformLength=',
+    ),
+    (
+        'createShader: stamp the shader with the context that created it',
+        'GL.shaders[id]=GLctx.createShader(shaderType);return id}',
+        'GL.shaders[id]=GLctx.createShader(shaderType);if(GL.shaders[id])GL.shaders[id].__fcGl=GLctx;return id}',
     ),
     # texParameter after a bind this glue refused: there is no texture on the target, so
     # the call would raise 'no texture bound to target'. Skip it while the last bind on
@@ -951,6 +956,30 @@ STALE_CLIENT_ARRAYS = [
     ),
 ]
 PATCHES += STALE_CLIENT_ARRAYS
+
+# A DESTROYED CONTEXT MUST BE LET GO OF BY THE PAGE TOO.
+#
+# Qt destroys a 3D view's WebGL context when its document closes (measured 2026-09-11:
+# one deleteContext per close), but the browser only reclaims a context once nothing
+# references it, and the page's present pass keeps framebuffer/texture registries that
+# hold the context object. Twenty open/close cycles left twenty live contexts; Chrome
+# caps a page at 16 and evicts the oldest, which is the visible view. Tell the page, and
+# forget this glue's own handles to the context's objects: Qt drops the context without
+# deleting Coin's textures, framebuffers and programs, and a live WebGL object keeps its
+# context alive; the immediate-mode renderer cache holds programs too, so it is rebuilt.
+PATCHES += [
+    (
+        'deleteContext: tell the page which context is going away',
+        'deleteContext:contextHandle=>{if(GL.currentContext===GL.contexts[contextHandle]){GL.currentContext=null}',
+        'deleteContext:contextHandle=>{try{var __dc=GL.contexts[contextHandle],__g=__dc&&__dc.GLctx;if(__g){'
+        'if(typeof window!=="undefined"&&window.__fcContextDeleted)window.__fcContextDeleted(__g);'
+        'var __T=[GL.textures,GL.framebuffers,GL.renderbuffers,GL.buffers,GL.programs,GL.shaders];'
+        'for(var __ti=0;__ti<__T.length;__ti++){var __t=__T[__ti];for(var __i=0;__i<__t.length;__i++){if(__t[__i]&&__t[__i].__fcGl===__g)__t[__i]=null}}'
+        'if(typeof GLImmediate!=="undefined"&&GLImmediate.MapTreeLib){GLImmediate.rendererCache=GLImmediate.MapTreeLib.create();GLImmediate.currentRenderer=null;GLImmediate.lastRenderer=null;GLImmediate.fixedFunctionProgram=0}'
+        '}}catch(e){}'
+        'if(GL.currentContext===GL.contexts[contextHandle]){GL.currentContext=null}',
+    ),
+]
 
 
 # ---- glDrawElements index type: a 32-bit-indexed mesh drew as half a mesh ------------
