@@ -3743,7 +3743,7 @@ window.fcRunPy = fcRunPy;
         for (var ci = 0; ci < canvases.length; ci++) {
           var g = null;
           try { g = canvases[ci].getContext('webgl2'); } catch (e) { continue; }
-          if (!g || g === mainGl || canvases[ci] === BR.cv || !g.drawingBufferWidth || g.drawingBufferWidth <= 1) continue;
+          if (!g || g === mainGl || canvases[ci].__fcBridge || !g.drawingBufferWidth || g.drawingBufferWidth <= 1) continue;
           var best = null, t, i;
           for (i = UPL.length - 1; i >= 0; i--) {
             t = UPL[i];
@@ -3834,12 +3834,20 @@ window.fcRunPy = fcRunPy;
       // A guest on Coin's context, so it saves and restores exactly what it touches (the
       // presentOtherWindows pattern). Returns false when the copy cannot be trusted.
       function bridgeGpu(w, dgl, sgl, W, H) {
-        var cv = sgl && sgl.canvas;
-        if (!cv || !w.tex || sgl === dgl) return false;
+        // The texture is bindable only on the context that created it, which the glue
+        // stamps on every GL object. drewGl is the context that last drew into the
+        // framebuffer and is not always that one: with two documents open the census
+        // counted 754 'object does not belong to this context' binds here (2026-09-11).
+        if (!w.tex || !w.tex.__fcGl) return false;
+        sgl = w.tex.__fcGl;
+        var cv = sgl.canvas;
+        if (!cv || sgl === dgl) return false;
         var p = progFor(sgl);
         if (!p) return false;
         if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
-        BR.cv = cv;   // the present pass must never mistake this canvas for the window
+        // The present pass must never mistake a bridge canvas for the window: every view's
+        // context has its own canvas, so flag the canvas rather than remember one.
+        cv.__fcBridge = true; BR.cv = cv;
         var S0 = shadowFor(sgl), sv = { prog: (sgl._fcProg !== undefined) ? sgl._fcProg : S0.prog,
                                         vao: (sgl._fcVAO !== undefined) ? sgl._fcVAO : S0.vao, tex: S0.tex, act: S0.act,
                                         draw: S0.draw, read: sgl.getParameter(sgl.READ_FRAMEBUFFER_BINDING), vp: S0.vp,
@@ -4104,7 +4112,7 @@ window.fcRunPy = fcRunPy;
           // ...or the canvas bridgeGpu resized to carry the 3D layer across: still an
           // offscreen surface, just no longer 1x1. Presenting onto it blacked the window
           // the first time the GPU bridge ran (2026-09-11).
-          if (gl && (gl.drawingBufferWidth <= 1 || gl.canvas === BR.cv)) {
+          if (gl && (gl.drawingBufferWidth <= 1 || (gl.canvas && gl.canvas.__fcBridge))) {
             // Qt 6.5+ hangs the whole screen off ONE shadow root, so the canvas is not
             // reachable from document.querySelectorAll -- hence the walk.
             var dom = null;
