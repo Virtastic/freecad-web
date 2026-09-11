@@ -1091,6 +1091,70 @@ PATCHES += [
     ),
 ]
 
+# ---- GL_LIGHT_MODEL_TWO_SIDE ---------------------------------------------------------
+#
+# The emulation tracks GLEmulation.lightModelTwoSide (it is even in the renderer cache
+# key) and then never reads it: the vertex shader lights every face with its own normal,
+# so a face seen from behind comes out in ambient only -- dark. FreeCAD lights "Two side"
+# by default, so on the desktop a back-facing face is as bright as a front-facing one.
+#
+# Measured 2026-09-11 on EngineBlock: the Draft BSpline/Circle faces lying ON the block's
+# top (same 0.8 grey, same plane, normal pointing down) z-fight with the top face exactly
+# as they do on the desktop, but here the loser is DARK, so the fight reads as a dark
+# speckled top that swims with the camera. With both faces lit the same the fight is
+# invisible, which is what the desktop shows.
+#
+# When two-sided lighting is on: light the vertex a second time with the flipped normal
+# into a v_colorBack varying, and let the fragment shader pick by gl_FrontFacing. The
+# vertex shader keeps computing into a local v_color so the passes above stay untouched.
+PATCHES += [
+    (
+        'two-sided lighting: light the back face too',
+        'vsLightingPass+="  v_color = clamp(v_color, 0.0, 1.0);"}',
+        'vsLightingPass+="  v_color = clamp(v_color, 0.0, 1.0);";'
+        'if(GLEmulation.lightModelTwoSide){__fcTS=true;vsLightingDefs+="varying vec4 v_colorBack;";'
+        'vsLightingPass+=vsLightingPass.split("v_color").join("v_colorBack").split("ecNormal").join("ecNormalB")'
+        '.replace("ecNormalB = normalize(","ecNormalB = -normalize(")}}',
+    ),
+    (
+        'two-sided lighting: vertex shader writes v_colorF',
+        '"varying vec4 v_color;",texUnitAttribList',
+        # "v_color;" split so the original search text does not survive in the output
+        '__fcTS?"varying vec4 v_colorF;":"varying vec4 "+"v_color;",texUnitAttribList',
+    ),
+    (
+        'two-sided lighting: v_color is a local in the vertex shader',
+        '"void main()","{","  vec4 ecPosition = u_modelView * a_position;"',
+        '"void main()","{",__fcTS?"  vec4 v_color;":null,"  vec4 ecPosition = u_modelView * a_position;"',
+    ),
+    (
+        'two-sided lighting: copy the front colour out',
+        'vsLightingPass,"}",""]',
+        'vsLightingPass,__fcTS?"  v_colorF = v_color;":null,"}",""]',
+    ),
+    (
+        'two-sided lighting: fragment shader picks by gl_FrontFacing',
+        '"varying vec4 v_color;",fogHeaderIfNeeded,fsClipPlaneDefs,fsAlphaTestDefs,"void main()","{",fsClipPlanePass,',
+        '__fcTS?"varying vec4 v_colorF;varying vec4 v_colorBack;":"varying vec4 v_color;",fogHeaderIfNeeded,fsClipPlaneDefs,fsAlphaTestDefs,'
+        '"void main()","{",__fcTS?"  vec4 v_color = gl_FrontFacing ? v_colorF : v_colorBack;":null,fsClipPlanePass,',
+    ),
+    # Nothing in this build ever turns the flag on: the wasm does not import glLightModeli
+    # (Coin's SoGLLazyElement sends two-sided lighting through it), so the emulation's
+    # default is what every lit draw gets -- the immediate-mode flush and the VBO face path
+    # alike. FreeCAD's default Lighting is "Two side"; make that the default here too. A
+    # glLightModelf(GL_LIGHT_MODEL_TWO_SIDE, 0) still switches it off if one ever arrives.
+    (
+        'two-sided lighting: on by default, as FreeCAD lights',
+        'lightModelLocalViewer:false,lightModelTwoSide:false,',
+        'lightModelLocalViewer:false,lightModelTwoSide:true,',
+    ),
+    (
+        'two-sided lighting: __fcTS declared before the lighting pass',
+        'var vsLightingDefs="";var vsLightingPass="";if(GLEmulation.lightingEnabled){',
+        'var vsLightingDefs="";var vsLightingPass="";var __fcTS=false;if(GLEmulation.lightingEnabled){',
+    ),
+]
+
 
 # Invariants a correctly patched file must satisfy, checked AFTER everything runs.
 #
