@@ -268,22 +268,16 @@ PATCHES = [
         'if(pname!==GL_RGB_SCALE&&pname!==GL_ALPHA_SCALE){return GLImmediate.TexEnvJIT.hook_texEnvi(target,pname,param)}'
         'var env=getCurTexUnit().env;switch(pname){case GL_RGB_SCALE:',
     ),
-    # QT 6.11 QUEUES EVERY DOM EVENT FOR A SUSPENDED EVENT LOOP THIS APP NEVER HAS.
-    #
-    # Qt's pointer/key handler pushes the event onto qtSuspendResumeControl.pendingEvents
-    # and then, with asyncify available, does NOTHING -- its own comment: 'Keep the event
-    # in the event queue to be processed on the next processEvents() call'. That drain
-    # lives in QEventDispatcherWasm::sendNativeEvents, which suspends the loop with JSPI
-    # and resumes it from the next DOM event. main() is not a promising export here, so
-    # that loop never suspends, control.resume is never set, and every mouse event since
-    # the 6.11 upgrade went into the queue and stayed there: measured 30 pending after one
-    # click and one drag, zero QEvents delivered, zero console output, Coin never asked.
-    # Forcing asyncifyEnabled=false in the live page made the same click select the box
-    # and the same drag rotate the camera (2026-09-10). So take the synchronous branch
-    # unconditionally -- the branch every pre-asyncify Qt build takes -- and deliver each
-    # event as it arrives. The resume path above it is untouched.
+    # QT 6.11 QUEUES EVERY DOM EVENT FOR ITS OWN EVENT LOOP TO DRAIN ON RESUME. That loop is
+    # callback-driven here (main() has returned), so a queued pointerdown sat in
+    # Module.qtSuspendResumeControl.pendingEvents (43 -> 51 entries, measured 2026-09-11)
+    # and the browser turned the drag into HTML5 drag-and-drop: preventDefault only counts
+    # while the DOM event is being dispatched. Deliver inline. The paint chain this leaves
+    # starved (posted UpdateLater -> wake-up timer -> requestAnimationFrame) is driven from
+    # the page instead: freecad-gui.html asks Qt to process posted events once per
+    # animation frame while input is live (68 scene frames per 4 s drag, from 2-6).
     (
-        'Qt 6.11: deliver DOM events instead of queueing them for a loop that never suspends',
+        'Qt 6.11: deliver DOM events inline instead of queueing them',
         'else{if(control.asyncifyEnabled){}else{Module.qtSendPendingEvents()}}};control.eventHandlers[index]=handler',
         'else{Module.qtSendPendingEvents()}};control.eventHandlers[index]=handler',
     ),

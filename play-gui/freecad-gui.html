@@ -4321,6 +4321,53 @@ window.fcRunPy = fcRunPy;
       // it, and REG/UPL/lastUi/lastBlit hold framebuffers and textures that hold the
       // context: measured 2026-09-11, one live 1x1 context per closed document, forever,
       // and Chrome evicts the oldest at 16 -- the visible view. Drop every reference.
+      // QT'S PAINT CHAIN IS DRIVEN FROM HERE WHILE INPUT IS LIVE.
+      //
+      // Qt 6.11 for wasm expects its event loop to sit suspended in processEvents() and to
+      // be resumed by every DOM event, timer and animation frame. In this app main() has
+      // returned and the loop is callback-driven, so the chain behind QWidget::update() --
+      // posted UpdateLater -> dispatcher wake-up timer -> requestAnimationFrame -> paint --
+      // only advances when something else happens to pump posted events. Measured
+      // 2026-09-11 with a timestamped event log: pointer moves handled every 33 ms, no
+      // wake-up, no frame request and no render for 600 ms at a stretch; 2-6 scene frames
+      // in a 4 s drag while the CPU sat 44 % idle. Asking Qt to process posted events once
+      // per animation frame while a button is down (and for 600 ms after any input) gave
+      // 68 frames in the same drag -- paint-bound at ~35 ms per frame. FreeCADGui.updateGui()
+      // is QApplication::processEvents(); the Python round trip is ~1 ms when idle.
+      // ponytail: a C++ export doing sendPostedEvents() would skip the Python hop; add it
+      // when this shows in a profile. Skipped while a py() call is in flight (__fcPyBusy).
+      (function () {
+        var down = 0, armedUntil = 0, busy = false;
+        var CODE = 'import FreeCADGui' + String.fromCharCode(10) + 'FreeCADGui.updateGui()' + String.fromCharCode(10);
+        function arm() { armedUntil = performance.now() + 600; }
+        window.addEventListener('pointerdown', function () { down++; arm(); }, true);
+        window.addEventListener('pointerup', function () { down = Math.max(0, down - 1); arm(); }, true);
+        window.addEventListener('pointercancel', function () { down = 0; arm(); }, true);
+        window.addEventListener('pointermove', function () { if (down) arm(); }, true);
+        window.addEventListener('wheel', arm, true);
+        window.addEventListener('keydown', arm, true);
+        function tick() {
+          try {
+            var m = window.fcInstance, c = m && m.qtSuspendResumeControl;
+            // queued native events first: a suspended loop drains itself on resume,
+            // an exclusive wait is left alone
+            if (c && c.pendingEvents.length && !c.resume && !(c.exclusiveEventHandler > 0) && typeof m.qtSendPendingEvents === 'function') {
+              window.__fcQtDrained = (window.__fcQtDrained || 0) + c.pendingEvents.length;
+              m.qtSendPendingEvents();
+            }
+            if (m && window.__fcAppReady && (down > 0 || performance.now() < armedUntil) && !busy && !window.__fcPyBusy && !(c && c.resume)) {
+              busy = true;
+              var n = new TextEncoder().encode(CODE).length + 1, q = m._malloc(n);
+              m.stringToUTF8(CODE, q, n);
+              var r = (window.fcRunPy || function (mm, pp) { window.fcwebCallPy(mm, pp); mm._free(pp); })(m, q);
+              var done = function () { busy = false; window.__fcPumped = (window.__fcPumped || 0) + 1; };
+              if (r && typeof r.then === 'function') r.then(done, done); else done();
+            }
+          } catch (e) { busy = false; window.__fcPumpErr = String(e); }
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      })();
       window.__fcContextDeleted = function (gl) {
         try {
           var k, e, n = 0;
@@ -4331,6 +4378,12 @@ window.fcRunPy = fcRunPy;
           if (BR && BR.src && BR.src.gl === gl) BR.src = null;
           if (BR && BR.gl === gl) { BR.gl = null; BR.tex = null; BR.buf = null; }
           try { delete gl.__fcPresProg; } catch (e2) {}
+          // And the 3D layer itself: renderScene published the rect and the visible
+          // framebuffer for the view that just died and nothing else ever resets them, so
+          // the pass kept compositing the last frame over the Start page after the document
+          // closed (reported 2026-09-11: 'frozen, still showing the engine block'). The next
+          // visible view republishes both on its first frame.
+          window.__fcWidgetRect = null; window.__fcVisibleFbo = null;
           window.__fcCtxReleased = (window.__fcCtxReleased || 0) + 1;
         } catch (e3) { window.__fcCtxReleaseErr = String(e3); }
       };
