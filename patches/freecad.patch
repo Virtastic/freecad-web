@@ -1733,7 +1733,7 @@ diff -ruNp a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
          }
          glDisableClientState(GL_TEXTURE_COORD_ARRAY);
          glDisable(GL_TEXTURE_2D);
-@@ -982,12 +1031,20 @@ void NaviCubeImplementation::drawNaviCub
+@@ -982,14 +1031,28 @@ void NaviCubeImplementation::drawNaviCub
              QColor& c = m_HiliteId == pickId ? m_HiliteColor : m_BaseColor;
              glColor4f(c.redF(), c.greenF(), c.blueF(), c.alphaF() * opacity);
          }
@@ -1753,8 +1753,16 @@ diff -ruNp a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
 +#endif
      }
  
++    // upstream enables GL_VERTEX_ARRAY at the top of this function and never disables it;
++    // harmless on desktop, but under the GL emulation client-array state is global and a
++    // leftover enable routes Qt's own draws (the RHI sample resolve that follows this
++    // paint on the same context) into the fixed-function path -- measured 2026-09-11 as
++    // "location is not from the associated program" on every frame with a nav cube.
++    glDisableClientState(GL_VERTEX_ARRAY);
      // Restore original state.
-@@ -1069,7 +1126,17 @@ bool NaviCubeImplementation::mousePresse
+     glPopMatrix();
+     glMatrixMode(GL_PROJECTION);
+@@ -1069,7 +1132,17 @@ bool NaviCubeImplementation::mousePresse
  
  void NaviCubeImplementation::handleMenu()
  {

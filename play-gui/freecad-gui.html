@@ -2538,6 +2538,9 @@ window.fcRunPy = fcRunPy;
   P.viewport=function(x,y,w,h){ var a=this._fcVP||(this._fcVP=new Int32Array(4)); a[0]=x;a[1]=y;a[2]=w;a[3]=h; return _vp.apply(this,arguments); };
   var _up=P.useProgram;
   P.useProgram=function(prog){ if(this._fcProg===prog) return; this._fcProg=prog; return _up.apply(this,arguments); };
+  // Not a skip -- a truthful record of the last VAO requested, for the present pass to restore.
+  var _bva=P.bindVertexArray;
+  P.bindVertexArray=function(vao){ this._fcVAO=vao; return _bva.apply(this,arguments); };
   // Skip redundant ARRAY_BUFFER re-binds (global state, not VAO-scoped, so safe to cache).
   var ARRAY_BUFFER=0x8892;
   var _bb=P.bindBuffer;
@@ -3660,6 +3663,15 @@ window.fcRunPy = fcRunPy;
           // destination and painted the whole viewport black, while Coin's own
           // framebuffer sat in the registry carrying the scene and no stamp.
           if (rb && rb.__fcId && REG[rb.__fcId]) { REG[rb.__fcId].blitFrom = performance.now(); }
+          // AND A RESOLVE. With anti-aliasing on, renderScene draws into a multisampled
+          // renderbuffer pair (no texture, so never presentable) and resolves into fcTex's
+          // framebuffer with this blit -- no draw call ever touches that one, so it never
+          // earned drewAt and the pass presented nothing: 55 frames in a session that
+          // rendered thousands (measured 2026-09-11, link 8, AntiAliasing=4). A blit whose
+          // source has no texture is that resolve; its destination is where the scene is.
+          if (rb && rb.__fcId && REG[rb.__fcId] && !REG[rb.__fcId].tex && db && db.__fcId && REG[db.__fcId]) {
+            REG[db.__fcId].drewAt = performance.now(); REG[db.__fcId].drewGl = this;
+          }
         } catch (e) {}
         return oBlitFb.apply(this, arguments);
       };
@@ -3718,6 +3730,20 @@ window.fcRunPy = fcRunPy;
           if (!best) continue;
           var p = progFor(g);
           if (!p) continue;
+          // SAVE AND RESTORE THIS CONTEXT'S STATE, exactly as the main pass does. This
+          // context is Qt's own window context, and Qt's RHI tracks what it bound: it
+          // does not re-issue useProgram for a pipeline it believes is current. Leaving
+          // the quad program bound here meant every uniform Qt set next frame landed on
+          // a program that was not bound -- 'location is not from the associated
+          // program', 252-805 per session, the last of the console noise. Measured
+          // 2026-09-11 from inside the glue: emscripten's shadow and Qt agreed on program
+          // 62, the driver had a program with no emscripten name -- ours. The shadow S
+          // is the app's state (track() ignores calls made while presenting); snapshot
+          // it first in case this pass runs with inPresent clear.
+          var S0 = shadowFor(g), sv = { prog: (g._fcProg !== undefined) ? g._fcProg : S0.prog,
+                                        vao: (g._fcVAO !== undefined) ? g._fcVAO : S0.vao, tex: S0.tex, act: S0.act,
+                                        draw: S0.draw, vp: S0.vp, scissor: S0.scissor,
+                                        depth: S0.depth, blend: S0.blend };
           try {
             g.bindFramebuffer(g.DRAW_FRAMEBUFFER, null);
             g.viewport(0, 0, g.drawingBufferWidth, g.drawingBufferHeight);
@@ -3730,6 +3756,15 @@ window.fcRunPy = fcRunPy;
             g.bindVertexArray(p.vao);
             g.drawArrays(g.TRIANGLES, 0, 6);
             window.__fcPresentedAux = (window.__fcPresentedAux || 0) + 1;
+          } catch (e) { window.__fcAuxErr = String(e); }
+          try {
+            g.useProgram(sv.prog); g.bindVertexArray(sv.vao);
+            g.activeTexture(sv.act); g.bindTexture(g.TEXTURE_2D, sv.tex);
+            g.bindFramebuffer(g.DRAW_FRAMEBUFFER, sv.draw);
+            if (sv.vp) g.viewport(sv.vp[0], sv.vp[1], sv.vp[2], sv.vp[3]);
+            if (sv.scissor) g.enable(g.SCISSOR_TEST);
+            if (sv.depth) g.enable(g.DEPTH_TEST);
+            if (sv.blend) g.enable(g.BLEND);
           } catch (e) { window.__fcAuxErr = String(e); }
         }
       }
@@ -4033,7 +4068,16 @@ window.fcRunPy = fcRunPy;
           // frame. The shadow is maintained by the wrappers below, so this costs
           // nothing; it is seeded once from the driver on the first frame.
           var S = shadowFor(gl);
-          var sProg = S.prog, sVao = S.vao, sTex = S.tex, sAct = S.act,
+          // The PROGRAM and VAO come from the low-level wrappers (_fcProg/_fcVAO), which
+          // record every request that reaches the driver, not from S: measured 2026-09-11
+          // from inside the glue, 224-805 times per session the restore below re-bound a
+          // program Qt had long since replaced (and by then deleted) -- S had gone stale,
+          // and Qt's RHI, which trusts its own binding, then set every uniform against the
+          // wrong program: 'location is not from the associated program'. __fcShadowDrift
+          // counts how often S and the truth disagree here.
+          if (S.prog !== gl._fcProg) { window.__fcShadowDrift = (window.__fcShadowDrift || 0) + 1; }
+          var sProg = (gl._fcProg !== undefined) ? gl._fcProg : S.prog,
+              sVao = (gl._fcVAO !== undefined) ? gl._fcVAO : S.vao, sTex = S.tex, sAct = S.act,
               sDraw = S.draw, sVp = S.vp,
               sScis = S.scissor, sDep = S.depth, sBl = S.blend;
           var W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;

@@ -218,27 +218,21 @@ PATCHES = [
         'genObject:(n,buffers,createFunction,objectTable)=>{for(var i=0;i<n;i++){var buffer=GLctx[createFunction]();var id=buffer&&GL.getNewId(objectTable);if(buffer){buffer.name=id;objectTable[id]=buffer}',
         'genObject:(n,buffers,createFunction,objectTable)=>{for(var i=0;i<n;i++){var buffer=GLctx[createFunction]();var id=buffer&&GL.getNewId(objectTable);if(buffer){buffer.name=id;buffer.__fcGl=GLctx;objectTable[id]=buffer}',
     ),
-    # THE SAME FOR PROGRAMS. Qt's RHI compositor (QRhiGles2::executeCommandBuffer) keeps
-    # the shader programs it built before the window's native WebGL context was recreated
-    # (the rehome patch swaps it when the first 3D view turns the surface into an OpenGL
-    # one), so every useProgram of them is refused and every uniform* that follows lands
-    # on a location 'not from the associated program': 476 warnings per session, stack-
-    # attributed 2026-09-10 to that one caller and nothing else. Its compose paints
-    # nothing here anyway -- the page composites the window -- so: tag programs with the
-    # context that made them, and on a foreign useProgram leave GL's binding alone and
-    # point emscripten's tracking at NO program. WebGL treats a uniform call with a null
-    # location as a no-op, silently, which is exactly the outcome the refused call had.
+    # MIGRATION: build-20260911's link (commit 4b9de04) baked a useProgram guard that a later
+    # measurement disproved (it never fired: GL.__fcXProg stayed 0 across every census). It
+    # is inert but it is also a lie in the shipped glue; take it back out of any asset that
+    # carries it, and the program tag that only existed for it.
     (
-        'createProgram: stamp the program with the context that created it',
-        'var program=GLctx.createProgram();program.name=id;program.maxUniformLength=',
-        'var program=GLctx.createProgram();program.name=id;program.__fcGl=GLctx;program.maxUniformLength=',
-    ),
-    (
-        'useProgram: a program from another context binds nothing and tracks as none',
-        'var _emscripten_glUseProgram=program=>{program=GL.programs[program];GLctx.useProgram(program);GLctx.currentProgram=program};',
+        'useProgram: remove the disproved cross-context guard',
         'var _emscripten_glUseProgram=program=>{program=GL.programs[program];'
         'if(program&&program.__fcGl&&program.__fcGl!==GLctx){GL.__fcXProg=(GL.__fcXProg|0)+1;GLctx.currentProgram=null;return}'
         'GLctx.useProgram(program);GLctx.currentProgram=program};',
+        'var _emscripten_glUseProgram=program=>{program=GL.programs[program];GLctx.useProgram(program);GLctx.currentProgram=program};',
+    ),
+    (
+        'createProgram: remove the tag that served the disproved guard',
+        'var program=GLctx.createProgram();program.name=id;program.__fcGl=GLctx;program.maxUniformLength=',
+        'var program=GLctx.createProgram();program.name=id;program.maxUniformLength=',
     ),
     # texParameter after a bind this glue refused: there is no texture on the target, so
     # the call would raise 'no texture bound to target'. Skip it while the last bind on
@@ -343,6 +337,27 @@ PATCHES = [
         'GLImmediate.flush lighting + program binding',
         'flush(numProvidedIndexes,startIndex=0,ptr=0){var renderer=GLImmediate.getRenderer();var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;if(!numVertices)return;var emulatedElementArrayBuffer=false;',
         'flush(numProvidedIndexes,startIndex=0,ptr=0){try{if(typeof GLEmulation!=="undefined"&&GLImmediate.enabledClientAttributes){var _hasN=!!GLImmediate.enabledClientAttributes[GLImmediate.NORMAL!=null?GLImmediate.NORMAL:1];if(GLEmulation.lightingEnabled!==_hasN){GLEmulation.lightingEnabled=_hasN;GLImmediate.currentRenderer=null;}if(_hasN&&GLEmulation.lightEnabled&&!GLEmulation.lightEnabled[0]){GLEmulation.lightEnabled[0]=true;GLEmulation.lightModelTwoSide=1;GLImmediate.currentRenderer=null;}}}catch(_e){}var renderer=GLImmediate.getRenderer();if(renderer&&renderer.program){GLctx.useProgram(renderer.program)}var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;if(!numVertices)return;if(numVertices!==(numVertices|0))return;var emulatedElementArrayBuffer=false;',
+        # 4th field: the entry below rewrites the program bind inside this replacement.
+        'flush(numProvidedIndexes,startIndex=0,ptr=0){try{if(typeof GLEmulation!=="undefined"&&GLImmediate.enabledClientAttributes){',
+    ),
+    # THE FORCED BIND MUST KEEP THE EMULATION'S OWN TRACKING HONEST.
+    #
+    # Qt 6.11 resolves a QOpenGLWidget's multisampled framebuffer with an RHI pass ON THE
+    # WIDGET'S OWN CONTEXT -- the one Coin draws in -- and leaves its shader program bound;
+    # the emulation records it as GL.currProgram. Coin's next fixed-function flush hits the
+    # bind above, which puts the renderer program on the driver but left GL.currProgram
+    # alone. The emulation's glUseProgram wrapper skips any request equal to GL.currProgram,
+    # so Qt's next glUseProgram of the same program was swallowed and every uniform it set
+    # landed on the renderer program: 'location is not from the associated program', 96-805
+    # per session. Measured 2026-09-11 with a per-context event ring inside the glue:
+    # em-use:62, fc-force-bind, em-use:65, fc-force-bind ... with the renderer program on the
+    # driver at every failing uniform. Once the renderer program is bound the app program
+    # is not current in any sense the emulation cares about: say so, and its own prepare /
+    # cleanup and the next real glUseProgram all do the right thing.
+    (
+        'GLImmediate.flush: a forced renderer bind clears GL.currProgram',
+        'if(renderer&&renderer.program){GLctx.useProgram(renderer.program)}',
+        'if(renderer&&renderer.program){GLctx.useProgram(renderer.program);if(GL.currProgram){GL.currProgram=0;GLImmediate.currentRenderer=null}GLImmediate.fixedFunctionProgram=renderer.program}',
     ),
     (
         'glBegin: map QUAD_STRIP and POLYGON',
@@ -628,6 +643,31 @@ POLYGON_MODE += [
         'glPolygonMode: migrate the previous forwarding condition',
         '&&face===1032&&(pmode===6913||pmode===6914))GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
         '&&face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}catch(e){}};',
+    ),
+]
+
+# THE EMULATION'S PROGRAM TRACKING IS GLOBAL; THE APP HAS MANY CONTEXTS.
+#
+# LEGACY_GL_EMULATION wraps glUseProgram as `if (GL.currProgram != program) {...real call}`
+# and binds its own fixed-function renderer program natively, tracked by
+# GLImmediate.fixedFunctionProgram -- both plain globals, written from whichever context
+# happens to be current. Qt-wasm gives the window one context and every 3D view its own,
+# so a fixed-function flush on a view context leaves the globals describing THAT context,
+# and the next glUseProgram Qt's RHI issues on the window is compared against a value that
+# was never true there. Measured 2026-09-11 from inside the glue with a per-context event
+# ring: emscripten requested program 81, 78, 81, 78 ... on the window context while the
+# driver had a renderer program bound before every one of them -- 224-805 'location is
+# not from the associated program' per session, the last of the console noise. Save and
+# restore both per context in the same makeContextCurrent hook that already carries the
+# lighting state across; a context seen for the first time starts at 0, which is true.
+POLYGON_MODE += [
+    (
+        'makeContextCurrent: GL.currProgram and fixedFunctionProgram are per context',
+        'prev.__fcEmu=snap()}catch(e){}var r=m2.apply(GL,arguments);',
+        'prev.__fcEmu=snap()}catch(e){}'
+        'try{if(prev){prev.__fcCurProg=GL.currProgram;prev.__fcFFP=GLImmediate.fixedFunctionProgram}}catch(e){}'
+        'var r=m2.apply(GL,arguments);'
+        'try{var c2=GL.currentContext;if(c2&&c2!==prev){GL.currProgram=c2.__fcCurProg||0;GLImmediate.fixedFunctionProgram=c2.__fcFFP||0;GLImmediate.currentRenderer=null}}catch(e){}',
     ),
 ]
 
