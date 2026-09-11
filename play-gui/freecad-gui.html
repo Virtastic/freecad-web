@@ -3834,7 +3834,9 @@ window.fcRunPy = fcRunPy;
       // to the visible canvas. Before that this pass presented to the 1x1 context -- same
       // context as the widget, so the bind worked, and nothing reached the screen at all.
       //
-      // There is no GPU path between two WebGL contexts, so this is the CPU one. It runs
+      // Two WebGL contexts share no objects, but the browser copies one context's CANVAS
+      // into another's texture on the GPU (bridgeGpu above, 2026-09-11). This readback is
+      // the fallback when that fails. It runs
       // once per 3D FRAME, not once per present: keyed on the blit stamp, so a 60 Hz
       // present pass over a viewport redrawing at 1-10 Hz pays it 1-10 times a second,
       // against the ~700 ms that redraw already costs. Skipped entirely when both live in
