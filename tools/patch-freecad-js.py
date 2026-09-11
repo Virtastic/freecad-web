@@ -671,6 +671,36 @@ POLYGON_MODE += [
     ),
 ]
 
+# A DRAW UNDER THE APP'S OWN SHADER MUST NOT BE ROUTED THROUGH THE FIXED-FUNCTION PATH BY
+# CLIENT-ARRAY STATE IT NEVER TOUCHED.
+#
+# emscripten sends glDrawArrays/glDrawElements through GLImmediate whenever any client array
+# is enabled -- state that is global here and that Coin (and upstream NaviCube, fixed in
+# freecad.patch) leaves enabled. Qt's RHI then draws its sample-resolve quad with its own
+# program bound and generic attributes in a VAO, and the emulation rebuilt it as a fixed-
+# function draw: renderer program bound over Qt's, Qt's uniforms failing from then on.
+# The tell is that the enabled client arrays predate the glUseProgram: remember how many
+# were enabled when a program was bound, clear that memory on the next glEnable/
+# DisableClientState (fresh fixed-function intent), and while it stands, draw directly.
+POLYGON_MODE += [
+    (
+        'glUseProgram: remember the client arrays enabled before an app program bind',
+        'if(GL.currProgram!=program){GLImmediate.currentRenderer=null;GL.currProgram=program;GLImmediate.fixedFunctionProgram=0;orig_glUseProgram(program)}',
+        'if(GL.currProgram!=program){GLImmediate.currentRenderer=null;GL.currProgram=program;GLImmediate.fixedFunctionProgram=0;'
+        'GLImmediate.__fcStaleECA=program?GLImmediate.totalEnabledClientAttributes:0;orig_glUseProgram(program)}',
+    ),
+    (
+        'glEnableClientState: fresh fixed-function intent',
+        'var _glEnableClientState=_emscripten_glEnableClientState;',
+        'var _glEnableClientState=_emscripten_glEnableClientState=(function(f){return cap=>{GLImmediate.__fcStaleECA=0;return f(cap)}})(_emscripten_glEnableClientState);',
+    ),
+    (
+        'glDisableClientState: fresh fixed-function intent',
+        'var _glDisableClientState=_emscripten_glDisableClientState;',
+        'var _glDisableClientState=_emscripten_glDisableClientState=(function(f){return cap=>{GLImmediate.__fcStaleECA=0;return f(cap)}})(_emscripten_glDisableClientState);',
+    ),
+]
+
 PATCHES += POLYGON_MODE
 
 
@@ -869,9 +899,27 @@ MERGE_PATCHES = [
     ('immediate-mode line batching: glEnd defers', OLD_END_MERGE, NEW_END_MERGE),
     ('immediate-mode line batching: glBegin continues', OLD_VC_MERGE, NEW_VC_MERGE),
 ]
+# 4th field: the stale-client-array entries below rewrite the fast-path condition that
+# follows the drain, so `n` stops appearing whole on the fixpoint's later passes; detect
+# the drain on its own prefix, up to and including the `if(` it drains before.
 MERGE_PATCHES += [('line batching drain: ' + o.split('=')[0].replace('var _gl', 'gl'),
-                   o, n) for o, n in DRAINS_MERGE]
+                   o, n, (n.split('if(')[0] + 'if(') if 'if(' in n else n) for o, n in DRAINS_MERGE]
 PATCHES += MERGE_PATCHES
+
+# After the drains: they anchor on the untouched fast-path condition these rewrite.
+STALE_CLIENT_ARRAYS = [
+    (
+        'glDrawArrays: stale client arrays under an app program draw directly',
+        'if(GLImmediate.totalEnabledClientAttributes==0&&mode<=6){GLctx.drawArrays(mode,first,count);return}',
+        'if((GLImmediate.totalEnabledClientAttributes==0||(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6){GLctx.drawArrays(mode,first,count);return}',
+    ),
+    (
+        'glDrawElements: stale client arrays under an app program draw directly',
+        'if(GLImmediate.totalEnabledClientAttributes==0&&mode<=6&&GLctx.currentElementArrayBufferBinding){GLctx.drawElements(mode,count,type,indices);return}',
+        'if((GLImmediate.totalEnabledClientAttributes==0||(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6&&GLctx.currentElementArrayBufferBinding){GLctx.drawElements(mode,count,type,indices);return}',
+    ),
+]
+PATCHES += STALE_CLIENT_ARRAYS
 
 
 # ---- glDrawElements index type: a 32-bit-indexed mesh drew as half a mesh ------------
