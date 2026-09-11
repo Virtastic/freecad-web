@@ -46,6 +46,14 @@ wrong rather than anything that errors.
 - [ ] The window looks like FreeCAD — menus, toolbars, tree, 3D view all where they belong
 - [ ] No blank panels, overlapping widgets, clipped text, or missing icons
 - [ ] The splash/loading step ends and the app is responsive, not merely painted
+- [ ] The loader goes straight to the finished window. Until 2026-09-11 it dropped onto a
+      bare four-menu window (File Edit View Help, no toolbars) that filled in seconds
+      later and then flashed and resized; it now waits for the workbench and that resize.
+      Seeing the bare window again is a regression.
+- [ ] The "Tasks" panel sits on the RIGHT as a translucent overlay (title bar with the
+      task boxes, e.g. PartDesign's "Start Part / New Body"). That is upstream 1.1's
+      default layout (`OverlayWidgets.cpp` seeds the right overlay with "Tasks"), not a
+      stray floating dock.
 
 **Workbenches (3 min)** — the one that bit us
 - [ ] Open the workbench dropdown and switch through **every** entry
