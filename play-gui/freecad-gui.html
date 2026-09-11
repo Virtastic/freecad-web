@@ -1953,7 +1953,18 @@ window.fcwebNotify = function (text, kind, actions) {
    // Python (only Qt knows the MDI layout). Capture it for the overlay compositor
    // and don't spam the log with it.
    if(typeof t==='string'){ const mR=t.indexOf('FCRECT '); if(mR>=0){
-     try{ window.__fcWidgetRect=JSON.parse(t.slice(mR+7)); }catch(e){} return; } }
+     try{ window.__fcWidgetRect=JSON.parse(t.slice(mR+7)); }catch(e){} return; }
+     // Which MDI view is in front (Python hook on QMdiArea.subWindowActivated, installed
+     // with the window-state cycle). renderScene publishes the rect and framebuffer of
+     // the visible 3D view but nothing withdraws them when that view goes behind the
+     // Start page or another document's tab: the present pass kept painting the last
+     // 3D frame over whatever was in front (measured 2026-09-11, a restored session
+     // showing a2plus across the Start page). Not a 3D view in front: no 3D layer
+     // until the next renderScene of a visible view republishes.
+     const mA=t.indexOf('FCACTIVE-'); if(mA>=0){
+       window.__fcActive3D = t.indexOf('FCACTIVE-3D')>=0;
+       if(!window.__fcActive3D){ window.__fcVisibleFbo=null; window.__fcWidgetRect=null; }
+       return; } }
    try { __maybeNotify(t); } catch(e){}
    try { if (window.fcwebLogRing) window.fcwebLogRing(t); } catch(e){}
    const noise = typeof t==='string' && __NOISE.test(t);
@@ -2199,6 +2210,20 @@ window.fcRunPy = fcRunPy;
      "  except Exception: pass",
      " _t=_qc.QTimer(); _t.timeout.connect(_fcweb_keep_fs); _t.start(1000)",
      " _f._fcweb_fs_timer=_t",
+     // Which MDI view is in front, for the present pass (see append(): FCACTIVE-).
+     // metaObject().className() is the real C++ class even without a binding for it.
+     " from PySide6 import QtWidgets as _qw",
+     " import sys as _s",
+     " def _fcweb_on_sub(sub):",
+     "  try:",
+     "   w=sub.widget() if sub is not None else None",
+     "   is3d=w is not None and 'View3DInventor' in w.metaObject().className()",
+     "   _s.__stderr__.write('FCACTIVE-%s\\n' % ('3D' if is3d else 'OTHER')); _s.__stderr__.flush()",
+     "  except Exception: pass",
+     " _mdi=_mw.findChild(_qw.QMdiArea)",
+     " if _mdi is not None and not getattr(_f,'_fcweb_sub_hook',None):",
+     "  _mdi.subWindowActivated.connect(_fcweb_on_sub); _f._fcweb_sub_hook=_fcweb_on_sub",
+     "  _fcweb_on_sub(_mdi.activeSubWindow())",
      // Tells the page the cycle ran, so the boot overlay can come down AFTER it (the
      // FCFS-DONE pattern above). Written whether or not this dispatch did the cycle.
      "import sys as _s; _s.__stderr__.write('FCDPR-DONE\\n'); _s.__stderr__.flush()",
@@ -4244,7 +4269,11 @@ window.fcRunPy = fcRunPy;
           //
           // Bounded by HOLD_MAX: a viewport that is legitimately gone (last document
           // closed) must not freeze the UI, so after ~0.3s the UI-only compose goes ahead.
-          var wHave = !!(widget && (widget.rect || window.__fcWidgetRect));
+          // ...and only while a 3D view is the active MDI window. A view that just went
+          // behind the Start page still renders once more at its restored 400x300 and
+          // republishes its rect (measured 2026-09-11), which would paint it over the
+          // Start page; the Python hook (FCACTIVE-) says what is actually in front.
+          var wHave = !!(widget && (widget.rect || window.__fcWidgetRect)) && window.__fcActive3D !== false;
           var wUsable = !!window.__fcNativeComposite && wHave;
           if (wUsable) { hadWidget = true; holdFrames = 0; }
           var holdThisFrame = (ui && !wUsable && hadWidget && !useKeep && keepValid &&
