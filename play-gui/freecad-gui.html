@@ -3743,7 +3743,7 @@ window.fcRunPy = fcRunPy;
         for (var ci = 0; ci < canvases.length; ci++) {
           var g = null;
           try { g = canvases[ci].getContext('webgl2'); } catch (e) { continue; }
-          if (!g || g === mainGl || !g.drawingBufferWidth || g.drawingBufferWidth <= 1) continue;
+          if (!g || g === mainGl || canvases[ci] === BR.cv || !g.drawingBufferWidth || g.drawingBufferWidth <= 1) continue;
           var best = null, t, i;
           for (i = UPL.length - 1; i >= 0; i--) {
             t = UPL[i];
@@ -3814,7 +3814,9 @@ window.fcRunPy = fcRunPy;
       // present pass over a viewport redrawing at 1-10 Hz pays it 1-10 times a second,
       // against the ~700 ms that redraw already costs. Skipped entirely when both live in
       // the same context, which is every build where Qt's own compositing works.
-      var BR = { tex: null, gl: null, w: 0, h: 0, at: 0, when: 0, buf: null, src: null };
+      var BR = { tex: null, gl: null, w: 0, h: 0, at: 0, when: 0, buf: null, src: null,
+                 // undefined: try the GPU copy; true: it works; false: readback only
+                 gpu: (/[?&]cpubridge=1/.test(location.search) ? false : undefined) };
       // At most every BRIDGE_MS, and immediately when the blit stamp moves.
       //
       // Keying on the blit stamp ALONE froze the viewport. Measured over five document
@@ -3828,6 +3830,75 @@ window.fcRunPy = fcRunPy;
       // redraws at 1-10 Hz, so refreshing at 10 Hz costs at most 24 MB/s of readback and
       // cannot fall behind by more than a frame.
       var BRIDGE_MS = 100;
+      // The GPU copy: widget texture -> source context's canvas -> destination texture.
+      // A guest on Coin's context, so it saves and restores exactly what it touches (the
+      // presentOtherWindows pattern). Returns false when the copy cannot be trusted.
+      function bridgeGpu(w, dgl, sgl, W, H) {
+        var cv = sgl && sgl.canvas;
+        if (!cv || !w.tex || sgl === dgl) return false;
+        var p = progFor(sgl);
+        if (!p) return false;
+        if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+        BR.cv = cv;   // the present pass must never mistake this canvas for the window
+        var S0 = shadowFor(sgl), sv = { prog: (sgl._fcProg !== undefined) ? sgl._fcProg : S0.prog,
+                                        vao: (sgl._fcVAO !== undefined) ? sgl._fcVAO : S0.vao, tex: S0.tex, act: S0.act,
+                                        draw: S0.draw, read: sgl.getParameter(sgl.READ_FRAMEBUFFER_BINDING), vp: S0.vp,
+                                        scissor: S0.scissor, depth: S0.depth, blend: S0.blend,
+                                        cull: sgl.isEnabled(sgl.CULL_FACE) };
+        var drew = false;
+        try {
+          sgl.bindFramebuffer(sgl.FRAMEBUFFER, null);
+          sgl.viewport(0, 0, W, H);
+          sgl.disable(sgl.DEPTH_TEST); sgl.disable(sgl.BLEND); sgl.disable(sgl.SCISSOR_TEST); sgl.disable(sgl.CULL_FACE);
+          sgl.useProgram(p.pr);
+          // flip=1 is a 1:1 copy with this quad (see progFor): framebuffer row r <- texel
+          // row r, so the canvas image is upright and the upload below flips it back into
+          // the bottom-up layout the widget quad expects (the layout readPixels produced).
+          sgl.uniform1f(p.flip, 1.0);
+          sgl.uniform1i(p.loc, 0);
+          sgl.activeTexture(sgl.TEXTURE0);
+          sgl.bindTexture(sgl.TEXTURE_2D, w.tex);
+          sgl.bindVertexArray(p.vao);
+          sgl.drawArrays(sgl.TRIANGLES, 0, 6);
+          drew = true;
+        } catch (e) { window.__fcBridgeGpuErr = String(e); }
+        try {
+          sgl.useProgram(sv.prog); sgl.bindVertexArray(sv.vao);
+          sgl.activeTexture(sv.act); sgl.bindTexture(sgl.TEXTURE_2D, sv.tex);
+          sgl.bindFramebuffer(sgl.DRAW_FRAMEBUFFER, sv.draw);
+          sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, sv.read);
+          if (sv.vp) sgl.viewport(sv.vp[0], sv.vp[1], sv.vp[2], sv.vp[3]);
+          if (sv.scissor) sgl.enable(sgl.SCISSOR_TEST);
+          if (sv.depth) sgl.enable(sgl.DEPTH_TEST);
+          if (sv.blend) sgl.enable(sgl.BLEND);
+          if (sv.cull) sgl.enable(sgl.CULL_FACE);
+        } catch (e) { window.__fcBridgeGpuErr = String(e); }
+        if (!drew) return false;
+        var fresh = !BR.tex || BR.w !== W || BR.h !== H;
+        if (!BR.tex) {
+          BR.tex = dgl.createTexture(); BR.tex.__fcPage = true;
+          dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_MIN_FILTER, dgl.LINEAR);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_MAG_FILTER, dgl.LINEAR);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_WRAP_S, dgl.CLAMP_TO_EDGE);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_WRAP_T, dgl.CLAMP_TO_EDGE);
+        } else {
+          dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
+        }
+        var pf = dgl.getParameter(dgl.UNPACK_FLIP_Y_WEBGL);
+        if (!pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, true);
+        // oTexImg/oTexSub: the page's own texture must never enter UPL.
+        if (fresh) oTexImg.call(dgl, dgl.TEXTURE_2D, 0, dgl.RGBA, dgl.RGBA, dgl.UNSIGNED_BYTE, cv);
+        else oTexSub.call(dgl, dgl.TEXTURE_2D, 0, 0, 0, dgl.RGBA, dgl.UNSIGNED_BYTE, cv);
+        if (!pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, false);
+        if (BR.gpu === undefined) {
+          // Decide once: any error on either side means the copy is not trustworthy.
+          var e1 = sgl.getError(), e2 = dgl.getError();
+          if (e1 || e2) { window.__fcBridgeGpuErr = 'gl error ' + e1 + '/' + e2; return false; }
+          BR.gpu = true;
+        }
+        return true;
+      }
       function bridgeWidget(w, dgl) {
         var sz = w.tex && w.tex.__fcSz;
         if (!sz || sz[0] < 2 || sz[1] < 2 || !w.fb || !w.gl) return null;
@@ -3837,9 +3908,38 @@ window.fcRunPy = fcRunPy;
         // clock says: switching documents must not show the old one's last frame.
         if (BR.src !== w) { BR.src = w; BR.at = -1; BR.when = 0; }
         var nowMs = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-        if (BR.tex && BR.w === W && BR.h === H && BR.at === w.blitTo
+        // The resolve blit stamps drewAt on the destination and blitTo as well; take the
+        // newer of the two so every scene frame refreshes the copy. Keyed on blitTo alone,
+        // half the frames of a drag were rendered and never shown (36 copies for 73 frames,
+        // measured 2026-09-11), because the timer below was doing the work at 10 Hz.
+        var stamp = Math.max(w.blitTo || 0, w.drewAt || 0);
+        if (BR.tex && BR.w === W && BR.h === H && BR.at === stamp
             && (nowMs - BR.when) < BRIDGE_MS) return BR.tex;
         var sgl = w.drewGl || w.gl, n = W * H * 4;
+        // GPU PATH FIRST. readPixels is a full pipeline stall: 14-17 ms per copy on the
+        // user's machine shape (2026-09-11), a third of every frame of a drag. Two WebGL
+        // contexts share no objects, but the browser can copy one context's CANVAS into
+        // another's texture on the GPU: draw the widget texture onto the source context's
+        // own (offscreen, 1x1 until now) canvas, then texImage2D that canvas here. No bytes
+        // cross to the CPU. Falls back to the readback below on the first GL error, or on
+        // ?cpubridge=1.
+        if (BR.gpu !== false) {
+          var okGpu = false;
+          try { okGpu = bridgeGpu(w, dgl, sgl, W, H); } catch (e) { window.__fcBridgeGpuErr = String(e); okGpu = false; }
+          if (okGpu) {
+            BR.w = W; BR.h = H; BR.at = stamp; BR.when = nowMs;
+            window.__fcBridgeMs = (window.__fcBridgeMs || 0) +
+              (((typeof performance !== 'undefined') ? performance.now() : Date.now()) - nowMs);
+            window.__fcBridged = (window.__fcBridged || 0) + 1;
+            window.__fcBridgedGpu = (window.__fcBridgedGpu || 0) + 1;
+            return BR.tex;
+          }
+          if (BR.gpu === undefined) {
+            // First attempt failed: this session uses the readback. Decided once, because
+            // the check that decides it (getError) is itself a round-trip.
+            BR.gpu = false; window.__fcBridgeGpuOff = window.__fcBridgeGpuErr || 'gl error';
+          }
+        }
         try {
           if (!BR.buf || BR.buf.length < n) BR.buf = new Uint8Array(n);
           // Restore the source context's read binding: this pass is a guest there.
@@ -3881,7 +3981,7 @@ window.fcRunPy = fcRunPy;
         else oTexSub.call(dgl, dgl.TEXTURE_2D, 0, 0, 0, W, H,
                           dgl.RGBA, dgl.UNSIGNED_BYTE, view);
         if (pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, true);
-        BR.w = W; BR.h = H; BR.at = w.blitTo; BR.when = nowMs;
+        BR.w = W; BR.h = H; BR.at = stamp; BR.when = nowMs;
         // Time it. An empty scene still costs 95-129 ms a frame with every object
         // hidden, so the floor is per-frame overhead rather than geometry, and this
         // readback -- 2.4 MB out of the GPU on the main thread -- is one of the few
@@ -4001,7 +4101,10 @@ window.fcRunPy = fcRunPy;
           // layer by another route then, and this pass was not what reached the canvas.
           // Fixing glShaderSource made this the only route, which is why the window went
           // black on a build whose shaders had just started working.
-          if (gl && gl.drawingBufferWidth <= 1) {
+          // ...or the canvas bridgeGpu resized to carry the 3D layer across: still an
+          // offscreen surface, just no longer 1x1. Presenting onto it blacked the window
+          // the first time the GPU bridge ran (2026-09-11).
+          if (gl && (gl.drawingBufferWidth <= 1 || gl.canvas === BR.cv)) {
             // Qt 6.5+ hangs the whole screen off ONE shadow root, so the canvas is not
             // reachable from document.querySelectorAll -- hence the walk.
             var dom = null;
