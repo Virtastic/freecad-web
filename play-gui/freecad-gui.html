@@ -1875,11 +1875,22 @@ window.fcwebNotify = function (text, kind, actions) {
  // the user sees the title bar flash away (it used to be visible ~2.5s: overlay dropped at
  // ~1.5s, showFullScreen ran at 4s). Gate the reveal on both, with a timeout so the overlay
  // can never get stuck covering a working app.
- var __bootReady=false, __fsReady=false;
- function __maybeReveal(){ if(__bootReady && __fsReady && __bootEl) __bootEl.classList.add('hide'); }
+ // Two more gates (2026-09-11): Qt's onLoaded fires while FreeCAD is still loading its
+ // workbenches, so the overlay used to drop onto a bare four-menu window (File Edit View
+ // Help, no toolbars) that filled in seconds later, and the HiDPI window-state cycle below
+ // then flashed and resized it in front of the user. Measured on a cold boot: overlay gone at
+ // 18 s, workbench active at 33 s. Now the overlay stays until the workbench is active
+ // (__fcWorkReady) AND that cycle has run, so the first thing shown is the finished window.
+ var __bootReady=false, __fsReady=false, __workReady=false, __dprReady=false;
+ function __maybeReveal(){ if(__bootReady && __fsReady && __workReady && __dprReady && __bootEl) __bootEl.classList.add('hide'); }
  function __hideBoot(){ __bootReady=true; __maybeReveal(); }
  function __fsApplied(){ __fsReady=true; __maybeReveal(); }
+ function __workApplied(){ __workReady=true; __maybeReveal(); }
+ function __dprApplied(){ __dprReady=true; __maybeReveal(); }
  setTimeout(function(){ __fsReady=true; __maybeReveal(); }, 15000); // safety net
+ // The work/dpr gates have their own nets: 120 s for the workbench (matches __fcWorkReady's
+ // own fallback) and 40 s after the app is up for the cycle, so the overlay can never stick.
+ setTimeout(function(){ __workReady=true; __maybeReveal(); }, 120000);
  // FCWEB: append() was THE boot bottleneck. FreeCAD prints thousands of lines at
  // startup; the old impl created a DOM node per line AND forced a synchronous
  // reflow every line (scrollTop=scrollHeight), making boot O(n^2) — ~90s of pure
@@ -2107,11 +2118,11 @@ window.fcRunPy = fcRunPy;
      ""].join("\n");
    const iv3=setInterval(()=>{
      try{
-       if(window.__fcWorkReady){ clearInterval(iv3); return; }
+       if(window.__fcWorkReady){ clearInterval(iv3); __workApplied(); return; }
        const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
        if(window.__fcPyBusy) return;   // don't re-enter CPython while a call is suspended
        if(/FCWORKREADY/.test(logEl.textContent||'')){
-         window.__fcWorkReady=true; clearInterval(iv3); return; }
+         window.__fcWorkReady=true; clearInterval(iv3); __workApplied(); return; }
        const n=new TextEncoder().encode(WORK_PY).length+1, q=m._malloc(n);
        m.stringToUTF8(WORK_PY,q,n); fcRunPy(m,q);
      }catch(e){}
@@ -2142,6 +2153,7 @@ window.fcRunPy = fcRunPy;
        " for _d in _mw.findChildren(_qw.QDockWidget):",
        "  if _d.objectName()=='Report view' and _d.isVisible(): _d.hide()",
        ""].join("\n");
+   let stopAt=null;
    const iv=setInterval(()=>{
      try{
        const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
@@ -2151,9 +2163,14 @@ window.fcRunPy = fcRunPy;
        // so a user who opens it themselves keeps it after that window.
        const n=new TextEncoder().encode(RPT_PY).length+1, q=m._malloc(n);
        m.stringToUTF8(RPT_PY,q,n); fcRunPy(m,q);
+       // The 20 s window counts from the WORKBENCH being active, not from Qt's Ready: the
+       // dock is re-shown by FreeCAD's GUI init, which on a slow or cold boot finishes
+       // 15-20 s after Ready -- measured, the window had already closed and the Report
+       // view stayed open behind every document (2026-09-11).
+       if(window.__fcWorkReady && !stopAt){ stopAt=setTimeout(()=>clearInterval(iv), 20000); }
      }catch(e){}
    },500);
-   setTimeout(()=>clearInterval(iv), 20000);   // bounded: stop re-asserting after 20s
+   setTimeout(()=>clearInterval(iv), 180000);   // absolute bound if the workbench never comes
  })();
 
  // One window-state cycle once the app has settled. At startup Qt sizes the window
@@ -2182,22 +2199,29 @@ window.fcRunPy = fcRunPy;
      "  except Exception: pass",
      " _t=_qc.QTimer(); _t.timeout.connect(_fcweb_keep_fs); _t.start(1000)",
      " _f._fcweb_fs_timer=_t",
+     // Tells the page the cycle ran, so the boot overlay can come down AFTER it (the
+     // FCFS-DONE pattern above). Written whether or not this dispatch did the cycle.
+     "import sys as _s; _s.__stderr__.write('FCDPR-DONE\\n'); _s.__stderr__.flush()",
      ""].join("\n");
-   let armed=false;
+   // Runs once the workbench is active (__fcWorkReady) and at least 5 s after Ready -- the
+   // 5 s is the measured minimum for the cycle to stick; on a cold boot the workbench comes
+   // later and the cycle waits for it. Retries while the interpreter is busy instead of
+   // dropping the call: a dropped call left the window at 1/dpr size for the session.
+   let readyAt=0, sent=false;
    const iv2=setInterval(()=>{
      try{
        const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
-       if(!armed){ armed=true; setTimeout(()=>{
-         try{
-           const mm=window.fcInstance;
-           if(!mm||window.__fcPyBusy) return;   // a dropped call here just leaves the old size
-           const n=new TextEncoder().encode(DPR_PY).length+1, q=mm._malloc(n);
-           mm.stringToUTF8(DPR_PY,q,n); fcRunPy(mm,q);
-         }catch(e){}
-       }, 5000); clearInterval(iv2); }
+       if(!readyAt){ readyAt=performance.now(); return; }
+       if(!sent && window.__fcWorkReady && performance.now()-readyAt>=5000 && !window.__fcPyBusy){
+         const n=new TextEncoder().encode(DPR_PY).length+1, q=m._malloc(n);
+         m.stringToUTF8(DPR_PY,q,n); fcRunPy(m,q); sent=true;
+       }
+       if(/FCDPR-DONE/.test(logEl.textContent||'')){ clearInterval(iv2); __dprApplied(); }
      }catch(e){}
-   },500);
-   setTimeout(()=>clearInterval(iv2), 120000);
+   },250);
+   setTimeout(()=>{ clearInterval(iv2); __dprApplied(); }, 120000);
+   // Overlay safety net for this gate: 40 s after the app is up, reveal regardless.
+   const iv2b=setInterval(()=>{ if(window.__fcAppReady){ clearInterval(iv2b); setTimeout(__dprApplied, 40000); } },500);
  })();
 
  // The HTML dialog bridge that used to live here has been REMOVED: Qt's own dialogs
