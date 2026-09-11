@@ -1091,6 +1091,37 @@ PATCHES += [
     ),
 ]
 
+# ---- per-vertex entry points: one heap-view check, no range-checked BigInt ---------------
+#
+# The immediate-mode paths (SoBrepFaceSet::renderShape for highlights, Coin's vertex cache
+# renderImmediate, SoBrepEdgeSet) call glVertex3fv/glNormal3fv once per vertex. Profiled
+# on a 4 s drag of EngineBlock (2026-09-11): growMemViews 10.7% and bigintToI53Checked
+# 5.3% of the whole main thread, nearly all under these four functions -- the generated
+# form checks the heap view THREE times per call and range-checks the pointer as a BigInt.
+# One check, Number(), a local view: same reads, a third of the overhead.
+PATCHES += [
+    (
+        'glVertex3fv: one heap-view check',
+        '_emscripten_glVertex3fv(p){p=bigintToI53Checked(p);return _glVertex3f((growMemViews(),HEAPF32)[p/4],(growMemViews(),HEAPF32)[(p+4)/4],(growMemViews(),HEAPF32)[(p+8)/4])}',
+        '_emscripten_glVertex3fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;return _glVertex3f(h[i],h[i+1],h[i+2])}',
+    ),
+    (
+        'glNormal3fv: one heap-view check',
+        '_emscripten_glNormal3fv(p){p=bigintToI53Checked(p);_glNormal3f((growMemViews(),HEAPF32)[p/4],(growMemViews(),HEAPF32)[(p+4)/4],(growMemViews(),HEAPF32)[(p+8)/4])}',
+        '_emscripten_glNormal3fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;_glNormal3f(h[i],h[i+1],h[i+2])}',
+    ),
+    (
+        'glColor3fv: one heap-view check',
+        '_emscripten_glColor3fv(p){p=bigintToI53Checked(p);return _glColor3f((growMemViews(),HEAPF32)[p/4],(growMemViews(),HEAPF32)[(p+4)/4],(growMemViews(),HEAPF32)[(p+8)/4])}',
+        '_emscripten_glColor3fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;return _glColor3f(h[i],h[i+1],h[i+2])}',
+    ),
+    (
+        'glColor4fv: one heap-view check',
+        '_emscripten_glColor4fv(p){p=bigintToI53Checked(p);return _glColor4f((growMemViews(),HEAPF32)[p/4],(growMemViews(),HEAPF32)[(p+4)/4],(growMemViews(),HEAPF32)[(p+8)/4],(growMemViews(),HEAPF32)[(p+12)/4])}',
+        '_emscripten_glColor4fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;return _glColor4f(h[i],h[i+1],h[i+2],h[i+3])}',
+    ),
+]
+
 # ---- GL_LIGHT_MODEL_TWO_SIDE ---------------------------------------------------------
 #
 # The emulation tracks GLEmulation.lightModelTwoSide (it is even in the renderer cache
