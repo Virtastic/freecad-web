@@ -630,7 +630,13 @@ POLYGON_MODE += [
     (
         'glPolygonMode does not forward POINT to WEBGL_polygon_mode',
         'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode)GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
-        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode&&face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}catch(e){}};',
+        # A fresh link goes straight to the lazy-extension form (the entry below migrates
+        # assets that carry the intermediate one).
+        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
+        'if(GLctx.webglPolygonMode===undefined){GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")}'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};',
+        # 4th field: the lazy-extension entry below rewrites this condition.
+        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(',
     ),
 ]
 
@@ -643,6 +649,31 @@ POLYGON_MODE += [
         'glPolygonMode: migrate the previous forwarding condition',
         '&&face===1032&&(pmode===6913||pmode===6914))GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
         '&&face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}catch(e){}};',
+        '(pmode!==6914||GLctx.__fcPolyUsed)){',
+    ),
+    # THE EXTENSION IS ENABLED ONLY WHEN WIREFRAME IS ACTUALLY ASKED FOR.
+    #
+    # emscripten enables every supported extension at context creation, and Chrome prints
+    # 'this extension has very low support on mobile devices ... WEBGL_polygon_mode' once
+    # per context for it -- two at boot and one per document opened, the only console
+    # warning left after the 2026-09-11 census. Take it out of the eager set and fetch it
+    # on the first LINE/POINT request; a user who never leaves FILL never sees the note.
+    (
+        'glPolygonMode: enable WEBGL_polygon_mode lazily',
+        'try{if(GLctx.webglPolygonMode&&face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}catch(e){}};',
+        'try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
+        'if(GLctx.webglPolygonMode===undefined){GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")}'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};',
+    ),
+    (
+        'context init: WEBGL_polygon_mode is not enabled eagerly',
+        'webgl_enable_EXT_clip_control(GLctx);webgl_enable_WEBGL_polygon_mode(GLctx);webgl_enable_ANGLE_instanced_arrays(GLctx);',
+        'webgl_enable_EXT_clip_control(GLctx);webgl_enable_ANGLE_instanced_arrays(GLctx);',
+    ),
+    (
+        'supported-extension list: WEBGL_polygon_mode is not enabled by the generic loop',
+        '"WEBGL_multi_draw","WEBGL_polygon_mode"];return ctx.getSupportedExtensions()',
+        '"WEBGL_multi_draw"];return ctx.getSupportedExtensions()',
     ),
 ]
 
