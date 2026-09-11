@@ -4504,6 +4504,8 @@ window.fcRunPy = fcRunPy;
           if (lastBlit && lastBlit.gl === gl) lastBlit = null;
           if (BR && BR.src && BR.src.gl === gl) BR.src = null;
           if (BR && BR.gl === gl) { BR.gl = null; BR.tex = null; BR.buf = null; }
+          // The bridge canvas belongs to the source context; a closed view takes it along.
+          if (BR && BR.cv && gl.canvas === BR.cv) BR.cv = null;
           try { delete gl.__fcPresProg; } catch (e2) {}
           // And the 3D layer itself: renderScene published the rect and the visible
           // framebuffer for the view that just died and nothing else ever resets them, so
