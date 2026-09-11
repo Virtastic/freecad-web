@@ -6052,7 +6052,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
  
  using namespace PartGui;
  
-@@ -334,7 +446,66 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+@@ -334,7 +446,69 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
          state->pop();
      }
      else {
@@ -6081,24 +6081,24 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +                                false,   // do NOT generate a normal cache: nothing here
 +                                fcNormalCacheUsed);   // unlocks it, and renderHighlight
 +                                                      // asks the same way
-+            // NO state->push() around this. Pushing and popping restores the element
-+            // VALUE while leaving the GL colour where sendFirst put it, so Coin's lazy
-+            // cache compares the next node's material against a value that GL no longer
-+            // holds and skips re-sending it -- every later node then draws in this
-+            // node's colour. Measured on the linked engine by sampling the current
-+            // colour at every draw: immediate mode shows 84,0,125 (Draft's annotation
-+            // purple) on 42 draws and 109,133,169 on 798 of BIMExample's, and with the
-+            // push/pop version both were ZERO and 1191 of 1240 draws were black.
-+            // inherited::GLRender does not push either; it just sends the material.
-+            // What Coin's own SoIndexedLineSet::GLRender does two lines before ITS
-+            // sendFirst: a line set with no normals is drawn unlit --
++            // Scoped exactly as Coin's SoIndexedLineSet::GLRender scopes it: push, set
++            // the light model, send the material, draw, pop. SoGLLazyElement::pop
++            // copies the child's GL state back into the parent, so what Coin believes
++            // GL holds stays true across the pop. Without the push the BASE_COLOR
++            // write stayed on the state for every later node: measured 2026-09-11,
++            // nodes drawn after a cached edge set came out unlit (EngineBlock top
++            // 191 grey against 147), BIM's annotations lost their blue, 6-10% of the
++            // pixels of each scene differed from the immediate path.
++            //
++            // A line set with no normals is drawn unlit -- what Coin does two lines
++            // before ITS sendFirst:
 +            //     if (sendNormals && normals == NULL)
 +            //         SoLazyElement::setLightModel(state, SoLazyElement::BASE_COLOR);
-+            // That element write is what made immediate-mode edges flat-coloured, and
-+            // skipping it is why the cached path came out lit: sampling the current
-+            // colour at every draw, immediate mode showed 25,25,25 on 302 draws and
-+            // Draft's 84,0,125 on 42, and this path showed neither (2026-09-10).
++            // Skipping it is what made the first cached edges come out lit.
++            bool fcPushed = false;
 +            if (fcNormals == nullptr) {
++                state->push();
++                fcPushed = true;
 +                SoLazyElement::setLightModel(state, SoLazyElement::BASE_COLOR);
 +            }
 +            SoMaterialBundle fcMb(action);
@@ -6109,6 +6109,9 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +                                             fcCoords ? fcCoords->getNum() : 0,
 +                                             fcCIdx,
 +                                             fcNumCIdx);
++            if (fcPushed) {
++                state->pop();
++            }
 +        }
 +        if (!fcDrewEdges) {
 +            inherited::GLRender(action);
