@@ -936,8 +936,19 @@ NEW_VC_MERGE = 'GLImmediate.mode=mode;if(GLImmediate.__mrgPend&&(mode===3||mode=
 DRAINS_MERGE = [('var _glDrawArrays=(mode,first,count)=>{if(GLImmediate.totalEnabledClientAttribu', 'var _glDrawArrays=(mode,first,count)=>{GLImmediate.__mf();if(GLImmediate.totalEnabledClientAttribu'), ('var _glDrawElements=(mode,count,type,indices,start,end)=>{if(GLImmediate.totalEnabledClientAttribu', 'var _glDrawElements=(mode,count,type,indices,start,end)=>{GLImmediate.__mf();if(GLImmediate.totalEnabledClientAttribu'), ('var _glEnableClientState=cap=>{var attrib=GLEmulation.getAttributeFromC', 'var _glEnableClientState=cap=>{GLImmediate.__mf();var attrib=GLEmulation.getAttributeFromC'), ('var _glDisableClientState=cap=>{var attrib=GLEmulation.getAttributeFromC', 'var _glDisableClientState=cap=>{GLImmediate.__mf();var attrib=GLEmulation.getAttributeFromC')]
 
 MERGE_PATCHES = [
-    ('immediate-mode line batching: glEnd defers', OLD_END_MERGE, NEW_END_MERGE),
+    # 4th field: the strip cap below inserts into __mrgPrep, so `new` stops appearing whole.
+    ('immediate-mode line batching: glEnd defers', OLD_END_MERGE, NEW_END_MERGE, 'GLImmediate.__mrgPrep=function(){'),
     ('immediate-mode line batching: glBegin continues', OLD_VC_MERGE, NEW_VC_MERGE),
+    # Only SHORT strips are worth converting. A LINE_STRIP of n vertices becomes 2(n-1)
+    # LINES vertices through an O(n) in-place expansion, every frame; Draft wires and
+    # circles run to hundreds of vertices and the object under the cursor is re-sent through
+    # this path by the preselection highlight on every frame of a drag. Measured 2026-09-12
+    # on draft_test_objects: 40 fps with ?nomerge=1, 15-17 with the uncapped merge, while
+    # ArchDetail (thousands of 2-vertex segments) goes 10 -> 22 fps WITH the merge. Long
+    # strips stay one LINE_STRIP draw each, which is also the pixel-exact form.
+    ('immediate-mode line batching: strips longer than 16 vertices are not converted',
+     'if(n===2)return true;var need=base+2*(n-1)*S',
+     'if(n===2)return true;if(n>16)return false;var need=base+2*(n-1)*S'),
 ]
 # 4th field: the stale-client-array entries below rewrite the fast-path condition that
 # follows the drain, so `n` stops appearing whole on the fixpoint's later passes; detect
