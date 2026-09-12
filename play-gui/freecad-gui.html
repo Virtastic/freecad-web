@@ -4512,8 +4512,16 @@ window.fcRunPy = fcRunPy;
       // ponytail: a C++ export doing sendPostedEvents() would skip the Python hop; add it
       // when this shows in a profile. Skipped while a py() call is in flight (__fcPyBusy).
       (function () {
-        var down = 0, armedUntil = 0, busy = false;
+        var down = 0, armedUntil = 0, busy = false, busyAt = 0;
         var CODE = 'import FreeCADGui' + String.fromCharCode(10) + 'FreeCADGui.updateGui()' + String.fromCharCode(10);
+        // Observable from probes: gpu-cycle-fps.py found the pump silent (0 calls) on
+        // every document after the first close, 2026-09-12, and nothing said why.
+        window.__fcPumpState = function () {
+          var m = window.fcInstance, c = m && m.qtSuspendResumeControl;
+          return { busy: busy, busyFor: busy ? Math.round(performance.now() - busyAt) : 0, down: down, armed: performance.now() < armedUntil,
+                   pyBusy: !!window.__fcPyBusy, resume: !!(c && c.resume), pending: c ? c.pendingEvents.length : -1,
+                   exclusive: c ? c.exclusiveEventHandler : null };
+        };
         function arm() { armedUntil = performance.now() + 600; }
         window.addEventListener('pointerdown', function () { down++; arm(); }, true);
         window.addEventListener('pointerup', function () { down = Math.max(0, down - 1); arm(); }, true);
@@ -4530,8 +4538,12 @@ window.fcRunPy = fcRunPy;
               window.__fcQtDrained = (window.__fcQtDrained || 0) + c.pendingEvents.length;
               m.qtSendPendingEvents();
             }
+            // Watchdog: a call whose promise never settles would park the pump for the
+            // session. __fcPyBusy is the real re-entry guard, so after 3 s treat the local
+            // flag as lost and count it.
+            if (busy && performance.now() - busyAt > 3000) { busy = false; window.__fcPumpLost = (window.__fcPumpLost || 0) + 1; }
             if (m && window.__fcAppReady && (down > 0 || performance.now() < armedUntil) && !busy && !window.__fcPyBusy && !(c && c.resume)) {
-              busy = true;
+              busy = true; busyAt = performance.now();
               var n = new TextEncoder().encode(CODE).length + 1, q = m._malloc(n);
               m.stringToUTF8(CODE, q, n);
               var r = (window.fcRunPy || function (mm, pp) { window.fcwebCallPy(mm, pp); mm._free(pp); })(m, q);
