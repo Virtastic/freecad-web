@@ -461,13 +461,20 @@ jobs:
           # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
           # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
           # already on disk. Honour the cache this workflow already pays to save.
-          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libCoin.a 2>/dev/null | wc -l)" -ge 1 ]; then
-            echo "  Coin3D: already built (cache hit), skipping"; exit 0
+          # ... but only for the coin3d.patch it was built from. The cache key hashes the
+          # patch, yet a miss falls back to the newest entry, which carries a libCoin.a --
+          # so a patch change restored the old archive and this step skipped the rebuild
+          # (2026-09-12, the sphere hunk). Stamp the archive with the patch hash.
+          stamp=deps/wasm/lib/libCoin.a.coin3d-patch.sha256
+          want="$(sha256sum patches/coin3d.patch | cut -d' ' -f1)"
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libCoin.a ] && [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then
+            echo "  Coin3D: already built from this coin3d.patch (cache hit), skipping"; exit 0
           fi
           export FCWEB_ALLOW_MISSING_GL_COMPAT=1   # a no-op once gl_compat.h is tracked
           t0=$SECONDS; rc=0
           bash configure-coin-weh.sh > /tmp/deplogs/coin.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          [ "$rc" = 0 ] && echo "$want" > "$stamp"
           echo "  coin exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/coin.txt
           # The point of a diagnostic run is the error list, which tail -30 truncates.
           # Distinct undeclared identifiers, most frequent first: gl_compat.h's specification.
