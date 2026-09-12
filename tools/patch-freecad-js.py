@@ -368,6 +368,8 @@ PATCHES = [
         'glColor drives material colour',
         'GLImmediate.clientColor[3]=a}};var _glColor3f=',
         'GLImmediate.clientColor[3]=a}if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;GLEmulation.materialDiffuse[1]=g;GLEmulation.materialDiffuse[2]=b;GLEmulation.materialDiffuse[3]=a;GLEmulation.materialAmbient[0]=r;GLEmulation.materialAmbient[1]=g;GLEmulation.materialAmbient[2]=b;GLEmulation.materialAmbient[3]=a}};var _glColor3f=',
+        # 4th field: the material-version bump below inserts into this replacement
+        'if(GLEmulation&&GLEmulation.materialDiffuse){',
     ),
     (
         'immediate renderer binds the app ARRAY_BUFFER before setting attributes',
@@ -1197,6 +1199,55 @@ PATCHES += [
         'cached edges: on by default, ?vboedges=0 opts out',
         'if(qs.get("vboedges")==="1"){ENV.FCWEB_VBO_EDGES="1"}',
         'if(qs.get("vboedges")!=="0"){ENV.FCWEB_VBO_EDGES="1"}',
+    ),
+]
+
+# ---- lighting uniforms: upload on change, not on every draw -----------------------------
+#
+# Renderer.prepare re-sent the light model ambient, five material uniforms and four per
+# light for all eight lights on EVERY lit draw -- ~37 uniform calls a draw, ~90,000 a
+# frame on ArchDetail (2,500 draws), while the values change a handful of times per frame
+# (Coin's headlight once, the material per object). Profiled 2026-09-12 on a 4 s drag:
+# uniform4fv 3.5 percent self plus its share of "(program)" and wasm-to-js, per-draw
+# overhead being what the whole frame is made of once the geometry is cached.
+#
+# Two version counters on GLEmulation, bumped at every write site of those arrays
+# (glMaterialfv, glLightfv, glLightModelfv, glColor4f's COLOR_MATERIAL branch, and the
+# per-context restore), compared per renderer in prepare. Uniforms live per program, so
+# a renderer that missed a change re-uploads on its next draw. `|0` because the counters
+# start undefined and `undefined !== undefined` would skip the very first upload.
+PATCHES += [
+    (
+        'lighting uniforms: upload when the material or lights changed',
+        'if(this.hasLighting){if(this.lightModelAmbientLocation)GLctx.uniform4fv(this.lightModelAmbientLocation,GLEmulation.lightModelAmbient);if(this.materialAmbientLocation)GLctx.uniform4fv(this.materialAmbientLocation,GLEmulation.materialAmbient);if(this.materialDiffuseLocation)GLctx.uniform4fv(this.materialDiffuseLocation,GLEmulation.materialDiffuse);if(this.materialSpecularLocation)GLctx.uniform4fv(this.materialSpecularLocation,GLEmulation.materialSpecular);if(this.materialShininessLocation)GLctx.uniform1f(this.materialShininessLocation,GLEmulation.materialShininess[0]);if(this.materialEmissionLocation)GLctx.uniform4fv(this.materialEmissionLocation,GLEmulation.materialEmission);for(var lightId=0;lightId<GLEmulation.MAX_LIGHTS;lightId++){if(this.lightAmbientLocation[lightId])GLctx.uniform4fv(this.lightAmbientLocation[lightId],GLEmulation.lightAmbient[lightId]);if(this.lightDiffuseLocation[lightId])GLctx.uniform4fv(this.lightDiffuseLocation[lightId],GLEmulation.lightDiffuse[lightId]);if(this.lightSpecularLocation[lightId])GLctx.uniform4fv(this.lightSpecularLocation[lightId],GLEmulation.lightSpecular[lightId]);if(this.lightPositionLocation[lightId])GLctx.uniform4fv(this.lightPositionLocation[lightId],GLEmulation.lightPosition[lightId])}}',
+        'if(this.hasLighting){if(this.__fcLV!==(GLEmulation.__fcLV|0)){this.__fcLV=GLEmulation.__fcLV|0;if(this.lightModelAmbientLocation)GLctx.uniform4fv(this.lightModelAmbientLocation,GLEmulation.lightModelAmbient);for(var lightId=0;lightId<GLEmulation.MAX_LIGHTS;lightId++){if(this.lightAmbientLocation[lightId])GLctx.uniform4fv(this.lightAmbientLocation[lightId],GLEmulation.lightAmbient[lightId]);if(this.lightDiffuseLocation[lightId])GLctx.uniform4fv(this.lightDiffuseLocation[lightId],GLEmulation.lightDiffuse[lightId]);if(this.lightSpecularLocation[lightId])GLctx.uniform4fv(this.lightSpecularLocation[lightId],GLEmulation.lightSpecular[lightId]);if(this.lightPositionLocation[lightId])GLctx.uniform4fv(this.lightPositionLocation[lightId],GLEmulation.lightPosition[lightId])}}if(this.__fcMV!==(GLEmulation.__fcMV|0)){this.__fcMV=GLEmulation.__fcMV|0;if(this.materialAmbientLocation)GLctx.uniform4fv(this.materialAmbientLocation,GLEmulation.materialAmbient);if(this.materialDiffuseLocation)GLctx.uniform4fv(this.materialDiffuseLocation,GLEmulation.materialDiffuse);if(this.materialSpecularLocation)GLctx.uniform4fv(this.materialSpecularLocation,GLEmulation.materialSpecular);if(this.materialShininessLocation)GLctx.uniform1f(this.materialShininessLocation,GLEmulation.materialShininess[0]);if(this.materialEmissionLocation)GLctx.uniform4fv(this.materialEmissionLocation,GLEmulation.materialEmission);}}',
+        'this.__fcMV!==(GLEmulation.__fcMV|0)',
+    ),
+    (
+        'glMaterialfv bumps the material version',
+        # the bump goes BETWEEN the two halves so the search text does not survive whole
+        'function _emscripten_glMaterialfv(face,pname,param){param=bigintToI53Checked(param);',
+        'function _emscripten_glMaterialfv(face,pname,param){GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;param=bigintToI53Checked(param);',
+    ),
+    (
+        'glColor4f (COLOR_MATERIAL) bumps the material version',
+        'if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;',
+        'if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;GLEmulation.materialDiffuse[0]=r;',
+    ),
+    (
+        'glLightfv bumps the light version',
+        'function _emscripten_glLightfv(light,pname,param){param=bigintToI53Checked(param);',
+        'function _emscripten_glLightfv(light,pname,param){GLEmulation.__fcLV=(GLEmulation.__fcLV|0)+1;param=bigintToI53Checked(param);',
+    ),
+    (
+        'glLightModelfv bumps the light version',
+        'function _emscripten_glLightModelfv(pname,param){param=bigintToI53Checked(param);',
+        'function _emscripten_glLightModelfv(pname,param){GLEmulation.__fcLV=(GLEmulation.__fcLV|0)+1;param=bigintToI53Checked(param);',
+    ),
+    (
+        'per-context restore bumps both versions',
+        'function rest(s){GLEmulation.lightModelTwoSide=s.lm2;',
+        'function rest(s){GLEmulation.__fcLV=(GLEmulation.__fcLV|0)+1;GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;GLEmulation.lightModelTwoSide=s.lm2;',
     ),
 ]
 

@@ -113,6 +113,12 @@ wrong rather than anything that errors.
       27-45 fps, BIMExample 48, and the 42 MB a2plus assembly 37-65 -- if a drag feels like
       single digits, that is a regression. Black edges on Part shapes and the object's own
       LineColor on everything else; a red-edged box must have red edges.
+      ArchDetail is the draw-count case (Draft dimensions: ~95 sphere dots, text labels,
+      ~2,500 draws a frame): it dragged at 6 fps until the GL emulation stopped re-sending
+      all 37 lighting uniforms on every draw (same day, tools/patch-freecad-js.py), 19 fps
+      after, pixel-identical. Its dots are also spheres that Coin drew as 15 flushes each;
+      the Coin patch draws each as one array (patches/coin3d.patch). If ArchDetail drags in
+      single digits again, one of those two came undone.
 - [ ] A file whose Python proxies are not installed (the a2plus assembly) pops the
       notification list over the 3D view -- one warning per blocked object, same as the
       desktop. Escape or a click dismisses it; the model behind it is fine.
