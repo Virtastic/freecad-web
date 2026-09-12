@@ -600,8 +600,8 @@ POLYGON_MODE = [
         'else{GLctx.drawArrays(GLImmediate.mode,startIndex,numVertices)}}',
         # 4th field: the index-type patch below rewrites the drawElements call inside this
         # replacement, so `new` no longer appears whole once both are in. Detect on the
-        # mode test instead, which nothing else touches.
-        'if(!(GLEmulation.__polyMode===6913||GLEmulation.__polyMode===6912)'
+        # tail of the mode test, which nothing else touches (the draw-time polygon-mode
+        # entry rewrites its head).
         '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){',
     ),
 ]
@@ -631,9 +631,15 @@ POLYGON_MODE += [
         'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode)GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
         # A fresh link goes straight to the lazy-extension form (the entry below migrates
         # assets that carry the intermediate one).
+        # A fresh link goes straight to the FINAL form: the wish is recorded, the extension
+        # is applied only where a draw already enabled it, and the draw-time half
+        # (_fcPolyApply, see POLYGON_MODE_AT_DRAW) rides along. The chain of entries below
+        # this one migrates assets that carry the intermediate forms.
         'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
-        'if(GLctx.webglPolygonMode===undefined){GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")}'
-        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};',
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};'
+        'var _fcPolyApply=(mode)=>{try{if(mode>=4&&mode<=6&&GLEmulation.__polyMode===6913&&GLctx.webglPolygonMode===undefined){'
+        'GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")||null;'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(1032,6913)}}}catch(e){}};',
         # 4th field: the lazy-extension entry below rewrites this condition.
         'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(',
     ),
@@ -663,6 +669,8 @@ POLYGON_MODE += [
         'try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
         'if(GLctx.webglPolygonMode===undefined){GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")}'
         'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};',
+        # 4th field: the draw-time entry below takes the getExtension out of this text.
+        'try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){',
     ),
     (
         'context init: WEBGL_polygon_mode is not enabled eagerly',
@@ -942,11 +950,14 @@ STALE_CLIENT_ARRAYS = [
         'glDrawArrays: stale client arrays under an app program draw directly',
         'if(GLImmediate.totalEnabledClientAttributes==0&&mode<=6){GLctx.drawArrays(mode,first,count);return}',
         'if((GLImmediate.totalEnabledClientAttributes==0||(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6){GLctx.drawArrays(mode,first,count);return}',
+        # 4th field: the draw-time polygon-mode entry inserts a call inside this branch.
+        '(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6){',
     ),
     (
         'glDrawElements: stale client arrays under an app program draw directly',
         'if(GLImmediate.totalEnabledClientAttributes==0&&mode<=6&&GLctx.currentElementArrayBufferBinding){GLctx.drawElements(mode,count,type,indices);return}',
         'if((GLImmediate.totalEnabledClientAttributes==0||(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6&&GLctx.currentElementArrayBufferBinding){GLctx.drawElements(mode,count,type,indices);return}',
+        '(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6&&GLctx.currentElementArrayBufferBinding){',
     ),
 ]
 PATCHES += STALE_CLIENT_ARRAYS
@@ -1121,6 +1132,58 @@ PATCHES += [
         '_emscripten_glColor4fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;return _glColor4f(h[i],h[i+1],h[i+2],h[i+3])}',
     ),
 ]
+
+# ---- polygon mode: ask for the extension only when a TRIANGLE is drawn in LINE mode ------
+#
+# Measured 2026-09-12 (scratchpad/gpu-linemode-draws.py) on EngineBlock, draft_test_objects,
+# BIMExample and the a2plus assembly: every draw issued while GL_LINE polygon mode was set
+# was drawArrays(GL_LINES) from a client array -- Coin's SoDrawStyle LINES sits over the
+# EDGE separators, and lines are lines whatever the polygon mode. Not one triangle. So the
+# extension request that glPolygonMode made, and Chrome's 'very low support on mobile
+# devices' console line with it, bought nothing on any of them.
+#
+# glPolygonMode now only records the wish (and applies it where the extension is already
+# on); the request moves to the draw: the first TRIANGLES/STRIP/FAN draw issued while LINE
+# is wanted enables the extension and applies the mode. A scene that never fills a polygon
+# in wireframe never asks, and the console stays clean.
+POLYGON_MODE_AT_DRAW = [
+    (
+        'glPolygonMode: record the wish, apply only where the extension is already on',
+        # Anchored from the function's first statement: the selftest fixture also carries
+        # the lazy entry's bare fragment, and this must match the whole function only once.
+        'GLEmulation.__polyMode=pmode;try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
+        'if(GLctx.webglPolygonMode===undefined){GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")}'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};',
+        'GLEmulation.__polyMode=pmode;try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};'
+        # The draw-time half. Returns undefined so it can sit in a condition.
+        'var _fcPolyApply=(mode)=>{try{if(mode>=4&&mode<=6&&GLEmulation.__polyMode===6913&&GLctx.webglPolygonMode===undefined){'
+        'GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")||null;'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(1032,6913)}}}catch(e){}};',
+        'var _fcPolyApply=(mode)=>{',
+    ),
+    # Inside the fast paths, not at the function heads: the line-batching drain entries
+    # detect themselves on everything up to each function's first `if(`. The slow paths go
+    # through flush(), which has its own call below.
+    (
+        'glDrawArrays: apply a pending LINE polygon mode before a triangle draw',
+        '){GLctx.drawArrays(mode,first,count);return}',
+        '){_fcPolyApply(mode);GLctx.drawArrays(mode,first,count);return}',
+    ),
+    (
+        'glDrawElements: apply a pending LINE polygon mode before a triangle draw',
+        '){GLctx.drawElements(mode,count,type,indices);return}',
+        '){_fcPolyApply(mode);GLctx.drawElements(mode,count,type,indices);return}',
+    ),
+    (
+        'flush: apply a pending LINE polygon mode before a begin/end triangle draw',
+        'if(!(GLEmulation.__polyMode===6913||GLEmulation.__polyMode===6912)'
+        '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){',
+        'if(_fcPolyApply(GLImmediate.mode)||!(GLEmulation.__polyMode===6913||GLEmulation.__polyMode===6912)'
+        '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){',
+    ),
+]
+PATCHES += POLYGON_MODE_AT_DRAW
 
 # ---- cached edges on by default --------------------------------------------------------
 #

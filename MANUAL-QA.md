@@ -208,13 +208,13 @@ actionable; "3D view is janky" is not.
 
 ## Known and accepted — not worth reporting
 
-- One browser console line per 3D view that draws something in wireframe: "WebGL: this
-  extension has very low support on mobile devices ... WEBGL_polygon_mode". Chrome prints it
-  the first time a context asks for the polygon-mode extension, which Coin needs the
-  moment a document contains a Wireframe-styled object (Draft polygons in EngineBlock,
-  parts of the a2plus assembly). It is Chrome's advice to developers, not an error, and
-  the app asks for the extension only when a Wireframe draw style is set, never at boot
-  (traced 2026-09-12 to Coin's SoGLDrawStyleElement).
+- The browser console should be EMPTY. The last line it used to carry -- "WebGL: this
+  extension has very low support on mobile devices ... WEBGL_polygon_mode", Chrome's note
+  the first time a context asks for the polygon-mode extension -- is gone since 2026-09-12:
+  the app asks for the extension only when a filled polygon is actually drawn in wireframe,
+  and on every bundled sample and the a2plus assembly the draws issued in wireframe mode
+  are all lines already. Seeing that line means a document really draws faces as wireframe
+  (a Wireframe-styled Mesh, say); it is still not an error.
 - A file whose Python proxies belong to an addon that is not installed (the a2plus
   assembly, `a2p_*`) logs one "module not permitted" line per object in the Report View,
   exactly as desktop FreeCAD 1.1 does for the same file.
