@@ -3757,14 +3757,27 @@ window.fcRunPy = fcRunPy;
       // A texture belongs to the context that created it; binding it anywhere else is the
       // INVALID_OPERATION the console fills with. So each canvas is presented from a
       // texture uploaded IN ITS OWN context, and canvases with none are left alone.
-      function presentOtherWindows(mainGl) {
-        var canvases = [];
+      // Every canvas in the document, shadow roots included (Qt 6.5+ hangs the screen off
+      // one). Walked at most once a second: this pass runs on every animation frame (213/s
+      // measured idle on a 240 Hz display, 2026-09-12) and the full-document walk was the
+      // second-largest idle cost after the pass itself. A canvas that appears between
+      // walks is picked up within a second, which is well inside a window's first paint.
+      var __cvList = [], __cvAt = -1e9;
+      function allCanvases() {
+        var now = performance.now();
+        if (now - __cvAt < 1000) return __cvList;
+        var out = [];
         (function walk(r) {
           r.querySelectorAll('*').forEach(function (el) {
-            if (el.tagName === 'CANVAS') canvases.push(el);
+            if (el.tagName === 'CANVAS') out.push(el);
             if (el.shadowRoot) walk(el.shadowRoot);
           });
         })(document);
+        __cvList = out; __cvAt = now;
+        return out;
+      }
+      function presentOtherWindows(mainGl) {
+        var canvases = allCanvases();
         for (var ci = 0; ci < canvases.length; ci++) {
           var g = null;
           try { g = canvases[ci].getContext('webgl2'); } catch (e) { continue; }
@@ -4143,13 +4156,9 @@ window.fcRunPy = fcRunPy;
             // Qt 6.5+ hangs the whole screen off ONE shadow root, so the canvas is not
             // reachable from document.querySelectorAll -- hence the walk.
             var dom = null;
-            (function walk(r) {
-              r.querySelectorAll('*').forEach(function (el) {
-                if (el.tagName === 'CANVAS'
-                    && (!dom || el.width * el.height > dom.width * dom.height)) dom = el;
-                if (el.shadowRoot) walk(el.shadowRoot);
-              });
-            })(document);
+            allCanvases().forEach(function (el) {
+              if (!dom || el.width * el.height > dom.width * dom.height) dom = el;
+            });
             try {
               var dgl = dom && dom.getContext('webgl2');
               if (dgl) gl = dgl;
