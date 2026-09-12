@@ -270,7 +270,19 @@ Module['preRun'].push(function () {
       // this up: the answer is in how the material BINDING is resolved, not in when
       // the send happens -- Coin's SoIndexedLineSet computes findMaterialBinding
       // first and this path does not.
-      if (qs.get('vboedges') === '1') { ENV.FCWEB_VBO_EDGES = '1'; }
+      //
+      // RESOLVED 2026-09-11, and it was neither: Coin's lazy cache believed GL still
+      // held the colour it sent the frame before, while a later draw had changed the
+      // current colour behind its back (no glPushAttrib/glPopAttrib in the emulation
+      // to put it back), so sendFirst() sent nothing and every cached edge set drew in
+      // the previous frame's last colour. The immediate path survives because it sends
+      // per part. The path now sends the node's own line colour itself (and scopes its
+      // light-model change with a state push, like Coin). Measured on that engine:
+      // EngineBlock 0 of 2,593,200 pixels differ from immediate mode, draft_test_objects
+      // 0.02%, BIMExample 0.05% (line-join pixels); a red-edged box and a blue polyline
+      // come out identical; BIMExample rotates at 48 fps against 31. ON by default;
+      // ?vboedges=0 is the escape hatch back to immediate mode.
+      if (qs.get('vboedges') !== '0') { ENV.FCWEB_VBO_EDGES = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');

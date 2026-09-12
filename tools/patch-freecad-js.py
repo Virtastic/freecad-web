@@ -1122,6 +1122,21 @@ PATCHES += [
     ),
 ]
 
+# ---- cached edges on by default --------------------------------------------------------
+#
+# pre-gui.js is --pre-js, baked into FreeCAD.js at link time, so an engine linked before
+# 2026-09-11 still carries the opt-in form. The C++ side (SoBrepEdgeSet, the node sends
+# its own line colour and scopes its light model) shipped in the same commit, so this is
+# only right on an engine that carries it -- which is every link from d3a05f3 on. Same
+# escape hatch as the source: ?vboedges=0.
+PATCHES += [
+    (
+        'cached edges: on by default, ?vboedges=0 opts out',
+        'if(qs.get("vboedges")==="1"){ENV.FCWEB_VBO_EDGES="1"}',
+        'if(qs.get("vboedges")!=="0"){ENV.FCWEB_VBO_EDGES="1"}',
+    ),
+]
+
 # ---- GL_LIGHT_MODEL_TWO_SIDE ---------------------------------------------------------
 #
 # The emulation tracks GLEmulation.lightModelTwoSide (it is even in the renderer cache
