@@ -1200,6 +1200,27 @@ PATCHES += [
     ),
 ]
 
+# ---- prepareClientAttributes: restride with the heap views hoisted -----------------------
+#
+# When a draw's client arrays do not share one stride (Coin's vertex-array paths for text,
+# spheres and strips hand the emulation separate position and normal arrays), the emulation
+# copies every element into a restrided temp buffer -- and the generated loop checks the
+# heap view TWICE PER 4 BYTES through growMemViews(), whose test reads the
+# WebAssembly.Memory buffer getter each time. Profiled on a 4 s drag of ArchDetail
+# (2026-09-12): growMemViews 27% + that getter 11% + the loop itself 10% of the main
+# thread, 2,800 draws a frame, 8 fps. One check per draw, the views in locals.
+PATCHES += [
+    (
+        'prepareClientAttributes: hoist the heap views out of the restride loops',
+        'for(var j=0;j<count;j++){for(var k=0;k<attr.sizeBytes;k+=4){var val=(growMemViews(),HEAP32)[(attr.pointer+(j*srcStride+k))/4];(growMemViews(),HEAP32)[(start+attr.offset+(bytes*j+k))/4]=val}}}'
+        'else{for(var j=0;j<count;j++){for(var k=0;k<attr.sizeBytes;k++){(growMemViews(),HEAP8)[start+attr.offset+bytes*j+k]=(growMemViews(),HEAP8)[attr.pointer+j*srcStride+k]}}}',
+        'growMemViews();var H32=HEAP32,H8=HEAP8,sp=attr.pointer,dp=start+attr.offset,sb=attr.sizeBytes;'
+        'for(var j=0;j<count;j++){var si=(sp+j*srcStride)/4,di=(dp+bytes*j)/4;for(var k=0;k<sb;k+=4){H32[di++]=H32[si++]}}}'
+        'else{growMemViews();var H8b=HEAP8,sp2=attr.pointer,dp2=start+attr.offset,sb2=attr.sizeBytes;'
+        'for(var j=0;j<count;j++){var si2=sp2+j*srcStride,di2=dp2+bytes*j;for(var k=0;k<sb2;k++){H8b[di2++]=H8b[si2++]}}}',
+    ),
+]
+
 # ---- GL_LIGHT_MODEL_TWO_SIDE ---------------------------------------------------------
 #
 # The emulation tracks GLEmulation.lightModelTwoSide (it is even in the renderer cache
