@@ -6140,16 +6140,31 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 diff -ruNp a/src/Mod/Surface/Gui/AppSurfaceGui.cpp b/src/Mod/Surface/Gui/AppSurfaceGui.cpp
 --- a/src/Mod/Surface/Gui/AppSurfaceGui.cpp
 +++ b/src/Mod/Surface/Gui/AppSurfaceGui.cpp
-@@ -71,6 +71,13 @@
+@@ -64,6 +64,18 @@
+ }  // namespace SurfaceGui
+ 
+ /* Python entry */
++#if defined(__EMSCRIPTEN__)
++// wasm: the module is linked statically and nothing references the .qrc object, so
++// its static initialiser never runs and every Surface_* icon is missing ("Cannot find
++// icon: Surface_Filling", blank toolbar). Register it the way Part does in
++// loadPartResource(): from a C++-linkage function, since PyMOD_INIT_FUNC is extern "C"
++// and Q_INIT_RESOURCE inside it would declare the init function with C linkage.
++static void fcwebLoadSurfaceResource()
++{
++    Q_INIT_RESOURCE(Surface);
++}
++#endif
++
+ PyMOD_INIT_FUNC(SurfaceGui)
+ {
+     if (!Gui::Application::Instance) {
+@@ -71,6 +83,9 @@
          PyMOD_Return(nullptr);
      }
  
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: the module is linked statically and nothing references the .qrc object,
-+    // so its static initialiser never runs and every Surface_* icon is missing
-+    // ("Cannot find icon: Surface_Filling", blank toolbar). Register it the way
-+    // Part, Fem, Mesh and TechDraw already do in their own init.
-+    Q_INIT_RESOURCE(Surface);
++    fcwebLoadSurfaceResource();
 +#endif
      Base::Interpreter().runString("import Surface");
      Base::Interpreter().runString("import PartGui");
@@ -6157,14 +6172,29 @@ diff -ruNp a/src/Mod/Surface/Gui/AppSurfaceGui.cpp b/src/Mod/Surface/Gui/AppSurf
 diff -ruNp a/src/Mod/Inspection/Gui/AppInspectionGui.cpp b/src/Mod/Inspection/Gui/AppInspectionGui.cpp
 --- a/src/Mod/Inspection/Gui/AppInspectionGui.cpp
 +++ b/src/Mod/Inspection/Gui/AppInspectionGui.cpp
-@@ -66,6 +66,11 @@
+@@ -59,6 +59,16 @@
+ 
+ 
+ /* Python entry */
++#if defined(__EMSCRIPTEN__)
++// wasm: same as Surface -- the static link drops the unreferenced .qrc object and
++// "Cannot find icon: inspect_pipette" follows. Register the resources from a
++// C++-linkage function (see AppSurfaceGui.cpp).
++static void fcwebLoadInspectionResource()
++{
++    Q_INIT_RESOURCE(Inspection);
++}
++#endif
++
+ PyMOD_INIT_FUNC(InspectionGui)
+ {
+     if (!Gui::Application::Instance) {
+@@ -66,6 +76,9 @@
          PyMOD_Return(nullptr);
      }
  
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: same as Surface -- the static link drops the unreferenced .qrc object
-+    // and "Cannot find icon: inspect_pipette" follows. Register the resources.
-+    Q_INIT_RESOURCE(Inspection);
++    fcwebLoadInspectionResource();
 +#endif
      // instantiating the commands
      // clang-format off
