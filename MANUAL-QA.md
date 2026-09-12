@@ -58,7 +58,11 @@ wrong rather than anything that errors.
 **Workbenches (3 min)** — the one that bit us
 - [ ] Open the workbench dropdown and switch through **every** entry
 - [ ] Each switch changes the toolbars *on the first click*
-- [ ] Toolbar icons render (not blank squares), and tooltips appear on hover
+- [ ] Toolbar icons render (not blank squares), and tooltips appear on hover. Surface and
+      Inspection had blank buttons until 2026-09-12 (their Qt resources were never
+      registered in the static link); the CAM workbench logged "No module named 'yaml'" on
+      activation until the same day (PyYAML is now staged with the other pure-Python
+      packages). Either coming back is a regression in the link or the Python tree.
 
 **Modelling (5 min)**
 - [ ] Part: create a Box, orbit / pan / zoom — smooth, no stutter, no flicker
