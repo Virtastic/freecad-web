@@ -103,7 +103,15 @@ wrong rather than anything that errors.
       your file manager — a `.FCStd` should be there and should keep updating as you work.
       Then reload and confirm it reconnects without asking again. This is the mechanism
       that makes work survive the browser clearing its storage, so it is worth the minute.
-- [ ] Open one of the bundled examples (BIM is the heaviest — watch for slowness)
+- [ ] Open one of the bundled examples (BIM is the heaviest — watch for slowness). Since
+      2026-09-12 the edges are drawn from a cached array by default (`?vboedges=0` goes
+      back to one call per vertex): measured on the dev tree, EngineBlock drag-rotates at
+      27-45 fps, BIMExample 48, and the 42 MB a2plus assembly 37-65 -- if a drag feels like
+      single digits, that is a regression. Black edges on Part shapes and the object's own
+      LineColor on everything else; a red-edged box must have red edges.
+- [ ] A file whose Python proxies are not installed (the a2plus assembly) pops the
+      notification list over the 3D view -- one warning per blocked object, same as the
+      desktop. Escape or a click dismisses it; the model behind it is fine.
 
 **Feel (3 min)**
 - [ ] Nothing takes visibly longer than it should for the size of the model
