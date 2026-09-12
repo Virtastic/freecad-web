@@ -367,6 +367,16 @@ def install():
     except Exception as e:
         print("[fcweb] sharing overlay FAILED: %r" % (e,))
 
+    # asyncio: Emscripten has no socketpair, so CPython's selector loop cannot build its
+    # wake-up pipe and asyncio.run() fails. CAM's asset manager (tool library, tool bits)
+    # runs every store call through asyncio.run -- measured 2026-09-12 as "Failed to
+    # initialize CAM assets ... [Errno 138] Not supported" on workbench activation.
+    try:
+        import fcweb_asyncio
+        print("[fcweb] %s" % fcweb_asyncio.install())
+    except Exception as e:
+        print("[fcweb] asyncio shim FAILED: %r" % (e,))
+
     try:
         from PySideWrapper import QtCore
     except ImportError:
