@@ -172,6 +172,12 @@ PURE=(
     "six==1.16.0"
     "typing_extensions==4.12.2"
     "lark==1.2.2"
+    # PyYAML: CAM's tool library and tool-bit serializers, FEM's YAML/JSON mesh import and
+    # the Material model tools all `import yaml`; without it the CAM workbench logs
+    # "Workbench failure: No module named 'yaml'" on activation (measured 2026-09-12). The
+    # wheel carries a C accelerator next to the pure package; yaml falls back to pure
+    # Python when `yaml._yaml` cannot load, and the extractor below leaves the .so out.
+    "PyYAML==6.0.2"
 )
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -186,6 +192,10 @@ for whl in sorted(src.glob('*.whl')):
             top = member.split('/')[0]
             # Skip wheel metadata; keep the importable payload only.
             if top.endswith('.dist-info') or top.endswith('.data'):
+                continue
+            # Compiled extensions for the HOST cannot load in wasm; PyYAML's _yaml is the
+            # one case here, and the package falls back to pure Python without it.
+            if member.endswith(('.so', '.pyd', '.dylib')):
                 continue
             z.extract(member, dest)
     print('   %s' % whl.name)
@@ -354,7 +364,7 @@ ls -1 "$DEST" | sed 's/^/   /'
 echo
 echo "== verification"
 REQUIRED=(numpy matplotlib mpl_toolkits PIL ifcopenshell kiwisolver fontTools packaging dateutil
-          pyparsing cycler lark PySide6 shiboken6 pivy)
+          pyparsing cycler lark yaml PySide6 shiboken6 pivy)
 for pkg in "${REQUIRED[@]}"; do
     if [ -e "$DEST/$pkg/__init__.py" ] || [ -e "$DEST/$pkg.py" ]; then
         echo "  ok       $pkg"

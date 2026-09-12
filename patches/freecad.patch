@@ -6137,3 +6137,35 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
      }
  
      // Workaround for #0000433
+diff -ruNp a/src/Mod/Surface/Gui/AppSurfaceGui.cpp b/src/Mod/Surface/Gui/AppSurfaceGui.cpp
+--- a/src/Mod/Surface/Gui/AppSurfaceGui.cpp
++++ b/src/Mod/Surface/Gui/AppSurfaceGui.cpp
+@@ -71,6 +71,13 @@
+         PyMOD_Return(nullptr);
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    // wasm: the module is linked statically and nothing references the .qrc object,
++    // so its static initialiser never runs and every Surface_* icon is missing
++    // ("Cannot find icon: Surface_Filling", blank toolbar). Register it the way
++    // Part, Fem, Mesh and TechDraw already do in their own init.
++    Q_INIT_RESOURCE(Surface);
++#endif
+     Base::Interpreter().runString("import Surface");
+     Base::Interpreter().runString("import PartGui");
+ 
+diff -ruNp a/src/Mod/Inspection/Gui/AppInspectionGui.cpp b/src/Mod/Inspection/Gui/AppInspectionGui.cpp
+--- a/src/Mod/Inspection/Gui/AppInspectionGui.cpp
++++ b/src/Mod/Inspection/Gui/AppInspectionGui.cpp
+@@ -66,6 +66,11 @@
+         PyMOD_Return(nullptr);
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    // wasm: same as Surface -- the static link drops the unreferenced .qrc object
++    // and "Cannot find icon: inspect_pipette" follows. Register the resources.
++    Q_INIT_RESOURCE(Inspection);
++#endif
+     // instantiating the commands
+     // clang-format off
+     CreateInspectionCommands();
