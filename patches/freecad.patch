@@ -6052,7 +6052,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
  
  using namespace PartGui;
  
-@@ -334,7 +446,69 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+@@ -334,7 +446,84 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
          state->pop();
      }
      else {
@@ -6103,12 +6103,27 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +            }
 +            SoMaterialBundle fcMb(action);
 +            fcMb.sendFirst();
-+            fcDrewEdges = fcwebDrawEdgeArray(this,
-+                                             this->getNodeId(),
-+                                             fcCoords ? fcCoords->getArrayPtr3() : nullptr,
-+                                             fcCoords ? fcCoords->getNum() : 0,
-+                                             fcCIdx,
-+                                             fcNumCIdx);
++            // sendFirst() trusts Coin's lazy cache, and that cache is wrong here: it
++            // believes GL still holds the colour it sent LAST frame, while something drawn
++            // after these edges changed the current colour behind its back and the
++            // emulation has no glPushAttrib/glPopAttrib to put it back. Measured
++            // 2026-09-11: a box with LineColor red drew its cached edges with the
++            // constant colour attribute still at the previous frame's (0,0,0,0.5); the
++            // immediate path, which sends per part, drew them red. So send the node's
++            // own colour, exactly as renderShape does for faces. A node whose edges
++            // carry more than one colour keeps the immediate path: one draw cannot
++            // honour a per-edge array.
++            if (SoLazyElement::getInstance(state)->getNumDiffuse() <= 1) {
++                const SbColor& fcLineCol = SoLazyElement::getDiffuse(state, 0);
++                const float fcLineTr = SoLazyElement::getTransparency(state, 0);
++                glColor4f(fcLineCol[0], fcLineCol[1], fcLineCol[2], 1.0F - fcLineTr);
++                fcDrewEdges = fcwebDrawEdgeArray(this,
++                                                 this->getNodeId(),
++                                                 fcCoords ? fcCoords->getArrayPtr3() : nullptr,
++                                                 fcCoords ? fcCoords->getNum() : 0,
++                                                 fcCIdx,
++                                                 fcNumCIdx);
++            }
 +            if (fcPushed) {
 +                state->pop();
 +            }
