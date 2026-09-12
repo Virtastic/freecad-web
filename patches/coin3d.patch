@@ -289,3 +289,134 @@ index 07007af..c56d66f 100644
    if (!sendNormals) nbind = OVERALL;
    else if (nbind == OVERALL) {
      glNormal3fv((const GLfloat *)normals);
+diff --git a/src/rendering/SoGL.cpp b/src/rendering/SoGL.cpp
+--- a/src/rendering/SoGL.cpp
++++ b/src/rendering/SoGL.cpp
+@@ -483,6 +483,104 @@
+   }
+ }
+ 
++#if defined(__EMSCRIPTEN__)
++#include <vector>
++// FCWEB: spheres through one cached vertex array.
++//
++// Under emscripten's GL emulation the immediate-mode body of sogl_render_sphere costs
++// stacks-1 flushes per sphere (two GL_TRIANGLES caps and stacks-3 quad strips, each a
++// buffer upload, a uniform set and a draw call) plus two JS calls per vertex. Draft's
++// dimension dots are spheres: on ArchDetail they were ~1400 of the ~2500 draws in a
++// frame (2026-09-12). Same tessellation and winding as the body below, built once per
++// (stacks, slices) as an interleaved N3F_V3F unit sphere, positions scaled per call,
++// one glDrawArrays. Textured spheres keep the body (no texture coordinates here).
++namespace {
++
++struct fcwasm_sphere_mesh {
++  int stacks;
++  int slices;
++  std::vector<float> verts;   // nx ny nz x y z, unit radius, GL_TRIANGLES
++};
++
++fcwasm_sphere_mesh fcwasm_sphere_meshes[8];
++int fcwasm_sphere_next = 0;
++
++const fcwasm_sphere_mesh &
++fcwasm_sphere_mesh_for(const int stacks, const int slices)
++{
++  for (int k = 0; k < 8; k++) {
++    const fcwasm_sphere_mesh & m = fcwasm_sphere_meshes[k];
++    if (m.stacks == stacks && m.slices == slices && !m.verts.empty()) return m;
++  }
++  fcwasm_sphere_mesh & m = fcwasm_sphere_meshes[fcwasm_sphere_next++ % 8];
++  m.stacks = stacks;
++  m.slices = slices;
++  m.verts.clear();
++  const float drho = float(M_PI) / (float) (stacks - 1);
++  const float dtheta = 2.0f * float(M_PI) / (float) slices;
++  std::vector<SbVec3f> prev(slices + 1);
++  std::vector<SbVec3f> cur(slices + 1);
++  // normal == position on the unit sphere, exactly as the body pairs them
++  struct pusher {
++    std::vector<float> & v;
++    void operator()(const SbVec3f & p) const {
++      for (int pass = 0; pass < 2; pass++) { v.push_back(p[0]); v.push_back(p[1]); v.push_back(p[2]); }
++    }
++  } push = { m.verts };
++  struct ringer {
++    int slices; float dtheta;
++    void operator()(std::vector<SbVec3f> & out, const float rho) const {
++      const float tc = (float) cos(rho);
++      const float ts = - (float) sin(rho);
++      for (int j = 0; j <= slices; j++) {
++        const float th = dtheta * (float) j;
++        out[j].setValue(float(sin(th)) * ts, tc, float(cos(th)) * ts);
++      }
++    }
++  } ring = { slices, dtheta };
++  const SbVec3f top(0.0f, 1.0f, 0.0f);
++  const SbVec3f bottom(0.0f, -1.0f, 0.0f);
++  ring(prev, drho);
++  for (int j = 1; j <= slices; j++) {            // top cap: (top, ring[j-1], ring[j])
++    push(top); push(prev[j - 1]); push(prev[j]);
++  }
++  float rho = 2.0f * drho;
++  for (int i = 2; i < stacks - 1; i++, rho += drho) {   // the GL_QUAD_STRIP bands
++    ring(cur, rho);
++    for (int j = 0; j < slices; j++) {
++      push(prev[j]); push(cur[j]); push(cur[j + 1]);
++      push(prev[j]); push(cur[j + 1]); push(prev[j + 1]);
++    }
++    prev.swap(cur);
++  }
++  for (int j = 0; j < slices; j++) {             // bottom cap: (ring[j], bottom, ring[j+1])
++    push(prev[j]); push(bottom); push(prev[j + 1]);
++  }
++  return m;
++}
++
++void
++fcwasm_render_sphere_arrays(const float radius, const int stacks, const int slices)
++{
++  const fcwasm_sphere_mesh & mesh = fcwasm_sphere_mesh_for(stacks, slices);
++  static std::vector<float> scaled;
++  scaled.assign(mesh.verts.begin(), mesh.verts.end());
++  for (size_t k = 3; k + 2 < scaled.size(); k += 6) {
++    scaled[k] *= radius; scaled[k + 1] *= radius; scaled[k + 2] *= radius;
++  }
++  // One interleaved array, one stride: the emulation draws it without restriding.
++  glEnableClientState(GL_VERTEX_ARRAY);
++  glEnableClientState(GL_NORMAL_ARRAY);
++  glNormalPointer(GL_FLOAT, 6 * sizeof(float), &scaled[0]);
++  glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), &scaled[3]);
++  glDrawArrays(GL_TRIANGLES, 0, (GLsizei) (scaled.size() / 6));
++  glDisableClientState(GL_VERTEX_ARRAY);
++  glDisableClientState(GL_NORMAL_ARRAY);
++}
++
++} // namespace
++#endif // __EMSCRIPTEN__
++
+ void
+ sogl_render_sphere(const float radius,
+                    const int numstacks,
+@@ -515,6 +613,22 @@
+ 
+   if (slices > 128) slices = 128;
+ 
++#if defined(__EMSCRIPTEN__)
++  // wasm: one vertex-array draw per untextured sphere (fcwasm_render_sphere_arrays above).
++  if (!(flags & (SOGL_NEED_TEXCOORDS | SOGL_NEED_3DTEXCOORDS))) {
++    fcwasm_render_sphere_arrays(radius, stacks, slices);
++    if (state && (SoComplexityTypeElement::get(state) ==
++                  SoComplexityTypeElement::OBJECT_SPACE)) {
++      SoGLCacheContextElement::shouldAutoCache(state, SoGLCacheContextElement::DO_AUTO_CACHE);
++      SoGLCacheContextElement::incNumShapes(state);
++    }
++    else {
++      SoGLCacheContextElement::shouldAutoCache(state, SoGLCacheContextElement::DONT_AUTO_CACHE);
++    }
++    return;
++  }
++#endif // __EMSCRIPTEN__
++
+   // used to cache last stack's data
+   SbVec3f coords[129];
+   SbVec3f normals[129];
