@@ -2809,172 +2809,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  
  #include <Inventor/SoFCPlacementIndicatorKit.h>
  
-@@ -150,6 +154,149 @@
- 
- using namespace Gui;
- 
-+#if defined(__EMSCRIPTEN__)
-+// FCWEB: SoSphere through a cached vertex array.
-+//
-+// Coin renders every sphere with glBegin/glVertex, one normal and one position call per
-+// vertex: at the default complexity that is ~550 vertices, ~1,100 wasm->JS calls, per
-+// sphere per frame. Draft's dimension dots are spheres; ArchDetail has enough of them that
-+// SoSphere::GLRender was 36% of a drag frame (profiled 2026-09-12). A render action routes
-+// a node TYPE to a method, so route SoSphere here: the same tessellation and winding as
-+// sogl_render_sphere, built once per (stacks, slices) as an interleaved N3F_V3F unit
-+// sphere, positions scaled per call, one glDrawArrays. Textured spheres keep Coin's path.
-+#include <Inventor/bundles/SoMaterialBundle.h>
-+#include <Inventor/elements/SoGLMultiTextureEnabledElement.h>
-+#include <Inventor/elements/SoMultiTextureCoordinateElement.h>
-+#include <cmath>
-+#include <vector>
-+namespace
-+{
-+struct FcSphereMesh
-+{
-+    int stacks = 0;
-+    int slices = 0;
-+    std::vector<float> verts;   // nx ny nz x y z, unit radius, GL_TRIANGLES
-+};
-+FcSphereMesh fcSphereMeshes[8];
-+int fcSphereMeshNext = 0;
-+
-+const FcSphereMesh& fcwebSphereMesh(int stacks, int slices)
-+{
-+    for (const auto& m : fcSphereMeshes) {
-+        if (m.stacks == stacks && m.slices == slices && !m.verts.empty()) {
-+            return m;
-+        }
-+    }
-+    FcSphereMesh& m = fcSphereMeshes[fcSphereMeshNext++ % 8];
-+    m.stacks = stacks;
-+    m.slices = slices;
-+    m.verts.clear();
-+    const float drho = static_cast<float>(M_PI) / static_cast<float>(stacks - 1);
-+    const float dtheta = 2.0F * static_cast<float>(M_PI) / static_cast<float>(slices);
-+    std::vector<SbVec3f> prev(slices + 1);
-+    std::vector<SbVec3f> cur(slices + 1);
-+    // normal == position on a unit sphere, exactly as sogl_render_sphere pairs them
-+    auto push = [&m](const SbVec3f& v) {
-+        for (int pass = 0; pass < 2; ++pass) {
-+            m.verts.push_back(v[0]);
-+            m.verts.push_back(v[1]);
-+            m.verts.push_back(v[2]);
-+        }
-+    };
-+    auto ring = [&](std::vector<SbVec3f>& out, float rho) {
-+        const float tc = std::cos(rho);
-+        const float ts = -std::sin(rho);
-+        for (int j = 0; j <= slices; ++j) {
-+            const float th = dtheta * static_cast<float>(j);
-+            out[j] = SbVec3f(std::sin(th) * ts, tc, std::cos(th) * ts);
-+        }
-+    };
-+    const SbVec3f top(0.0F, 1.0F, 0.0F);
-+    const SbVec3f bottom(0.0F, -1.0F, 0.0F);
-+    ring(prev, drho);
-+    for (int j = 1; j <= slices; ++j) {          // top cap: (top, ring[j-1], ring[j])
-+        push(top);
-+        push(prev[j - 1]);
-+        push(prev[j]);
-+    }
-+    float rho = 2.0F * drho;
-+    for (int i = 2; i < stacks - 1; ++i, rho += drho) {   // Coin's GL_QUAD_STRIP bands
-+        ring(cur, rho);
-+        for (int j = 0; j < slices; ++j) {
-+            push(prev[j]);
-+            push(cur[j]);
-+            push(cur[j + 1]);
-+            push(prev[j]);
-+            push(cur[j + 1]);
-+            push(prev[j + 1]);
-+        }
-+        prev.swap(cur);
-+    }
-+    for (int j = 0; j < slices; ++j) {           // bottom cap: (ring[j], bottom, ring[j+1])
-+        push(prev[j]);
-+        push(bottom);
-+        push(prev[j + 1]);
-+    }
-+    return m;
-+}
-+
-+// shouldGLRender / getComplexityValue are protected in SoShape; reach them the usual way.
-+struct FcSphereAccess: public SoSphere
-+{
-+    using SoSphere::getComplexityValue;
-+    using SoSphere::shouldGLRender;
-+};
-+
-+void fcwebSphereGLRender(SoAction* action, SoNode* node)
-+{
-+    auto* sphere = static_cast<SoSphere*>(node);
-+    auto* ra = static_cast<SoGLRenderAction*>(action);
-+    SoState* state = action->getState();
-+    if (SoGLMultiTextureEnabledElement::get(state, 0)
-+        || SoMultiTextureCoordinateElement::getType(state)
-+            == SoMultiTextureCoordinateElement::FUNCTION) {
-+        sphere->GLRender(ra);   // texture coordinates are not built here
-+        return;
-+    }
-+    auto* acc = static_cast<FcSphereAccess*>(sphere);
-+    if (!acc->shouldGLRender(ra)) {
-+        return;
-+    }
-+    SoMaterialBundle mb(ra);
-+    mb.sendFirst();
-+    const float complexity = SbClamp(acc->getComplexityValue(ra), 0.0F, 1.0F);
-+    int slices = static_cast<int>(30.0F * complexity);   // SPHERE_NUM_SLICES in SoSphere.cpp
-+    int stacks = static_cast<int>(30.0F * complexity);   // SPHERE_NUM_STACKS
-+    if (stacks < 3) {
-+        stacks = 3;
-+    }
-+    if (slices < 4) {
-+        slices = 4;
-+    }
-+    if (slices > 128) {
-+        slices = 128;
-+    }
-+    const FcSphereMesh& mesh = fcwebSphereMesh(stacks, slices);
-+    const float r = sphere->radius.getValue();
-+    static std::vector<float> scaled;
-+    scaled.assign(mesh.verts.begin(), mesh.verts.end());
-+    for (size_t k = 3; k + 2 < scaled.size(); k += 6) {
-+        scaled[k] *= r;
-+        scaled[k + 1] *= r;
-+        scaled[k + 2] *= r;
-+    }
-+    // One interleaved array, one stride: the emulation draws it without restriding.
-+    glEnableClientState(GL_VERTEX_ARRAY);
-+    glEnableClientState(GL_NORMAL_ARRAY);
-+    glNormalPointer(GL_FLOAT, 6 * sizeof(float), scaled.data());
-+    glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), scaled.data() + 3);
-+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(scaled.size() / 6));
-+    glDisableClientState(GL_VERTEX_ARRAY);
-+    glDisableClientState(GL_NORMAL_ARRAY);
-+}
-+}  // namespace
-+#endif
-+
- /*!
- As ProgressBar has no chance to control the incoming Qt events of Quarter so we need to stop
- the event handling to prevent the scenegraph from being selected or deselected
-@@ -459,6 +606,14 @@
-     vboEnabled = false;
- 
-     attachSelection();
-+#if defined(__EMSCRIPTEN__)
-+    // wasm: spheres through the cached vertex array above (see fcwebSphereGLRender)
-+    static bool fcwebSphereMethod = false;
-+    if (!fcwebSphereMethod) {
-+        fcwebSphereMethod = true;
-+        SoGLRenderAction::addMethod(SoSphere::getClassTypeId(), fcwebSphereGLRender);
-+    }
-+#endif
- 
-     // Coin should not clear the pixel-buffer, so the background image
-     // is not removed.
-@@ -1473,6 +1628,15 @@
+@@ -1473,6 +1476,15 @@ void View3DInventorViewer::setRenderCach
  
      auto caching = mode == 0 ? SoSeparator::AUTO : (mode == 1 ? SoSeparator::ON : SoSeparator::OFF);
  
@@ -2990,7 +2825,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      SoFCSeparator::setCacheMode(caching);
  }
  
-@@ -2490,6 +2654,32 @@
+@@ -2490,6 +2502,32 @@ void View3DInventorViewer::renderGLImage
      glRasterPos2f(0, 0);
      glDrawPixels(glImage.width(), glImage.height(), GL_BGRA, GL_UNSIGNED_BYTE, glImage.bits());
  
@@ -3023,7 +2858,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      printDimension();
  
      for (auto it : this->graphicsItems) {
-@@ -2522,6 +2712,126 @@
+@@ -2522,6 +2560,126 @@ void View3DInventorViewer::renderScene()
      const SbViewportRegion vp = this->getSoRenderManager()->getViewportRegion();
      SbVec2s origin = vp.getViewportOriginPixels();
      SbVec2s size = vp.getViewportSizePixels();
@@ -3150,7 +2985,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      glViewport(origin[0], origin[1], size[0], size[1]);
  
      const QColor col = this->backgroundColor();
-@@ -2535,6 +2845,15 @@
+@@ -2535,6 +2614,15 @@ void View3DInventorViewer::renderScene()
  #endif
  
      SoGLRenderAction* glra = this->getSoRenderManager()->getGLRenderAction();
@@ -3166,7 +3001,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      SoState* state = glra->getState();
  
      // Render our scenegraph with the image.
-@@ -2545,6 +2864,10 @@
+@@ -2545,6 +2633,10 @@ void View3DInventorViewer::renderScene()
          SoGLRenderActionElement::set(state, glra);
          SoGLVBOActivatedElement::set(state, this->vboEnabled);
          drawSingleBackground(col);
@@ -3177,7 +3012,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          glra->apply(this->backgroundroot);
      }
  
-@@ -2555,6 +2878,32 @@
+@@ -2555,6 +2647,32 @@ void View3DInventorViewer::renderScene()
      }
  
      try {
@@ -3210,7 +3045,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +3028,185 @@
+@@ -2679,6 +2782,185 @@ void View3DInventorViewer::renderScene()
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -3396,7 +3231,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  }
  
  void View3DInventorViewer::setSeekMode(bool on)
-@@ -2751,6 +3279,7 @@
+@@ -2751,6 +2899,7 @@ void View3DInventorViewer::getDimensions
      else {
          fHeight *= aspectRatio;
      }
@@ -3404,7 +3239,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  }
  
  void View3DInventorViewer::printDimension() const
-@@ -3564,9 +4093,13 @@
+@@ -3564,9 +3713,13 @@ void View3DInventorViewer::viewAll()
                                                                                / 4.0);  // NOLINT
              }
  
