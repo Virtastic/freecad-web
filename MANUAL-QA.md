@@ -222,6 +222,10 @@ actionable; "3D view is janky" is not.
 - A file whose Python proxies belong to an addon that is not installed (the a2plus
   assembly, `a2p_*`) logs one "module not permitted" line per object in the Report View,
   exactly as desktop FreeCAD 1.1 does for the same file.
+- "OpenSCAD executable not found" when the OpenSCAD workbench activates: there is no
+  OpenSCAD binary in a browser, and a desktop without it installed prints the same line.
+  Switching through all 20 workbenches on a clean boot logs nothing else (2026-09-12,
+  after the asyncio shim let CAM's asset manager initialise: 14 tool bits, no errors).
 
 - Chrome/Edge 137+ only (other browsers are refused up front, having downloaded nothing)
 - First load downloads ~115 MB. Later loads really are cached now — the engine is held in
