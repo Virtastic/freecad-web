@@ -61,7 +61,8 @@ SBK_SRC="$(dirname "$(find "$ROOT/deps/src/pyside-setup/sources/shiboken6/libshi
 SBK_GEN="$(dirname "$(find "$ROOT/build-shiboken-wasm" "$ROOT/deps/wasm/shiboken6/include" -name sbkversion.h 2>/dev/null | head -1)")"
 FC_SRC="$ROOT/deps/src/freecad/src"
 FC_GEN="$ROOT/build-freecad-gui-weh/src"
-QTCONVFLAGS="-std=c++20 $PYFLAGS -I$SBK_SRC -I$SBK_GEN -I$FC_SRC -I$FC_GEN -I$FC_GEN/.. -I$QT/include -I$QT/include/QtCore -DFC_OS_LINUX -DHAVE_CONFIG_H"
+# PyCXX moved to src/3rdParty/PyCXX in 1.1 (QuantityPy.h includes <CXX/Objects.hxx>); Boost for Base/Exception.h.
+QTCONVFLAGS="-std=c++20 $PYFLAGS -I$SBK_SRC -I$SBK_GEN -I$FC_SRC -I$FC_SRC/3rdParty/PyCXX -I$FC_GEN -I$FC_GEN/.. -I$ROOT/deps/wasm/include -I$QT/include -I$QT/include/QtCore -DFC_OS_LINUX -DHAVE_CONFIG_H"
 echo "  shiboken:       $SBK_SRC (+ $SBK_GEN)"
 echo "  freecad:        $FC_SRC (+ generated $FC_GEN)"
 echo "  python include: $PYINC"
