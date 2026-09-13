@@ -57,6 +57,11 @@ wrong rather than anything that errors.
       OVER the 3D view, translucent with the mouse away, opaque with the mouse on it.
       Until 2026-09-13 the page painted the 3D frame on top of it and every task panel
       was invisible while Qt reported it shown; the 3D layer now goes under the UI layer.
+- [ ] Box selection (View > Box selection, or Shift+B) and lasso: drag over part of the
+      model. A translucent white rectangle with a thin yellow outline must follow the
+      mouse over a frozen frame, and the release must select what it covered. Until
+      2026-09-13 the band was drawn into a framebuffer nobody composited; the yellow
+      outline is 1 px here where the desktop draws 4 px dashed (WebGL line width).
 
 **Workbenches (3 min)** — the one that bit us
 - [ ] Open the workbench dropdown and switch through **every** entry
