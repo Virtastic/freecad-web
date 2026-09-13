@@ -2224,6 +2224,13 @@ window.fcRunPy = fcRunPy;
      "   w=sub.widget() if sub is not None else None",
      "   is3d=w is not None and 'View3DInventor' in w.metaObject().className()",
      "   _s.__stderr__.write('FCACTIVE-%s\\n' % ('3D' if is3d else 'OTHER')); _s.__stderr__.flush()",
+     // A 3D view coming (back) to the front must render once, or the page has no rect and
+     // no framebuffer for it and paints black until the user moves the mouse: measured
+     // 2026-09-13 after the Preferences dialog closed (activation went OTHER then 3D, the
+     // page cleared the rect on OTHER, and Qt saw nothing to repaint on the way back).
+     "   if is3d:",
+     "    for c in w.findChildren(_qw.QWidget):",
+     "     if 'QOpenGLWidget' in c.metaObject().className(): c.update()",
      "  except Exception: pass",
      " _mdi=_mw.findChild(_qw.QMdiArea)",
      " if _mdi is not None and not getattr(_f,'_fcweb_sub_hook',None):",
@@ -4581,6 +4588,8 @@ window.fcRunPy = fcRunPy;
       window.__fcContextDeleted = function (gl) {
         try {
           var k, e, n = 0;
+          var ve = window.__fcVisibleFbo && REG[window.__fcVisibleFbo];
+          var visGone = !!(ve && (ve.gl === gl || ve.drewGl === gl));
           for (k in REG) { e = REG[k]; if (e && (e.gl === gl || e.drewGl === gl)) { if (e.tex) e.tex.__fcDead = true; delete REG[k]; n++; } }
           for (var i = UPL.length - 1; i >= 0; i--) { if (UPL[i] && UPL[i].__fcGl === gl) { UPL[i].__fcDead = true; UPL.splice(i, 1); } }
           if (lastUi && lastUi.__fcGl === gl) lastUi = null;
@@ -4595,7 +4604,14 @@ window.fcRunPy = fcRunPy;
           // the pass kept compositing the last frame over the Start page after the document
           // closed (reported 2026-09-11: 'frozen, still showing the engine block'). The next
           // visible view republishes both on its first frame.
-          window.__fcWidgetRect = null; window.__fcVisibleFbo = null;
+          //
+          // ONLY when the dead context is the one behind the visible view. Every top-level
+          // Qt window has a context of its own -- the Preferences dialog included -- and
+          // clearing here on any deletion left the viewport black after that dialog closed:
+          // nothing had changed in the view, so Qt repainted nothing, and the page had no
+          // rect to composite (measured 2026-09-13: drawn stuck, rect null, 95% dark until
+          // the next mouse drag).
+          if (visGone) { window.__fcWidgetRect = null; window.__fcVisibleFbo = null; }
           window.__fcCtxReleased = (window.__fcCtxReleased || 0) + 1;
         } catch (e3) { window.__fcCtxReleaseErr = String(e3); }
       };
