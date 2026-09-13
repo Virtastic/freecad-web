@@ -131,6 +131,16 @@ wrong rather than anything that errors.
       notification list over the 3D view -- one warning per blocked object, same as the
       desktop. Escape or a click dismisses it; the model behind it is fine.
 
+- [ ] **FEM, end to end.** Open FEMExample, or make a box with a fixed face and a force,
+      mesh it (gmsh) and run CalculiX from the solver's task panel. The mesher and the solver
+      each suspend the Python call while Qt's event loop keeps running; until 2026-09-13 that
+      loop resumed on top of the suspended call's C stack, and the call came back to a
+      smashed frame -- the result was written, then Python died with 'Fatal Python error:
+      Executing a cache' and the page could freeze (the boot gate's post-fem hang). Every
+      promising call now runs on its own stack. Expect: the result object appears, the colour
+      map paints (per-vertex colours, a colour bar with a visible gradient), constraint
+      arrows are arrow-sized, and NOTHING in the Report view mentions a fatal error.
+
 **Feel (3 min)**
 - [ ] Nothing takes visibly longer than it should for the size of the model
 - [ ] No moment where the UI is frozen with no indication of progress
