@@ -2918,8 +2918,8 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    int fcWantSamples = 0;
 +    if (auto* fcGlwS = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
 +        fcWantSamples = fcGlwS->format().samples();
-+        GLint fcMaxS = 0;
-+        glGetIntegerv(0x8D57 /* GL_MAX_SAMPLES */, &fcMaxS);
++        static GLint fcMaxS = -1;   // a context constant: one query, not one a frame
++        if (fcMaxS < 0) { glGetIntegerv(0x8D57 /* GL_MAX_SAMPLES */, &fcMaxS); }
 +        if (fcWantSamples > fcMaxS) { fcWantSamples = fcMaxS; }
 +        if (fcWantSamples < 2) { fcWantSamples = 0; }
 +    }
@@ -3045,7 +3045,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +2782,185 @@ void View3DInventorViewer::renderScene()
+@@ -2679,6 +2782,193 @@ void View3DInventorViewer::renderScene()
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -3085,7 +3085,6 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +        if (auto* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
 +            widgetFbo = (GLuint)fcGlw->defaultFramebufferObject();
 +        }
-+        while (glGetError() != GL_NO_ERROR) { }   // start from a clean slate
 +        if (fcWantSamples > 0 && fcSet->msFbo != 0) {
 +            // Resolve the multisampled scene into fcTex, which is what the page reads.
 +            glBindFramebuffer(GL_READ_FRAMEBUFFER, fcSet->msFbo);
@@ -3098,10 +3097,19 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +        // AntiAliasing on). Nothing presents that framebuffer anyway; the page
 +        // composites fcTex. Report it as a success so the page does not hold a frame.
 +        glBindFramebuffer(GL_FRAMEBUFFER, widgetFbo);
-+        GLint fcWidgetSamples = 0;
-+        glGetIntegerv(GL_SAMPLES, &fcWidgetSamples);
++        // GL_SAMPLES is a property of the widget framebuffer: ask once per framebuffer
++        // object, not once per frame -- it is a synchronous read, as is glGetError,
++        // which is why the clean-slate drain sits under the branch that needs it.
++        static GLuint fcSamplesFbo = ~0u;
++        static GLint fcWidgetSamples = 0;
++        if (widgetFbo != fcSamplesFbo) {
++            fcWidgetSamples = 0;
++            glGetIntegerv(GL_SAMPLES, &fcWidgetSamples);
++            fcSamplesFbo = widgetFbo;
++        }
 +        const bool fcSelfBlit = (fcFbo == widgetFbo) || fcWidgetSamples > 0;
-+        if (!fcSelfBlit) { glBindFramebuffer(GL_READ_FRAMEBUFFER, fcFbo);
++        if (!fcSelfBlit) { while (glGetError() != GL_NO_ERROR) { }   // a clean slate for blitErr
++        glBindFramebuffer(GL_READ_FRAMEBUFFER, fcFbo);
 +        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, widgetFbo);
 +        glBlitFramebuffer(0, 0, fcVw, fcVh, 0, 0, fcVw, fcVh,
 +                          GL_COLOR_BUFFER_BIT, GL_NEAREST); }
