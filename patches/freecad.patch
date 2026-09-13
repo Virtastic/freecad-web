@@ -2809,7 +2809,44 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  
  #include <Inventor/SoFCPlacementIndicatorKit.h>
  
-@@ -1473,6 +1476,15 @@ void View3DInventorViewer::setRenderCach
+@@ -150,6 +154,36 @@
+ 
+ using namespace Gui;
+ 
++#if defined(__EMSCRIPTEN__)
++namespace
++{
++// FCWEB: the per-context offscreen framebuffers renderScene renders Coin into (the page
++// composites .tex). File scope so the Image render path (renderGLImage) can reach them.
++struct FcFboSet
++{
++    int ctx;
++    GLuint fbo, tex, depth;
++    int w, h;
++    GLuint msFbo, msColor, msDepth;
++    int msSamples;
++    GLuint imgTex;   // the frame frozen at setRenderType(Image), see renderGLImage
++    bool imgDirty;
++};
++FcFboSet fcSets[8] = {};
++int fcSetNext = 0;
++FcFboSet* fcwebCurrentSet()
++{
++    const int id = static_cast<int>(emscripten_webgl_get_current_context());
++    for (auto& s : fcSets) {
++        if (s.ctx == id && s.fbo != 0) {
++            return &s;
++        }
++    }
++    return nullptr;
++}
++}  // namespace
++#endif
++
+ /*!
+ As ProgressBar has no chance to control the incoming Qt events of Quarter so we need to stop
+ the event handling to prevent the scenegraph from being selected or deselected
+@@ -1473,6 +1507,15 @@
  
      auto caching = mode == 0 ? SoSeparator::AUTO : (mode == 1 ? SoSeparator::ON : SoSeparator::OFF);
  
@@ -2825,7 +2862,20 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      SoFCSeparator::setCacheMode(caching);
  }
  
-@@ -2490,6 +2502,32 @@ void View3DInventorViewer::renderGLImage
+@@ -2242,6 +2285,12 @@
+             break;
+         case Image: {
+             glImage = grabFramebuffer();
++#if defined(__EMSCRIPTEN__)
++            // grabFramebuffer made the GL widget current; freeze its last frame (renderGLImage).
++            if (FcFboSet* fcS = fcwebCurrentSet()) {
++                fcS->imgDirty = true;
++            }
++#endif
+         } break;
+     }
+ }
+@@ -2490,6 +2539,81 @@
      glRasterPos2f(0, 0);
      glDrawPixels(glImage.width(), glImage.height(), GL_BGRA, GL_UNSIGNED_BYTE, glImage.bits());
  
@@ -2848,17 +2898,85 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // (INVALID_ENUM getParameter storms) and the frame renders into the wrong
 +    // context ("no valid shader program", foreign attrib locations). Make the 3D
 +    // widget's context current before doing anything.
-+    if (auto* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
++    QOpenGLWidget* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget());
++    if (fcGlw) {
 +        fcGlw->makeCurrent();
 +    }
-+    // Signal the page (before ANY Coin draw this frame) that the C++ native
-+    // composite owns presentation, so the legacy JS overlay stays fully inert.
++    // glDrawPixels above is a no-op under the GL emulation, and the widget framebuffer
++    // this path paints is not what the page composites -- so box and lasso selection
++    // dragged a rubber band nobody could see, over a frozen frame that never moved
++    // (measured 2026-09-13: the band's fan and loop landed in the widget framebuffer,
++    // black, while the page kept showing the Coin framebuffer). Draw the frozen frame
++    // ourselves, INTO the Coin framebuffer the page reads: a copy of it taken when the
++    // render type switched (setRenderType), so it is exactly the last picture on screen;
++    // the graphics items and the cube then paint on top, as upstream intends.
++    FcFboSet* fcS = fcwebCurrentSet();
++    if (fcS) {
++        if (fcS->imgTex == 0) {
++            glGenTextures(1, &fcS->imgTex);
++            fcS->imgDirty = true;
++        }
++        if (fcS->imgDirty) {
++            glBindFramebuffer(GL_READ_FRAMEBUFFER, fcS->fbo);
++            glBindTexture(GL_TEXTURE_2D, fcS->imgTex);
++            glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, fcS->w, fcS->h, 0);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++            fcS->imgDirty = false;
++        }
++        glBindFramebuffer(GL_FRAMEBUFFER, fcS->fbo);
++        glViewport(0, 0, fcS->w, fcS->h);
++        glMatrixMode(GL_PROJECTION);
++        glLoadIdentity();
++        glOrtho(0, fcS->w, 0, fcS->h, 0, 100);
++        glMatrixMode(GL_MODELVIEW);
++        glLoadIdentity();
++        glDisable(GL_DEPTH_TEST);
++        glDisable(GL_BLEND);
++        glDisable(GL_LIGHTING);
++        glEnable(GL_TEXTURE_2D);
++        glBindTexture(GL_TEXTURE_2D, fcS->imgTex);
++        glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
++        const float fw = static_cast<float>(fcS->w);
++        const float fh = static_cast<float>(fcS->h);
++        // s, t, x, y per corner; the copy is GL y-up like the framebuffer, so t follows y.
++        const GLfloat fcQuad[16] = {0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, fw, 0.0F,
++                                    1.0F, 1.0F, fw, fh, 0.0F, 1.0F, 0.0F, fh};
++        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
++        glEnableClientState(GL_VERTEX_ARRAY);
++        glTexCoordPointer(2, GL_FLOAT, 4 * sizeof(GLfloat), fcQuad);
++        glVertexPointer(2, GL_FLOAT, 4 * sizeof(GLfloat), fcQuad + 2);
++        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
++        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
++        glDisableClientState(GL_VERTEX_ARRAY);
++        glDisable(GL_TEXTURE_2D);
++        glBindTexture(GL_TEXTURE_2D, 0);
++    }
 +    EM_ASM({ window.__fcNativeComposite = 1; });
 +#endif
      printDimension();
  
      for (auto it : this->graphicsItems) {
-@@ -2522,6 +2560,126 @@ void View3DInventorViewer::renderScene()
+@@ -2501,6 +2625,18 @@
+     }
+ 
+     glPopAttrib();
++#if defined(__EMSCRIPTEN__)
++    // Hand the frame to the page the way renderScene does, and give Qt its framebuffer back.
++    if (fcS && fcGlw) {
++        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(fcGlw->defaultFramebufferObject()));
++        if (fcGlw->isVisible()) {
++            const QPoint fcTl = fcGlw->mapTo(fcGlw->window(), QPoint(0, 0));
++            EM_ASM({ window.__fcWidgetRect = [$0].concat($1).concat($2).concat($3); },
++                   fcTl.x(), fcTl.y(), fcGlw->width(), fcGlw->height());
++            EM_ASM({ window.__fcVisibleFbo = $0; }, static_cast<int>(fcS->fbo));
++        }
++    }
++#endif
+ }
+ 
+ // #define ENABLE_GL_DEPTH_RANGE
+@@ -2522,6 +2658,123 @@
      const SbViewportRegion vp = this->getSoRenderManager()->getViewportRegion();
      SbVec2s origin = vp.getViewportOriginPixels();
      SbVec2s size = vp.getViewportSizePixels();
@@ -2886,9 +3004,6 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // published __fcNativeComposite = 0, and the page held a stale frame for the
 +    // rest of the session. 176 such binds in one document; document 1 was always
 +    // fine, which is what made it look like a compositor bug for two days.
-+    struct FcFboSet { int ctx; GLuint fbo, tex, depth; int w, h; GLuint msFbo, msColor, msDepth; int msSamples; };
-+    static FcFboSet fcSets[8] = {};
-+    static int fcSetNext = 0;
 +    const int fcCtxId = (int)emscripten_webgl_get_current_context();
 +    FcFboSet* fcSet = nullptr;
 +    for (auto& s : fcSets) {
@@ -2900,7 +3015,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    if (!fcSet) {                 // >8 contexts in one session: recycle round-robin
 +        fcSet = &fcSets[fcSetNext % 8];
 +        fcSetNext++;
-+        *fcSet = FcFboSet{fcCtxId, 0, 0, 0, 0, 0, 0, 0, 0, 0};
++        *fcSet = FcFboSet{fcCtxId, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false};
 +    }
 +    GLuint& fcFbo = fcSet->fbo;
 +    GLuint& fcTex = fcSet->tex;
@@ -2985,7 +3100,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      glViewport(origin[0], origin[1], size[0], size[1]);
  
      const QColor col = this->backgroundColor();
-@@ -2535,6 +2614,15 @@ void View3DInventorViewer::renderScene()
+@@ -2535,6 +2788,15 @@
  #endif
  
      SoGLRenderAction* glra = this->getSoRenderManager()->getGLRenderAction();
@@ -3001,7 +3116,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      SoState* state = glra->getState();
  
      // Render our scenegraph with the image.
-@@ -2545,6 +2633,10 @@ void View3DInventorViewer::renderScene()
+@@ -2545,6 +2807,10 @@
          SoGLRenderActionElement::set(state, glra);
          SoGLVBOActivatedElement::set(state, this->vboEnabled);
          drawSingleBackground(col);
@@ -3012,7 +3127,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          glra->apply(this->backgroundroot);
      }
  
-@@ -2555,6 +2647,32 @@ void View3DInventorViewer::renderScene()
+@@ -2555,6 +2821,32 @@
      }
  
      try {
@@ -3045,7 +3160,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +2782,193 @@ void View3DInventorViewer::renderScene()
+@@ -2679,6 +2971,193 @@
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -3239,7 +3354,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  }
  
  void View3DInventorViewer::setSeekMode(bool on)
-@@ -2751,6 +2899,7 @@ void View3DInventorViewer::getDimensions
+@@ -2751,6 +3230,7 @@
      else {
          fHeight *= aspectRatio;
      }
@@ -3247,7 +3362,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  }
  
  void View3DInventorViewer::printDimension() const
-@@ -3564,9 +3713,13 @@ void View3DInventorViewer::viewAll()
+@@ -3564,9 +4044,13 @@
                                                                                / 4.0);  // NOLINT
              }
  
