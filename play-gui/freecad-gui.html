@@ -2579,8 +2579,15 @@ window.fcRunPy = fcRunPy;
   P.getParameter=function(pn){
     if(pn===FB_BINDING && this._fcFB!==undefined) return this._fcFB;
     if(pn===VIEWPORT && this._fcVP) return this._fcVP;
+    if(pn===DEPTH_RANGE && this._fcDR) return this._fcDR;
+    if(pn===UNPACK_ALIGNMENT && this._fcUA!==undefined) return this._fcUA;
     return _gp.apply(this,arguments);
   };
+  // drawAxisCross reads DEPTH_RANGE and UNPACK_ALIGNMENT back every frame (measured
+  // 2026-09-12); both only change through these two entry points.
+  var DEPTH_RANGE=0x0B70, UNPACK_ALIGNMENT=0x0CF5;
+  var _dr=P.depthRange;
+  P.depthRange=function(n,f){ var a=this._fcDR||(this._fcDR=new Float32Array(2)); a[0]=n;a[1]=f; return _dr.apply(this,arguments); };
   var _bf=P.bindFramebuffer;
   P.bindFramebuffer=function(target,fb){ this._fcFB=(target===TARGET_FRAMEBUFFER)?fb:undefined; return _bf.apply(this,arguments); };
   var _vp=P.viewport;
@@ -2594,6 +2601,11 @@ window.fcRunPy = fcRunPy;
   var ARRAY_BUFFER=0x8892;
   var _bb=P.bindBuffer;
   P.bindBuffer=function(target,buf){ if(target===ARRAY_BUFFER){ if(this._fcAB===buf) return; this._fcAB=buf; } return _bb.apply(this,arguments); };
+  // Not a skip -- a record of UNPACK_FLIP_Y_WEBGL, so the GPU bridge reads it without a
+  // synchronous getParameter (two per presented frame, measured 2026-09-12).
+  var UNPACK_FLIP_Y=0x9240;
+  var _ps=P.pixelStorei;
+  P.pixelStorei=function(pn,v){ if(pn===UNPACK_FLIP_Y) this._fcFlipY=!!v; else if(pn===UNPACK_ALIGNMENT) this._fcUA=v; return _ps.apply(this,arguments); };
 })();
 </script>
 <script>
@@ -3933,7 +3945,7 @@ window.fcRunPy = fcRunPy;
         } else {
           dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
         }
-        var pf = dgl.getParameter(dgl.UNPACK_FLIP_Y_WEBGL);
+        var pf = dgl._fcFlipY !== undefined ? dgl._fcFlipY : dgl.getParameter(dgl.UNPACK_FLIP_Y_WEBGL);
         if (!pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, true);
         // oTexImg/oTexSub: the page's own texture must never enter UPL.
         if (fresh) oTexImg.call(dgl, dgl.TEXTURE_2D, 0, dgl.RGBA, dgl.RGBA, dgl.UNSIGNED_BYTE, cv);
@@ -4019,7 +4031,7 @@ window.fcRunPy = fcRunPy;
         // readPixels hands back GL row order, bottom-up -- the same order the widget's own
         // texture is in, so the quad's flip=1 stays correct. That only holds if the upload
         // does not flip as well, and Qt is free to have left UNPACK_FLIP_Y_WEBGL on.
-        var pf = dgl.getParameter(dgl.UNPACK_FLIP_Y_WEBGL);
+        var pf = dgl._fcFlipY !== undefined ? dgl._fcFlipY : dgl.getParameter(dgl.UNPACK_FLIP_Y_WEBGL);
         if (pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, false);
         var view = BR.buf.length === n ? BR.buf : BR.buf.subarray(0, n);
         // oTexImg/oTexSub, not the wrapped pair: this texture is the page's own and must
