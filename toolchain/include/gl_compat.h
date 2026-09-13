@@ -802,10 +802,6 @@ void glPushAttrib(GLbitfield m);
 void glPopAttrib(void);
 void glPushClientAttrib(GLbitfield m);
 void glPopClientAttrib(void);
-void glRasterPos2f(GLfloat x, GLfloat y);
-void glRasterPos2i(GLint x, GLint y);
-void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z);
-void glBitmap(GLsizei w, GLsizei h, GLfloat x0, GLfloat y0, GLfloat xi, GLfloat yi, const GLubyte* b);
 void glRecti(GLint a, GLint b, GLint c, GLint d);
 void glRectf(GLfloat a, GLfloat b, GLfloat c, GLfloat d);
 void glVertex2d(GLdouble x, GLdouble y);
@@ -819,10 +815,8 @@ void glLineStipple(GLint f, GLushort p);
 void glPolygonStipple(const GLubyte* m);
 void glAccum(GLenum op, GLfloat v);
 void glColorMaterial(GLenum f, GLenum m);
-void glDrawPixels(GLsizei w, GLsizei h, GLenum f, GLenum t, const void* p);
 void glGetDoublev(GLenum pn, GLdouble* p);
 void glPixelZoom(GLfloat x, GLfloat y);
-void glRasterPos2d(GLdouble x, GLdouble y);
 void glTexCoord4fv(const GLfloat* v);
 GLint glRenderMode(GLenum m);
 void glSelectBuffer(GLsizei n, unsigned int* b);
@@ -856,6 +850,12 @@ void glBindBufferARB(GLenum target, GLuint buffer);
 void glGenBuffersARB(GLsizei n, GLuint* buffers);
 void glDeleteBuffersARB(GLsizei n, const GLuint* buffers);
 void glBufferDataARB(GLenum target, long size, const void* data, GLenum usage);
+void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z);
+void glRasterPos2f(GLfloat x, GLfloat y);
+void glRasterPos2i(GLint x, GLint y);
+void glRasterPos2d(GLdouble x, GLdouble y);
+void glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const void* pixels);
+void glBitmap(GLsizei w, GLsizei h, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte* bits);
 
 #ifdef __cplusplus
 }  /* extern "C" */

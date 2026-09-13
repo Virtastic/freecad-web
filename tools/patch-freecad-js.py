@@ -314,6 +314,15 @@ PATCHES = [
         'else if(name_===3121){ret=1}}if(ret===undefined){',
     ),
     (
+        # gl_legacy_stubs.c's glRasterPos3f captures the raster colour with this query, so
+        # glBitmap text (Coin's built-in font) comes out in the colour the caller set. The
+        # emulation answers only the matrices here; WebGL itself has no such parameter.
+        'glGetFloatv: GL_CURRENT_COLOR',
+        '_glGetFloatv=_emscripten_glGetFloatv=(pname,params)=>{params=Number(params);if(pname==2982){',
+        '_glGetFloatv=_emscripten_glGetFloatv=(pname,params)=>{params=Number(params);'
+        'if(pname==2816){(growMemViews(),HEAPF32).set(GLImmediate.clientColor,params/4)}else if(pname==2982){',
+    ),
+    (
         'GL emulation default lighting',
         'GLEmulation.lightModelAmbient=new Float32Array([.2,.2,.2,1]);'
         'GLEmulation.materialAmbient=new Float32Array([.2,.2,.2,1]);',

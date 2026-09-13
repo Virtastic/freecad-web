@@ -47,11 +47,6 @@ void glPushAttrib(GLbitfield m) { (void)m; }
 void glPopAttrib(void) {}
 void glPushClientAttrib(GLbitfield m) { (void)m; }
 void glPopClientAttrib(void) {}
-void glRasterPos2f(GLfloat x, GLfloat y) { (void)x;(void)y; }
-void glRasterPos2i(GLint x, GLint y) { (void)x;(void)y; }
-void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z) { (void)x;(void)y;(void)z; }
-void glBitmap(GLsizei w, GLsizei h, GLfloat x0, GLfloat y0, GLfloat xi, GLfloat yi, const GLubyte* b)
-{ (void)w;(void)h;(void)x0;(void)y0;(void)xi;(void)yi;(void)b; }
 /* glRect(x1,y1,x2,y2) is defined by the GL spec as exactly this quad, in this winding.
  * Emitting it through glBegin/glEnd -- which the emulation does provide -- turns two more
  * silently-dropped draws into real ones. */
@@ -81,10 +76,8 @@ void glPolygonStipple(const GLubyte* m) { (void)m; }
 /* second batch */
 void glAccum(GLenum op, GLfloat v) { (void)op;(void)v; }
 void glColorMaterial(GLenum f, GLenum m) { (void)f;(void)m; }
-void glDrawPixels(GLsizei w, GLsizei h, GLenum f, GLenum t, const void* p) { (void)w;(void)h;(void)f;(void)t;(void)p; }
 void glGetDoublev(GLenum pn, GLdouble* p) { (void)pn; if (p) { for (int i=0;i<16;++i) p[i]=(i%5==0)?1.0:0.0; } }
 void glPixelZoom(GLfloat x, GLfloat y) { (void)x;(void)y; }
-void glRasterPos2d(GLdouble x, GLdouble y) { (void)x;(void)y; }
 void glTexCoord4fv(const GLfloat* v) { if (v) glTexCoord4f(v[0],v[1],v[2],v[3]); }
 // Returns GLint (hit count in GL_SELECT/GL_FEEDBACK exit) — a void definition
 // is a wasm signature mismatch vs callers expecting the count (mesh picking).
@@ -199,7 +192,137 @@ void fcwasm_draw_text_tris(const float* verts, int nverts) {
 
 /* ARB VBO suffix aliases used by PartGui's Coin SoBrepFaceSet (map to core). */
 #include <GLES2/gl2.h>
+#include <stdlib.h>
 void glBindBufferARB(GLenum target, GLuint buffer) { glBindBuffer(target, buffer); }
 void glGenBuffersARB(GLsizei n, GLuint* buffers) { glGenBuffers(n, buffers); }
 void glDeleteBuffersARB(GLsizei n, const GLuint* buffers) { glDeleteBuffers(n, buffers); }
 void glBufferDataARB(GLenum target, long size, const void* data, GLenum usage) { glBufferData(target, size, data, usage); }
+
+/* Raster operations: glRasterPos + glBitmap / glDrawPixels, the way Coin's SoText2 uses
+ * them (every 2D label: the FEM colour bar's numbers, axis and dimension text). SoText2 sets
+ * an ortho projection in window pixels, positions each string with glRasterPos3f and hands
+ * over either one RGBA image of the whole string (FreeType, antialiased: glDrawPixels) or a
+ * 1-bit mask per glyph (the built-in font: glBitmap, coloured with the raster colour).
+ * These were empty until 2026-09-13, so no 2D text ever reached the screen.
+ *
+ * The raster position is projected through the current matrices to a window position, as
+ * the spec says; the image is then drawn as one textured quad under a window-pixel ortho of
+ * our own, at the raster depth, and every piece of state touched is put back. A texture per
+ * call is the price of not caching: a colour bar is a dozen small images a frame. */
+extern void glMatrixMode(GLenum);
+extern void glPushMatrix(void);
+extern void glPopMatrix(void);
+extern void glLoadIdentity(void);
+extern void glOrtho(GLdouble, GLdouble, GLdouble, GLdouble, GLdouble, GLdouble);
+
+static struct { float x, y, z; float color[4]; int valid; } fc_raster = { 0, 0, 0, {1, 1, 1, 1}, 0 };
+
+static void fc_mat_mul_vec(const float* m, const float* v, float* out) {   /* column-major, as GL stores it */
+    for (int r = 0; r < 4; r++) out[r] = m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2] + m[12 + r] * v[3];
+}
+
+void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z) {
+    float mv[16], pr[16], obj[4] = { x, y, z, 1.0f }, eye[4], clip[4];
+    GLint vp[4];
+    glGetFloatv(0x0BA6 /* GL_MODELVIEW_MATRIX */, mv);
+    glGetFloatv(0x0BA7 /* GL_PROJECTION_MATRIX */, pr);
+    glGetIntegerv(0x0BA2 /* GL_VIEWPORT */, vp);
+    fc_mat_mul_vec(mv, obj, eye);
+    fc_mat_mul_vec(pr, eye, clip);
+    if (clip[3] == 0.0f) { fc_raster.valid = 0; return; }
+    fc_raster.x = (float)vp[0] + (clip[0] / clip[3] + 1.0f) * 0.5f * (float)vp[2];
+    fc_raster.y = (float)vp[1] + (clip[1] / clip[3] + 1.0f) * 0.5f * (float)vp[3];
+    fc_raster.z = clip[2] / clip[3];
+    fc_raster.color[0] = fc_raster.color[1] = fc_raster.color[2] = fc_raster.color[3] = 1.0f;
+    glGetFloatv(0x0B00 /* GL_CURRENT_COLOR */, fc_raster.color);
+    fc_raster.valid = 1;
+}
+void glRasterPos2f(GLfloat x, GLfloat y) { glRasterPos3f(x, y, 0.0f); }
+void glRasterPos2i(GLint x, GLint y) { glRasterPos3f((GLfloat)x, (GLfloat)y, 0.0f); }
+void glRasterPos2d(GLdouble x, GLdouble y) { glRasterPos3f((GLfloat)x, (GLfloat)y, 0.0f); }
+
+/* One RGBA image at window position (x, y), bottom-left origin, rows bottom-up. */
+static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* rgba) {
+    const GLenum GL_TEXTURE_2D_ = 0x0DE1, GL_RGBA_ = 0x1908, GL_UNSIGNED_BYTE_ = 0x1401;
+    const GLenum GL_MODELVIEW_ = 0x1700, GL_PROJECTION_ = 0x1701, GL_TRIANGLE_FAN_ = 0x0006;
+    const GLenum GL_BLEND_ = 0x0BE2, GL_LIGHTING_ = 0x0B50;
+    GLint vp[4], oldtex = 0, blendsrc = 0, blenddst = 0;
+    GLuint tex = 0;
+    GLubyte blendWas, lightWas;
+    if (w <= 0 || h <= 0 || !rgba) return;
+    glGetIntegerv(0x0BA2 /* GL_VIEWPORT */, vp);
+    glGetIntegerv(0x8069 /* GL_TEXTURE_BINDING_2D */, &oldtex);
+    /* The WebGL names: the classic GL_BLEND_SRC and GL_BLEND_DST are invalid enums there. */
+    glGetIntegerv(0x80C9 /* GL_BLEND_SRC_RGB */, &blendsrc);
+    glGetIntegerv(0x80C8 /* GL_BLEND_DST_RGB */, &blenddst);
+    blendWas = glIsEnabled(GL_BLEND_);
+    lightWas = glIsEnabled(GL_LIGHTING_);
+
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D_, tex);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2801 /* MIN_FILTER */, 0x2600 /* NEAREST */);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2800 /* MAG_FILTER */, 0x2600);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2802 /* WRAP_S */, 0x812F /* CLAMP_TO_EDGE */);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2803 /* WRAP_T */, 0x812F);
+    glTexImage2D(GL_TEXTURE_2D_, 0, GL_RGBA_, w, h, 0, GL_RGBA_, GL_UNSIGNED_BYTE_, rgba);
+
+    glMatrixMode(GL_PROJECTION_); glPushMatrix(); glLoadIdentity();
+    glOrtho(vp[0], vp[0] + vp[2], vp[1], vp[1] + vp[3], -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW_); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_LIGHTING_);
+    glEnable(GL_BLEND_);
+    glBlendFunc(0x0302 /* SRC_ALPHA */, 0x0303 /* ONE_MINUS_SRC_ALPHA */);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);           /* the image carries its own colour */
+    /* glOrtho(-1, 1) maps z_eye to -z_eye, so -z_ndc lands at the raster depth. */
+    const float zq = -fc_raster.z;
+    glBegin(GL_TRIANGLE_FAN_);
+    glTexCoord2f(0.0f, 0.0f); glVertex3f(x, y, zq);
+    glTexCoord2f(1.0f, 0.0f); glVertex3f(x + (float)w, y, zq);
+    glTexCoord2f(1.0f, 1.0f); glVertex3f(x + (float)w, y + (float)h, zq);
+    glTexCoord2f(0.0f, 1.0f); glVertex3f(x, y + (float)h, zq);
+    glEnd();
+
+    glColor4f(fc_raster.color[0], fc_raster.color[1], fc_raster.color[2], fc_raster.color[3]);
+    glMatrixMode(GL_MODELVIEW_); glPopMatrix();
+    glMatrixMode(GL_PROJECTION_); glPopMatrix();
+    /* GL_MATRIX_MODE cannot be queried through the emulation; MODELVIEW is the GL default and
+     * what every Coin caller leaves selected. */
+    if (!blendWas) glDisable(GL_BLEND_);
+    glBlendFunc((GLenum)blendsrc, (GLenum)blenddst);
+    if (lightWas) glEnable(GL_LIGHTING_);
+    glBindTexture(GL_TEXTURE_2D_, (GLuint)oldtex);
+    glDeleteTextures(1, &tex);
+}
+
+void glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const void* pixels) {
+    if (!fc_raster.valid) return;
+    if (format == 0x1908 /* GL_RGBA */ && type == 0x1401 /* GL_UNSIGNED_BYTE */) {
+        fc_draw_rgba(fc_raster.x, fc_raster.y, w, h, (const GLubyte*)pixels);
+    }
+    /* Other formats (depth, stencil, colour index) are not what any caller here sends. */
+}
+
+void glBitmap(GLsizei w, GLsizei h, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte* bits) {
+    if (!fc_raster.valid) return;
+    if (w > 0 && h > 0 && bits) {
+        /* 1 bit per pixel, MSB first, rows padded to a byte (SoText2 sets UNPACK_ALIGNMENT 1). */
+        const int rowbytes = (w + 7) / 8;
+        GLubyte* rgba = (GLubyte*)malloc((size_t)w * (size_t)h * 4);
+        if (rgba) {
+            const GLubyte r = (GLubyte)(fc_raster.color[0] * 255.0f), g = (GLubyte)(fc_raster.color[1] * 255.0f),
+                          b = (GLubyte)(fc_raster.color[2] * 255.0f), a = (GLubyte)(fc_raster.color[3] * 255.0f);
+            for (int y = 0; y < h; y++) {
+                const GLubyte* row = bits + (size_t)y * rowbytes;
+                GLubyte* dst = rgba + (size_t)y * w * 4;
+                for (int x = 0; x < w; x++, dst += 4) {
+                    const int on = (row[x >> 3] >> (7 - (x & 7))) & 1;
+                    dst[0] = r; dst[1] = g; dst[2] = b; dst[3] = on ? a : 0;
+                }
+            }
+            fc_draw_rgba(fc_raster.x - xorig, fc_raster.y - yorig, w, h, rgba);
+            free(rgba);
+        }
+    }
+    fc_raster.x += xmove;
+    fc_raster.y += ymove;
+}
