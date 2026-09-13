@@ -4539,6 +4539,11 @@ window.fcRunPy = fcRunPy;
                    pyBusy: !!window.__fcPyBusy, resume: !!(c && c.resume), pending: c ? c.pendingEvents.length : -1,
                    exclusive: c ? c.exclusiveEventHandler : null };
         };
+        // ?pumpmin=<ms>: never pump more often than this. A/B knob, measured 2026-09-13 on
+        // draft_test_objects drags: 0 (every animation frame) 32/62 fps, 30 ms 23/55, 60 ms
+        // 17/42 -- fewer pumps, fewer frames, so the default stays 0.
+        var PUMP_MIN = 0, lastPump = 0;
+        try { PUMP_MIN = Math.max(0, parseInt(new URLSearchParams(location.search).get('pumpmin') || '0', 10) || 0); } catch (e) {}
         function arm() { armedUntil = performance.now() + 600; }
         window.addEventListener('pointerdown', function () { down++; arm(); }, true);
         window.addEventListener('pointerup', function () { down = Math.max(0, down - 1); arm(); }, true);
@@ -4559,8 +4564,9 @@ window.fcRunPy = fcRunPy;
             // session. __fcPyBusy is the real re-entry guard, so after 3 s treat the local
             // flag as lost and count it.
             if (busy && performance.now() - busyAt > 3000) { busy = false; window.__fcPumpLost = (window.__fcPumpLost || 0) + 1; }
-            if (m && window.__fcAppReady && (down > 0 || performance.now() < armedUntil) && !busy && !window.__fcPyBusy && !(c && c.resume)) {
-              busy = true; busyAt = performance.now();
+            if (m && window.__fcAppReady && (down > 0 || performance.now() < armedUntil) && !busy && !window.__fcPyBusy && !(c && c.resume)
+                && performance.now() - lastPump >= PUMP_MIN) {
+              busy = true; busyAt = lastPump = performance.now();
               var n = new TextEncoder().encode(CODE).length + 1, q = m._malloc(n);
               m.stringToUTF8(CODE, q, n);
               var r = (window.fcRunPy || function (mm, pp) { window.fcwebCallPy(mm, pp); mm._free(pp); })(m, q);
