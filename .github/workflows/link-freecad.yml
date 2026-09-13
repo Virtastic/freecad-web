@@ -784,6 +784,38 @@ jobs:
           echo "  share: $(find freecad-gui-install/share -type f 2>/dev/null | wc -l) files"
           [ -d freecad-gui-install/Mod ] || { echo "::error::install produced no Mod tree"; exit 1; }
 
+      # Python compiled its own sources on EVERY boot. MEMFS forgets __pycache__ between
+      # sessions and the payload shipped none: 1,486 .py under Mod and 0 .pyc, a cold
+      # `import Draft` at 1.6 s against 2 ms from the bytecode it had just written, and the
+      # tokenizer and PEG parser among the warm-boot profile's top functions (2026-09-12,
+      # scratchpad/gpu-pyc-check.py, gpu-boot-profile.py). Compile every packaged tree with
+      # the host 3.13 -- the same magic number as the wasm interpreter, asserted below -- as
+      # UNCHECKED-HASH bytecode: the packager stamps every file with the unpack time, which
+      # would invalidate timestamp bytecode on every boot, and the payload is immutable.
+      - name: Precompile the packaged Python trees
+        if: ${{ inputs.stop_after != 'configure' && inputs.stop_after != 'compile' }}
+        run: |
+          set -e
+          py='${{ steps.hostpy.outputs.python-path }}'
+          host="$("$py" -c 'import importlib.util;print(int.from_bytes(importlib.util.MAGIC_NUMBER[:2],"little"))')"
+          wasm="$(grep -oE 'MAGIC_NUMBER = [(][0-9]+[)]' deps/src/cpython/Lib/importlib/_bootstrap_external.py | grep -oE '[0-9]+' | head -1)"
+          echo "  bytecode magic: host $host, wasm $wasm"
+          if [ -z "$wasm" ] || [ "$host" != "$wasm" ]; then
+            echo "::error::host interpreter bytecode magic $host does not match the wasm interpreter's $wasm -- the payload would ship bytecode nothing can load"
+            exit 1
+          fi
+          trees="freecad-gui-install/Mod freecad-gui-install/Ext build-freecad-gui-weh/Ext deps/wasm/pyside-pkg deps/src/cpython/Lib"
+          for d in $trees; do [ -d "$d" ] || { echo "::error::no such tree to precompile: $d"; exit 1; }; done
+          # Not fatal on a file that will not compile (upstream ships a few Python 2 relics
+          # under Mod); they simply stay source-only, as before.
+          "$py" -m compileall -q -j 0 --invalidation-mode unchecked-hash -x '/(test|tests|idlelib|tkinter|turtledemo|ensurepip|lib2to3|pydoc_data)/' $trees \
+            || echo "::warning::compileall reported files it could not compile (listed above); they stay source-only"
+          for d in $trees; do
+            echo "  $d: $(find "$d" -name '*.py' | wc -l) .py, $(find "$d" -name '*.pyc' | wc -l) .pyc, $(find "$d" -name '*.pyc' -printf '%s\n' | awk '{s+=$1} END {printf "%.1f MB", s/1048576}') of bytecode"
+          done
+          # The thing the boot pays for, by name: Draft's bytecode must exist.
+          [ -s freecad-gui-install/Mod/Draft/__pycache__/Draft.cpython-313.pyc ] || { echo "::error::Mod/Draft/__pycache__/Draft.cpython-313.pyc missing after compileall"; exit 1; }
+
       - name: Link
         id: link
         if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
