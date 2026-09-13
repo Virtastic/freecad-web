@@ -2598,6 +2598,10 @@ window.fcRunPy = fcRunPy;
   // drawAxisCross reads DEPTH_RANGE and UNPACK_ALIGNMENT back every frame (measured
   // 2026-09-12); both only change through these two entry points.
   var DEPTH_RANGE=0x0B70, UNPACK_ALIGNMENT=0x0CF5;
+  // ... and the blend function, which the present pass changes and must put back.
+  var _blf=P.blendFunc, _blfs=P.blendFuncSeparate;   // NOT _bf: that is bindFramebuffer above
+  P.blendFunc=function(s,d){ this._fcBF=[s,d,s,d]; return _blf.apply(this,arguments); };
+  P.blendFuncSeparate=function(s,d,sa,da){ this._fcBF=[s,d,sa,da]; return _blfs.apply(this,arguments); };
   var _dr=P.depthRange;
   P.depthRange=function(n,f){ var a=this._fcDR||(this._fcDR=new Float32Array(2)); a[0]=n;a[1]=f; return _dr.apply(this,arguments); };
   var _bf=P.bindFramebuffer;
@@ -4360,10 +4364,15 @@ window.fcRunPy = fcRunPy;
               keepValid = false;            // reallocated: holds nothing yet
             }
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, keepFbo);
-            gl.viewport(0, 0, W, H);
-            gl.uniform1f(p.flip, 0.0);   // QImage upload: already top-left origin
-            gl.bindTexture(gl.TEXTURE_2D, ui);
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            // THE 3D LAYER GOES UNDER THE UI LAYER, not over it. Qt punches a transparent
+            // hole in its raster backing store where the QOpenGLWidget sits (measured
+            // 2026-09-13: RGBA 0,0,0,0 across the view) and paints anything that overlaps
+            // the view -- the Tasks overlay panel, its translucent title bar -- into that
+            // same store on top. Drawing the widget quad last covered all of it: every
+            // task panel was invisible in the browser while Qt reported it visible. So:
+            // the widget quad first, then the UI texture blended over the whole canvas
+            // (premultiplied, as Qt's ARGB32_Premultiplied store is), and the hole shows
+            // the 3D frame through.
             // widget.tex is only bindable here when the widget shares this context; when
             // it does not, bridgeWidget copies it across. A null means the copy failed and
             // the frame keeps the UI layer alone -- never the wrong texture stretched over
@@ -4406,6 +4415,14 @@ window.fcRunPy = fcRunPy;
               // compositor is alive; only this says the 3D layer is in the frame.
               window.__fcWidgetDrawn = (window.__fcWidgetDrawn || 0) + 1;
             }
+            gl.viewport(0, 0, W, H);
+            gl.uniform1f(p.flip, 0.0);   // QImage upload: already top-left origin
+            gl.enable(gl.BLEND);
+            gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.bindTexture(gl.TEXTURE_2D, ui);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            gl.disable(gl.BLEND);
+            if (gl._fcBF) gl.blendFuncSeparate(gl._fcBF[0], gl._fcBF[1], gl._fcBF[2], gl._fcBF[3]);
             keepValid = true;             // this frame is complete and safe to re-present
           }
           // ?presentlog=1 only: what did this frame's composite actually LOOK like? Draw
@@ -4614,6 +4631,20 @@ window.fcRunPy = fcRunPy;
           if (visGone) { window.__fcWidgetRect = null; window.__fcVisibleFbo = null; }
           window.__fcCtxReleased = (window.__fcCtxReleased || 0) + 1;
         } catch (e3) { window.__fcCtxReleaseErr = String(e3); }
+      };
+      // Diagnostic: RGBA of the current UI layer texture at canvas pixel (x, y), top-left
+      // origin. Reads through a scratch framebuffer on the UI texture's own context.
+      window.__fcUiPixel = function (x, y) {
+        try {
+          var ui = lastUi; if (!ui) return null;
+          var g = ui.__fcGl; if (!g) return null;
+          var fb = g.createFramebuffer(), prev = g.getParameter(g.READ_FRAMEBUFFER_BINDING);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, fb);
+          g.framebufferTexture2D(g.READ_FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, ui, 0);
+          var px = new Uint8Array(4); g.readPixels(x, (ui.__fcSz ? ui.__fcSz[1] : g.drawingBufferHeight) - 1 - y, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, prev); g.deleteFramebuffer(fb);
+          return { rgba: Array.from(px), size: ui.__fcSz || null, err: g.getError() };
+        } catch (e) { return { error: String(e) }; }
       };
       window.__fcPresentStats = function () {
         // The SIZES too. A count cannot tell you WHICH framebuffer the widget quad

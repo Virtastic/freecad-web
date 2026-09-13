@@ -53,7 +53,10 @@ wrong rather than anything that errors.
 - [ ] The "Tasks" panel sits on the RIGHT as a translucent overlay (title bar with the
       task boxes, e.g. PartDesign's "Start Part / New Body"). That is upstream 1.1's
       default layout (`OverlayWidgets.cpp` seeds the right overlay with "Tasks"), not a
-      stray floating dock.
+      stray floating dock. Start any task (Part > Primitives): the panel must be visible
+      OVER the 3D view, translucent with the mouse away, opaque with the mouse on it.
+      Until 2026-09-13 the page painted the 3D frame on top of it and every task panel
+      was invisible while Qt reported it shown; the 3D layer now goes under the UI layer.
 
 **Workbenches (3 min)** — the one that bit us
 - [ ] Open the workbench dropdown and switch through **every** entry
