@@ -39,6 +39,7 @@ on:
       # link builds and trigger no link, which is precisely the shape of a fix that
       # ships as a no-op.
       - 'fcweb_ccx_module.cpp'
+      - 'fcweb_qtconv_module.cpp'
       - 'fcweb_dlg_module.cpp'
       - 'fcweb_gmsh_module.cpp'
       - 'spe_sanitize.cpp'

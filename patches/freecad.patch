@@ -4029,7 +4029,7 @@ diff -ruNp a/src/Main/MainCmd.cpp b/src/Main/MainCmd.cpp
 diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -130,8 +130,206 @@
+@@ -130,8 +130,208 @@
      }
  }
  
@@ -4093,6 +4093,7 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 +extern "C" PyObject* PyInit__fcwebdlg();  // FreeCAD-Web blocking HTML dialogs
 +extern "C" PyObject* PyInit__fcwebgmsh();  // FreeCAD-Web in-browser gmsh mesher
 +extern "C" PyObject* PyInit__fcwebccx();   // FreeCAD-Web in-browser CalculiX solver
++extern "C" PyObject* PyInit__fcwebqt();    // FreeCAD-Web PySide conversions (Base::Quantity)
 +extern "C" PyObject* PyInit__ifcopenshell_wrapper();  // IfcOpenShell (SWIG IFC bindings)
 +// numpy C extensions (static; numpy/__init__.py aliases them to dotted names)
 +extern "C" PyObject* PyInit__multiarray_umath();
@@ -4209,6 +4210,7 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 +    PyImport_AppendInittab("_fcwebdlg", PyInit__fcwebdlg);
 +    PyImport_AppendInittab("_fcwebgmsh", PyInit__fcwebgmsh);
 +    PyImport_AppendInittab("_fcwebccx", PyInit__fcwebccx);
++    PyImport_AppendInittab("_fcwebqt", PyInit__fcwebqt);
 +    PyImport_AppendInittab("_ifcopenshell_wrapper", PyInit__ifcopenshell_wrapper);
 +    // Register under the FULL dotted names numpy's own C code imports itself by
 +    // (PyImport_ImportModule("numpy._core._multiarray_umath"), etc.). A meta-path

@@ -53,6 +53,17 @@ QTFLAGS="-I$QT/include -I$QT/include/QtCore"
 QTMKSPEC="$(dirname "$(ls "$QT"/mkspecs/*/qplatformdefs.h 2>/dev/null | head -1)" 2>/dev/null)"
 [ -n "$QTMKSPEC" ] && [ -d "$QTMKSPEC" ] && QTFLAGS="$QTFLAGS -I$QTMKSPEC"
 
+# fcweb_qtconv_module.cpp registers a Shiboken converter, so it needs the wasm shiboken6
+# headers (libshiboken sources plus the generated sbkversion.h), FreeCAD's Base headers
+# (source tree plus the generated QuantityPy.h in the build tree) and Qt. Every path is
+# checked by name: a missing include is a compile error here, not a trap in the browser.
+SBK_SRC="$(dirname "$(find "$ROOT/deps/src/pyside-setup/sources/shiboken6/libshiboken" "$ROOT/deps/wasm/shiboken6/include" -name sbkconverter.h 2>/dev/null | head -1)")"
+SBK_GEN="$(dirname "$(find "$ROOT/build-shiboken-wasm" "$ROOT/deps/wasm/shiboken6/include" -name sbkversion.h 2>/dev/null | head -1)")"
+FC_SRC="$ROOT/deps/src/freecad/src"
+FC_GEN="$ROOT/build-freecad-gui-weh/src"
+QTCONVFLAGS="-std=c++20 $PYFLAGS -I$SBK_SRC -I$SBK_GEN -I$FC_SRC -I$FC_GEN -I$FC_GEN/.. -I$QT/include -I$QT/include/QtCore -DFC_OS_LINUX -DHAVE_CONFIG_H"
+echo "  shiboken:       $SBK_SRC (+ $SBK_GEN)"
+echo "  freecad:        $FC_SRC (+ generated $FC_GEN)"
 echo "  python include: $PYINC"
 echo "  qt include:     $QT/include${QTVER:+ (+ private $QTVER)}${QTMKSPEC:+ (+ mkspec $QTMKSPEC)}"
 
@@ -86,6 +97,7 @@ spe_sanitize.cpp|em++|QT|__wrap__ZN23QCoreApplicationPrivate13notify_helperEP7QO
 fcweb_dlg_module.cpp|em++|PY|PyInit__fcwebdlg
 fcweb_gmsh_module.cpp|em++|PY|PyInit__fcwebgmsh
 fcweb_ccx_module.cpp|em++|PY|PyInit__fcwebccx
+fcweb_qtconv_module.cpp|em++|QTCONV|PyInit__fcwebqt
 wasm_event_dispatch.cpp|em++|QT|fcweb_dispatch_event
 "
 
@@ -101,6 +113,7 @@ echo "$UNITS" | while IFS='|' read -r src cc kind want; do
     case "$kind" in
         PY) extra="$PYFLAGS" ;;
         QT) extra="$QTFLAGS" ;;
+        QTCONV) extra="$QTCONVFLAGS" ;;
     esac
     if ! $cc $COMMON $extra -c "$src" -o "$obj" 2>/tmp/weh-obj-err.txt; then
         echo "  FAILED   $src"

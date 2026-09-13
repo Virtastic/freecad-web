@@ -382,6 +382,17 @@ def install():
     except ImportError:
         from PySide6 import QtCore
 
+    # Base::Quantity <-> Python for PySide signals and slots. FreeCAD is built with
+    # FREECAD_USE_SHIBOKEN=OFF on wasm, so the registration upstream does in
+    # Gui/PythonWrapper.cpp never runs; without it every Gui::QuantitySpinBox signal
+    # connected from Python (Draft, BIM, FEM, CAM task panels) raises "parameter 0 of
+    # type Base::Quantity cannot be converted" at emit time (measured 2026-09-13).
+    try:
+        import _fcwebqt
+        print("[fcweb] Quantity converter %s" % ("registered" if _fcwebqt.install() else "already registered"))
+    except Exception as e:
+        print("[fcweb] Quantity converter FAILED: %r" % (e,))
+
     state = {"timer": None, "tries": 0, "done": False}
 
     def _apply():

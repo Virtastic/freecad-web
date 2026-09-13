@@ -4646,6 +4646,21 @@ window.fcRunPy = fcRunPy;
           return { rgba: Array.from(px), size: ui.__fcSz || null, err: g.getError() };
         } catch (e) { return { error: String(e) }; }
       };
+      // Diagnostic: RGBA of the visible 3D view's colour texture at texture pixel (x, y),
+      // top-left origin of the VIEW (the texture is GL y-up; flipped here).
+      window.__fcWidgetPixel = function (x, y) {
+        try {
+          var e = window.__fcVisibleFbo && REG[window.__fcVisibleFbo]; if (!e || !e.tex) return null;
+          var g = e.gl; if (!g) return null;
+          var fb = g.createFramebuffer(), prev = g.getParameter(g.READ_FRAMEBUFFER_BINDING);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, fb);
+          g.framebufferTexture2D(g.READ_FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, e.tex, 0);
+          var h = window.__fcCoinH || 0;
+          var px = new Uint8Array(4); g.readPixels(x, h ? h - 1 - y : y, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, prev); g.deleteFramebuffer(fb);
+          return { rgba: Array.from(px), size: [window.__fcCoinW || 0, h], err: g.getError() };
+        } catch (ex) { return { error: String(ex) }; }
+      };
       window.__fcPresentStats = function () {
         // The SIZES too. A count cannot tell you WHICH framebuffer the widget quad
         // draws from, and picking the wrong one puts the wrong picture in the
