@@ -297,6 +297,21 @@ PATCHES = [
         'else if(name_===2850){name_=33902}else if(name_===2880){ret=6914}'
         'else if(name_===3377){ret=8}else if(name_===3121){ret=0}}if(ret===undefined){'
         'var result=GLctx.getParameter(name_);',
+        # 4th field: the RGBA_MODE entry below rewrites the 3121 answer inside this output
+        'else if(name_===3377){ret=8}else if(name_===3121){ret=',
+    ),
+    (
+        # GL_RGBA_MODE (0x0C31) answered 0 above -- and Coin reads it once per GL context in
+        # SoGLLazyElement::initGL: on 0 it decides the context is COLOUR-INDEX mode, and from
+        # then on every per-index diffuse send (sendDiffuseByIndex) goes to glIndexi, a no-op
+        # stub here, instead of glColor4ub. Measured 2026-09-13 on the FEM result mesh: 434
+        # per-vertex colours in the scene, zero glColor calls in the render, a grey beam and a
+        # black colour bar. The same mechanism is why the SoBrepFaceSet immediate path and the
+        # cached edge path each needed an explicit glColor4f of the node's diffuse. A WebGL
+        # context is always RGBA.
+        'glGetBooleanv: GL_RGBA_MODE is true',
+        'else if(name_===3121){ret=0}}if(ret===undefined){',
+        'else if(name_===3121){ret=1}}if(ret===undefined){',
     ),
     (
         'GL emulation default lighting',
@@ -363,6 +378,7 @@ PATCHES = [
         'var _glBegin=mode=>{GLImmediate.enabledClientAttributes_preBegin=',
         'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;'
         'GLImmediate.enabledClientAttributes_preBegin=',
+        'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;',   # 4th field: the stateful-attribute reset follows
     ),
     (
         'glColor drives material colour',
@@ -474,21 +490,25 @@ GROWABLE_IMMEDIATE = [
         'GLImmediate.tempData=GLImmediate.vertexData=g;'
         'GLImmediate.vertexDataU8=new Uint8Array(g.buffer);'
         'GLImmediate.__grew=(GLImmediate.__grew||0)+1};',
+        'GLImmediate.__grew=(GLImmediate.__grew||0)+1}',   # 4th field: the attribute-state entry splits the `};`
     ),
     (
         'growable immediate: glVertex2f',
         'var _glVertex2f=(x,y)=>{GLImmediate.vertexData',
         'var _glVertex2f=(x,y)=>{GLImmediate.__grow();GLImmediate.vertexData',
+        'var _glVertex2f=(x,y)=>{GLImmediate.__grow();',   # 4th field: the stateful-attribute rewrite replaces the body
     ),
     (
         'growable immediate: glVertex3f',
         'var _glVertex3f=(x,y,z)=>{GLImmediate.vertexData',
         'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();GLImmediate.vertexData',
+        'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();',
     ),
     (
         'growable immediate: glVertex4f',
         'var _glVertex4f=(x,y,z,w)=>{GLImmediate.vertexData',
         'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();GLImmediate.vertexData',
+        'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();',
     ),
     (
         # glNormal3f's writer is created by the 'glNormal3f outside begin/end' patch
@@ -497,11 +517,13 @@ GROWABLE_IMMEDIATE = [
         'growable immediate: glNormal3f',
         'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
         'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+        'GLEmulation.__curNormal=[x,y,z];return}',   # 4th field: the stateful-attribute rewrite replaces the body
     ),
     (
         'growable immediate: glTexCoord2i',
         'var _glTexCoord2i=(u,v)=>{GLImmediate.vertexData',
         'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();GLImmediate.vertexData',
+        'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();',
     ),
     (
         # glColor4f writes PACKED BYTES through vertexDataU8, a view on the same buffer,
@@ -510,6 +532,8 @@ GROWABLE_IMMEDIATE = [
         'growable immediate: glColor4f',
         'if(GLImmediate.mode>=0){var start=GLImmediate.vertexCounter<<2;GLImmediate.vertexDataU8[start+0]=r*255;',
         'if(GLImmediate.mode>=0){GLImmediate.__grow();var start=GLImmediate.vertexCounter<<2;GLImmediate.vertexDataU8[start+0]=r*255;',
+        # 4th field: the attribute-state entry replaces this branch with a record of the colour
+        'if(GLImmediate.mode>=0){GLImmediate.__',
     ),
     (
         # The GPU-side ring only has slots for sizes up to MAX_TEMP_BUFFER_SIZE. Give an
@@ -1231,6 +1255,142 @@ PATCHES += [
     ),
 ]
 
+# ---- JSPI: every promising call gets its own shadow stack ---------------------------------
+#
+# The wasm stack is switched by the engine under JSPI; the C shadow stack in linear memory
+# is not. Emscripten leaves __stack_pointer wherever the suspending computation left it,
+# which is safe only while everything that runs during the suspension returns before it
+# resumes (last in, first out). Qt's main loop breaks that order all day: main() sits
+# suspended in qtSuspendJs between events and RESUMES on every timer and DOM event, its
+# wait() returns, and the dispatcher's next calls push frames from main's own level --
+# straight over the frames of any fcweb_run_python that suspended below it (the gmsh and
+# ccx bridges, HTML dialogs). Measured 2026-09-13: Qt resumed 15 times inside one gmsh
+# call; the Python call came back to a smashed entry frame and died with "Fatal Python
+# error: _PyEval_EvalFrameDefault: Executing a cache" after its result had been written,
+# which is the boot gate's post-fem freeze (run 34775938426) and a local trap on every
+# FEM solve.
+#
+# So each promising export (fcweb_run_python, fcweb_dispatch_event) runs on a private
+# malloc'd stack the size of the main one, pooled and reused. When a call suspends, the
+# shared pointer is handed back to the level its caller had; when it resumes, its own
+# pointer is put back first. main() keeps the real stack. A computation's frames can
+# then never be overwritten by another's, whatever order they resume in.
+_JSPI_STACKS = (
+    'Asyncify.__stk={main:0,regions:[],free:[],size:0,'
+    'init(){var S=Asyncify.__stk;if(!S.size){S.size=_emscripten_stack_get_base()-_emscripten_stack_get_end();S.main=stackSave()}},'
+    'inMain(v){return v<=_emscripten_stack_get_base()&&v>=_emscripten_stack_get_end()},'
+    'of(v){var R=Asyncify.__stk.regions;for(var i=0;i<R.length;i++){var r=R[i];if(r.live&&v>r.base&&v<=r.top)return r}return null},'
+    'acquire(){var S=Asyncify.__stk;S.init();var r=S.free.pop();'
+    'if(!r){var b=_malloc(S.size);if(!b)throw new Error("fcweb: no memory for a call stack");'
+    'r={base:b,top:Math.floor((b+S.size)/16)*16,live:false,gen:0};S.regions.push(r)}r.live=true;r.gen++;return r},'
+    'release(r){r.live=false;Asyncify.__stk.free.push(r)},'
+    'safe(v,reg,gen){var S=Asyncify.__stk;if(S.inMain(v))return v;if(reg&&reg.live&&reg.gen===gen)return v;return S.main}};'
+    'Module.__fcStk=Asyncify.__stk;'   # so a probe can read how many stacks a session needed
+)
+PATCHES += [
+    (
+        'JSPI stacks: a suspending call hands the pointer back, a resuming one takes its own',
+        'handleAsync:async startAsync=>{runtimeKeepalivePush();try{return await startAsync()}finally{runtimeKeepalivePop()}}',
+        'handleAsync:async startAsync=>{runtimeKeepalivePush();var S=Asyncify.__stk;S.init();var sp=stackSave(),reg=S.of(sp);if(!reg)S.main=sp;'
+        'try{var pr=startAsync();if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
+        'finally{stackRestore(sp);runtimeKeepalivePop()}}',
+    ),
+    (
+        'JSPI stacks: promising exports run on a private stack, and the pool they come from',
+        'makeAsyncFunction(original){return WebAssembly.promising(original)}};',
+        'makeAsyncFunction(original,name){var p=WebAssembly.promising(original);if(name==="main"||name==="__main_argc_argv")return p;'
+        'return function(){var S=Asyncify.__stk;S.init();var outer=stackSave(),oreg=S.of(outer),ogen=oreg?oreg.gen:0;if(S.inMain(outer))S.main=outer;'
+        'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;'
+        'try{r=p.apply(null,arguments)}catch(e){stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}'
+        'stackRestore(S.safe(outer,oreg,ogen));'
+        'var done=function(){if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};'
+        'if(r&&typeof r.then==="function")r.then(done,done);else done();return r}}};' + _JSPI_STACKS,
+    ),
+    (
+        'JSPI stacks: the export name reaches the wrapper',
+        'original=Asyncify.makeAsyncFunction(original)}',
+        'original=Asyncify.makeAsyncFunction(original,x)}',
+    ),
+]
+
+# ---- immediate mode: attributes are STATE, every vertex carries the layout --------------
+#
+# GL semantics: glNormal/glColor/glTexCoord set current values and glVertex emits a vertex
+# carrying all of them. Emscripten's emulation appends each call to the vertex stream as
+# it comes and derives the per-vertex layout from the first vertex, so any code that sets
+# a normal once per two vertices (Coin's cylinder and cone sides: a glNormal per quad-strip
+# column), or a colour once before the first vertex (SoDatumLabel), shifts every later
+# vertex by the missing bytes. Measured 2026-09-13: FEM constraint arrows (SoCone,
+# SoCylinder, SoCube via SoMultipleCopy) drew as slabs tens of metres long; the datum
+# label's textured quad (25 floats at a stride of 7) never drew at all.
+#
+# The setters now record state (__aN, __aC, __aT) and the layout order in which each
+# attribute was first set before the first vertex (__aOrder); glVertex writes the layout
+# attributes in that order, then the position. An attribute that first appears AFTER the
+# first vertex cannot join a layout already laid out and is dropped, which is a wrong
+# colour, not a corrupt buffer. glBegin resets the order and seeds the colour from the
+# current client colour and the normal from the last glNormal outside begin/end.
+_ATTR_STATE = (
+    'GLImmediate.__aN=new Float32Array([0,0,1]);GLImmediate.__aC=new Float32Array([1,1,1,1]);'
+    'GLImmediate.__aT=new Float32Array(2);GLImmediate.__aMask=0;GLImmediate.__aOrder=[];GLImmediate.__aLayout=[];GLImmediate.__aFirst=true;'
+    'GLImmediate.__aSet=function(bit,id){var G=GLImmediate;if(!(G.__aMask&bit)){G.__aMask|=bit;if(G.__aFirst)G.__aOrder.push(id)}};'
+    'GLImmediate.__aEmit=function(x,y,z,w){var G=GLImmediate,d=G.vertexData;'
+    'if(G.__aFirst){var rc=G.rendererComponents,ca=G.clientAttributes,o=[];for(var i=1;i<4;i++)if(rc[i])o.push(i);'
+    'if(o.length>1)o.sort(function(p,q){return ca[p].pointer-ca[q].pointer});G.__aLayout=o.length?o:G.__aOrder.slice();G.__aFirst=false}'
+    'var order=G.__aLayout;for(var k=0;k<order.length;k++){var id=order[k];'
+    'if(id===1){d[G.vertexCounter++]=G.__aN[0];d[G.vertexCounter++]=G.__aN[1];d[G.vertexCounter++]=G.__aN[2];G.addRendererComponent(1,3,GLctx.FLOAT)}'
+    'else if(id===2){var s=G.vertexCounter<<2,u=G.vertexDataU8;u[s]=G.__aC[0]*255;u[s+1]=G.__aC[1]*255;u[s+2]=G.__aC[2]*255;u[s+3]=G.__aC[3]*255;G.vertexCounter++;G.addRendererComponent(2,4,GLctx.UNSIGNED_BYTE)}'
+    'else{d[G.vertexCounter++]=G.__aT[0];d[G.vertexCounter++]=G.__aT[1];G.addRendererComponent(3,2,GLctx.FLOAT)}}'
+    'd[G.vertexCounter++]=x;d[G.vertexCounter++]=y;d[G.vertexCounter++]=z;d[G.vertexCounter++]=w;G.addRendererComponent(0,4,GLctx.FLOAT)};'
+)
+PATCHES += [
+    (
+        'immediate attributes: state and emitter',
+        # the `};` is split by a newline so the search text does not survive whole
+        'GLImmediate.__grew=(GLImmediate.__grew||0)+1};',
+        'GLImmediate.__grew=(GLImmediate.__grew||0)+1}' + chr(10) + ';' + _ATTR_STATE,
+        'GLImmediate.__aEmit=function(x,y,z,w){',
+    ),
+    (
+        'immediate attributes: glBegin resets the layout',
+        'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;GLImmediate.enabledClientAttributes_preBegin=',
+        'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;'
+        'GLImmediate.__aFirst=true;GLImmediate.__aOrder=[];GLImmediate.__aMask=0;GLImmediate.__aC.set(GLImmediate.clientColor);'
+        'if(GLEmulation.__curNormal)GLImmediate.__aN.set(GLEmulation.__curNormal);'
+        'GLImmediate.enabledClientAttributes_preBegin=',
+    ),
+    (
+        'immediate attributes: glNormal3f records',
+        'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;GLImmediate.vertexData[GLImmediate.vertexCounter++]=y;GLImmediate.vertexData[GLImmediate.vertexCounter++]=z;GLImmediate.addRendererComponent(GLImmediate.NORMAL,3,GLctx.FLOAT)};',
+        'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__aN[0]=x;GLImmediate.__aN[1]=y;GLImmediate.__aN[2]=z;GLImmediate.__aSet(2,1)};',
+    ),
+    (
+        'immediate attributes: glColor4f records',
+        'if(GLImmediate.mode>=0){GLImmediate.__grow();var start=GLImmediate.vertexCounter<<2;GLImmediate.vertexDataU8[start+0]=r*255;GLImmediate.vertexDataU8[start+1]=g*255;GLImmediate.vertexDataU8[start+2]=b*255;GLImmediate.vertexDataU8[start+3]=a*255;GLImmediate.vertexCounter++;GLImmediate.addRendererComponent(GLImmediate.COLOR,4,GLctx.UNSIGNED_BYTE)}else{',
+        'if(GLImmediate.mode>=0){GLImmediate.__aC[0]=r;GLImmediate.__aC[1]=g;GLImmediate.__aC[2]=b;GLImmediate.__aC[3]=a;GLImmediate.__aSet(4,2)}else{',
+    ),
+    (
+        'immediate attributes: glTexCoord2i records',
+        'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=u;GLImmediate.vertexData[GLImmediate.vertexCounter++]=v;GLImmediate.addRendererComponent(GLImmediate.TEXTURE0,2,GLctx.FLOAT)};',
+        'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();GLImmediate.__aT[0]=u;GLImmediate.__aT[1]=v;if(GLImmediate.mode>=0)GLImmediate.__aSet(8,3)};',
+    ),
+    (
+        'immediate attributes: glVertex2f emits',
+        'var _glVertex2f=(x,y)=>{GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;GLImmediate.vertexData[GLImmediate.vertexCounter++]=y;GLImmediate.vertexData[GLImmediate.vertexCounter++]=0;GLImmediate.vertexData[GLImmediate.vertexCounter++]=1;GLImmediate.addRendererComponent(GLImmediate.VERTEX,4,GLctx.FLOAT)};',
+        'var _glVertex2f=(x,y)=>{GLImmediate.__grow();GLImmediate.__aEmit(x,y,0,1)};',
+    ),
+    (
+        'immediate attributes: glVertex3f emits',
+        'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;GLImmediate.vertexData[GLImmediate.vertexCounter++]=y;GLImmediate.vertexData[GLImmediate.vertexCounter++]=z;GLImmediate.vertexData[GLImmediate.vertexCounter++]=1;GLImmediate.addRendererComponent(GLImmediate.VERTEX,4,GLctx.FLOAT)};',
+        'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();GLImmediate.__aEmit(x,y,z,1)};',
+    ),
+    (
+        'immediate attributes: glVertex4f emits',
+        'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;GLImmediate.vertexData[GLImmediate.vertexCounter++]=y;GLImmediate.vertexData[GLImmediate.vertexCounter++]=z;GLImmediate.vertexData[GLImmediate.vertexCounter++]=w;GLImmediate.addRendererComponent(GLImmediate.VERTEX,4,GLctx.FLOAT)};',
+        'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();GLImmediate.__aEmit(x,y,z,w)};',
+    ),
+]
+
 # ---- lighting uniforms: upload on change, not on every draw -----------------------------
 #
 # Renderer.prepare re-sent the light model ambient, five material uniforms and four per
@@ -1259,9 +1419,16 @@ PATCHES += [
         'function _emscripten_glMaterialfv(face,pname,param){GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;param=bigintToI53Checked(param);',
     ),
     (
+        # Only when the colour actually changes: with GL_RGBA_MODE answered truthfully Coin
+        # sends the diffuse before every shape (SoMaterialBundle::sendFirst), mostly the
+        # same value, and an unconditional bump re-uploaded all 37 lighting uniforms per
+        # draw again (EngineBlock drag 36 -> 26 fps, measured 2026-09-13).
         'glColor4f (COLOR_MATERIAL) bumps the material version',
         'if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;',
-        'if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;GLEmulation.materialDiffuse[0]=r;',
+        'if(GLEmulation&&GLEmulation.materialDiffuse){var __md=GLEmulation.materialDiffuse;'
+        'if(__md[0]!==r||__md[1]!==g||__md[2]!==b||__md[3]!==a)GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;'
+        'GLEmulation.materialDiffuse[0]=r;',
+        '__fcMV|0)+1;GLEmulation.materialDiffuse[0]=r;',   # 4th field: a tree patched by the unconditional version counts as done
     ),
     (
         'glLightfv bumps the light version',
@@ -1420,10 +1587,13 @@ def check_postconditions(text):
         # that is a legitimate seventh guard rather than a stray one. This invariant
         # failed the first link that ever contained it (34279403314): 'expected 6,
         # found 7', on a build whose patches had all applied correctly.
+        # Since the attribute-state rewrite (2026-09-13) glNormal3f and glColor4f only
+        # RECORD inside begin/end -- the emitter in glVertex writes their bytes -- so the
+        # writers that reserve headroom are glVertex2f/3f/4f, glTexCoord2i and __mrgPrep.
         n = text.count('GLImmediate.__grow()')
-        if n != 7:
+        if n != 5:
             bad.append(('growable immediate guards',
-                        'expected 7 -- six vertex writers plus __mrgPrep -- found %d' % n,
+                        'expected 5 -- glVertex2f/3f/4f, glTexCoord2i and __mrgPrep -- found %d' % n,
                         n))
     if 'tempVertexBuffers1[idx]=[null]' not in text:
         bad.append(('oversize temp vertex buffer ring', 'absent -- an oversize batch dereferences undefined', 1))
