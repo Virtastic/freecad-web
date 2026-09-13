@@ -209,6 +209,13 @@ which is the everyday case). Machine idle (CPU under 20 percent) when it ran.
 
     * all 136 are the a2plus proxy ImportErrors the desktop prints too (addon not installed).
 
+    The a2plus click (1.5 s) is not a rendering cost: timed from inside the interpreter,
+    the ray pick at the view centre is 170-230 ms (Coin's triangle walk over the picked
+    body, Face4489 of a 34-part assembly), the selection with tree/property sync 50-190 ms,
+    the clear 40-80 ms, one redraw 76 ms. The desktop does the same walk natively in a few
+    tens of ms; on wasm it is the 42 MB file's one visible lag, and the everyday files
+    click in 0.05-0.4 s.
+
 Same table on 2026-09-12 morning, before the lighting-uniform cache, the merger cap and the
 Coin sphere path: ArchDetail 19.9 s / 12.3 fps, BIMExample 18.6 s / 21.3 fps, EngineBlock
 28.7 fps, AssemblyExample 27.4 fps. Console, WebGL and page errors: zero across the census
