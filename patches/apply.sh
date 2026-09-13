@@ -175,6 +175,9 @@ apply_one cpython       cpython-ctypes-wasm.patch
 apply_one cpython       cpython-trampoline-wasm64.patch
 apply_one numpy         numpy.patch
 apply_one coin3d        coin3d.patch
+# pivy asks SWIG for "<Type> *" before "So<Type> *" and SWIG caches hits only: every
+# autocast paid a linear scan of every type table (1.35 s of one BIM open). Remembers it.
+apply_one pivy          pivy.patch
 # Compiles the generated per-schema tables for size. Their populate functions are the
 # three largest in the whole wasm module, the engine compiles one when it is first
 # called, and that compile is what kills the renderer on wasm64: schema_by_name()

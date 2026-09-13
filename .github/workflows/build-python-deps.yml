@@ -54,6 +54,7 @@ on:
       - 'build-cpython.sh'
       - 'build-cpython-mt.sh'
       - 'patches/apply.sh'
+      - 'patches/pivy.patch'
       # The patches this lane APPLIES, which it did not watch. A change to
       # pyside-setup.patch rebuilt nothing, so a patch that had stopped applying could sit
       # in the tree indefinitely -- the same shape as the vtk-expat patch that nothing
@@ -117,7 +118,7 @@ jobs:
             deps/wasm/shiboken6
             build-shiboken-wasm
             build-pyside-wasm
-          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in', 'tools/stage-python-packages.sh', 'tools/verify-patch-applied.py') }}
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/pivy.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in', 'tools/stage-python-packages.sh', 'tools/verify-patch-applied.py') }}
           restore-keys: |
             fcweb-pydeps-${{ env.PYDEPS_KEY }}-
 
@@ -218,7 +219,7 @@ jobs:
             echo "::notice::$1 was patched with a different (or unrecorded) $2 -- re-fetching"
             rm -rf "$tree"
             [ -n "${3:-}" ] && rm -rf $3 || true
-            echo "FCWEB_PYSIDE_REBUILD=1" >> "$GITHUB_ENV"
+            [ "$1" = pyside-setup ] && echo "FCWEB_PYSIDE_REBUILD=1" >> "$GITHUB_ENV" || true
           }
           # Only pyside-setup for now: its rebuild lane is self-contained and its skip
           # condition is understood. apply.sh stamps every other tree as it goes, so the
@@ -226,6 +227,9 @@ jobs:
           # deleting a source tree whose build lane keys off a SEPARATE cache would force
           # a rebuild that proves nothing.
           check pyside-setup pyside-setup.patch "build-pyside-wasm build-shiboken-wasm"
+          # pivy: its archive lives in this same cache, and its lane skips on that archive, so
+          # clearing the archive with the tree is what makes a pivy.patch change build.
+          check pivy pivy.patch "deps/wasm/lib/pivy-mod build-pivy-wasm"
 
       - name: Fetch sources
         run: |
@@ -722,4 +726,4 @@ jobs:
             deps/wasm/shiboken6
             build-shiboken-wasm
             build-pyside-wasm
-          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in', 'tools/stage-python-packages.sh', 'tools/verify-patch-applied.py') }}
+          key: fcweb-pydeps-${{ env.PYDEPS_KEY }}-${{ hashFiles('configure-*.sh', 'rebuild-pyside-weh.sh', 'build-shiboken-host.sh', 'build-cpython*.sh', 'patches/numpy.patch', 'patches/pyside-setup.patch', 'patches/pivy.patch', 'patches/apply.sh', 'tools/patch-pyside-*.py', 'tools/patch-shiboken-*.py', '*.meson.in', 'tools/stage-python-packages.sh', 'tools/verify-patch-applied.py') }}

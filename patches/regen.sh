@@ -15,6 +15,7 @@ MAP=(
   "cpython:cpython-ctypes-wasm.patch"
   "numpy:numpy.patch"
   "coin3d:coin3d.patch"
+  "pivy:pivy.patch"
 )
 
 for pair in "${MAP[@]}"; do
