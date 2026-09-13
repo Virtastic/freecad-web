@@ -1965,6 +1965,11 @@ window.fcwebNotify = function (text, kind, actions) {
        window.__fcActive3D = t.indexOf('FCACTIVE-3D')>=0;
        if(!window.__fcActive3D){ window.__fcVisibleFbo=null; window.__fcWidgetRect=null; }
        return; } }
+   // The two reveal gates used to grep the visible log for their markers; a boot that
+   // floods the log can trim a marker out before the 200 ms poll sees it, and the gate
+   // then waits for its 15 s net (measured 2026-09-13: work-ready at 9.0 s, overlay gone
+   // at 15.2 s, 6 s idle). Flag them here, at the source.
+   if(typeof t==='string'){ if(t.indexOf('FCFS-DONE')>=0) window.__fcFsDone=true; if(t.indexOf('FCDPR-DONE')>=0) window.__fcDprDone=true; }
    try { __maybeNotify(t); } catch(e){}
    try { if (window.fcwebLogRing) window.fcwebLogRing(t); } catch(e){}
    const noise = typeof t==='string' && __NOISE.test(t);
@@ -2096,7 +2101,7 @@ window.fcRunPy = fcRunPy;
      try{
        const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
        if(window.__fcPyBusy) return;   // don't re-enter CPython while a call is suspended
-       if(/FCFS-DONE/.test(logEl.textContent||'')){ clearInterval(iv); __fsApplied(); return; }
+       if(window.__fcFsDone || /FCFS-DONE/.test(logEl.textContent||'')){ clearInterval(iv); __fsApplied(); return; }
        const n=new TextEncoder().encode(FS_PY).length+1, q=m._malloc(n);
        m.stringToUTF8(FS_PY,q,n); fcRunPy(m,q);
      }catch(e){}
@@ -2241,7 +2246,7 @@ window.fcRunPy = fcRunPy;
          const n=new TextEncoder().encode(DPR_PY).length+1, q=m._malloc(n);
          m.stringToUTF8(DPR_PY,q,n); fcRunPy(m,q); sent=true;
        }
-       if(/FCDPR-DONE/.test(logEl.textContent||'')){ clearInterval(iv2); __dprApplied(); }
+       if(window.__fcDprDone || /FCDPR-DONE/.test(logEl.textContent||'')){ clearInterval(iv2); __dprApplied(); }
      }catch(e){}
    },250);
    setTimeout(()=>{ clearInterval(iv2); __dprApplied(); }, 120000);

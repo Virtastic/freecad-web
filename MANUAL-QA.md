@@ -271,7 +271,10 @@ Against the table below it: a2plus 71 -> 28 s and its click 1.5 -> 0.5 s, FEM 4.
 Schenkel 5.2 -> 2.1, draft 2.8 -> 1.2, SkyrimHelm 2.4 -> 1.1. ArchDetail and BIM opens
 are flat at 10-13 s: their remaining time is the topological-naming ancestry build and
 OCC shape loading, plus pivy's SWIG type lookups (next table). The payload grew from 200
-to 307 MB uncompressed (about 99 MB gzipped) for it; a warm boot still takes 12-15 s.
+to 307 MB uncompressed (about 99 MB gzipped) for it. A warm boot measured 12-15 s until
+the overlay's filesystem gate stopped grepping the visible log for its marker (a boot
+flood could trim the line out, and the gate then sat out its 15 s net with the app idle):
+9.0 s to a revealed, active workbench on three consecutive warm boots after that fix.
 
 ## What the gate now checks, so you do not have to
 
