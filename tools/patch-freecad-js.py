@@ -1213,6 +1213,24 @@ PATCHES += [
     ),
 ]
 
+# ---- glTexImage2D: legacy component-count internal formats ------------------------------
+#
+# Desktop GL accepts 1..4 as the internal format (number of components); WebGL does not,
+# and emscripten's emulation passes the value through. SoDatumLabel -- every Sketcher
+# constraint value -- uploads its text with internalFormat 4: INVALID_VALUE on the
+# upload, INVALID_OPERATION on the sub-image, and the label draws with no texture, so a
+# sketch in edit mode showed dimension arrows with no numbers (measured 2026-09-13).
+# Map the four counts to LUMINANCE / LUMINANCE_ALPHA / RGB / RGBA, which WebGL2 accepts
+# as unsized internal formats with the matching format.
+PATCHES += [
+    (
+        'glTexImage2D: internal format 1..4 means components',
+        # anchored through the first statement so the search text does not survive whole
+        'function _emscripten_glTexImage2D(target,level,internalFormat,width,height,border,format,type,pixels){pixels=bigintToI53Checked(pixels);',
+        'function _emscripten_glTexImage2D(target,level,internalFormat,width,height,border,format,type,pixels){if(internalFormat>=1&&internalFormat<=4)internalFormat=[0,6409,6410,6407,6408][internalFormat];pixels=bigintToI53Checked(pixels);',
+    ),
+]
+
 # ---- lighting uniforms: upload on change, not on every draw -----------------------------
 #
 # Renderer.prepare re-sent the light model ambient, five material uniforms and four per

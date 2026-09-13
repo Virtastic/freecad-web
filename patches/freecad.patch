@@ -6324,3 +6324,22 @@ diff -ruNp a/src/Mod/Inspection/Gui/AppInspectionGui.cpp b/src/Mod/Inspection/Gu
      // instantiating the commands
      // clang-format off
      CreateInspectionCommands();
+diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
+--- a/src/Gui/SoDatumLabel.cpp
++++ b/src/Gui/SoDatumLabel.cpp
+@@ -1562,9 +1562,13 @@
+     // Apply a rotation and translation matrix
+     glTranslatef(textOffset[0], textOffset[1], textOffset[2]);
+     glRotatef(Base::toDegrees<GLfloat>(angle), 0, 0, 1);
+-    glBegin(GL_QUADS);
+-
++    // The colour goes BEFORE glBegin. Emscripten's immediate-mode emulation lays every
++    // vertex out with the attributes seen inside begin/end; a colour set once, before the
++    // first texcoord/vertex pair, made vertex 0 wider than the other three (25 floats at a
++    // stride of 7), the quad count rounded to zero and no constraint value ever drew on
++    // wasm. Same GL either way.
+     glColor3f(1.F, 1.F, 1.F);
++    glBegin(GL_QUADS);
+ 
+     glTexCoord2f(flip ? 0.F : 1.F, 1.F);
+     glVertex2f(-this->imgWidth / 2, this->imgHeight / 2);
