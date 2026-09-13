@@ -221,6 +221,58 @@ Coin sphere path: ArchDetail 19.9 s / 12.3 fps, BIMExample 18.6 s / 21.3 fps, En
 28.7 fps, AssemblyExample 27.4 fps. Console, WebGL and page errors: zero across the census
 session (EngineBlock, a2plus, BIMExample, back) on the same engine.
 
+## Measured on the dev tree -- 2026-09-13, engine 7836adcb (pivy type cache) + glue 72de0120
+
+Same probe, same order, machine idle. pivy's autocast asked SWIG for "<Type> *" before
+"So<Type> *" and SWIG caches hits only, so every getField/getChild from Python paid a
+linear scan of every type table -- 55 us a call, 25,000 calls in a BIM open. patches/
+pivy.patch remembers the answer; a call is 1.5-3 us now. Draft, Arch and BIM documents
+are the ones that live on those calls, and it shows:
+
+    FILE               OPEN s  DRAWS/frame  DRAG fps  press->frame s  click s  LOGS
+    ArchDetail            6.4      2165        27.4        0.09        0.08     0
+    AssemblyExample       0.8      1535        36.1        0.05        0.03     0
+    BIMExample            7.1      1937        58.2        0.05        0.04     0
+    EngineBlock           0.3      1478        37.8        0.03        0.05     0
+    FEMExample            1.3      1453        33.8        0.28        0.04     0
+    PartDesignExample     0.2       734        38.0        0.03        0.04     0
+    draft_test_objects    0.7      1686        33.1        0.05        0.04     0
+    Schenkel.stp          1.5       734        38.1        0.04        0.04     0
+    a2plus (42 MB)       20.2      1442        25.5        0.14        0.32   136*
+    SkyrimHelm (stl)      0.7      1411        52.2        0.04        0.04     0
+
+Against the morning of 2026-09-12 (before the lighting-uniform cache, the merger cap, the
+Coin sphere path, bytecode and this): ArchDetail 19.9 s / 12 fps -> 6.4 s / 27 fps,
+BIMExample 18.6 s / 21 fps -> 7.1 s / 58 fps, a2plus 44 s -> 20 s with its click 0.9 ->
+0.3 s, every other file under 1.6 s to open. What remains in ArchDetail, BIM and a2plus is
+upstream work at wasm speed: the topological-naming ancestry build and OCC shape loading.
+Console, WebGL and page errors: zero across the census session on this engine.
+
+## Measured on the dev tree -- 2026-09-13, engine 4a6028d0 (bytecode in the payload) + glue 72de0120
+
+Same probe, same order, machine idle. The payload now carries unchecked-hash bytecode for
+every packaged Python tree (Python compiled 1,486 source files afresh on every boot before;
+a cold `import Draft` was 1.6 s, now 0.36 s). Open times are what moved; the drags start
+at the view centre as before.
+
+    FILE               OPEN s  DRAWS/frame  DRAG fps  press->frame s  click s  LOGS
+    ArchDetail           10.6      2141        17.1        0.14        0.17     0
+    AssemblyExample       1.6      1466        34.8        0.06        0.05     0
+    BIMExample           12.7      1868        40.7        0.08        0.06     0
+    EngineBlock           0.6      1417        36.3        0.07        0.04     0
+    FEMExample            2.2       762        32.4        0.07        0.07     0
+    PartDesignExample     0.4       732        36.5        0.07        0.13     0
+    draft_test_objects    1.2      1665        32.2        0.06        0.06     0
+    Schenkel.stp          2.1       706        34.7        0.07        0.10     0
+    a2plus (42 MB)       28.4      1418        33.9        0.21        0.50   136*
+    SkyrimHelm (stl)      1.1      1393        48.3        0.06        0.06     0
+
+Against the table below it: a2plus 71 -> 28 s and its click 1.5 -> 0.5 s, FEM 4.0 -> 2.2,
+Schenkel 5.2 -> 2.1, draft 2.8 -> 1.2, SkyrimHelm 2.4 -> 1.1. ArchDetail and BIM opens
+are flat at 10-13 s: their remaining time is the topological-naming ancestry build and
+OCC shape loading, plus pivy's SWIG type lookups (next table). The payload grew from 200
+to 307 MB uncompressed (about 99 MB gzipped) for it; a warm boot still takes 12-15 s.
+
 ## What the gate now checks, so you do not have to
 
 `tools/boot-gate.py --scenario all` runs on every link and covers these lines mechanically,
