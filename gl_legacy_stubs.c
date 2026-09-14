@@ -17,6 +17,8 @@
  * work rather than impossible: the GL_SELECT name stack, and display lists (see glGenLists
  * below, and ROADMAP item 5). A full Coin->WebGL viewport port would replace all of it. */
 #include <emscripten/em_js.h>
+#include <emscripten/emscripten.h>
+#include <stdint.h>
 typedef unsigned int   GLenum;
 typedef unsigned int   GLbitfield;
 typedef int            GLint;
@@ -48,11 +50,16 @@ extern void glTexCoord4f(GLfloat, GLfloat, GLfloat, GLfloat);
  * axis cross sets glPixelZoom(1/3) inside a glPushAttrib(GL_ALL_ATTRIB_BITS) pair and never
  * resets it; with no-op push/pop every later glDrawPixels -- Coin's SoText2 labels -- drew at
  * a third of their size (dots where the colour bar's numbers should be, 2026-09-14). */
+static int fc_dl_note(int kind, double a, double b, double c, double d, double e, double f, const void* p, int bytes);
+static void fc_push_attrib(void);
+static void fc_pop_attrib(void);
 static float fc_zoom[2] = { 1.0f, 1.0f };   /* glPixelZoom: scales glDrawPixels only, as the spec says */
 static float fc_zoom_stack[16][2];
 static int fc_zoom_depth = 0;
-void glPushAttrib(GLbitfield m) { (void)m; if (fc_zoom_depth < 16) { fc_zoom_stack[fc_zoom_depth][0] = fc_zoom[0]; fc_zoom_stack[fc_zoom_depth][1] = fc_zoom[1]; } fc_zoom_depth++; }
-void glPopAttrib(void) { if (fc_zoom_depth > 0) { fc_zoom_depth--; if (fc_zoom_depth < 16) { fc_zoom[0] = fc_zoom_stack[fc_zoom_depth][0]; fc_zoom[1] = fc_zoom_stack[fc_zoom_depth][1]; } } }
+static void fc_push_attrib(void) { if (fc_zoom_depth < 16) { fc_zoom_stack[fc_zoom_depth][0] = fc_zoom[0]; fc_zoom_stack[fc_zoom_depth][1] = fc_zoom[1]; } fc_zoom_depth++; }
+static void fc_pop_attrib(void) { if (fc_zoom_depth > 0) { fc_zoom_depth--; if (fc_zoom_depth < 16) { fc_zoom[0] = fc_zoom_stack[fc_zoom_depth][0]; fc_zoom[1] = fc_zoom_stack[fc_zoom_depth][1]; } } }
+void glPushAttrib(GLbitfield m) { (void)m; if (fc_dl_note(5, 0, 0, 0, 0, 0, 0, 0, 0)) fc_push_attrib(); }
+void glPopAttrib(void) { if (fc_dl_note(6, 0, 0, 0, 0, 0, 0, 0, 0)) fc_pop_attrib(); }
 void glPushClientAttrib(GLbitfield m) { (void)m; }
 void glPopClientAttrib(void) {}
 /* glRect(x1,y1,x2,y2) is defined by the GL spec as exactly this quad, in this winding.
@@ -86,7 +93,8 @@ void glAccum(GLenum op, GLfloat v) { (void)op;(void)v; }
 void glColorMaterial(GLenum f, GLenum m) { (void)f;(void)m; }
 void glGetDoublev(GLenum pn, GLdouble* p) { (void)pn; if (p) { for (int i=0;i<16;++i) p[i]=(i%5==0)?1.0:0.0; } }
 /* glPixelZoom scales glDrawPixels only (never glBitmap), as the spec says; see the raster ops at the end. */
-void glPixelZoom(GLfloat x, GLfloat y) { fc_zoom[0] = x; fc_zoom[1] = y; }
+static void fc_pixel_zoom(float x, float y) { fc_zoom[0] = x; fc_zoom[1] = y; }
+void glPixelZoom(GLfloat x, GLfloat y) { if (fc_dl_note(4, x, y, 0, 0, 0, 0, 0, 0)) fc_pixel_zoom(x, y); }
 void glTexCoord4fv(const GLfloat* v) { if (v) glTexCoord4f(v[0],v[1],v[2],v[3]); }
 // Returns GLint (hit count in GL_SELECT/GL_FEEDBACK exit) — a void definition
 // is a wasm signature mismatch vs callers expecting the count (mesh picking).
@@ -115,6 +123,19 @@ EM_JS(void, fcweb_dl_begin, (unsigned int list, unsigned int mode), { if (typeof
 EM_JS(void, fcweb_dl_end, (void), { if (typeof __fcDL !== "undefined") __fcDL.end(); });
 EM_JS(void, fcweb_dl_call, (unsigned int list), { if (typeof __fcDL !== "undefined") __fcDL.call(list); });
 EM_JS(void, fcweb_dl_del, (unsigned int list, int range), { if (typeof __fcDL !== "undefined") __fcDL.del(list, range); });
+/* This file's own raster ops are not GL imports, so the recorder cannot see them. They ask
+ * whether a list is being recorded (0 no, 1 GL_COMPILE, 2 GL_COMPILE_AND_EXECUTE), push
+ * themselves as an op that calls back into fcweb_dl_exec() at replay -- with the pixel data
+ * copied -- and run now only when the mode says so. Evaluated at replay, as GL specifies
+ * for glRasterPos: the list's own matrix loads have executed by then. */
+EM_JS(int, fcweb_dl_rec_state, (void), { return (typeof __fcDL !== "undefined" && __fcDL.rec && !__fcDL.replaying) ? (__fcDL.rec.exec ? 2 : 1) : 0; });
+EM_JS(void, fcweb_dl_push, (int kind, double a, double b, double c, double d, double e, double f, double p, int bytes), { if (typeof __fcDL !== "undefined") __fcDL.pushC(kind, a, b, c, d, e, f, p, bytes); });
+static int fc_dl_note(int kind, double a, double b, double c, double d, double e, double f, const void* p, int bytes) {
+    int st = fcweb_dl_rec_state();
+    if (!st) return 1;                                   /* not recording: run normally */
+    fcweb_dl_push(kind, a, b, c, d, e, f, (double)(uintptr_t)p, bytes);
+    return st == 2;                                      /* COMPILE_AND_EXECUTE runs it now as well */
+}
 GLuint glGenLists(GLsizei range) { return fcweb_dl_gen(range); }
 void glNewList(GLuint list, GLenum mode) { fcweb_dl_begin(list, mode); }
 void glEndList(void) { fcweb_dl_end(); }
@@ -240,7 +261,7 @@ static void fc_mat_mul_vec(const float* m, const float* v, float* out) {   /* co
     for (int r = 0; r < 4; r++) out[r] = m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2] + m[12 + r] * v[3];
 }
 
-void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z) {
+static void fc_raster_pos(float x, float y, float z) {
     float mv[16], pr[16], obj[4] = { x, y, z, 1.0f }, eye[4], clip[4];
     GLint vp[4];
     glGetFloatv(0x0BA6 /* GL_MODELVIEW_MATRIX */, mv);
@@ -256,9 +277,6 @@ void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z) {
     glGetFloatv(0x0B00 /* GL_CURRENT_COLOR */, fc_raster.color);
     fc_raster.valid = 1;
 }
-void glRasterPos2f(GLfloat x, GLfloat y) { glRasterPos3f(x, y, 0.0f); }
-void glRasterPos2i(GLint x, GLint y) { glRasterPos3f((GLfloat)x, (GLfloat)y, 0.0f); }
-void glRasterPos2d(GLdouble x, GLdouble y) { glRasterPos3f((GLfloat)x, (GLfloat)y, 0.0f); }
 
 /* One RGBA image at window position (x, y), bottom-left origin, rows bottom-up. */
 /* The images repeat: a glyph of the built-in font is the same 32x14 bitmap every frame, and a
@@ -352,7 +370,7 @@ static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* 
     glBindTexture(GL_TEXTURE_2D_, (GLuint)oldtex);
 }
 
-void glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const void* pixels) {
+static void fc_draw_pixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const void* pixels) {
     if (!fc_raster.valid) return;
     if (format == 0x1908 /* GL_RGBA */ && type == 0x1401 /* GL_UNSIGNED_BYTE */) {
         fc_draw_rgba(fc_raster.x, fc_raster.y, w, h, (const GLubyte*)pixels, fc_zoom[0], fc_zoom[1]);
@@ -360,7 +378,7 @@ void glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const void* 
     /* Other formats (depth, stencil, colour index) are not what any caller here sends. */
 }
 
-void glBitmap(GLsizei w, GLsizei h, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte* bits) {
+static void fc_bitmap(GLsizei w, GLsizei h, float xorig, float yorig, float xmove, float ymove, const GLubyte* bits) {
     if (!fc_raster.valid) return;
     if (w > 0 && h > 0 && bits) {
         /* 1 bit per pixel, MSB first, rows padded to a byte (SoText2 sets UNPACK_ALIGNMENT 1). */
@@ -383,4 +401,31 @@ void glBitmap(GLsizei w, GLsizei h, GLfloat xorig, GLfloat yorig, GLfloat xmove,
     }
     fc_raster.x += xmove;
     fc_raster.y += ymove;
+}
+
+/* The public raster entry points: recorded into an open display list, executed per mode. */
+void glRasterPos3f(GLfloat x, GLfloat y, GLfloat z) { if (fc_dl_note(1, x, y, z, 0, 0, 0, 0, 0)) fc_raster_pos(x, y, z); }
+void glRasterPos2f(GLfloat x, GLfloat y) { glRasterPos3f(x, y, 0.0f); }
+void glRasterPos2i(GLint x, GLint y) { glRasterPos3f((GLfloat)x, (GLfloat)y, 0.0f); }
+void glRasterPos2d(GLdouble x, GLdouble y) { glRasterPos3f((GLfloat)x, (GLfloat)y, 0.0f); }
+void glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const void* pixels) {
+    int bytes = (format == 0x1908 && type == 0x1401 && w > 0 && h > 0) ? w * h * 4 : 0;
+    if (fc_dl_note(3, w, h, format, type, 0, 0, pixels, bytes)) fc_draw_pixels(w, h, format, type, pixels);
+}
+void glBitmap(GLsizei w, GLsizei h, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte* bits) {
+    int bytes = (w > 0 && h > 0 && bits) ? ((w + 7) / 8) * h : 0;
+    if (fc_dl_note(2, w, h, xorig, yorig, xmove, ymove, bits, bytes)) fc_bitmap(w, h, xorig, yorig, xmove, ymove, bits);
+}
+/* Replay entry, called from the glue for a recorded raster op. */
+EMSCRIPTEN_KEEPALIVE void fcweb_dl_exec(int kind, double a, double b, double c, double d, double e, double f, double p) {
+    const void* ptr = (const void*)(uintptr_t)p;
+    switch (kind) {
+    case 1: fc_raster_pos((float)a, (float)b, (float)c); break;
+    case 2: fc_bitmap((GLsizei)a, (GLsizei)b, (float)c, (float)d, (float)e, (float)f, (const GLubyte*)ptr); break;
+    case 3: fc_draw_pixels((GLsizei)a, (GLsizei)b, (GLenum)c, (GLenum)d, ptr); break;
+    case 4: fc_pixel_zoom((float)a, (float)b); break;
+    case 5: fc_push_attrib(); break;
+    case 6: fc_pop_attrib(); break;
+    default: break;
+    }
 }

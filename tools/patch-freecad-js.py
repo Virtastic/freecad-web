@@ -1363,7 +1363,7 @@ PATCHES += [
 # as the GL spec has it. On until ?dlists=0.
 _DLISTS = (
     'var __fcDL={on:!/[?&]dlists=0/.test(typeof location!=="undefined"?location.search:""),lists:new Map(),next:1,rec:null,orig:null,'
-    'stats:{lists:0,ops:0,replays:0,bytes:0,wrongCtx:0},'
+    'stats:{lists:0,ops:0,replays:0,bytes:0,wrongCtx:0},replaying:0,'
     'SKIP:/^(?:emscripten_)?gl(?:Gen|Delete|Get|Is|ReadPixels|Flush|Finish|Create|Shader|Compile|Link|Attach|Detach|BufferData|BufferSubData|TexImage|TexSubImage|CompressedTex|CopyTex|Map|Unmap|Fence|Check|Validate|Release|Sampler|Query|ClientWait|Uniform|Program|Blit|Framebuffer|Renderbuffer|Invalidate|WaitSync|Debug|Label|Object|String|Hint|PixelStore|ReadBuffer|DrawBuffer|Vertex(?:Attrib|Array)|Bind(?:Framebuffer|Renderbuffer|VertexArray|Sampler|Transform)|Enable(?:VertexAttrib|i)|Disable(?:VertexAttrib|i))/,'
     'V:{glVertex2fv:["glVertex2f",2],glVertex3fv:["glVertex3f",3],glVertex4fv:["glVertex4f",4],glNormal3fv:["glNormal3f",3],glColor3fv:["glColor3f",3],glColor4fv:["glColor4f",4],glTexCoord2fv:["glTexCoord2f",2],glTexCoord3fv:["glTexCoord3f",3],glTexCoord4fv:["glTexCoord4f",4]},'
     'P:{glMaterialfv:[2,16],glLightfv:[2,16],glLightModelfv:[1,16],glFogfv:[1,16],glTexGenfv:[2,16],glTexEnvfv:[2,16],glTexParameterfv:[2,16],glLoadMatrixf:[0,64],glMultMatrixf:[0,64],glLoadMatrixd:[0,128],glMultMatrixd:[0,128],glClipPlane:[1,32],glPointParameterfv:[1,16]},'
@@ -1371,8 +1371,8 @@ _DLISTS = (
     'gen(n){if(!__fcDL.on)return 0;var id=__fcDL.next;__fcDL.next+=n;return id},'
     'begin(id,mode){if(!__fcDL.on)return;if(__fcDL.rec)__fcDL.end();__fcDL.del(id,1);var G=GLImmediate,cl={en:[],p:[]};for(var i=0;i<4;i++){cl.en[i]=!!(G.enabledClientAttributes&&G.enabledClientAttributes[i]);var ca=G.clientAttributes&&G.clientAttributes[i];cl.p[i]=ca?{size:ca.size,type:ca.type,stride:ca.stride,pointer:ca.pointer}:null}__fcDL.rec={id:id,exec:mode!==4864,ops:[],mem:[],ctx:null,cl:cl,vbo:GLctx.currentArrayBufferBinding,ebo:GLctx.currentElementArrayBufferBinding}},'
     'end(){var R=__fcDL.rec;if(!R)return;__fcDL.rec=null;__fcDL.lists.set(R.id,R);__fcDL.stats.lists++;__fcDL.stats.ops+=R.ops.length/2},'
-    'call(id){var R=__fcDL.rec;if(R){R.ops.push(__fcDL.callOp,[id]);if(!R.exec)return}var L=__fcDL.lists.get(id);if(!L)return;if(L.ctx!==GL.currentContext){__fcDL.stats.wrongCtx++;return}__fcDL.stats.replays++;var o=L.ops;for(var i=0;i<o.length;i+=2)o[i].apply(null,o[i+1])},'
-    'callOp(id){__fcDL.call(id)},'
+    'call(id){var R=__fcDL.rec;if(R){R.ops.push(__fcDL.callOp,[id]);if(!R.exec)return}var L=__fcDL.lists.get(id);if(!L)return;if(L.ctx!==GL.currentContext){__fcDL.stats.wrongCtx++;return}__fcDL.stats.replays++;var o=L.ops;__fcDL.replaying++;try{for(var i=0;i<o.length;i+=2)o[i].apply(null,o[i+1])}finally{__fcDL.replaying--}},'
+    'callOp(id){__fcDL.call(id)},''pushC(kind,a,b,c,d,e,f,p,bytes){var R=__fcDL.rec;if(!R)return;if(!R.ctx)R.ctx=GL.currentContext;var np=p;if(bytes>0&&p){np=__fcDL.keep(R,p,bytes)||p}R.ops.push(__fcDL.cop,[kind,a,b,c,d,e,f,np])},''cop(kind,a,b,c,d,e,f,p){if(typeof _fcweb_dl_exec=="function")_fcweb_dl_exec(kind,a,b,c,d,e,f,p)},'
     'del(id,n){for(var i=0;i<n;i++){var L=__fcDL.lists.get(id+i);if(L){for(var j=0;j<L.mem.length;j++)_free(L.mem[j]);__fcDL.lists.delete(id+i)}}},'
     'keep(R,src,bytes){var p=_malloc(bytes);if(!p)return 0;(growMemViews(),HEAPU8).copyWithin(p,src,src+bytes);R.mem.push(p);__fcDL.stats.bytes+=bytes;return p},'
     'snapArrays(R,first,count,idxType,idxPtr){var cl=R.cl,ops=[];var vcount=first+count;'
