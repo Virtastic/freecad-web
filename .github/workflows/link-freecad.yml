@@ -38,6 +38,7 @@ on:
       # reached lived in fcweb_gmsh_module.cpp -- would otherwise change a file the
       # link builds and trigger no link, which is precisely the shape of a fix that
       # ships as a no-op.
+      - 'gl_legacy_stubs.c'          # compiled by build-weh-objs.sh into the link; a raster-op change never re-linked before
       - 'fcweb_ccx_module.cpp'
       - 'fcweb_qtconv_module.cpp'
       - 'fcweb_dlg_module.cpp'
