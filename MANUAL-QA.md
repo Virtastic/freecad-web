@@ -298,6 +298,38 @@ the overlay's filesystem gate stopped grepping the visible log for its marker (a
 flood could trim the line out, and the gate then sat out its 15 s net with the app idle):
 9.0 s to a revealed, active workbench on three consecutive warm boots after that fix.
 
+## Measured on the dev tree -- 2026-09-14, engine 3cf06010 (FreeType in Coin, raster text) + glue e10df6aa
+
+NOT an idle machine: another workload held the CPU at 45-90% for the whole session, so the
+absolute numbers below are pessimistic and noisy (the same EngineBlock drag read 29 fps in one
+cell and 57 in another an hour apart). What is load-independent: zero WebGL, console and page
+errors across the census; every A/B in this session pixel-identical inside the 3D view.
+
+    FILE               OPEN s   HEAP DRAWS DRAG fps  PRESS  CLICK   LOGS
+    ArchDetail           17.4  1024M  2578     19.1   0.23   0.67     0/0
+    AssemblyExample       2.9  1024M  1923     25.4   0.16   0.14     0/0
+    BIMExample           31.0  1136M  2293     15.1   0.19   0.15     0/0
+    EngineBlock           1.6  1136M  1872     26.9   0.19   0.44     0/0
+    FEMExample            5.4  1136M  1994     32.8   0.06   0.08     0/0
+    PartDesignExample     0.4  1136M   968     36.9   0.07   0.11     0/0
+    draft_test_objects    1.0  1136M  2163     27.4   0.09   0.08     0/0
+    Schenkel.stp          3.1  1136M   960     30.2   0.14   0.32     0/0
+    a2plus               65.2  1751M  1915     21.6   0.52   1.37   136/68
+    SkyrimHelm            2.3  1751M  1896     49.2   0.07   0.06     0/0
+
+Same-session A/Bs (each pair back to back, so the load cancels out):
+
+    ?vbofaces=1 (default) vs =0    AssemblyExample 46.7 vs 12.1 fps, FEM 33.2 vs 23.8,
+                                   EngineBlock 44.8 vs 40.3, ArchDetail 22.4 vs 19.8; 0-0.14% px differ
+    GL state shadow vs ?glshadow=0 EngineBlock 35.2 vs 29.4, ArchDetail 27.9 vs 27.8; 0 px differ
+
+Where a frame goes now (EngineBlock drag, profiled): ~60 scene draws -- the geometry is
+nearly free -- plus the axis cross (37 immediate-mode draws), Qt's raster repaint of the
+widget layer, the present pass, and emscripten's per-access heap-view refresh
+(growMemViews, 5.5% self). The two synchronous round trips that were left (glGetError x4 a
+frame, getParameter on temp-buffer creation) are gone. Re-measure on an idle machine before
+reading anything else into these numbers.
+
 ## What the gate now checks, so you do not have to
 
 `tools/boot-gate.py --scenario all` runs on every link and covers these lines mechanically,
