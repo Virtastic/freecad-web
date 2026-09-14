@@ -3665,6 +3665,7 @@ window.fcRunPy = fcRunPy;
       var lastUi = null;                  // last good canvas-sized UI texture
       var keepTex = null, keepFbo = null, keepSz = [0, 0]; // page-owned composite of the last frame
       var PLOG = /[?&]presentlog=1/.test(location.search) ? (window.__fcPresentLog = []) : null;
+      if (PLOG) { window.__fcClickLog = []; window.addEventListener('pointerdown', function (ev) { window.__fcLastClick = performance.now(); PLOG.push({ t: Math.round(performance.now()), click: [ev.clientX, ev.clientY] }); }, true); }
       var hadWidget = false, holdFrames = 0;   // see the 3D-layer hold in present()
       var HOLD_MAX = 20;                       // ~0.3s at 60Hz, then let the UI through anyway
       var everLive = false;                    // latched __fcNativeComposite; see present()
@@ -3842,9 +3843,35 @@ window.fcRunPy = fcRunPy;
           }
         } catch (e) {}
       }
-      var oDrawArrays2 = P2.drawArrays, oDrawElements2 = P2.drawElements;
-      P2.drawArrays = function () { noteSceneDraw(this); return oDrawArrays2.apply(this, arguments); };
-      P2.drawElements = function () { noteSceneDraw(this); return oDrawElements2.apply(this, arguments); };
+      // QT'S OWN COMPOSE STILL REACHES THE CANVAS ON A CLICK, and it is wrong.
+      //
+      // Measured 2026-09-14 in the user's Chrome with a tap on every draw to the window's
+      // default framebuffer: 13-17 ms after each pointerdown, and every ~180 s on its own,
+      // a clear + two full-window quads arrive from Qt's compositor -- the second one, the
+      // QOpenGLWidget's rect, sampling the WINDOW texture (the widget texture lives on
+      // another context, so its bind fails silently and the last bound one is drawn):
+      // the whole FreeCAD window, upside down, inside the 3D view for one frame, until
+      // this pass's next animation frame paints over it. Exactly what was reported.
+      //
+      // The user's Chrome presents at 240 Hz and the probes at 60, which is why a
+      // one-frame frame was never photographed. So: whenever anything but this pass draws
+      // to the window's framebuffer 0, re-present the kept composite in a microtask --
+      // after Qt's compose task has finished, before the browser composites the canvas.
+      var presentGl = null, foreignQueued = false;
+      function noteForeignFb0(gl) {
+        if (inPresent || gl !== presentGl || !keepValid) return;
+        var fb = gl._fcFB;
+        if (fb === undefined) { try { fb = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING); } catch (e) { return; } }
+        if (fb !== null) return;
+        window.__fcForeignFb0 = (window.__fcForeignFb0 || 0) + 1;
+        if (foreignQueued) return;
+        foreignQueued = true;
+        queueMicrotask(function () { foreignQueued = false; try { representKept(gl); } catch (e) { window.__fcPresentErr = String(e); } });
+      }
+      var oDrawArrays2 = P2.drawArrays, oDrawElements2 = P2.drawElements, oClear2 = P2.clear;
+      P2.drawArrays = function () { noteSceneDraw(this); noteForeignFb0(this); return oDrawArrays2.apply(this, arguments); };
+      P2.drawElements = function () { noteSceneDraw(this); noteForeignFb0(this); return oDrawElements2.apply(this, arguments); };
+      P2.clear = function () { noteForeignFb0(this); return oClear2.apply(this, arguments); };
       var oBlitFb = P2.blitFramebuffer;
       var lastBlit = null;                 // the REG entry the C++ composite blitted into last
       P2.blitFramebuffer = function () {
@@ -4208,6 +4235,36 @@ window.fcRunPy = fcRunPy;
         return gl.__fcPresProg;
       }
 
+      // The kept composite, drawn again over whatever someone else just put on the
+      // canvas. State is saved and restored from the shadows exactly as present() does.
+      function representKept(gl) {
+        if (inPresent || !keepValid || !keepTex || !gl || gl.isContextLost()) return;
+        var p = progFor(gl); if (!p) return;
+        var S = shadowFor(gl);
+        var sProg = (gl._fcProg !== undefined) ? gl._fcProg : S.prog,
+            sVao = (gl._fcVAO !== undefined) ? gl._fcVAO : S.vao, sTex = S.tex, sAct = S.act,
+            sDraw = S.draw, sVp = S.vp, sScis = S.scissor, sDep = S.depth, sBl = S.blend;
+        inPresent = true;
+        try {
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+          gl.disable(gl.SCISSOR_TEST); gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+          gl.useProgram(p.pr); gl.bindVertexArray(p.vao);
+          gl.activeTexture(gl.TEXTURE0); gl.uniform1i(p.loc, 0);
+          gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+          gl.uniform1f(p.flip, 1.0);
+          gl.bindTexture(gl.TEXTURE_2D, keepTex);
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+          gl.useProgram(sProg); gl.bindVertexArray(sVao);
+          gl.activeTexture(sAct); gl.bindTexture(gl.TEXTURE_2D, sTex);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, sDraw);
+          if (sVp) gl.viewport(sVp[0], sVp[1], sVp[2], sVp[3]);
+          if (sScis) gl.enable(gl.SCISSOR_TEST);
+          if (sDep) gl.enable(gl.DEPTH_TEST);
+          if (sBl) gl.enable(gl.BLEND);
+          window.__fcRepresented = (window.__fcRepresented || 0) + 1;
+        } catch (ex) { window.__fcPresentErr = String(ex); }
+        inPresent = false;
+      }
       function present() {
         requestAnimationFrame(present);
         if (inPresent) return;
@@ -4253,20 +4310,20 @@ window.fcRunPy = fcRunPy;
           // visible as __fcVisibleFbo; emscripten stores that name on the object (.name),
           // so prefer the entry whose framebuffer carries it, and fall back to recency only
           // when the app has not said.
-          var vis = window.__fcVisibleFbo;
+          var vis = window.__fcVisibleFbo, how = '';
           if (vis) {
             for (k in REG) { e = REG[k];
-              if (e.fb && e.fb.name === vis && e.tex && e.drewAt && !e.tex.__fcDead) { src = e; break; } }
+              if (e.fb && e.fb.name === vis && e.tex && e.drewAt && !e.tex.__fcDead) { src = e; how = 'vis:' + k; break; } }
           }
           if (!src) {
             for (k in REG) { e = REG[k];
               if (!e.tex || !e.drewAt || e.tex.__fcDead) continue;
-              if (!src || e.drewAt > src.drewAt) src = e; }
+              if (!src || e.drewAt > src.drewAt) { src = e; how = 'recent:' + k; } }
           }
           if (!src) {
             for (k in REG) { e = REG[k];
               if (!e.tex || !e.blitFrom || e.tex.__fcDead) continue;
-              if (!src || e.blitFrom > src.blitFrom) src = e; }
+              if (!src || e.blitFrom > src.blitFrom) { src = e; how = 'blit:' + k; } }
           }
           for (k in REG) { e = REG[k];
             // The ACTIVE view is the largest recently-blitted framebuffer, not the most
@@ -4385,6 +4442,7 @@ window.fcRunPy = fcRunPy;
           // frame. The shadow is maintained by the wrappers below, so this costs
           // nothing; it is seeded once from the driver on the first frame.
           var S = shadowFor(gl);
+          presentGl = gl;
           // The PROGRAM and VAO come from the low-level wrappers (_fcProg/_fcVAO), which
           // record every request that reaches the driver, not from S: measured 2026-09-11
           // from inside the glue, 224-805 times per session the restore below re-bound a
@@ -4456,8 +4514,12 @@ window.fcRunPy = fcRunPy;
           // identified instead of guessed at. A bad frame is 8-16 ms -- long enough to see
           // as a flash, far too short to screenshot.
           if (PLOG) { PLOG.push({ t: Math.round(performance.now()), ui: !!ui, keep: !!useKeep,
-                                  widget: wUsable, hold: holdThisFrame, size: W + 'x' + H });
-                      if (PLOG.length > 600) PLOG.shift(); }
+                                  widget: wUsable, hold: holdThisFrame, size: W + 'x' + H,
+                                  how: how, tex: (widget && widget.tex && widget.tex.__fcSz) ? widget.tex.__fcSz.join('x') : '',
+                                  rect: (widget && (widget.rect || window.__fcWidgetRect) || []).join(','),
+                                  vis: vis || 0, a3d: window.__fcActive3D, draw: !!wDraw, nat: !!window.__fcNativeComposite });
+                      // Plain frames are evicted first; clicks and the sampled frames after them stay.
+                      if (PLOG.length > 2000) { var __i0 = PLOG.findIndex(function (e) { return !e.click && e.grid === undefined; }); if (__i0 >= 0 && PLOG.length < 20000) PLOG.splice(__i0, 1); else PLOG.shift(); } }
 
           if (composing) {
             // (Re)size the kept framebuffer ONLY here, where a real compose is about to
@@ -4556,6 +4618,17 @@ window.fcRunPy = fcRunPy;
               var __s = 0;
               for (var __q = 0; __q < 64; __q += 4) { __s += __px[__q] + __px[__q+1] + __px[__q+2]; }
               PLOG[PLOG.length - 1].lum = Math.round(__s / 16 / 3);
+              // Within half a second of a click, a 4x4 grid of samples across the 3D rect
+              // as well: a wrong picture in the viewport (the whole window drawn into it)
+              // moves these while the centre pixel can stay the same.
+              var __lc = window.__fcLastClick || 0, __rr = window.__fcWidgetRect;
+              if (__rr && performance.now() - __lc < 500) {
+                var __g = [], __p1 = new Uint8Array(4), __cv2 = gl.canvas, __sx2 = W / (__cv2.clientWidth || W), __sy2 = H / (__cv2.clientHeight || H);
+                for (var __j = 0; __j < 4; __j++) for (var __i = 0; __i < 4; __i++) {
+                  var __x = Math.round((__rr[0] + __rr[2] * (__i + 0.5) / 4) * __sx2), __y = H - Math.round((__rr[1] + __rr[3] * (__j + 0.5) / 4) * __sy2);
+                  gl.readPixels(__x, __y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, __p1); __g.push(((__p1[0] >> 4) << 8) | ((__p1[1] >> 4) << 4) | (__p1[2] >> 4)); }
+                PLOG[PLOG.length - 1].grid = __g.map(function (v) { return v.toString(16).padStart(3, '0'); }).join(' ');
+              }
             } catch (e) { PLOG[PLOG.length - 1].lum = -1; }
           }
           // Present whenever we hold a complete frame -- which, after the first one, is
