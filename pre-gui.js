@@ -176,10 +176,15 @@ Module['preRun'].push(function () {
     ENV.FREECAD_WASM_HOME = '/freecad';
     ENV.HOME = '/home/web_user';
     ENV.QT_QPA_PLATFORM = 'wasm';
-    // Disable Coin render caching: display lists are stubbed in wasm and cache
-    // creation loops forever in the emulated GL path.
-    ENV.COIN_AUTO_CACHING = '0';
-    ENV.IV_SEPARATOR_MAX_CACHES = '0';
+    // Coin render caching. Display lists were stubs until 2026-09-14 (glGenLists returned 0,
+    // so Coin retried cache creation on every frame -- that is why this was off); the GL
+    // shim now records and replays them (gl_legacy_stubs.c -> tools/patch-freecad-js.py
+    // __fcDL), which is what makes the desktop fast on big static scenes. ?dlists=0 goes
+    // back to no lists and no caching, both, because one without the other is the loop.
+    try {
+      var __noDL = new URLSearchParams((typeof location !== 'undefined' && location.search) || '').get('dlists') === '0';
+    } catch (e) { var __noDL = false; }
+    if (__noDL) { ENV.COIN_AUTO_CACHING = '0'; ENV.IV_SEPARATOR_MAX_CACHES = '0'; }
     // WASM init-bisection: forward ?skipCoin / ?skipWb URL params to env vars so
     // init substeps can be toggled across page reloads without a rebuild.
     try {

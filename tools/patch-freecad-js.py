@@ -1342,6 +1342,74 @@ PATCHES += [
     ),
 ]
 
+# ---- display lists: Coin's render caches, recorded at the import table ---------------------
+#
+# The desktop is fast on big static scenes because Coin compiles each separator into a GL
+# display list and replays it; glGenLists has returned 0 here since the first link, so Coin
+# re-traversed every node every frame (BIMExample: 63% of a drag frame in SoGLRenderAction,
+# desktop 75 fps vs 15-40, measured 2026-09-14). The C stubs now talk to this object
+# (gl_legacy_stubs.c -> EM_JS -> __fcDL): glGenLists hands out ids, glNewList starts a
+# recording, every GL import called while recording is appended as (function, args) and --
+# Coin compiles with GL_COMPILE_AND_EXECUTE -- executed as well, glEndList stores the list,
+# glCallList replays it.
+#
+# Two things make a replay faithful. Pointer arguments to immediate-mode vector calls
+# (glVertex3fv etc.) and to the fv setters point at memory Coin reuses, so they are
+# dereferenced at record time (the *fv becomes the scalar call; the setters get a private
+# copy). Client vertex arrays -- the cached edge path, SoAsciiText's triangles, meshes -- are
+# snapshotted at the draw that consumes them, into private wasm memory the recorded pointer
+# calls are rewritten to; VBO draws are recorded as-is (offsets). Object creation, uploads
+# and queries (Gen/Delete/Get/Is/TexImage/BufferData...) are executed and never recorded,
+# as the GL spec has it. On until ?dlists=0.
+_DLISTS = (
+    'var __fcDL={on:!/[?&]dlists=0/.test(typeof location!=="undefined"?location.search:""),lists:new Map(),next:1,rec:null,orig:null,'
+    'stats:{lists:0,ops:0,replays:0,bytes:0,wrongCtx:0},'
+    'SKIP:/^(?:emscripten_)?gl(?:Gen|Delete|Get|Is|ReadPixels|Flush|Finish|Create|Shader|Compile|Link|Attach|Detach|BufferData|BufferSubData|TexImage|TexSubImage|CompressedTex|CopyTex|Map|Unmap|Fence|Check|Validate|Release|Sampler|Query|ClientWait|Uniform|Program|Blit|Framebuffer|Renderbuffer|Invalidate|WaitSync|Debug|Label|Object|String|Hint|PixelStore|ReadBuffer|DrawBuffer|Vertex(?:Attrib|Array)|Bind(?:Framebuffer|Renderbuffer|VertexArray|Sampler|Transform)|Enable(?:VertexAttrib|i)|Disable(?:VertexAttrib|i))/,'
+    'V:{glVertex2fv:["glVertex2f",2],glVertex3fv:["glVertex3f",3],glVertex4fv:["glVertex4f",4],glNormal3fv:["glNormal3f",3],glColor3fv:["glColor3f",3],glColor4fv:["glColor4f",4],glTexCoord2fv:["glTexCoord2f",2],glTexCoord3fv:["glTexCoord3f",3],glTexCoord4fv:["glTexCoord4f",4]},'
+    'P:{glMaterialfv:[2,16],glLightfv:[2,16],glLightModelfv:[1,16],glFogfv:[1,16],glTexGenfv:[2,16],glTexEnvfv:[2,16],glTexParameterfv:[2,16],glLoadMatrixf:[0,64],glMultMatrixf:[0,64],glLoadMatrixd:[0,128],glMultMatrixd:[0,128],glClipPlane:[1,32],glPointParameterfv:[1,16]},'
+    'base(k){return k.replace(/^emscripten_/,"")},'
+    'gen(n){if(!__fcDL.on)return 0;var id=__fcDL.next;__fcDL.next+=n;return id},'
+    'begin(id,mode){if(!__fcDL.on)return;if(__fcDL.rec)__fcDL.end();__fcDL.del(id,1);__fcDL.rec={id:id,exec:mode!==4864,ops:[],mem:[],ctx:null}},'
+    'end(){var R=__fcDL.rec;if(!R)return;__fcDL.rec=null;__fcDL.lists.set(R.id,R);__fcDL.stats.lists++;__fcDL.stats.ops+=R.ops.length/2},'
+    'call(id){var R=__fcDL.rec;if(R){R.ops.push(__fcDL.callOp,[id]);if(!R.exec)return}var L=__fcDL.lists.get(id);if(!L)return;if(L.ctx!==GL.currentContext){__fcDL.stats.wrongCtx++;return}__fcDL.stats.replays++;var o=L.ops;for(var i=0;i<o.length;i+=2)o[i].apply(null,o[i+1])},'
+    'callOp(id){__fcDL.call(id)},'
+    'del(id,n){for(var i=0;i<n;i++){var L=__fcDL.lists.get(id+i);if(L){for(var j=0;j<L.mem.length;j++)_free(L.mem[j]);__fcDL.lists.delete(id+i)}}},'
+    'keep(R,src,bytes){var p=_malloc(bytes);if(!p)return 0;(growMemViews(),HEAPU8).copyWithin(p,src,src+bytes);R.mem.push(p);__fcDL.stats.bytes+=bytes;return p},'
+    'snapArrays(R,first,count,idxType,idxPtr){var G=GLImmediate,ops=[];var vcount=first+count;'
+    'if(idxType){var n=count,isz=idxType===5125?4:idxType===5123?2:1,mx=0;var A=isz===4?(growMemViews(),HEAPU32):isz===2?(growMemViews(),HEAPU16):(growMemViews(),HEAPU8);var b=idxPtr/isz;for(var i=0;i<n;i++){var v=A[b+i];if(v>mx)mx=v}vcount=mx+1;var np=__fcDL.keep(R,idxPtr,n*isz);if(!np)return null;ops.idx=np}'
+    'var names=[["glVertexPointer",0],["glNormalPointer",1],["glColorPointer",2],["glTexCoordPointer",3]];'
+    'for(var k=0;k<names.length;k++){var ai=names[k][1];if(!G.enabledClientAttributes[ai])continue;var ca=G.clientAttributes[ai];if(!ca||!ca.pointer)continue;var ts=GL.byteSizeByType[ca.type-GL.byteSizeByTypeRoot]||4,es=ca.size*ts,st=ca.stride||es,bytes=(vcount-1)*st+es;var np2=__fcDL.keep(R,ca.pointer,bytes);if(!np2)return null;'
+    'var f=__fcDL.orig[names[k][0]];if(!f)continue;var args=ai===1?[ca.type,ca.stride,BigInt(np2)]:[ca.size,ca.type,ca.stride,BigInt(np2)];ops.push(f,args)}return ops},'
+    'wrap(imports){if(imports.__fcDLWrapped)return;imports.__fcDLWrapped=true;__fcDL.orig={};var keys=Object.keys(imports);'
+    'for(var i=0;i<keys.length;i++){var k=keys[i];if(!/^(?:emscripten_)?gl[A-Z]/.test(k)||typeof imports[k]!=="function")continue;__fcDL.orig[__fcDL.base(k)]=__fcDL.orig[__fcDL.base(k)]||imports[k]}'
+    'for(var i2=0;i2<keys.length;i2++){var k2=keys[i2];if(!/^(?:emscripten_)?gl[A-Z]/.test(k2)||typeof imports[k2]!=="function")continue;if(__fcDL.SKIP.test(k2))continue;imports[k2]=__fcDL.mk(__fcDL.base(k2),imports[k2])}},'
+    'mk(name,f){var V=__fcDL.V[name],P=__fcDL.P[name],D=/^glDraw(Arrays|Elements|RangeElements)$/.test(name)?name:null;'
+    'return function(){var R=__fcDL.rec;if(!R)return f.apply(null,arguments);if(!R.ctx)R.ctx=GL.currentContext;else if(R.ctx!==GL.currentContext)return f.apply(null,arguments);var a=Array.prototype.slice.call(arguments);'
+    'if(V){var sf=__fcDL.orig[V[0]],p=Number(a[0])>>2,F=(growMemViews(),HEAPF32),va=[];for(var i=0;i<V[1];i++)va.push(F[p+i]);R.ops.push(sf,va)}'
+    'else if(P){var np=__fcDL.keep(R,Number(a[P[0]]),P[1]);if(np){var na=a.slice();na[P[0]]=BigInt(np);R.ops.push(f,na)}}'
+    'else if(D&&!GLctx.currentArrayBufferBinding){var first=0,count,it=0,ip=0,ii=-1;'
+    'if(D==="glDrawArrays"){first=a[1];count=a[2]}else if(D==="glDrawElements"){count=a[1];it=a[2];ii=3}else{count=a[3];it=a[4];ii=5}'
+    'if(ii>=0&&GLctx.currentElementArrayBufferBinding){it=0}else if(ii>=0){ip=Number(a[ii])}'
+    'var so=__fcDL.snapArrays(R,first,count,it,ip);'
+    'if(so){for(var j=0;j<so.length;j++)R.ops.push(so[j]);var da=a.slice();if(so.idx)da[ii]=BigInt(so.idx);R.ops.push(f,da)}else{R.ops.push(f,a)}}'
+    'else R.ops.push(f,a);'
+    'if(R.exec)return f.apply(null,arguments)}}};'
+    'if(typeof Module!=="undefined")Module.__fcDL=__fcDL;'
+)
+PATCHES += [
+    (
+        'display lists: the recorder',
+        'var wasmImports;function assignWasmImports(){',
+        _DLISTS + 'var wasmImports; function assignWasmImports(){',   # the space keeps `new` from containing `old`
+        'var __fcDL={',
+    ),
+    (
+        'display lists: every GL import can be recorded',
+        'function getWasmImports(){assignWasmImports();',
+        'function getWasmImports(){ assignWasmImports();__fcDL.wrap(wasmImports);',
+    ),
+]
+
 # ---- immediate mode: attributes are STATE, every vertex carries the layout --------------
 #
 # GL semantics: glNormal/glColor/glTexCoord set current values and glVertex emits a vertex

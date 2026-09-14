@@ -16,6 +16,7 @@
  * accumulation buffer, colour-index mode, pixel transfer -- plus two groups that are real
  * work rather than impossible: the GL_SELECT name stack, and display lists (see glGenLists
  * below, and ROADMAP item 5). A full Coin->WebGL viewport port would replace all of it. */
+#include <emscripten/em_js.h>
 typedef unsigned int   GLenum;
 typedef unsigned int   GLbitfield;
 typedef int            GLint;
@@ -104,11 +105,21 @@ void glCopyPixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum t) { (void)x;(v
  * that Coin references. glGenLists returns 0 so Coin falls back to immediate
  * mode (which LEGACY_GL emulates), giving a chance at real rendering. */
 typedef unsigned int GLuint;
-GLuint glGenLists(GLsizei range) { (void)range; return 0; }   /* 0 => no display lists => immediate mode */
-void glNewList(GLuint list, GLenum mode) { (void)list;(void)mode; }
-void glEndList(void) {}
-void glCallList(GLuint list) { (void)list; }
-void glDeleteLists(GLuint list, GLsizei range) { (void)list;(void)range; }
+/* Display lists are Coin's render caches: the desktop is fast on big static scenes because
+ * each separator is compiled once and replayed. They live in the JS glue (__fcDL, put there
+ * by tools/patch-freecad-js.py): every GL import called between glNewList and glEndList is
+ * recorded, pointer arguments are copied, and glCallList replays the list. Without the glue
+ * object glGenLists answers 0 and Coin renders uncached, as it did before 2026-09-14. */
+EM_JS(unsigned int, fcweb_dl_gen, (int range), { return (typeof __fcDL !== "undefined") ? __fcDL.gen(range) : 0; });
+EM_JS(void, fcweb_dl_begin, (unsigned int list, unsigned int mode), { if (typeof __fcDL !== "undefined") __fcDL.begin(list, mode); });
+EM_JS(void, fcweb_dl_end, (void), { if (typeof __fcDL !== "undefined") __fcDL.end(); });
+EM_JS(void, fcweb_dl_call, (unsigned int list), { if (typeof __fcDL !== "undefined") __fcDL.call(list); });
+EM_JS(void, fcweb_dl_del, (unsigned int list, int range), { if (typeof __fcDL !== "undefined") __fcDL.del(list, range); });
+GLuint glGenLists(GLsizei range) { return fcweb_dl_gen(range); }
+void glNewList(GLuint list, GLenum mode) { fcweb_dl_begin(list, mode); }
+void glEndList(void) { fcweb_dl_end(); }
+void glCallList(GLuint list) { fcweb_dl_call(list); }
+void glDeleteLists(GLuint list, GLsizei range) { fcweb_dl_del(list, range); }
 void glClearIndex(GLfloat c) { (void)c; }
 void glIndexi(GLint c) { (void)c; }
 void glLightModeli(GLenum pn, GLint p) { GLfloat f = (GLfloat)p; glLightModelfv(pn, &f); }
