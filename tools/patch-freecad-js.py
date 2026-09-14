@@ -333,6 +333,16 @@ PATCHES = [
         '_glIsEnabled=_emscripten_glIsEnabled=cap=>{if(cap==3553){return GLImmediate.TexEnvJIT.getTexUnitType(0)==3553?1:0}else if(cap==2912){',
     ),
     (
+        # A new temp vertex buffer (one per size class per ring slot, 64 slots, created lazily
+        # over the first hundreds of frames) restored the previous binding through a
+        # synchronous getParameter(ARRAY_BUFFER_BINDING): 37 a frame on EngineBlock while the
+        # rings fill (measured 2026-09-14), each a GPU-process round trip. The page's bindBuffer
+        # wrapper already shadows that binding on the context (_fcAB); use it when it is there.
+        'getTempVertexBuffer: the previous binding from the shadow, not a round trip',
+        'var prevVBO=GLctx.getParameter(34964);',
+        'var prevVBO=(GLctx._fcAB!==undefined)?GLctx._fcAB:GLctx.getParameter(34964);',
+    ),
+    (
         'GL emulation default lighting',
         'GLEmulation.lightModelAmbient=new Float32Array([.2,.2,.2,1]);'
         'GLEmulation.materialAmbient=new Float32Array([.2,.2,.2,1]);',

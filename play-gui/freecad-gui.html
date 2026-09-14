@@ -2667,6 +2667,12 @@ window.fcRunPy = fcRunPy;
   var _cen=P.enable, _cdis=P.disable;
   P.enable=function(cap){ var c=this._fcCap||(this._fcCap={}); if(c[cap]===1){ stats.cap++; return; } c[cap]=1; return _cen.call(this,cap); };
   P.disable=function(cap){ var c=this._fcCap||(this._fcCap={}); if(c[cap]===2){ stats.cap++; return; } c[cap]=2; return _cdis.call(this,cap); };
+  // glGetError is a GPU-process round trip; View3DInventorViewer::actualRedraw asks four
+  // times a frame (measured 2026-09-14, 3.7% of an EngineBlock drag). GL errors are sticky
+  // until read, so answering NO_ERROR for 50 ms after a real read loses nothing: the next
+  // real read still reports whatever happened.
+  var _ge=P.getError;
+  P.getError=function(){ var now=performance.now(); if(this._fcGEat!==undefined && now-this._fcGEat<50) return 0; this._fcGEat=now; return _ge.call(this); };
   var _vp2=P.viewport;
   P.viewport=function(x,y,w,h){ var a=this._fcVP; if(a && a[0]===x && a[1]===y && a[2]===w && a[3]===h){ stats.viewport++; return; } return _vp2.apply(this,arguments); };
 })();
