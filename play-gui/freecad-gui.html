@@ -2608,15 +2608,35 @@ window.fcRunPy = fcRunPy;
   P.bindFramebuffer=function(target,fb){ this._fcFB=(target===TARGET_FRAMEBUFFER)?fb:undefined; return _bf.apply(this,arguments); };
   var _vp=P.viewport;
   P.viewport=function(x,y,w,h){ var a=this._fcVP||(this._fcVP=new Int32Array(4)); a[0]=x;a[1]=y;a[2]=w;a[3]=h; return _vp.apply(this,arguments); };
+  // useProgram(null) is deferred: the emulation unbinds its renderer program after a
+  // batch and binds it again for the next one (2 useProgram per draw, measured 2026-09-14
+  // on BIMExample). A null bind is only observable at a draw or a uniform upload, so it is
+  // remembered there and cancelled when the same program comes back.
   var _up=P.useProgram;
-  P.useProgram=function(prog){ if(this._fcProg===prog) return; this._fcProg=prog; return _up.apply(this,arguments); };
+  function applyPN(gl){ gl._fcPN=false; gl._fcProg=null; _up.call(gl,null); }
+  P.useProgram=function(prog){ if(!prog){ if(this._fcProg===null||this._fcProg===undefined) return; this._fcPN=true; return; }
+    if(this._fcProg===prog){ this._fcPN=false; return; } this._fcPN=false; this._fcProg=prog; return _up.apply(this,arguments); };
+  ['drawArrays','drawElements','drawArraysInstanced','drawElementsInstanced','drawRangeElements','deleteProgram'].forEach(function(nm){
+    var o=P[nm]; P[nm]=function(){ if(this._fcPN) applyPN(this); return o.apply(this,arguments); }; });
+  Object.getOwnPropertyNames(P).forEach(function(nm){ if(!/^uniform/.test(nm)) return; var o=P[nm]; if(typeof o!=='function') return;
+    P[nm]=function(){ if(this._fcPN) applyPN(this); return o.apply(this,arguments); }; });
+  var _gpp=P.getParameter; P.getParameter=function(pn){ if(pn===35725 && this._fcProg!==undefined) return this._fcPN?null:this._fcProg; return _gpp.apply(this,arguments); };
   // Not a skip -- a truthful record of the last VAO requested, for the present pass to restore.
   var _bva=P.bindVertexArray;
   P.bindVertexArray=function(vao){ this._fcVAO=vao; return _bva.apply(this,arguments); };
   // Skip redundant ARRAY_BUFFER re-binds (global state, not VAO-scoped, so safe to cache).
   var ARRAY_BUFFER=0x8892;
   var _bb=P.bindBuffer;
-  P.bindBuffer=function(target,buf){ if(target===ARRAY_BUFFER){ if(this._fcAB===buf) return; this._fcAB=buf; } return _bb.apply(this,arguments); };
+  // An ARRAY_BUFFER unbind is deferred the same way as a null program: Coin binds a VBO,
+  // draws, unbinds, and the next draw binds the next one (or the emulation's temp buffer).
+  // A null binding is observable only by the calls that read it -- vertexAttribPointer,
+  // bufferData/bufferSubData, getBufferParameter -- so it is applied there.
+  function applyABN(gl){ gl._fcABN=false; gl._fcAB=null; _bb.call(gl,ARRAY_BUFFER,null); }
+  P.bindBuffer=function(target,buf){ if(target===ARRAY_BUFFER){ if(!buf){ if(this._fcAB===null||this._fcAB===undefined) return; this._fcABN=true; return; }
+      if(this._fcAB===buf){ this._fcABN=false; return; } this._fcABN=false; this._fcAB=buf; } return _bb.apply(this,arguments); };
+  ['vertexAttribPointer','vertexAttribIPointer','bufferData','bufferSubData','getBufferParameter','getBufferSubData','copyBufferSubData','deleteBuffer','bindBufferBase','bindBufferRange'].forEach(function(nm){
+    var o=P[nm]; if(typeof o!=='function') return; P[nm]=function(){ if(this._fcABN) applyABN(this); return o.apply(this,arguments); }; });
+  var _gpab=P.getParameter; P.getParameter=function(pn){ if(pn===34964 && this._fcAB!==undefined) return this._fcABN?null:this._fcAB; return _gpab.apply(this,arguments); };
   // Not a skip -- a record of UNPACK_FLIP_Y_WEBGL, so the GPU bridge reads it without a
   // synchronous getParameter (two per presented frame, measured 2026-09-12).
   var UNPACK_FLIP_Y=0x9240;
@@ -2638,12 +2658,23 @@ window.fcRunPy = fcRunPy;
   var P=WebGL2RenderingContext.prototype;
   try { if (new URLSearchParams(location.search).get('glshadow') === '0') return; } catch (e) {}
   var stats = window.__glShadow = { attribEn: 0, attribPtr: 0, uniform: 0, lineWidth: 0, cap: 0, viewport: 0 };
-  function vaoState(gl){ var m=gl._fcVaoSt||(gl._fcVaoSt=new Map()); var k=gl._fcVAO||null; var s=m.get(k); if(!s){ s={en:new Uint8Array(32), ptr:new Array(32)}; m.set(k,s); } return s; }
+  function vaoState(gl){ var m=gl._fcVaoSt||(gl._fcVaoSt=new Map()); var k=gl._fcVAO||null; var s=m.get(k); if(!s){ s={en:new Uint8Array(32), pd:new Uint8Array(32), ptr:new Array(32)}; m.set(k,s); } return s; }
   var _dva=P.deleteVertexArray;
-  P.deleteVertexArray=function(vao){ try { if(this._fcVaoSt) this._fcVaoSt.delete(vao); if(this._fcVAO===vao) this._fcVAO=null; } catch(e){} return _dva.apply(this,arguments); };
+  P.deleteVertexArray=function(vao){ try { if(this._fcVaoSt){ var st=this._fcVaoSt.get(vao); if(st&&this._fcPD===st) this._fcPD=null; this._fcVaoSt.delete(vao); } if(this._fcVAO===vao) this._fcVAO=null; } catch(e){} return _dva.apply(this,arguments); };
+  // A disable is deferred to the next draw (or VAO switch) and cancelled by an enable in
+  // between: the emulation disables its attributes after every batch and the next
+  // renderer enables the same locations again (position is location 0 in every one).
   var _en=P.enableVertexAttribArray, _dis=P.disableVertexAttribArray;
-  P.enableVertexAttribArray=function(i){ if(i<0||i===4294967295) return; if(i<32){ var s=vaoState(this); if(s.en[i]===1){ stats.attribEn++; return; } s.en[i]=1; } return _en.call(this,i); };
-  P.disableVertexAttribArray=function(i){ if(i<0||i===4294967295) return; if(i<32){ var s=vaoState(this); if(s.en[i]===2){ stats.attribEn++; return; } s.en[i]=2; } return _dis.call(this,i); };
+  function applyPD(gl){ var s=gl._fcPD; gl._fcPD=null; if(!s) return; for(var i=0;i<32;i++){ if(s.pd[i]){ s.pd[i]=0; _dis.call(gl,i); } } }
+  P.enableVertexAttribArray=function(i){ if(i<0||i===4294967295) return; if(i<32){ var s=vaoState(this); if(s.en[i]===1){ stats.attribEn++; return; } s.en[i]=1; if(s.pd[i]){ s.pd[i]=0; stats.attribEn++; return; } } return _en.call(this,i); };
+  P.disableVertexAttribArray=function(i){ if(i<0||i===4294967295) return; if(i<32){ var s=vaoState(this); if(s.en[i]===2){ stats.attribEn++; return; } var was=s.en[i]; s.en[i]=2; if(was===1){ s.pd[i]=1; this._fcPD=s; return; } } return _dis.call(this,i); };
+  // Applied at the next draw: leaving them through a draw of a program that does not
+  // consume them was tried -- ANGLE's D3D11 vertex path validates every enabled attribute
+  // (85 GL_INVALID_OPERATION in VertexDataManager on one BIMExample redraw). And at a
+  // VAO switch, because the state belongs to the old VAO.
+  ['drawArrays','drawElements','drawArraysInstanced','drawElementsInstanced','drawRangeElements'].forEach(function(nm){
+    var o=P[nm]; P[nm]=function(){ if(this._fcPD) applyPD(this); return o.apply(this,arguments); }; });
+  var _bva2=P.bindVertexArray; P.bindVertexArray=function(vao){ if(this._fcPD) applyPD(this); return _bva2.apply(this,arguments); };
   var _vap=P.vertexAttribPointer;
   P.vertexAttribPointer=function(i,size,type,norm,stride,off){ if(i<0||i===4294967295) return;
     if(i<32){ var s=vaoState(this), buf=this._fcAB, p=s.ptr[i];

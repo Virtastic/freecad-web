@@ -898,7 +898,7 @@ COUNTING_PATCHES = [
 ]
 
 
-def apply(text, _passes=3, counting=True):
+def apply(text, _passes=8, counting=True):
     """Return (patched_text, [status per patch]). Idempotent.
 
     Applied repeatedly to a fixpoint: some sites only appear once an earlier patch has
@@ -907,7 +907,7 @@ def apply(text, _passes=3, counting=True):
     """
     for _ in range(_passes - 1):
         text, st = _apply_once(text)
-        if all(s != 'applied' for _, s in st):
+        if not any(s.startswith('applied') for _, s in st):
             break
     text, st = _apply_once(text)
 
@@ -1630,6 +1630,63 @@ PATCHES += [
         'two-sided lighting: __fcTS declared before the lighting pass',
         'var vsLightingDefs="";var vsLightingPass="";if(GLEmulation.lightingEnabled){',
         'var vsLightingDefs="";var vsLightingPass="";var __fcTS=false;if(GLEmulation.lightingEnabled){',
+    ),
+]
+
+
+# ---- lazy fixed-function cleanup: unbind at the next foreign draw, not after every one ----
+#
+# Every immediate-mode flush ended with Renderer.cleanup(): disable its 2-4 attribute arrays,
+# useProgram(null), bindBuffer(null) -- and the next flush, usually the same renderer, put
+# all of it back. BIMExample's drag frame was 13,672 WebGL calls for 657 draws (measured
+# 2026-09-14, lists on): useProgram 1.8 per draw, disableVertexAttribArray 2.6, bindBuffer
+# 2.4 -- a third of the frame's calls undoing and redoing state nothing had looked at.
+# The page shadow cannot drop them: each is a real transition.
+#
+# Now cleanup only remembers the renderer (and its context); the undo runs when someone
+# else could observe the state: a different renderer's prepare (attributes only -- flush()
+# has already bound the new program), an app program bind (Qt's RHI, Coin shaders), a raw
+# draw through the fast path, a VAO bind, a context switch, and never for a context that is
+# gone. ?lazyclean=0 restores the eager cleanup for A/Bs.
+PATCHES += [
+    (
+        'lazy cleanup: Renderer.cleanup remembers instead of undoing',
+        'this.cleanup=function(){GLctx.disableVertexAttribArray(this.positionLocation);',
+        'this.cleanup=function(){if(!GLImmediate.__fcLzOn)return this.__fcClean(false);GLImmediate.__fcLz=this;GLImmediate.__fcLzGl=GLctx;GLImmediate.matricesModified=true};'
+        'this.__fcClean=function(skipProg){GLctx.disableVertexAttribArray(this.positionLocation);',
+    ),
+    (
+        'lazy cleanup: the program is left alone when the caller is binding one',
+        'if(this.hasNormal){GLctx.disableVertexAttribArray(this.normalLocation)}if(!GL.currProgram){GLctx.useProgram(null);GLImmediate.fixedFunctionProgram=0}',
+        'if(this.hasNormal){GLctx.disableVertexAttribArray(this.normalLocation)}if(!skipProg&&!GL.currProgram){GLctx.useProgram(null);GLImmediate.fixedFunctionProgram=0}',
+    ),
+    (
+        'lazy cleanup: another renderer undoes the previous one first',
+        'this.prepare=function(){var arrayBuffer;',
+        'this.prepare=function(){if(GLImmediate.__fcLz){if(GLImmediate.__fcLz!==this)GLImmediate.__fcLzFlush(true);else GLImmediate.__fcLz=null}var arrayBuffer;',
+    ),
+    # The flush lives with _fcPolyApply, which every raw fast-path draw already calls right
+    # before GLctx.draw*; flush() calls it after prepare(), when nothing is pending. The
+    # context-switch wrapper flushes with the program kept: the per-context program
+    # snapshot taken by the outer hook must stay true.
+    (
+        'lazy cleanup: the flush, the context switch, and the raw draws',
+        'var _fcPolyApply=(mode)=>{try{if(mode>=4',
+        'GLImmediate.__fcLz=null;GLImmediate.__fcLzGl=null;GLImmediate.__fcLzOn=!/[?&]lazyclean=0/.test(location.search);'
+        'GLImmediate.__fcLzFlush=function(skipProg){var r=GLImmediate.__fcLz;if(!r)return;GLImmediate.__fcLz=null;var g=GLImmediate.__fcLzGl;'
+        'if(g&&g!==GLctx){var c=GLctx;GLctx=g;try{r.__fcClean(skipProg)}finally{GLctx=c}}else r.__fcClean(skipProg)};'
+        '(function(){var m3=GL.makeContextCurrent;GL.makeContextCurrent=function(){try{if(GLImmediate.__fcLz)GLImmediate.__fcLzFlush(true)}catch(e){}return m3.apply(GL,arguments)}})();'
+        'var _fcPolyApply=(mode)=>{if(GLImmediate.__fcLz)GLImmediate.__fcLzFlush(false);try{if(mode>=4',
+    ),
+    (
+        'lazy cleanup: a VAO bind sees clean state',
+        'var emulGlBindVertexArray=vao=>{GLEmulation.currentVao=null;',
+        'var emulGlBindVertexArray=vao=>{if(GLImmediate.__fcLz)GLImmediate.__fcLzFlush(false);GLEmulation.currentVao=null;',
+    ),
+    (
+        'lazy cleanup: an app program bind sees clean attributes',
+        '_glUseProgram=_emscripten_glUseProgram=program=>{if(GL.currProgram!=program){GLImmediate.currentRenderer=null;',
+        '_glUseProgram=_emscripten_glUseProgram=program=>{if(GLImmediate.__fcLz&&GL.currProgram!=program)GLImmediate.__fcLzFlush(true);if(GL.currProgram!=program){GLImmediate.currentRenderer=null;',
     ),
 ]
 
