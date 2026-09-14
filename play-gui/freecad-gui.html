@@ -3009,12 +3009,14 @@ window.fcRunPy = fcRunPy;
       // Coin nulls glBindBuffer and the pref silently does nothing. ?vbo=0 flips both off.
       "_App.ParamGet('User parameter:BaseApp/Preferences/View').SetBool('UseVBO', " +
         (new URLSearchParams(location.search).get('vbo') === '0' ? 'False' : 'True') + ")",
-      // RenderCache 2 = Centralized: Coin holds ONE cached buffer for the scene
-      // instead of re-walking the graph every frame. Measured on a 1.13M-triangle
-      // a2plus assembly: 1802 ms/frame at the default Auto, 974 ms/frame here --
-      // 1.85x, for a setting. ?rendercache=0 restores FreeCAD's default.
+      // RenderCache 1 = Distributed: every view provider's separator keeps its own render
+      // cache (a GL display list, real since 2026-09-14 -- see gl_legacy_stubs.c and the
+      // __fcDL recorder in the glue). FreeCAD's own default, 0/Auto, resolves to the same
+      // because View3DInventorViewer disables Coin auto-caching. 2/Centralized was chosen
+      // while lists were stubs (it stopped Coin from re-walking into empty caches); with
+      // lists working it is the one mode that caches NOTHING. ?rendercache=N overrides.
       "_App.ParamGet('User parameter:BaseApp/Preferences/View').SetInt('RenderCache', " +
-        (new URLSearchParams(location.search).get('rendercache') || '2') + ")",
+        (new URLSearchParams(location.search).get('rendercache') || '1') + ")",
       "if not getattr(_App, '_fcweb_saver', None):",
       "    class _FcwebSaver(object):",
       "        DIR = '" + AUTOSAVE_DIR + "'",

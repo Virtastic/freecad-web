@@ -2386,12 +2386,13 @@ diff -ruNp a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
  #include <ParamHandler.h>
  
  #ifdef FC_OS_WIN32
-@@ -32,6 +36,9 @@
+@@ -32,6 +36,10 @@
  #include <QImageReader>
  #include <QLabel>
  #include <QOpenGLContext>
 +#if defined(__EMSCRIPTEN__)
 +#include <Inventor/nodes/SoSeparator.h>
++#include <Inventor/C/tidbits.h>
 +#endif
  #include <QOpenGLFunctions>
  #include <QProcess>
@@ -2442,15 +2443,18 @@ diff -ruNp a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
      checkVersionMigration();
  }
  
-@@ -402,6 +436,12 @@ void StartupPostProcess::loadOpenInvento
+@@ -402,6 +436,15 @@ void StartupPostProcess::loadOpenInvento
          // init the Inventor subsystem
          Application::initOpenInventor();
      }
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: GL display lists are stubbed, so Coin separator render caches replay
-+    // NOTHING on 2nd+ frames (first render direct = geometry visible, every
-+    // redraw after = blank). Disable render caching engine-wide.
-+    SoSeparator::setNumRenderCaches(0);
++    // wasm: GL display lists are recorded and replayed by the glue since 2026-09-14
++    // (gl_legacy_stubs.c -> __fcDL), so Coin's separator render caches work as on the
++    // desktop. ?dlists=0 sets FCWEB_NO_DLISTS: lists answer 0 again and caching must
++    // then be off engine-wide, or every redraw after the first draws nothing.
++    if (coin_getenv("FCWEB_NO_DLISTS")) {
++        SoSeparator::setNumRenderCaches(0);
++    }
 +#endif
  }
  
@@ -2846,17 +2850,19 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  /*!
  As ProgressBar has no chance to control the incoming Qt events of Quarter so we need to stop
  the event handling to prevent the scenegraph from being selected or deselected
-@@ -1473,6 +1507,15 @@
+@@ -1473,6 +1507,17 @@
  
      auto caching = mode == 0 ? SoSeparator::AUTO : (mode == 1 ? SoSeparator::ON : SoSeparator::OFF);
  
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: display lists are stubbed (glGenLists returns 0), so ON/AUTO render
-+    // caching produces permanently-empty caches — children are never traversed
-+    // after the first frame and nothing draws. Force caching OFF.
-+    caching = SoSeparator::OFF;
-+    if (pcViewProviderRoot) {
-+        pcViewProviderRoot->renderCaching = SoSeparator::OFF;
++    // wasm: display lists are real since 2026-09-14 (recorded and replayed by the
++    // glue), so render caching behaves as on the desktop. With ?dlists=0 they answer 0
++    // again and caching must be OFF, or nothing draws after the first frame.
++    if (coin_getenv("FCWEB_NO_DLISTS")) {
++        caching = SoSeparator::OFF;
++        if (pcViewProviderRoot) {
++            pcViewProviderRoot->renderCaching = SoSeparator::OFF;
++        }
 +    }
 +#endif
      SoFCSeparator::setCacheMode(caching);
