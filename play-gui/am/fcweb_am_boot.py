@@ -393,6 +393,32 @@ def install():
     except Exception as e:
         print("[fcweb] Quantity converter FAILED: %r" % (e,))
 
+    # A real font for Coin's 2D text (the FEM colour bar's numbers, every SoText2). There is
+    # no font file anywhere in the wasm filesystem, so Coin fell back to its built-in 8x12
+    # bitmap font where the desktop (fontconfig) renders DejaVu Sans through FreeType.
+    # matplotlib ships DejaVuSans.ttf in the payload already. Coin resolves "Arial" from
+    # FreeCAD's "Helvetica,Arial,Times New Roman" through $COIN_FONT_PATH/Arial.ttf, and an
+    # unknown name ("defaultFont", "Helvetica") is handed to FT_New_Face as a path relative
+    # to the working directory, so those two get a symlink in / as well. Same GL, same
+    # FreeType, the desktop's glyphs. Measured 2026-09-14.
+    try:
+        import os
+        import matplotlib
+        ttf = os.path.join(matplotlib.get_data_path(), "fonts", "ttf", "DejaVuSans.ttf")
+        if os.path.exists(ttf):
+            fdir = "/tmp/fcweb-fonts"
+            os.makedirs(fdir, exist_ok=True)
+            for link in (os.path.join(fdir, "Arial.ttf"), os.path.join(fdir, "arial.ttf"),
+                         "/defaultFont", "/Helvetica"):
+                if not os.path.lexists(link):
+                    os.symlink(ttf, link)
+            os.environ["COIN_FONT_PATH"] = fdir
+            print("[fcweb] Coin 2D font: DejaVu Sans")
+        else:
+            print("[fcweb] Coin 2D font: DejaVuSans.ttf not found, built-in bitmap font stays")
+    except Exception as e:
+        print("[fcweb] Coin 2D font FAILED: %r" % (e,))
+
     state = {"timer": None, "tries": 0, "done": False}
 
     def _apply():

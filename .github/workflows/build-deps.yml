@@ -466,7 +466,10 @@ jobs:
           # so a patch change restored the old archive and this step skipped the rebuild
           # (2026-09-12, the sphere hunk). Stamp the archive with the patch hash.
           stamp=deps/wasm/lib/libCoin.a.coin3d-patch.sha256
-          want="$(sha256sum patches/coin3d.patch | cut -d' ' -f1)"
+          # The configure script is an input too: FreeType went from dlopen (never there in
+          # wasm) to linked-in through configure-coin-weh.sh alone, and a stamp on the patch
+          # alone would have kept serving the old library forever.
+          want="$(cat patches/coin3d.patch configure-coin-weh.sh | sha256sum | cut -d' ' -f1)"
           if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libCoin.a ] && [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then
             echo "  Coin3D: already built from this coin3d.patch (cache hit), skipping"; exit 0
           fi

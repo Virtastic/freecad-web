@@ -34,7 +34,25 @@ BOOST_INC="${FCWEB_BOOST_INCLUDE_DIR:-$DW/include}"
   exit 1
 }
 
+# FreeType, linked in rather than dlopen()ed: Coin's default is FREETYPE_RUNTIME_LINKING=ON,
+# which looks for a libfreetype shared object at run time -- there is none in wasm, so every
+# SoText2 (the FEM colour bar's numbers, all 2D labels) fell back to Coin's built-in 8x12
+# bitmap font while the desktop renders DejaVu Sans through FreeType (measured 2026-09-14,
+# COIN_DEBUG_FONTSUPPORT: "FreeType library will not be used"). Headers from the emscripten
+# port, materialised the same way configure-occt-weh.sh does; the symbols resolve at the
+# final link, where matplotlib's libfreetype.a already is (FREECAD_USE_FREETYPE=ON). The font
+# file itself comes from matplotlib's mpl-data at run time (play-gui/am/fcweb_am_boot.py).
+echo 'int main(){return 0;}' > /tmp/ftprobe.c
+emcc --use-port=freetype -c /tmp/ftprobe.c -o /tmp/ftprobe.o
+FT_INC="$(em-config CACHE)/sysroot/include/freetype2"
+FT_LIBDIR="$(em-config CACHE)/sysroot/lib/wasm64-emscripten"
+[ -e "$FT_INC/ft2build.h" ] || { echo "ERROR: no ft2build.h under $FT_INC -- the freetype port did not materialise." >&2; exit 1; }
+
 emcmake cmake -S deps/src/coin3d -B build-coin -G Ninja \
+  -DFREETYPE_RUNTIME_LINKING=OFF \
+  -DFREETYPE_INCLUDE_DIR_ft2build="$FT_INC" \
+  -DFREETYPE_INCLUDE_DIR_freetype2="$FT_INC" \
+  -DFREETYPE_LIBRARY="$FT_LIBDIR/libfreetype.a" \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_POLICY_DEFAULT_CMP0167=OLD \
   -DBoost_INCLUDE_DIR="$BOOST_INC" \
