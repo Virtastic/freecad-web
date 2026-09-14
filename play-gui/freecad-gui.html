@@ -2623,6 +2623,53 @@ window.fcRunPy = fcRunPy;
   var _ps=P.pixelStorei;
   P.pixelStorei=function(pn,v){ if(pn===UNPACK_FLIP_Y) this._fcFlipY=!!v; else if(pn===UNPACK_ALIGNMENT) this._fcUA=v; return _ps.apply(this,arguments); };
 })();
+// FCWEB PERF: the rest of the per-draw churn. With GL_UNSAFE_OPTS=0 the emulation tears
+// every immediate-mode batch down and builds the next one up from nothing: enable/
+// disableVertexAttribArray, vertexAttribPointer, uniform4fv x4 (ambient, diffuse,
+// specular, emission on every material bump), lineWidth on every element push/pop.
+// Measured on ArchDetail, 2026-09-14: 17,900 WebGL calls per scene frame for ~950 draws,
+// 2,471 disableVertexAttribArray, 2,538 uniform4fv, 565 lineWidth, 398 disable. Each is
+// state that only changes through these prototype methods, so a shadow of the last value
+// makes the repeat a no-op. Vertex-array state is per VAO, so that shadow is keyed on the
+// VAO the page tracked in bindVertexArray; uniform values are per program object, so
+// theirs is keyed on the (stable, emscripten-cached) location object and invalidated by
+// linkProgram, which resets a program's uniforms. ?glshadow=0 turns all of it off.
+(function(){
+  var P=WebGL2RenderingContext.prototype;
+  try { if (new URLSearchParams(location.search).get('glshadow') === '0') return; } catch (e) {}
+  var stats = window.__glShadow = { attribEn: 0, attribPtr: 0, uniform: 0, lineWidth: 0, cap: 0, viewport: 0 };
+  function vaoState(gl){ var m=gl._fcVaoSt||(gl._fcVaoSt=new Map()); var k=gl._fcVAO||null; var s=m.get(k); if(!s){ s={en:new Uint8Array(32), ptr:new Array(32)}; m.set(k,s); } return s; }
+  var _dva=P.deleteVertexArray;
+  P.deleteVertexArray=function(vao){ try { if(this._fcVaoSt) this._fcVaoSt.delete(vao); if(this._fcVAO===vao) this._fcVAO=null; } catch(e){} return _dva.apply(this,arguments); };
+  var _en=P.enableVertexAttribArray, _dis=P.disableVertexAttribArray;
+  P.enableVertexAttribArray=function(i){ if(i<0||i===4294967295) return; if(i<32){ var s=vaoState(this); if(s.en[i]===1){ stats.attribEn++; return; } s.en[i]=1; } return _en.call(this,i); };
+  P.disableVertexAttribArray=function(i){ if(i<0||i===4294967295) return; if(i<32){ var s=vaoState(this); if(s.en[i]===2){ stats.attribEn++; return; } s.en[i]=2; } return _dis.call(this,i); };
+  var _vap=P.vertexAttribPointer;
+  P.vertexAttribPointer=function(i,size,type,norm,stride,off){ if(i<0||i===4294967295) return;
+    if(i<32){ var s=vaoState(this), buf=this._fcAB, p=s.ptr[i];
+      if(p && p[0]===buf && p[1]===size && p[2]===type && p[3]===!!norm && p[4]===stride && p[5]===off){ stats.attribPtr++; return; }
+      s.ptr[i]=[buf,size,type,!!norm,stride,off]; }
+    return _vap.apply(this,arguments); };
+  var _gul=P.getUniformLocation, _lp=P.linkProgram;
+  P.getUniformLocation=function(prog,name){ var l=_gul.apply(this,arguments); if(l && !l.__fcP){ l.__fcP=prog; } return l; };
+  P.linkProgram=function(prog){ prog.__fcGen=(prog.__fcGen|0)+1; return _lp.apply(this,arguments); };
+  function same(loc, v, n){ var p=loc.__fcP, g=p?p.__fcGen|0:0; var c=loc.__fcV; if(c && loc.__fcG===g && c.length===n){ for(var i=0;i<n;i++){ if(c[i]!==v[i]) break; } if(i===n) return true; c.set ? c.set(v) : 0; for(i=0;i<n;i++) c[i]=v[i]; return false; } loc.__fcG=g; loc.__fcV=new Float32Array(n); for(i=0;i<n;i++) loc.__fcV[i]=v[i]; return false; }
+  var _u4=P.uniform4fv, _u3=P.uniform3fv, _u2=P.uniform2fv, _u1f=P.uniform1f, _u1i=P.uniform1i, _um4=P.uniformMatrix4fv, _um3=P.uniformMatrix3fv;
+  P.uniform4fv=function(loc,v){ if(loc && v.length===4 && arguments.length===2 && same(loc,v,4)){ stats.uniform++; return; } return _u4.apply(this,arguments); };
+  P.uniform3fv=function(loc,v){ if(loc && v.length===3 && arguments.length===2 && same(loc,v,3)){ stats.uniform++; return; } return _u3.apply(this,arguments); };
+  P.uniform2fv=function(loc,v){ if(loc && v.length===2 && arguments.length===2 && same(loc,v,2)){ stats.uniform++; return; } return _u2.apply(this,arguments); };
+  P.uniform1f=function(loc,x){ if(loc && same(loc,[x],1)){ stats.uniform++; return; } return _u1f.apply(this,arguments); };
+  P.uniform1i=function(loc,x){ if(loc && same(loc,[x],1)){ stats.uniform++; return; } return _u1i.apply(this,arguments); };
+  P.uniformMatrix4fv=function(loc,tr,v){ if(loc && !tr && v.length===16 && arguments.length===3 && same(loc,v,16)){ stats.uniform++; return; } return _um4.apply(this,arguments); };
+  P.uniformMatrix3fv=function(loc,tr,v){ if(loc && !tr && v.length===9 && arguments.length===3 && same(loc,v,9)){ stats.uniform++; return; } return _um3.apply(this,arguments); };
+  var _lw=P.lineWidth;
+  P.lineWidth=function(w){ if(this._fcLW===w){ stats.lineWidth++; return; } this._fcLW=w; return _lw.apply(this,arguments); };
+  var _cen=P.enable, _cdis=P.disable;
+  P.enable=function(cap){ var c=this._fcCap||(this._fcCap={}); if(c[cap]===1){ stats.cap++; return; } c[cap]=1; return _cen.call(this,cap); };
+  P.disable=function(cap){ var c=this._fcCap||(this._fcCap={}); if(c[cap]===2){ stats.cap++; return; } c[cap]=2; return _cdis.call(this,cap); };
+  var _vp2=P.viewport;
+  P.viewport=function(x,y,w,h){ var a=this._fcVP; if(a && a[0]===x && a[1]===y && a[2]===w && a[3]===h){ stats.viewport++; return; } return _vp2.apply(this,arguments); };
+})();
 </script>
 <script>
 // FCWEB GL tracer: wrap WebGL2 draw calls to see what actually reaches the GPU.
