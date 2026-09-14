@@ -191,6 +191,9 @@ Module['preRun'].push(function () {
       var qs = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
       if (qs.has('skipCoin')) { ENV.FCWEB_SKIP_COIN = '1'; }
       if (qs.has('skipWb'))   { ENV.FCWEB_SKIP_WB = '1'; }
+      // OCC's thread pool size (patches/freecad.patch, AppPart.cpp): bounded to 6 by default;
+      // ?occthreads=1 is the old serial pool, for A/Bs of tessellation and booleans.
+      if (qs.has('occthreads')) { ENV.FCWEB_OCC_THREADS = String(parseInt(qs.get('occthreads'), 10) || 1); }
       // 3D viewport is ON by default now that the render pipeline works; ?no3d opts out.
       if (!qs.has('no3d'))     { ENV.FCWEB_ENABLE_3D = '1'; ENV.FCWEB_NO_FBO0 = '1'; }
       if (qs.has('nofbo0'))    { ENV.FCWEB_NO_FBO0 = '1'; }

@@ -5022,30 +5022,50 @@ diff -ruNp a/src/Mod/OpenSCAD/OpenSCADUtils.py b/src/Mod/OpenSCAD/OpenSCADUtils.
 diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
 --- a/src/Mod/Part/App/AppPart.cpp
 +++ b/src/Mod/Part/App/AppPart.cpp
-@@ -27,6 +27,9 @@
+@@ -27,6 +27,12 @@
  #include <IGESControl_Controller.hxx>
  #include <STEPControl_Controller.hxx>
  #include <Standard_Version.hxx>
 +#if defined(__EMSCRIPTEN__)
 +#include <OSD_ThreadPool.hxx>
++#include <algorithm>
++#include <cstdlib>
++#include <emscripten/threading.h>
 +#endif
  
  #include <FCConfig.h>
  
-@@ -222,6 +225,18 @@ PyMOD_INIT_FUNC(Part)
+@@ -222,3 +225,28 @@ PyMOD_INIT_FUNC(Part)
      }
      Base::Console().log("Module: Part\n");
  
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: OCC parallel algorithms share one process-global OSD_ThreadPool. FreeCAD runs
-+    // boolean ops parallel (mkFuse/mkCut/mkCommon SetRunParallel(true) in TopoShape.cpp);
-+    // that spins up the pool, and the NEXT parallel op (BRepMesh inside
-+    // MeshPart.meshFromShape) reuses it -- under emscripten's fixed pthread pool the reuse
-+    // DEADLOCKS and the browser tab hangs (the reproducible "boolean then mesh" crash).
-+    // Confirmed by forcing navigator.hardwareConcurrency=1 (a 0-worker pool => no crash).
-+    // Force OCC fully serial here, before any Part op can create the pool: correctness over
-+    // CPU parallelism, which is the right trade in a single browser tab anyway.
-+    OSD_ThreadPool::DefaultPool()->Init(1);
++    // wasm: OCC parallel algorithms share one process-global OSD_ThreadPool, sized by
++    // default to the machine's logical cores (32 here). emscripten's pthread pool holds
++    // 16 workers (PTHREAD_POOL_SIZE); a thread the pool cannot hand out is created lazily
++    // when the main thread next yields -- which it never does while it is blocked waiting
++    // for that very thread. That was the reproducible "boolean then mesh" hang: the first
++    // parallel op took every worker, the next one waited forever. It was fixed by forcing
++    // the pool serial, which also made every tessellation single-threaded: opening the
++    // 42 MB a2plus assembly spent 14 of 23 s in BRepMesh_IncrementalMesh::Perform
++    // (profiled 2026-09-14) on a machine with 15 idle workers.
++    //
++    // A BOUNDED pool is both: at most 6 threads (created once, kept), well inside the 15
++    // spare workers measured after boot + a document + a boolean/mesh round, never more
++    // than cores - 1. FCWEB_OCC_THREADS (?occthreads=N) overrides, 1 = the old serial.
++    {
++        int n = emscripten_num_logical_cores();
++        n = std::max(1, std::min(6, n - 1));
++        if (const char* env = std::getenv("FCWEB_OCC_THREADS")) {
++            int v = std::atoi(env);
++            if (v >= 1 && v <= 15) {
++                n = v;
++            }
++        }
++        OSD_ThreadPool::DefaultPool()->Init(n);
++        Base::Console().log("wasm: OCC thread pool %d
+", n);
++    }
 +#endif
 +
      // This is highly experimental and we should keep an eye on it

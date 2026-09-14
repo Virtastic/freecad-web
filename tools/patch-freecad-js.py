@@ -1437,7 +1437,7 @@ _DLISTS = (
     'if(so){for(var j=0;j<so.length;j++)R.ops.push(so[j]);var da=a.slice();if(so.idx)da[ii]=BigInt(so.idx);R.ops.push(f,da)}else{R.ops.push(f,a)}}'
     'else R.ops.push(f,a);'
     'if(R.exec)return f.apply(null,arguments)}}};'
-    'if(typeof Module!=="undefined")Module.__fcDL=__fcDL;'
+    'if(typeof Module!=="undefined"){Module.__fcDL=__fcDL;Module.__fcPThread=function(){return typeof PThread!=="undefined"?PThread:null}}'
 )
 PATCHES += [
     (
