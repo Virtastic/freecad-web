@@ -385,6 +385,40 @@ cache would keep the old picture; Coin invalidates on every scene change and the
 for sketching, Draft, FEM and box selection all pass). ?dlists=0 is the escape hatch and
 turns caching off with it.
 
+## Deferred GL teardown -- 2026-09-14 (glue 84a46c4, page 84a46c4)
+
+With lists on, a BIMExample drag frame was still 13,672 WebGL calls for 657 draws: the
+fixed-function emulation tore every batch down (disable attributes, useProgram(null),
+bindBuffer(null)) and the next batch built it back up. The glue now defers the teardown to
+the first point where someone could observe it, and the page shadow cancels a null program
+bind, a null ARRAY_BUFFER bind and an attribute disable when the same state comes back
+before a draw. ?lazyclean=0 and ?glshadow=0 are the escape hatches.
+
+    BIMExample, same session         GPU-bound calls/frame   desk-bench drag (60 rotations)
+    lazy + shadow (default)                  6,563             22.0 ms, 30.6 ms (two runs)
+    ?lazyclean=0&glshadow=0                 12,338             28.0 ms, 46.9 ms
+
+Pixel-identical against ?lazyclean=0 on BIMExample (twice), EngineBlock and
+draft_test_objects; 0 console errors. Leaving pending attribute disables across a draw
+was tried and rejected: ANGLE's D3D11 vertex path validates every enabled attribute (85
+GL_INVALID_OPERATION on one redraw), so they are applied at the draw.
+
+## In the user's own Chrome -- 2026-09-14
+
+Two things the scripted probes never showed, seen through the Chrome extension on the
+real browser (DPR 1.5, 1261x926 page):
+
+- **The window never sized itself.** Boot took ~140 s under load and the page's
+  window-state cycle (showNormal + showFullScreen, the fix for Qt creating its backing
+  store before the device pixel ratio is known) gave up 120 s after page LOAD. Result: the
+  app at 840x617 in the corner, raster UI at 1/dpr, the 3D view rect stale. Fixed in
+  90b15ec: the bound runs from ready and the cycle is re-sent until FCDPR-DONE comes back.
+  If you ever see the app small in the top-left, that is this.
+- **Click flash (reported, open).** The user sees a black frame / another layer for an
+  instant on every click in the 3D view; the probes never do. `?presentlog=1` records one
+  entry per presented frame with the mean luminance of the composite; a hidden tab
+  presents nothing, so the recording tab must be in front while the user clicks.
+
 ## What the gate now checks, so you do not have to
 
 `tools/boot-gate.py --scenario all` runs on every link and covers these lines mechanically,
