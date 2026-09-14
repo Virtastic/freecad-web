@@ -43,8 +43,15 @@ extern void glLightModelfv(GLenum, const GLfloat*);
 extern void glTexCoord3f(GLfloat, GLfloat, GLfloat);
 extern void glTexCoord4f(GLfloat, GLfloat, GLfloat, GLfloat);
 
-void glPushAttrib(GLbitfield m) { (void)m; }
-void glPopAttrib(void) {}
+/* glPushAttrib/glPopAttrib keep only what this file itself models: the pixel zoom. The
+ * axis cross sets glPixelZoom(1/3) inside a glPushAttrib(GL_ALL_ATTRIB_BITS) pair and never
+ * resets it; with no-op push/pop every later glDrawPixels -- Coin's SoText2 labels -- drew at
+ * a third of their size (dots where the colour bar's numbers should be, 2026-09-14). */
+static float fc_zoom[2] = { 1.0f, 1.0f };   /* glPixelZoom: scales glDrawPixels only, as the spec says */
+static float fc_zoom_stack[16][2];
+static int fc_zoom_depth = 0;
+void glPushAttrib(GLbitfield m) { (void)m; if (fc_zoom_depth < 16) { fc_zoom_stack[fc_zoom_depth][0] = fc_zoom[0]; fc_zoom_stack[fc_zoom_depth][1] = fc_zoom[1]; } fc_zoom_depth++; }
+void glPopAttrib(void) { if (fc_zoom_depth > 0) { fc_zoom_depth--; if (fc_zoom_depth < 16) { fc_zoom[0] = fc_zoom_stack[fc_zoom_depth][0]; fc_zoom[1] = fc_zoom_stack[fc_zoom_depth][1]; } } }
 void glPushClientAttrib(GLbitfield m) { (void)m; }
 void glPopClientAttrib(void) {}
 /* glRect(x1,y1,x2,y2) is defined by the GL spec as exactly this quad, in this winding.
@@ -78,7 +85,6 @@ void glAccum(GLenum op, GLfloat v) { (void)op;(void)v; }
 void glColorMaterial(GLenum f, GLenum m) { (void)f;(void)m; }
 void glGetDoublev(GLenum pn, GLdouble* p) { (void)pn; if (p) { for (int i=0;i<16;++i) p[i]=(i%5==0)?1.0:0.0; } }
 /* glPixelZoom scales glDrawPixels only (never glBitmap), as the spec says; see the raster ops at the end. */
-static float fc_zoom[2] = { 1.0f, 1.0f };
 void glPixelZoom(GLfloat x, GLfloat y) { fc_zoom[0] = x; fc_zoom[1] = y; }
 void glTexCoord4fv(const GLfloat* v) { if (v) glTexCoord4f(v[0],v[1],v[2],v[3]); }
 // Returns GLint (hit count in GL_SELECT/GL_FEEDBACK exit) — a void definition
