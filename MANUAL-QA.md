@@ -360,6 +360,31 @@ the web build is genuinely behind (2-5x): Coin traversal at wasm speed. Opening 
 within 2x everywhere and equal on ArchDetail. Desktop drag numbers are uncapped offscreen
 renders; on screen the desktop is vsync-limited like everything else.
 
+## Display lists -- 2026-09-14 (engine 69f277f9, glue with the __fcDL recorder)
+
+Coin's render caches were the desktop's advantage on static scenes and had never worked
+here: glGenLists returned 0 since the first link, and two switches of our own (patch and
+page) kept caching off so that Coin would not re-walk into empty caches every frame. The
+glue now records every GL import between glNewList/glEndList (pointer data copied, client
+arrays snapshotted, VBO draws as offsets, our own raster text ops re-evaluated at replay)
+and glCallList replays it. Same session, same load, lists on vs ?dlists=0:
+
+    FILE                lists on  lists off   px differ
+    BIMExample             50.3      39.6        15
+    draft_test_objects     50.2      40.6         0
+    ArchDetail             32.0      27.0         0
+    EngineBlock            53.4      52.8         0 (after the merger colour fix)
+    AssemblyExample        58.1      53.9         0
+    FEMExample             55.4      54.4       1-px label offsets on the colour bar
+    PartDesignExample      55.3      59.2         0
+
+Against the desktop table above: BIMExample 50 vs 75 (was 15-40), draft_test_objects 50
+vs 13, ArchDetail 32 vs 4, the light files at the 60 Hz cap on both. What to look for:
+edit a sketch, move an object, change a colour -- the change must show at once (a stale
+cache would keep the old picture; Coin invalidates on every scene change and the probes
+for sketching, Draft, FEM and box selection all pass). ?dlists=0 is the escape hatch and
+turns caching off with it.
+
 ## What the gate now checks, so you do not have to
 
 `tools/boot-gate.py --scenario all` runs on every link and covers these lines mechanically,
