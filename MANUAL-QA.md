@@ -330,6 +330,36 @@ widget layer, the present pass, and emscripten's per-access heap-view refresh
 frame, getParameter on temp-buffer creation) are gone. Re-measure on an idle machine before
 reading anything else into these numbers.
 
+## Against DESKTOP FreeCAD 1.1.3 on the same machine -- 2026-09-14
+
+The reference that was missing. The official Windows 1.1.3 installer (winget, hash-verified)
+was extracted with 7-Zip into a scratch directory and run portably -- nothing installed --
+with scratchpad/desk-bench.py: the same example files, the same stimulus as the web bench
+(10 view-API changes, each followed by updateGui(); then 60 small camera rotations, one
+frame each), same RTX 4080, same session, same 45-90% external CPU load on both. The web
+numbers are this day's runs (bench-22 for the view changes, the analysis table and the
+floor probe for drags); neither side had the machine to itself.
+
+    FILE                DESKTOP view ms  WEB view ms   DESKTOP drag fps  WEB drag fps   DESKTOP open s  WEB open s
+    ArchDetail                171            50              3.9            19-27           18.7          17.4
+    draft_test_objects         73            52             13.3            27-32            1.8           1.0
+    BIMExample                 12            37             75              15-40           17.8          31.0
+    AssemblyExample             8            16            182              25-47            1.6           2.9
+    EngineBlock                 4            34            244              27-57            0.6           1.6
+    FEMExample                  3            59            259              33               2.3           5.4
+    PartDesignExample           4            36            302              37-59            0.4           0.4
+    empty document              -             -              -              45-52 (the floor)
+
+Reading it: on the Draft-heavy files the web build is FASTER than the desktop on this
+machine (ArchDetail 5-7x, draft_test_objects 2x -- the desktop spends its frame in
+SoAsciiText/FreeType and immediate-mode dimension geometry that the web build batches). On
+the light files the desktop renders an offscreen frame in 3-5 ms and the web build sits at
+its ~20 ms per-frame floor (Qt repaint + compose + present, rAF-capped at 60): 4-6x in raw
+frame time, both far above what a 60 Hz monitor shows. BIMExample is the one file where
+the web build is genuinely behind (2-5x): Coin traversal at wasm speed. Opening times are
+within 2x everywhere and equal on ArchDetail. Desktop drag numbers are uncapped offscreen
+renders; on screen the desktop is vsync-limited like everything else.
+
 ## What the gate now checks, so you do not have to
 
 `tools/boot-gate.py --scenario all` runs on every link and covers these lines mechanically,
