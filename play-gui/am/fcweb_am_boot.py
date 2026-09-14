@@ -408,8 +408,11 @@ def install():
         if os.path.exists(ttf):
             fdir = "/tmp/fcweb-fonts"
             os.makedirs(fdir, exist_ok=True)
+            # Coin does not split FreeCAD's comma list: the whole string is one font name,
+            # unknown to its table, handed to FT_New_Face as a path -- so that path exists.
             for link in (os.path.join(fdir, "Arial.ttf"), os.path.join(fdir, "arial.ttf"),
-                         "/defaultFont", "/Helvetica"):
+                         "/defaultFont", "/Helvetica", "/Helvetica,Arial,Times New Roman",
+                         "/Arial", "/Sans", "/sans"):
                 if not os.path.lexists(link):
                     os.symlink(ttf, link)
             os.environ["COIN_FONT_PATH"] = fdir
