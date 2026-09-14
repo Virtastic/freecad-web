@@ -5035,7 +5035,7 @@ diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
  
  #include <FCConfig.h>
  
-@@ -222,3 +225,28 @@ PyMOD_INIT_FUNC(Part)
+@@ -222,6 +225,34 @@ PyMOD_INIT_FUNC(Part)
      }
      Base::Console().log("Module: Part\n");
  
@@ -5063,8 +5063,7 @@ diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
 +            }
 +        }
 +        OSD_ThreadPool::DefaultPool()->Init(n);
-+        Base::Console().log("wasm: OCC thread pool %d
-", n);
++        Base::Console().log("wasm: OCC thread pool %d\n", n);
 +    }
 +#endif
 +
