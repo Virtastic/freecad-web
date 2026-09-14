@@ -77,7 +77,9 @@ void glPolygonStipple(const GLubyte* m) { (void)m; }
 void glAccum(GLenum op, GLfloat v) { (void)op;(void)v; }
 void glColorMaterial(GLenum f, GLenum m) { (void)f;(void)m; }
 void glGetDoublev(GLenum pn, GLdouble* p) { (void)pn; if (p) { for (int i=0;i<16;++i) p[i]=(i%5==0)?1.0:0.0; } }
-void glPixelZoom(GLfloat x, GLfloat y) { (void)x;(void)y; }
+/* glPixelZoom scales glDrawPixels only (never glBitmap), as the spec says; see the raster ops at the end. */
+static float fc_zoom[2] = { 1.0f, 1.0f };
+void glPixelZoom(GLfloat x, GLfloat y) { fc_zoom[0] = x; fc_zoom[1] = y; }
 void glTexCoord4fv(const GLfloat* v) { if (v) glTexCoord4f(v[0],v[1],v[2],v[3]); }
 // Returns GLint (hit count in GL_SELECT/GL_FEEDBACK exit) — a void definition
 // is a wasm signature mismatch vs callers expecting the count (mesh picking).
@@ -276,8 +278,8 @@ static GLuint fc_cached_texture(GLsizei w, GLsizei h, const GLubyte* rgba) {
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D_, tex);
-    glTexParameteri(GL_TEXTURE_2D_, 0x2801 /* MIN_FILTER */, 0x2600 /* NEAREST */);
-    glTexParameteri(GL_TEXTURE_2D_, 0x2800 /* MAG_FILTER */, 0x2600);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2801 /* MIN_FILTER */, 0x2601 /* LINEAR */);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2800 /* MAG_FILTER */, 0x2601);
     glTexParameteri(GL_TEXTURE_2D_, 0x2802 /* WRAP_S */, 0x812F /* CLAMP_TO_EDGE */);
     glTexParameteri(GL_TEXTURE_2D_, 0x2803 /* WRAP_T */, 0x812F);
     glTexImage2D(GL_TEXTURE_2D_, 0, GL_RGBA_, w, h, 0, GL_RGBA_, GL_UNSIGNED_BYTE_, rgba);
@@ -286,7 +288,7 @@ static GLuint fc_cached_texture(GLsizei w, GLsizei h, const GLubyte* rgba) {
     return tex;
 }
 
-static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* rgba) {
+static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* rgba, float zx, float zy) {
     const GLenum GL_TEXTURE_2D_ = 0x0DE1;
     const GLenum GL_MODELVIEW_ = 0x1700, GL_PROJECTION_ = 0x1701, GL_TRIANGLE_FAN_ = 0x0006;
     const GLenum GL_BLEND_ = 0x0BE2, GL_LIGHTING_ = 0x0B50;
@@ -316,9 +318,9 @@ static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* 
     const float zq = -fc_raster.z;
     glBegin(GL_TRIANGLE_FAN_);
     glTexCoord2f(0.0f, 0.0f); glVertex3f(x, y, zq);
-    glTexCoord2f(1.0f, 0.0f); glVertex3f(x + (float)w, y, zq);
-    glTexCoord2f(1.0f, 1.0f); glVertex3f(x + (float)w, y + (float)h, zq);
-    glTexCoord2f(0.0f, 1.0f); glVertex3f(x, y + (float)h, zq);
+    glTexCoord2f(1.0f, 0.0f); glVertex3f(x + (float)w * zx, y, zq);
+    glTexCoord2f(1.0f, 1.0f); glVertex3f(x + (float)w * zx, y + (float)h * zy, zq);
+    glTexCoord2f(0.0f, 1.0f); glVertex3f(x, y + (float)h * zy, zq);
     glEnd();
 
     glColor4f(fc_raster.color[0], fc_raster.color[1], fc_raster.color[2], fc_raster.color[3]);
@@ -336,7 +338,7 @@ static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* 
 void glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const void* pixels) {
     if (!fc_raster.valid) return;
     if (format == 0x1908 /* GL_RGBA */ && type == 0x1401 /* GL_UNSIGNED_BYTE */) {
-        fc_draw_rgba(fc_raster.x, fc_raster.y, w, h, (const GLubyte*)pixels);
+        fc_draw_rgba(fc_raster.x, fc_raster.y, w, h, (const GLubyte*)pixels, fc_zoom[0], fc_zoom[1]);
     }
     /* Other formats (depth, stencil, colour index) are not what any caller here sends. */
 }
@@ -358,7 +360,7 @@ void glBitmap(GLsizei w, GLsizei h, GLfloat xorig, GLfloat yorig, GLfloat xmove,
                     dst[0] = r; dst[1] = g; dst[2] = b; dst[3] = on ? a : 0;
                 }
             }
-            fc_draw_rgba(fc_raster.x - xorig, fc_raster.y - yorig, w, h, rgba);
+            fc_draw_rgba(fc_raster.x - xorig, fc_raster.y - yorig, w, h, rgba, 1.0f, 1.0f);
             free(rgba);
         }
     }
