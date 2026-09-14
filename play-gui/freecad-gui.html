@@ -2673,6 +2673,23 @@ window.fcRunPy = fcRunPy;
   // real read still reports whatever happened.
   var _ge=P.getError;
   P.getError=function(){ var now=performance.now(); if(this._fcGEat!==undefined && now-this._fcGEat<50) return 0; this._fcGEat=now; return _ge.call(this); };
+  // The raster text in gl_legacy_stubs.c (axis letters, colour bar numbers) saves and
+  // restores the texture binding and blend function around its quad; asked of WebGL those
+  // are round trips -- 12 a frame for three letters, 12.5% of a PartDesignExample drag
+  // (measured 2026-09-14). All of it is state that passes through here.
+  var TEXTURE_2D=0x0DE1, TEXTURE0=0x84C0, TEXTURE_BINDING_2D=0x8069, BLEND_SRC_RGB=0x80C9, BLEND_DST_RGB=0x80C8, BLEND_SRC_ALPHA=0x80CB, BLEND_DST_ALPHA=0x80CA;
+  var _at=P.activeTexture; P.activeTexture=function(u){ this._fcUnit=u-TEXTURE0; return _at.apply(this,arguments); };
+  var _bt=P.bindTexture; P.bindTexture=function(target,tex){ if(target===TEXTURE_2D){ (this._fcTex2D||(this._fcTex2D=[]))[this._fcUnit||0]=tex||null; } return _bt.apply(this,arguments); };
+  var _dt=P.deleteTexture; P.deleteTexture=function(tex){ var a=this._fcTex2D; if(a){ for(var i=0;i<a.length;i++) if(a[i]===tex) a[i]=null; } return _dt.apply(this,arguments); };
+  var _gp2=P.getParameter;
+  P.getParameter=function(pn){
+    if(pn===TEXTURE_BINDING_2D){ var a=this._fcTex2D, u=this._fcUnit||0; if(a && u in a) return a[u]; }
+    else if(pn===BLEND_SRC_RGB){ if(this._fcBF) return this._fcBF[0]; }
+    else if(pn===BLEND_DST_RGB){ if(this._fcBF) return this._fcBF[1]; }
+    else if(pn===BLEND_SRC_ALPHA){ if(this._fcBF) return this._fcBF[2]; }
+    else if(pn===BLEND_DST_ALPHA){ if(this._fcBF) return this._fcBF[3]; }
+    return _gp2.apply(this,arguments); };
+  var _ie=P.isEnabled; P.isEnabled=function(cap){ var c=this._fcCap; if(c){ if(c[cap]===1) return true; if(c[cap]===2) return false; } return _ie.call(this,cap); };
   var _vp2=P.viewport;
   P.viewport=function(x,y,w,h){ var a=this._fcVP; if(a && a[0]===x && a[1]===y && a[2]===w && a[3]===h){ stats.viewport++; return; } return _vp2.apply(this,arguments); };
 })();
