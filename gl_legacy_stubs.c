@@ -242,13 +242,56 @@ void glRasterPos2i(GLint x, GLint y) { glRasterPos3f((GLfloat)x, (GLfloat)y, 0.0
 void glRasterPos2d(GLdouble x, GLdouble y) { glRasterPos3f((GLfloat)x, (GLfloat)y, 0.0f); }
 
 /* One RGBA image at window position (x, y), bottom-left origin, rows bottom-up. */
-static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* rgba) {
+/* The images repeat: a glyph of the built-in font is the same 32x14 bitmap every frame, and a
+ * string's RGBA buffer changes only when the string does. A colour bar is ~160 glyphs a frame,
+ * so uploading each one every time is 160 texture creations per paint. Cache by content hash
+ * and size, per GL context (a texture belongs to the context that made it; Coin has one per
+ * view), least-recently-used out. */
+extern long emscripten_webgl_get_current_context(void);
+#define FC_TEXCACHE 256
+static struct { long ctx; GLsizei w, h; unsigned hash; GLuint tex; unsigned stamp; } fc_texcache[FC_TEXCACHE];
+static unsigned fc_texstamp = 0;
+
+static GLuint fc_cached_texture(GLsizei w, GLsizei h, const GLubyte* rgba) {
     const GLenum GL_TEXTURE_2D_ = 0x0DE1, GL_RGBA_ = 0x1908, GL_UNSIGNED_BYTE_ = 0x1401;
+    const long ctx = emscripten_webgl_get_current_context();
+    const size_t n = (size_t)w * (size_t)h * 4;
+    unsigned hash = 2166136261u;                       /* FNV-1a over the pixels */
+    for (size_t i = 0; i < n; i++) { hash ^= rgba[i]; hash *= 16777619u; }
+    int victim = 0;
+    for (int i = 0; i < FC_TEXCACHE; i++) {
+        if (fc_texcache[i].tex && fc_texcache[i].ctx == ctx && fc_texcache[i].w == w && fc_texcache[i].h == h && fc_texcache[i].hash == hash) {
+            fc_texcache[i].stamp = ++fc_texstamp;
+            glBindTexture(GL_TEXTURE_2D_, fc_texcache[i].tex);
+            return fc_texcache[i].tex;
+        }
+        if (!fc_texcache[i].tex) { victim = i; break; }
+        if (fc_texcache[i].stamp < fc_texcache[victim].stamp) victim = i;
+    }
+    if (fc_texcache[victim].tex) {
+        /* A texture from another context cannot be deleted here; let it leak with its view. */
+        if (fc_texcache[victim].ctx == ctx) glDeleteTextures(1, &fc_texcache[victim].tex);
+        fc_texcache[victim].tex = 0;
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D_, tex);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2801 /* MIN_FILTER */, 0x2600 /* NEAREST */);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2800 /* MAG_FILTER */, 0x2600);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2802 /* WRAP_S */, 0x812F /* CLAMP_TO_EDGE */);
+    glTexParameteri(GL_TEXTURE_2D_, 0x2803 /* WRAP_T */, 0x812F);
+    glTexImage2D(GL_TEXTURE_2D_, 0, GL_RGBA_, w, h, 0, GL_RGBA_, GL_UNSIGNED_BYTE_, rgba);
+    fc_texcache[victim].ctx = ctx; fc_texcache[victim].w = w; fc_texcache[victim].h = h;
+    fc_texcache[victim].hash = hash; fc_texcache[victim].tex = tex; fc_texcache[victim].stamp = ++fc_texstamp;
+    return tex;
+}
+
+static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* rgba) {
+    const GLenum GL_TEXTURE_2D_ = 0x0DE1;
     const GLenum GL_MODELVIEW_ = 0x1700, GL_PROJECTION_ = 0x1701, GL_TRIANGLE_FAN_ = 0x0006;
     const GLenum GL_BLEND_ = 0x0BE2, GL_LIGHTING_ = 0x0B50;
     GLint vp[4], oldtex = 0, blendsrc = 0, blenddst = 0;
-    GLuint tex = 0;
-    GLubyte blendWas, lightWas;
+    GLubyte blendWas, lightWas, texWas;
     if (w <= 0 || h <= 0 || !rgba) return;
     glGetIntegerv(0x0BA2 /* GL_VIEWPORT */, vp);
     glGetIntegerv(0x8069 /* GL_TEXTURE_BINDING_2D */, &oldtex);
@@ -257,19 +300,15 @@ static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* 
     glGetIntegerv(0x80C8 /* GL_BLEND_DST_RGB */, &blenddst);
     blendWas = glIsEnabled(GL_BLEND_);
     lightWas = glIsEnabled(GL_LIGHTING_);
+    texWas = glIsEnabled(GL_TEXTURE_2D_);   /* answered by the glue from the fixed-function state */
 
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D_, tex);
-    glTexParameteri(GL_TEXTURE_2D_, 0x2801 /* MIN_FILTER */, 0x2600 /* NEAREST */);
-    glTexParameteri(GL_TEXTURE_2D_, 0x2800 /* MAG_FILTER */, 0x2600);
-    glTexParameteri(GL_TEXTURE_2D_, 0x2802 /* WRAP_S */, 0x812F /* CLAMP_TO_EDGE */);
-    glTexParameteri(GL_TEXTURE_2D_, 0x2803 /* WRAP_T */, 0x812F);
-    glTexImage2D(GL_TEXTURE_2D_, 0, GL_RGBA_, w, h, 0, GL_RGBA_, GL_UNSIGNED_BYTE_, rgba);
+    fc_cached_texture(w, h, rgba);   /* binds it */
 
     glMatrixMode(GL_PROJECTION_); glPushMatrix(); glLoadIdentity();
     glOrtho(vp[0], vp[0] + vp[2], vp[1], vp[1] + vp[3], -1.0, 1.0);
     glMatrixMode(GL_MODELVIEW_); glPushMatrix(); glLoadIdentity();
     glDisable(GL_LIGHTING_);
+    glEnable(GL_TEXTURE_2D_);   /* the emulation's shader samples only an ENABLED unit; a bound texture alone draws white */
     glEnable(GL_BLEND_);
     glBlendFunc(0x0302 /* SRC_ALPHA */, 0x0303 /* ONE_MINUS_SRC_ALPHA */);
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);           /* the image carries its own colour */
@@ -290,8 +329,8 @@ static void fc_draw_rgba(float x, float y, GLsizei w, GLsizei h, const GLubyte* 
     if (!blendWas) glDisable(GL_BLEND_);
     glBlendFunc((GLenum)blendsrc, (GLenum)blenddst);
     if (lightWas) glEnable(GL_LIGHTING_);
+    if (!texWas) glDisable(GL_TEXTURE_2D_);
     glBindTexture(GL_TEXTURE_2D_, (GLuint)oldtex);
-    glDeleteTextures(1, &tex);
 }
 
 void glDrawPixels(GLsizei w, GLsizei h, GLenum format, GLenum type, const void* pixels) {

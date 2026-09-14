@@ -323,6 +323,16 @@ PATCHES = [
         'if(pname==2816){(growMemViews(),HEAPF32).set(GLImmediate.clientColor,params/4)}else if(pname==2982){',
     ),
     (
+        # gl_legacy_stubs.c's raster ops (glBitmap/glDrawPixels) enable GL_TEXTURE_2D around
+        # their quad -- the emulation's fixed-function shader only samples a unit that has
+        # been glEnable()d -- and put it back afterwards, which needs the answer WebGL cannot
+        # give (GL_TEXTURE_2D is not a WebGL capability). Unit 0, which is the one Coin's
+        # text draws on.
+        'glIsEnabled: GL_TEXTURE_2D from the fixed-function state',
+        '_glIsEnabled=_emscripten_glIsEnabled=cap=>{if(cap==2912){',
+        '_glIsEnabled=_emscripten_glIsEnabled=cap=>{if(cap==3553){return GLImmediate.TexEnvJIT.getTexUnitType(0)==3553?1:0}else if(cap==2912){',
+    ),
+    (
         'GL emulation default lighting',
         'GLEmulation.lightModelAmbient=new Float32Array([.2,.2,.2,1]);'
         'GLEmulation.materialAmbient=new Float32Array([.2,.2,.2,1]);',
