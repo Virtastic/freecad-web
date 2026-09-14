@@ -1323,6 +1323,8 @@ PATCHES += [
         'handleAsync:async startAsync=>{runtimeKeepalivePush();var S=Asyncify.__stk;S.init();var sp=stackSave(),reg=S.of(sp);if(!reg)S.main=sp;'
         'try{var pr=startAsync();if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
         'finally{stackRestore(sp);runtimeKeepalivePop()}}',
+        # 4th field: the JSPI-live entries below insert into this body.
+        'if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}',
     ),
     (
         'JSPI stacks: promising exports run on a private stack, and the pool they come from',
@@ -1334,11 +1336,48 @@ PATCHES += [
         'stackRestore(S.safe(outer,oreg,ogen));'
         'var done=function(){if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};'
         'if(r&&typeof r.then==="function")r.then(done,done);else done();return r}}};' + _JSPI_STACKS,
+        # 4th field: the JSPI-live entries below insert into this body.
+        'Asyncify.__stk={main:0,regions:[],free:[],size:0,',
     ),
     (
         'JSPI stacks: the export name reaches the wrapper',
         'original=Asyncify.makeAsyncFunction(original)}',
         'original=Asyncify.makeAsyncFunction(original,x)}',
+    ),
+]
+
+# ---- JSPI live: is the code running right now on a promising stack? ----------------------
+#
+# gl_legacy_stubs.c's fcweb_maybe_yield() parks a long computation (document open,
+# recompute) for one turn of the browser event loop so the tab stays alive -- legal only
+# while a promising activation is executing; from a raw callback into wasm the suspend
+# traps. Nothing in JSPI says which is the case, so count it: +1 when a promising export
+# (or main) is entered, -1 when it suspends, +1 when it resumes, -1 when it completes.
+# Exactly one promising activation executes at a time, so the count is 0 or 1.
+PATCHES += [
+    (
+        'JSPI live: entering a promising export',
+        'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;'
+        'try{r=p.apply(null,arguments)}catch(e){stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+        'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;Asyncify.__live=(Asyncify.__live|0)+1;'
+        'try{r=p.apply(null,arguments)}catch(e){Asyncify.__live--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+    ),
+    (
+        'JSPI live: a promising export completes',
+        'var done=function(){if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
+        'var done=function(){Asyncify.__live--;if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
+    ),
+    (
+        'JSPI live: main counts too',
+        'if(name==="main"||name==="__main_argc_argv")return p;',
+        'if(name==="main"||name==="__main_argc_argv")return function(){Module.__fcLive=function(){return Asyncify.__live|0};Asyncify.__live=(Asyncify.__live|0)+1;var r=p.apply(null,arguments);var d=function(){Asyncify.__live--};if(r&&typeof r.then==="function")r.then(d,d);else d();return r};',
+    ),
+    (
+        'JSPI live: a suspend leaves, a resume comes back',
+        'try{var pr=startAsync();if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
+        'finally{stackRestore(sp);runtimeKeepalivePop()}}',
+        'var __dec=false;try{var pr=startAsync();Asyncify.__live--;__dec=true;if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
+        'finally{if(__dec)Asyncify.__live++;stackRestore(sp);runtimeKeepalivePop()}}',
     ),
 ]
 

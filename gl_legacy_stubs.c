@@ -118,6 +118,32 @@ typedef unsigned int GLuint;
  * by tools/patch-freecad-js.py): every GL import called between glNewList and glEndList is
  * recorded, pointer arguments are copied, and glCallList replays the list. Without the glue
  * object glGenLists answers 0 and Coin renders uncached, as it did before 2026-09-14. */
+/* ---- yielding to the browser during long synchronous work -----------------------------
+ *
+ * A document open or recompute is one synchronous run of wasm: the tab handles no input,
+ * paints nothing, and after a while Chrome offers to kill it. The desktop keeps its window
+ * alive from the same place -- Gui::SequencerBar::setValue pumps the event loop every
+ * 100 ms -- but qApp->processEvents() cannot yield to the browser (see the ProgressBar.cpp
+ * hunk in patches/freecad.patch). This can: fcweb_yield_js is an EM_ASYNC_JS, which under
+ * -sJSPI is a suspending import, so the call parks the whole computation for one turn of
+ * the event loop and resumes. Legal only on a promising stack: Asyncify.__live (kept by
+ * the glue patches, tools/patch-freecad-js.py "JSPI live") counts the promising
+ * activation currently executing; every Qt DOM event, the Python bridge and main() are
+ * one, a raw callback (the compositor's animation frame, a timer into embind) is not.
+ * Rate-limited to one turn per 100 ms, like the desktop's pump.
+ */
+EM_JS(int, fcweb_yield_ok, (void), { try { return (typeof Asyncify !== "undefined" && (Asyncify.__live | 0) > 0) ? 1 : 0; } catch (e) { return 0; } });
+EM_ASYNC_JS(void, fcweb_yield_js, (void), { await new Promise(function (r) { setTimeout(r, 0); }); if (typeof Module !== "undefined") Module.__fcYields = (Module.__fcYields | 0) + 1; });
+static double fc_last_yield = 0;
+EMSCRIPTEN_KEEPALIVE void fcweb_maybe_yield(void) {
+    double now = emscripten_get_now();
+    if (now - fc_last_yield < 100.0) return;
+    if (!fcweb_yield_ok()) return;
+    fc_last_yield = now;
+    fcweb_yield_js();
+    fc_last_yield = emscripten_get_now();
+}
+
 EM_JS(unsigned int, fcweb_dl_gen, (int range), { return (typeof __fcDL !== "undefined") ? __fcDL.gen(range) : 0; });
 EM_JS(void, fcweb_dl_begin, (unsigned int list, unsigned int mode), { if (typeof __fcDL !== "undefined") __fcDL.begin(list, mode); });
 EM_JS(void, fcweb_dl_end, (void), { if (typeof __fcDL !== "undefined") __fcDL.end(); });

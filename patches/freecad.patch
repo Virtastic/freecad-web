@@ -2044,6 +2044,19 @@ diff -ruNp a/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp b/src/Gui/Pre
 diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
 --- a/src/Gui/ProgressBar.cpp
 +++ b/src/Gui/ProgressBar.cpp
+@@ -38,6 +38,12 @@
+ #include "WaitCursor.h"
+ 
+ 
++#if defined(__EMSCRIPTEN__)
++// FCWEB: gl_legacy_stubs.c. Parks the running computation for one turn of the browser
++// event loop (JSPI), at most every 100 ms -- what qApp->processEvents() is for below.
++extern "C" void fcweb_maybe_yield(void);
++#endif
++
+ using namespace Gui;
+ 
+ 
 @@ -179,7 +179,11 @@ void SequencerBar::checkAbort()
              return;
          }
@@ -2056,17 +2069,19 @@ diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
          return;
      }
      // restore cursor
-@@ -266,7 +270,9 @@ void SequencerBar::setValue(int step)
+@@ -266,7 +270,11 @@ void SequencerBar::setValue(int step)
              }
              else {
                  d->bar->setValueEx(d->bar->value() + 1);
 +#ifndef __EMSCRIPTEN__
                  qApp->processEvents();
++#else
++                fcweb_maybe_yield();
 +#endif
              }
          }
      }
-@@ -292,7 +298,18 @@ void SequencerBar::setValue(int step)
+@@ -292,7 +298,21 @@ void SequencerBar::setValue(int step)
                      showRemainingTime();
                  }
                  d->bar->resetObserveEventFilter();
@@ -2078,9 +2093,12 @@ diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
 +                // suspend never resumes, everything after it silently never runs — most
 +                // visibly GuiDocument.xml, so every ViewProvider's Proxy and Visibility
 +                // stay unrestored (FEMExample opened with all objects hidden and
-+                // Proxy=None). The progress bar cannot animate during synchronous wasm
-+                // work anyway, so skip the pump entirely here.
++                // Proxy=None). That was the suspend-stack corruption fixed 2026-09-14 (private
++                // stacks per promising call); processEvents() still cannot yield to the browser,
++                // so the tab froze for the whole load and Chrome offered to kill it. Yield instead.
                  qApp->processEvents();
++#else
++                fcweb_maybe_yield();
 +#endif
              }
          }
