@@ -2244,19 +2244,27 @@ window.fcRunPy = fcRunPy;
    // 5 s is the measured minimum for the cycle to stick; on a cold boot the workbench comes
    // later and the cycle waits for it. Retries while the interpreter is busy instead of
    // dropping the call: a dropped call left the window at 1/dpr size for the session.
-   let readyAt=0, sent=false;
+   //
+   // The bound is measured from READY, not from page load, and a sent call that never
+   // reports back is sent again. The old form gave up 120 s after load: a boot that took
+   // 140 s (measured 2026-09-14 in the user's own Chrome, machine under load) never ran
+   // the cycle, the app sat at 840x617 in a 1261x926 window with its raster store at
+   // 1/dpr for the whole session, and the probes -- which boot in under two minutes --
+   // never saw it.
+   let readyAt=0, sentAt=0, tries=0;
    const iv2=setInterval(()=>{
      try{
        const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
-       if(!readyAt){ readyAt=performance.now(); return; }
-       if(!sent && window.__fcWorkReady && performance.now()-readyAt>=5000 && !window.__fcPyBusy){
+       const now=performance.now();
+       if(!readyAt){ readyAt=now; return; }
+       if(window.__fcDprDone || /FCDPR-DONE/.test(logEl.textContent||'')){ clearInterval(iv2); __dprApplied(); return; }
+       if(window.__fcWorkReady && now-readyAt>=5000 && !window.__fcPyBusy && (!sentAt || now-sentAt>=15000) && tries<8){
          const n=new TextEncoder().encode(DPR_PY).length+1, q=m._malloc(n);
-         m.stringToUTF8(DPR_PY,q,n); fcRunPy(m,q); sent=true;
+         m.stringToUTF8(DPR_PY,q,n); fcRunPy(m,q); sentAt=now; tries++;
        }
-       if(window.__fcDprDone || /FCDPR-DONE/.test(logEl.textContent||'')){ clearInterval(iv2); __dprApplied(); }
+       if(now-readyAt>300000){ clearInterval(iv2); __dprApplied(); }
      }catch(e){}
    },250);
-   setTimeout(()=>{ clearInterval(iv2); __dprApplied(); }, 120000);
    // Overlay safety net for this gate: 40 s after the app is up, reveal regardless.
    const iv2b=setInterval(()=>{ if(window.__fcAppReady){ clearInterval(iv2b); setTimeout(__dprApplied, 40000); } },500);
  })();
