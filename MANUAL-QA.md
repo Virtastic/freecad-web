@@ -115,6 +115,8 @@ wrong rather than anything that errors.
       your file manager — a `.FCStd` should be there and should keep updating as you work.
       Then reload and confirm it reconnects without asking again. This is the mechanism
       that makes work survive the browser clearing its storage, so it is worth the minute.
+- [ ] The axis cross in the corner shows small X, Y, Z letters next to its arrows, the
+      same size as the desktop's (glPixelZoom; they drew three times too big for one link).
 - [ ] Open one of the bundled examples (BIM is the heaviest — watch for slowness). Since
       2026-09-12 the edges are drawn from a cached array by default (`?vboedges=0` goes
       back to one call per vertex): measured on the dev tree, EngineBlock drag-rotates at
@@ -138,7 +140,9 @@ wrong rather than anything that errors.
       smashed frame -- the result was written, then Python died with 'Fatal Python error:
       Executing a cache' and the page could freeze (the boot gate's post-fem hang). Every
       promising call now runs on its own stack. Expect: the result object appears, the colour
-      map paints (per-vertex colours, a colour bar with a visible gradient), constraint
+      map paints (per-vertex colours, a colour bar with a visible gradient AND its numbers
+      beside it in DejaVu Sans -- every 2D label was invisible until 2026-09-14, when the
+      raster shims were empty, and blocky until Coin got FreeType the same day), constraint
       arrows are arrow-sized, and NOTHING in the Report view mentions a fatal error.
 
 **Feel (3 min)**
