@@ -3116,6 +3116,7 @@ window.fcRunPy = fcRunPy;
     ].join("\n");
     var RESTORE_PY = [
       "import FreeCAD as _App, os as _os, sys as _s",
+      "import FreeCAD as App, FreeCADGui as Gui",   // what FreeCADGuiInit.py binds; harmless twice, fatal to be early without
       "_rec = '" + AUTOSAVE_DIR + "'",
       "_n = 0",
       "import time as _t",
@@ -3311,6 +3312,12 @@ window.fcRunPy = fcRunPy;
           }
           installed = true; append('[autosave] observer installed'); return;
         }
+        // Not before the workbench is up. Ready is Qt's, not FreeCAD's: opening a document
+        // makes Gui::Document run `Gui.SendMsgToActiveView(...)` through the interpreter,
+        // and in one boot in four the restore won the race against FreeCADGuiInit.py, which
+        // is what binds `Gui` in __main__ -- a NameError traceback in the Report view on a
+        // clean start (measured 2026-09-14, 2 of 8 boots).
+        if (!restored && !window.__fcWorkReady) return;
         if (!restored) { runPy(RESTORE_PY); restored = true; return; }
         clearInterval(poll);
         setInterval(function(){ runPy(AUTOSAVE_PY); }, 1500);
