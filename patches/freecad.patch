@@ -6371,3 +6371,113 @@ diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
  
      glTexCoord2f(flip ? 0.F : 1.F, 1.F);
      glVertex2f(-this->imgWidth / 2, this->imgHeight / 2);
+diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
+--- a/src/App/Document.cpp
++++ b/src/App/Document.cpp
+@@ -64,6 +64,36 @@
+ #include <Base/UnitsApi.h>
+ 
+ #include "Document.h"
++#if defined(__EMSCRIPTEN__)
++// FCWEB: gl_legacy_stubs.c. Park the load for one turn of the browser event loop (JSPI),
++// at most every 100 ms, so the tab paints and Chrome does not call it hung.
++//
++// Every load runs with the GIL held (Gui::Application::open goes through
++// FreeCAD.openDocument), and Python that runs while the load is parked may release the
++// GIL and suspend in turn (PySide releases it around QDialog::exec; the boot gate's
++// network probe did the same): the resumed load then freed a tuple with no thread
++// state -- fatal PyThreadState_Get, gate run 34913239544. So the park is a proper
++// blocking call: the GIL is released before it and taken back after, and if another
++// activation holds it when the turn ends, the load parks again until it is free.
++extern "C" int fcweb_yield_due(void);
++extern "C" void fcweb_yield_now(void);
++static void fcweb_yield_point()
++{
++    if (!fcweb_yield_due()) {
++        return;
++    }
++    if (!PyGILState_Check()) {
++        try { fcweb_yield_now(); } catch (...) {}
++        return;
++    }
++    PyThreadState* ts = PyEval_SaveThread();
++    try { fcweb_yield_now(); } catch (...) {}
++    for (int spin = 0; PyGILState_Check() && spin < 100000; ++spin) {
++        try { fcweb_yield_now(); } catch (...) {}
++    }
++    PyEval_RestoreThread(ts);
++}
++#endif
+ #include "private/DocumentP.h"
+ #include "Application.h"
+ #include "AutoTransaction.h"
+@@ -1546,6 +1576,9 @@ std::vector<DocumentObject*> Document::r
+             try {
+                 FC_TRACE("restoring " << pObj->getFullName());
+                 pObj->Restore(reader);
++#if defined(__EMSCRIPTEN__)
++                fcweb_yield_point();
++#endif
+             }
+             // Try to continue only for certain exception types if not handled
+             // by the feature type. For all other exception types abort the process.
+@@ -2092,6 +2125,9 @@ bool Document::afterRestore(const std::v
+                 d->addRecomputeLog(returnCode);
+             }
+             obj->onDocumentRestored();
++#if defined(__EMSCRIPTEN__)
++            fcweb_yield_point();
++#endif
+             if (touched) {
+                 d->touchedObjs.insert(obj);
+             }
+diff -ruNp a/src/Gui/Document.cpp b/src/Gui/Document.cpp
+--- a/src/Gui/Document.cpp
++++ b/src/Gui/Document.cpp
+@@ -57,6 +57,36 @@
+ 
+ #include "Document.h"
+ #include "DocumentPy.h"
++#if defined(__EMSCRIPTEN__)
++// FCWEB: gl_legacy_stubs.c. Park the load for one turn of the browser event loop (JSPI),
++// at most every 100 ms, so the tab paints and Chrome does not call it hung.
++//
++// Every load runs with the GIL held (Gui::Application::open goes through
++// FreeCAD.openDocument), and Python that runs while the load is parked may release the
++// GIL and suspend in turn (PySide releases it around QDialog::exec; the boot gate's
++// network probe did the same): the resumed load then freed a tuple with no thread
++// state -- fatal PyThreadState_Get, gate run 34913239544. So the park is a proper
++// blocking call: the GIL is released before it and taken back after, and if another
++// activation holds it when the turn ends, the load parks again until it is free.
++extern "C" int fcweb_yield_due(void);
++extern "C" void fcweb_yield_now(void);
++static void fcweb_yield_point()
++{
++    if (!fcweb_yield_due()) {
++        return;
++    }
++    if (!PyGILState_Check()) {
++        try { fcweb_yield_now(); } catch (...) {}
++        return;
++    }
++    PyThreadState* ts = PyEval_SaveThread();
++    try { fcweb_yield_now(); } catch (...) {}
++    for (int spin = 0; PyGILState_Check() && spin < 100000; ++spin) {
++        try { fcweb_yield_now(); } catch (...) {}
++    }
++    PyEval_RestoreThread(ts);
++}
++#endif
+ #include "Application.h"
+ #include "Command.h"
+ #include "Control.h"
+@@ -1969,6 +1999,9 @@ void Document::RestoreDocFile(Base::Read
+             // check if this feature has been registered
+             if (pObj) {
+                 pObj->Restore(*localreader);
++#if defined(__EMSCRIPTEN__)
++                fcweb_yield_point();
++#endif
+             }
+ 
+             if (pObj && treeRank >= 0) {

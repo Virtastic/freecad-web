@@ -135,13 +135,25 @@ typedef unsigned int GLuint;
 EM_JS(int, fcweb_yield_ok, (void), { try { return (typeof Asyncify !== "undefined" && (Asyncify.__live | 0) > 0) ? 1 : 0; } catch (e) { return 0; } });
 EM_ASYNC_JS(void, fcweb_yield_js, (void), { await new Promise(function (r) { setTimeout(r, 0); }); if (typeof Module !== "undefined") Module.__fcYields = (Module.__fcYields | 0) + 1; });
 static double fc_last_yield = 0;
-EMSCRIPTEN_KEEPALIVE void fcweb_maybe_yield(void) {
+/* Is a turn due (100 ms since the last one) AND legal right now? Split from the yield so a
+ * C++ caller can do its bookkeeping between the two -- the document loader releases the GIL
+ * around the park and takes it back after (freecad.patch, Document.cpp), which must not
+ * happen on the 99 calls in 100 that will not park. */
+EMSCRIPTEN_KEEPALIVE int fcweb_yield_due(void) {
     double now = emscripten_get_now();
-    if (now - fc_last_yield < 100.0) return;
-    if (!fcweb_yield_ok()) return;
+    if (now - fc_last_yield < 100.0) return 0;
+    if (!fcweb_yield_ok()) return 0;
     fc_last_yield = now;
+    return 1;
+}
+/* One turn of the event loop now, if legal. */
+EMSCRIPTEN_KEEPALIVE void fcweb_yield_now(void) {
+    if (!fcweb_yield_ok()) return;
     fcweb_yield_js();
     fc_last_yield = emscripten_get_now();
+}
+EMSCRIPTEN_KEEPALIVE void fcweb_maybe_yield(void) {
+    if (fcweb_yield_due()) fcweb_yield_now();
 }
 
 EM_JS(unsigned int, fcweb_dl_gen, (int range), { return (typeof __fcDL !== "undefined") ? __fcDL.gen(range) : 0; });
