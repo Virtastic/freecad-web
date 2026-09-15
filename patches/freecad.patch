@@ -5178,7 +5178,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
  void SoBrepFaceSet::generatePrimitives(SoAction* action)
  {
-@@ -1247,6 +1306,70 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1247,7 +1306,142 @@ void SoBrepFaceSet::generatePrimitives(S
          }
      }
  
@@ -5247,9 +5247,81 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 +#endif
 +
      while (viptr + 2 < viendptr) {
++#if defined(__EMSCRIPTEN__)
++        // FCWEB: a culled face whose triangles are laid out the way ViewProviderPartExt writes
++        // them (v1 v2 v3 -1, pi times) is jumped over, with every index pointer and counter
++        // advanced exactly as the walk below would have advanced it (v1 site + DO_VERTEX x2 +
++        // the per-triangle tail). Walking it was still 40 ms a pick on the a2plus assembly
++        // after the culling (2026-09-15). Anything not in that layout takes the walk.
++        if (skipPart && trinr == 0 && pi > 0 && viptr + 4 * pi <= viendptr) {
++            bool plain = true;
++            for (int k = 0; k < pi && plain; ++k) {
++                const int32_t* t = viptr + 4 * k;
++                plain = t[0] >= 0 && t[1] >= 0 && t[2] >= 0 && t[3] < 0;
++            }
++            if (plain) {
++                viptr += 4 * pi;
++                if (mbind == PER_PART) {
++                    matnr++;
++                }
++                else if (mbind == PER_PART_INDEXED) {
++                    mindices++;
++                }
++                else if (mbind == PER_VERTEX) {
++                    matnr += 3 * pi;
++                }
++                else if (mbind == PER_FACE) {
++                    matnr += pi;
++                }
++                else if (mbind == PER_VERTEX_INDEXED) {
++                    mindices += 4 * pi;
++                }
++                else if (mbind == PER_FACE_INDEXED) {
++                    mindices += pi;
++                }
++                if (nbind == PER_VERTEX) {
++                    normnr += 3 * pi;
++                }
++                else if (nbind == PER_FACE) {
++                    normnr += pi;
++                }
++                else if (nbind == PER_VERTEX_INDEXED) {
++                    nindices += 4 * pi;
++                }
++                else if (nbind == PER_FACE_INDEXED) {
++                    nindices += pi;
++                }
++                if ((tb.isFunction() && tb.needIndices()) || (!tb.isFunction() && tbind != NONE)) {
++                    if (tindices) {
++                        tindices += 3 * pi;
++                    }
++                    else {
++                        texidx += 3 * pi;
++                    }
++                }
++                if (tindices) {
++                    tindices += pi;
++                }
++                faceDetail.setFaceIndex(faceDetail.getFaceIndex() + pi);
++                pi = piptr < piendptr ? *piptr++ : -1;
++                while (pi == 0) {
++                    pi = piptr < piendptr ? *piptr++ : -1;
++                    if (mbind == PER_PART) {
++                        matnr++;
++                    }
++                    else if (mbind == PER_PART_INDEXED) {
++                        mindices++;
++                    }
++                }
++                cullPart();
++                continue;
++            }
++        }
++#endif
          v1 = *viptr++;
          v2 = *viptr++;
-@@ -1322,7 +1445,7 @@ void SoBrepFaceSet::generatePrimitives(S
+         v3 = *viptr++;
+@@ -1322,7 +1516,7 @@ void SoBrepFaceSet::generatePrimitives(S
          }
          pointDetail.setCoordinateIndex(v1);
          vertex.setPoint(coords->get3(v1));
@@ -5258,7 +5330,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
          DO_VERTEX(v2);
          DO_VERTEX(v3);
-@@ -1364,6 +1487,9 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1364,6 +1558,9 @@ void SoBrepFaceSet::generatePrimitives(S
                  }
              }
              trinr = 0;
@@ -5268,7 +5340,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          }
      }
      if (mode != POLYGON) {
-@@ -1380,6 +1506,7 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1380,6 +1577,7 @@ void SoBrepFaceSet::generatePrimitives(S
  }
  
  #undef DO_VERTEX
@@ -5276,7 +5348,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
  void SoBrepFaceSet::renderHighlight(SoGLRenderAction* action, SelContextPtr ctx)
  {
-@@ -2005,6 +2132,22 @@ void SoBrepFaceSet::renderShape(
+@@ -2005,6 +2203,22 @@ void SoBrepFaceSet::renderShape(
      SbBool texture
  )
  {
@@ -5299,7 +5371,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
      // Can we use vertex buffer objects?
      if (hasVBO) {
          int nbinding = nbind;
-@@ -2067,6 +2210,24 @@ void SoBrepFaceSet::renderShape(
+@@ -2067,6 +2281,24 @@ void SoBrepFaceSet::renderShape(
          }
      }
  

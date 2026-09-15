@@ -134,6 +134,79 @@ EMIT = b'''#if defined(__EMSCRIPTEN__)
 
 '''
 
+SKIP = b'''#if defined(__EMSCRIPTEN__)
+        // FCWEB: a culled face whose triangles are laid out the way ViewProviderPartExt writes
+        // them (v1 v2 v3 -1, pi times) is jumped over, with every index pointer and counter
+        // advanced exactly as the walk below would have advanced it (v1 site + DO_VERTEX x2 +
+        // the per-triangle tail). Walking it was still 40 ms a pick on the a2plus assembly
+        // after the culling (2026-09-15). Anything not in that layout takes the walk.
+        if (skipPart && trinr == 0 && pi > 0 && viptr + 4 * pi <= viendptr) {
+            bool plain = true;
+            for (int k = 0; k < pi && plain; ++k) {
+                const int32_t* t = viptr + 4 * k;
+                plain = t[0] >= 0 && t[1] >= 0 && t[2] >= 0 && t[3] < 0;
+            }
+            if (plain) {
+                viptr += 4 * pi;
+                if (mbind == PER_PART) {
+                    matnr++;
+                }
+                else if (mbind == PER_PART_INDEXED) {
+                    mindices++;
+                }
+                else if (mbind == PER_VERTEX) {
+                    matnr += 3 * pi;
+                }
+                else if (mbind == PER_FACE) {
+                    matnr += pi;
+                }
+                else if (mbind == PER_VERTEX_INDEXED) {
+                    mindices += 4 * pi;
+                }
+                else if (mbind == PER_FACE_INDEXED) {
+                    mindices += pi;
+                }
+                if (nbind == PER_VERTEX) {
+                    normnr += 3 * pi;
+                }
+                else if (nbind == PER_FACE) {
+                    normnr += pi;
+                }
+                else if (nbind == PER_VERTEX_INDEXED) {
+                    nindices += 4 * pi;
+                }
+                else if (nbind == PER_FACE_INDEXED) {
+                    nindices += pi;
+                }
+                if ((tb.isFunction() && tb.needIndices()) || (!tb.isFunction() && tbind != NONE)) {
+                    if (tindices) {
+                        tindices += 3 * pi;
+                    }
+                    else {
+                        texidx += 3 * pi;
+                    }
+                }
+                if (tindices) {
+                    tindices += pi;
+                }
+                faceDetail.setFaceIndex(faceDetail.getFaceIndex() + pi);
+                pi = piptr < piendptr ? *piptr++ : -1;
+                while (pi == 0) {
+                    pi = piptr < piendptr ? *piptr++ : -1;
+                    if (mbind == PER_PART) {
+                        matnr++;
+                    }
+                    else if (mbind == PER_PART_INDEXED) {
+                        mindices++;
+                    }
+                }
+                cullPart();
+                continue;
+            }
+        }
+#endif
+'''
+
 EDITS = [
     (b'#include <Inventor/actions/SoGLRenderAction.h>\n',
      b'#include <Inventor/actions/SoGLRenderAction.h>\n#include <Inventor/actions/SoRayPickAction.h>\n', 1),
@@ -146,6 +219,8 @@ EDITS = [
     # after the leading "skip empty parts" loop, before the triangle walk
     (b'            mindices++;\n        }\n    }\n\n    while (viptr + 2 < viendptr) {\n',
      b'            mindices++;\n        }\n    }\n\n' + COMMENT + b'\n    while (viptr + 2 < viendptr) {\n', 1),
+    (b'    while (viptr + 2 < viendptr) {\n        v1 = *viptr++;\n        v2 = *viptr++;\n        v3 = *viptr++;\n        if (v1 < 0 || v2 < 0 || v3 < 0) {\n',
+     b'    while (viptr + 2 < viendptr) {\n' + SKIP + b'        v1 = *viptr++;\n        v2 = *viptr++;\n        v3 = *viptr++;\n        if (v1 < 0 || v2 < 0 || v3 < 0) {\n', 1),
     (b'            trinr = 0;\n        }\n    }\n    if (mode != POLYGON) {\n',
      b'            trinr = 0;\n#if defined(__EMSCRIPTEN__)\n            cullPart();\n#endif\n        }\n    }\n    if (mode != POLYGON) {\n', 1),
     (b'#undef DO_VERTEX\n', b'#undef DO_VERTEX\n#undef FCWEB_SHAPE_VERTEX\n', 1),
@@ -158,7 +233,11 @@ hdr = b'diff -ruNp a/' + REL.encode() + b' b/' + REL.encode() + b'\n'
 i = raw.index(hdr)
 j = raw.index(b'\ndiff -ruNp ', i + 10) + 1
 old_sec = raw[i:j]
-cur = apply_section(src, old_sec)
+# The edits anchor on the section as it was BEFORE any culling (67781cb); the current file's
+# section is replaced wholesale, so the script can be re-run to regenerate it.
+base_raw = subprocess.check_output(['git', 'show', '67781cb:patches/freecad.patch'], cwd=ROOT)
+bi = base_raw.index(hdr); bj = base_raw.index(b'\ndiff -ruNp ', bi + 10) + 1
+cur = apply_section(src, base_raw[bi:bj])
 if len(sys.argv) > 1 and sys.argv[1] == '--check-cur':
     io.open(os.path.join(ROOT, 'scratchpad', '_bfs_cur.cpp'), 'wb').write(cur); print('wrote _bfs_cur.cpp'); sys.exit(0)
 mod = cur
