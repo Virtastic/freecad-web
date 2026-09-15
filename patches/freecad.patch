@@ -2044,19 +2044,6 @@ diff -ruNp a/src/Gui/PreferencePages/DlgSettingsWorkbenchesImp.cpp b/src/Gui/Pre
 diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
 --- a/src/Gui/ProgressBar.cpp
 +++ b/src/Gui/ProgressBar.cpp
-@@ -38,6 +38,12 @@
- #include "WaitCursor.h"
- 
- 
-+#if defined(__EMSCRIPTEN__)
-+// FCWEB: gl_legacy_stubs.c. Parks the running computation for one turn of the browser
-+// event loop (JSPI), at most every 100 ms -- what qApp->processEvents() is for below.
-+extern "C" void fcweb_maybe_yield(void);
-+#endif
-+
- using namespace Gui;
- 
- 
 @@ -179,7 +179,11 @@ void SequencerBar::checkAbort()
              return;
          }
@@ -2069,14 +2056,12 @@ diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
          return;
      }
      // restore cursor
-@@ -266,7 +270,11 @@ void SequencerBar::setValue(int step)
+@@ -266,7 +270,9 @@ void SequencerBar::setValue(int step)
              }
              else {
                  d->bar->setValueEx(d->bar->value() + 1);
 +#ifndef __EMSCRIPTEN__
                  qApp->processEvents();
-+#else
-+                try { fcweb_maybe_yield(); } catch (...) {}
 +#endif
              }
          }
@@ -2093,12 +2078,12 @@ diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
 +                // suspend never resumes, everything after it silently never runs — most
 +                // visibly GuiDocument.xml, so every ViewProvider's Proxy and Visibility
 +                // stay unrestored (FEMExample opened with all objects hidden and
-+                // Proxy=None). That was the suspend-stack corruption fixed 2026-09-14 (private
-+                // stacks per promising call); processEvents() still cannot yield to the browser,
-+                // so the tab froze for the whole load and Chrome offered to kill it. Yield instead.
++                // Proxy=None). The progress bar cannot animate during synchronous wasm
++                // work anyway, so skip the pump entirely here. (A JSPI yield in its place was
++                // tried 2026-09-15 and withdrawn: a parked load interleaves with other Python
++                // activations on the one thread and the GIL state no longer matches -- fatal
++                // PyThreadState_Get in the boot gate, run 34913239544.)
                  qApp->processEvents();
-+#else
-+                try { fcweb_maybe_yield(); } catch (...) {}
 +#endif
              }
          }
@@ -6386,63 +6371,3 @@ diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
  
      glTexCoord2f(flip ? 0.F : 1.F, 1.F);
      glVertex2f(-this->imgWidth / 2, this->imgHeight / 2);
-diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
---- a/src/App/Document.cpp
-+++ b/src/App/Document.cpp
-@@ -64,6 +64,11 @@
- #include <Base/UnitsApi.h>
- 
- #include "Document.h"
-+#if defined(__EMSCRIPTEN__)
-+// FCWEB: gl_legacy_stubs.c. Parks the load for one turn of the browser event loop
-+// (JSPI), at most every 100 ms, so the tab paints and Chrome does not call it hung.
-+extern "C" void fcweb_maybe_yield(void);
-+#endif
- #include "private/DocumentP.h"
- #include "Application.h"
- #include "AutoTransaction.h"
-@@ -1546,6 +1551,9 @@ std::vector<DocumentObject*> Document::r
-             try {
-                 FC_TRACE("restoring " << pObj->getFullName());
-                 pObj->Restore(reader);
-+#if defined(__EMSCRIPTEN__)
-+                try { fcweb_maybe_yield(); } catch (...) {}
-+#endif
-             }
-             // Try to continue only for certain exception types if not handled
-             // by the feature type. For all other exception types abort the process.
-@@ -2092,6 +2100,9 @@ bool Document::afterRestore(const std::v
-                 d->addRecomputeLog(returnCode);
-             }
-             obj->onDocumentRestored();
-+#if defined(__EMSCRIPTEN__)
-+            try { fcweb_maybe_yield(); } catch (...) {}
-+#endif
-             if (touched) {
-                 d->touchedObjs.insert(obj);
-             }
-diff -ruNp a/src/Gui/Document.cpp b/src/Gui/Document.cpp
---- a/src/Gui/Document.cpp
-+++ b/src/Gui/Document.cpp
-@@ -56,6 +56,11 @@
- #include <Base/Tools.h>
- 
- #include "Document.h"
-+#if defined(__EMSCRIPTEN__)
-+// FCWEB: gl_legacy_stubs.c. Parks the load for one turn of the browser event loop
-+// (JSPI), at most every 100 ms, so the tab paints and Chrome does not call it hung.
-+extern "C" void fcweb_maybe_yield(void);
-+#endif
- #include "DocumentPy.h"
- #include "Application.h"
- #include "Command.h"
-@@ -1969,6 +1974,9 @@ void Document::RestoreDocFile(Base::Read
-             // check if this feature has been registered
-             if (pObj) {
-                 pObj->Restore(*localreader);
-+#if defined(__EMSCRIPTEN__)
-+                try { fcweb_maybe_yield(); } catch (...) {}
-+#endif
-             }
- 
-             if (pObj && treeRank >= 0) {
