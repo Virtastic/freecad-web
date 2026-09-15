@@ -450,6 +450,15 @@ def tick():
             os.write(fd, json.dumps(pw).encode())
             os.close(fd)
             App.saveParameter()
+        # Expiry is an ABSOLUTE time, fixed when the choice is made: the page compares it
+        # with the server's and only re-sends on a real change, so a reload no longer
+        # restarts the countdown. ponytail: SetInt is 32-bit, fine until 2038.
+        choice = p.GetInt('ExpiryDays', 0)
+        if choice != p.GetInt('ExpiryChoice', 0):
+            days = [0, 7, 30, 90][choice] if 0 <= choice < 4 else 0
+            p.SetInt('Expires', int(time.time()) + days * 86400 if days else 0)
+            p.SetInt('ExpiryChoice', choice)
+            App.saveParameter()
         c = _ctl()
         enabled = p.GetBool('Enabled', False)
         if (enabled or c.get('session')) and not _pin:
@@ -494,9 +503,9 @@ def tick():
             'enabled': enabled, 'pinned': _pin, 'name': p.GetString('DisplayName', ''),
             'include_env': p.GetBool('IncludeEnv', True), 'agent': p.GetBool('AllowAgent', False),
             'regen_agent': p.GetBool('RegenerateAgent', False),
-            'expiry_days': p.GetInt('ExpiryDays', 0), 'session': p.GetString('SessionId', ''),
+            'expires': p.GetInt('Expires', 0), 'session': p.GetString('SessionId', ''),
             'key': p.GetString('WriteKey', ''), 'agent_url': p.GetString('AgentUrl', ''),
-            'pw_pending': bool(pw), 'staged': staged, 'revert_t': _revert_t,
+            'pw_pending': bool(pw) or os.path.exists(PWFILE), 'staged': staged, 'revert_t': _revert_t,
             'cam': _camera(), 'docs': sorted(App.listDocuments().keys()),
             'active': App.ActiveDocument.Name if App.ActiveDocument else None,
             'obs_changed': _obs.changed if _obs else None, 'last_pub': _last_pub_change,

@@ -336,6 +336,12 @@ def _route(method, path, fullpath, h, body):
              'pw_edit': '', 'agent': '', 'agent_on': False, 'expires': None,
              'created': int(_now()), 'last_viewed': int(_now()), 'activity': [],
              'owner': ''}
+        why = _evicted().get(i)
+        if why:
+            # the owner is re-sharing a session the server threw away: say so once
+            m['recreated_after'] = why['why']
+            ev = _evicted(); ev.pop(i, None)
+            _write_atomic(os.path.join(CFG['dir'], 'evicted.json'), json.dumps(ev).encode())
         _save_meta(i, m)
     if m is None:
         why = _evicted().get(i)
@@ -389,7 +395,8 @@ def _route(method, path, fullpath, h, body):
         return _json(200, {'client': cid, 'role': role, 'edit': tok, 'name': name,
                            'owner': m.get('owner', ''), 'document': m.get('n', ''),
                            'addons': (env or {}).get('addons', []), 'v': m['v'],
-                           'env_v': m['env_v'], 'holder': _name(s, s['holder'])})
+                           'env_v': m['env_v'], 'holder': _name(s, s['holder']),
+                           'recreated_after': m.pop('recreated_after', None)})
 
     # everything below needs a joined client or the admin key
     if not client and not admin:
