@@ -315,13 +315,17 @@ class _Cmd(object):
         c = _ctl()
         if self.req == 'share':
             return True
-        if not c.get('session'):
+        if not c.get('session') or c.get('ended'):
             return False
         if self.req == 'release':
             return bool(c.get('holder'))
-        # Anyone in the session may ask for control; the holder decides. The editor
-        # password is only needed to TAKE it, which the toast offers separately.
-        return not c.get('holder')
+        if c.get('holder'):
+            return False
+        # Anyone in the session may ASK; the holder decides. TAKING needs an edit token
+        # (the editor password) or the owner's own authority -- the same rule as the bar.
+        if self.req == 'force':
+            return bool(c.get('edit')) or c.get('role') == 'admin'
+        return True
 
     def Activated(self):
         if self.req == 'share':
@@ -331,15 +335,30 @@ class _Cmd(object):
             except Exception as e:
                 _log('showPreferences failed: %r' % (e,))
             return
-        try:
-            open(REQ, 'w').write(self.req)
-        except Exception:
-            pass
+        _req(self.req)
+
+
+def _try(fn):
+    """Best effort on a widget this page may no longer be allowed to touch."""
+    try:
+        fn()
+    except Exception as e:
+        _log('Sharing page widget touch failed: %r' % (e,))
+
+
+def _req(verb):
+    """Ask the browser half to do something it alone can (control, the clipboard). The
+    page reads and unlinks REQ every 500 ms."""
+    try:
+        open(REQ, 'w').write(verb)
+    except Exception:
+        pass
 
 
 COMMANDS = (
     ('Fcweb_ShareSession', _Cmd('Share Session...', 'Share this document as a live, durable link', 'share')),
     ('Fcweb_RequestControl', _Cmd('Request Control', 'Ask the current editor for control of the shared session', 'request')),
+    ('Fcweb_TakeControl', _Cmd('Take Control', 'Take control now; the current editor keeps their unpublished work as a separate document', 'force')),
     ('Fcweb_ReleaseControl', _Cmd('Release Control', 'Hand control of the shared session back', 'release')),
 )
 
@@ -391,6 +410,211 @@ def ensure_menu():
     return True
 
 
+# Pending "clear this password" clicks, module level because exactly one Preferences
+# dialog exists at a time.
+_touched = {}
+
+
+def _ago(t):
+    d = int(time.time() - float(t or 0))
+    if not t or d < 0:
+        return ''
+    if d < 60:
+        return 'just now'
+    if d < 3600:
+        return '%d min ago' % (d // 60)
+    if d < 86400:
+        return '%d h ago' % (d // 3600)
+    return '%d days ago' % (d // 86400)
+
+
+def _paint(f):
+    """Show the session as it stands, on the widgets this page owns.
+
+    Called when the page opens and from its own button handlers -- never from tick(). A
+    Python preference page's widgets can only be touched from Qt's own call stack here:
+    reached from the browser half's timer while the modal dialog is up, shiboken reports
+    "Internal C++ object already deleted" for widgets that are plainly still on screen.
+    So this page shows the state it opened with, its buttons act at once, and everything
+    live -- who is editing, how many are watching, lost contact -- belongs to the session
+    bar and the toasts, which are HTML and always current."""
+    c = _ctl()
+    p = _p()
+    enabled = p.GetBool('Enabled', False)
+    sharing = bool(c.get('session')) and not c.get('ended')
+    if c.get('unavailable'):
+        st = 'Sharing is not available on this site: the session service is not running.'
+    elif sharing:
+        st = 'Sharing %s' % (c.get('doc') or p.GetString('PinnedDocument', '') or 'the active document')
+        st += ' \u00b7 %d watching' % int(c.get('watching') or 0)
+        if c.get('t'):
+            st += ' \u00b7 last updated ' + _ago(c['t'])
+        if not c.get('contact', True):
+            st += ' \u00b7 lost contact (%s), retrying' % (c.get('lastErr') or 'network')
+    elif enabled:
+        st = 'Starting\u2026'
+    else:
+        st = 'Not shared'
+    f.lStatus.setText(st)
+    f.btnStart.setEnabled(not enabled and not c.get('unavailable'))
+    f.btnStop.setEnabled(bool(enabled))
+    link = c.get('link') or ''
+    f.leLink.setText(link)
+    f.btnCopyLink.setEnabled(bool(link))
+    if not sharing:
+        f.lEditor.setText('\u2014')
+    elif c.get('holder'):
+        f.lEditor.setText('You')
+    elif c.get('holderName'):
+        f.lEditor.setText('%s is editing' % c['holderName'])
+    else:
+        f.lEditor.setText('Nobody \u2014 the next request is granted at once')
+    hp = c.get('has_pw') or {}
+    for which, lab, btn in (('viewer', f.lVpwState, f.btnClearVpw), ('editor', f.lEpwState, f.btnClearEpw)):
+        if _touched.get('clear_' + which):
+            lab.setText('will be cleared')
+            btn.setEnabled(False)
+        else:
+            lab.setText('set \u2713' if hp.get(which) else 'not set')
+            btn.setEnabled(bool(hp.get(which)))
+    exp = int(c.get('expires') or p.GetInt('Expires', 0) or 0)
+    f.lExpires.setText(('expires ' + time.strftime('%Y-%m-%d', time.localtime(exp))) if exp else 'never')
+    url = p.GetString('AgentUrl', '') or c.get('agentUrl') or ''
+    f.leAgentUrl.setText(url)
+    f.btnCopyMcp.setEnabled(bool(url))
+    f.btnRegen.setEnabled(bool(url))
+
+
+class FcwebSharingPage(object):
+    """Edit > Preferences > Sharing. FreeCAD instantiates this with no arguments each time
+    the dialog opens, shows `form`, and calls loadSettings()/saveSettings() around it.
+
+    The buttons act at once -- Start, Stop, Copy, Regenerate, the AI toggle -- because a
+    link you cannot get until you press OK is not a feature. Typed fields (name, passwords,
+    expiry, include-environment) apply on OK, or when you press Start."""
+
+    def __init__(self):
+        import FreeCADGui as Gui
+        self.form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share.ui')
+        f = self.form
+        f.btnStart.clicked.connect(self._start)
+        f.btnStop.clicked.connect(self._stop)
+        f.btnCopyLink.clicked.connect(lambda: _req('copy:link'))
+        f.btnCopyMcp.clicked.connect(lambda: _req('copy:mcp'))
+        f.btnRegen.clicked.connect(self._regen)
+        f.btnClearVpw.clicked.connect(lambda: self._clear('viewer'))
+        f.btnClearEpw.clicked.connect(lambda: self._clear('editor'))
+        f.cbExpiry.currentIndexChanged.connect(lambda i: _touched.__setitem__('expiry', i))
+        f.cbAgent.toggled.connect(self._agent)
+
+    # ---- FreeCAD's contract
+    def loadSettings(self):
+        p = _p()
+        f = self.form
+        _touched.clear()
+        f.leName.setText(p.GetString('DisplayName', ''))
+        f.cbEnv.setChecked(p.GetBool('IncludeEnv', True))
+        f.cbAgent.blockSignals(True)
+        f.cbAgent.setChecked(p.GetBool('AllowAgent', False))
+        f.cbAgent.blockSignals(False)
+        f.cbExpiry.blockSignals(True)
+        f.cbExpiry.setCurrentIndex(max(0, min(3, p.GetInt('ExpiryChoice', 0))))
+        f.cbExpiry.blockSignals(False)
+        f.leViewerPw.clear()
+        f.leEditorPw.clear()
+        try:
+            _paint(f)
+        except Exception as e:
+            _log('Sharing page paint failed: %r' % (e,))
+
+    def saveSettings(self):
+        self._apply()
+
+    # ---- what the buttons do
+    def _apply(self):
+        """Write the typed fields. Passwords go to PWFILE only when set or cleared; an
+        untouched field sends nothing, so setting one never clears the other."""
+        p = _p()
+        f = self.form
+        p.SetString('DisplayName', f.leName.text().strip())
+        p.SetBool('IncludeEnv', f.cbEnv.isChecked())
+        p.SetBool('AllowAgent', f.cbAgent.isChecked())
+        if 'expiry' in _touched:
+            choice = int(_touched['expiry'])
+            days = [0, 7, 30, 90][choice] if 0 <= choice < 4 else 0
+            # absolute, fixed now: the page re-sends it only when it differs from the
+            # server's, so a reload never restarts the countdown. ponytail: SetInt is 32-bit.
+            p.SetInt('Expires', int(time.time()) + days * 86400 if days else 0)
+            p.SetInt('ExpiryChoice', choice)
+        pw = {}
+        for which, le in (('viewer', f.leViewerPw), ('editor', f.leEditorPw)):
+            if le.text():
+                pw[which] = le.text()
+            elif _touched.get('clear_' + which):
+                pw[which] = ''
+        if pw:
+            fd = os.open(PWFILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.write(fd, json.dumps(pw).encode())
+            os.close(fd)
+            f.leViewerPw.clear()
+            f.leEditorPw.clear()
+        _touched.clear()
+        App.saveParameter()
+
+    def _close(self):
+        """Close the Preferences dialog. Sharing is live from here on, and everything the
+        person needs next -- the link, who is watching, Stop -- is on the session bar and
+        in the toast, which update in real time. Keeping a stale dialog open would not."""
+        try:
+            self.form.window().close()
+        except Exception as e:
+            _log('could not close Preferences: %r' % (e,))
+
+    def _start(self):
+        # The work first, then the cosmetics. Touching a widget can raise here (shiboken
+        # invalidates this page's wrappers once the dialog is up), and a failed label
+        # update must never stop the session from starting or the dialog from closing.
+        self._apply()
+        _p().SetBool('Enabled', True)
+        App.saveParameter()
+        _try(lambda: self.form.lStatus.setText('Starting\u2026'))
+        _try(lambda: self.form.btnStart.setEnabled(False))
+        self._close()
+
+    def _stop(self):
+        _p().SetBool('Enabled', False)
+        App.saveParameter()
+        self.form.lStatus.setText('Not shared')
+        self.form.btnStop.setEnabled(False)
+        self.form.btnStart.setEnabled(True)
+        self.form.leLink.setText('')
+        self.form.btnCopyLink.setEnabled(False)
+
+    def _agent(self, on):
+        p = _p()
+        p.SetBool('AllowAgent', bool(on))
+        App.saveParameter()
+        if on and not p.GetBool('Enabled', False):
+            self._start()          # the assistant needs a session to attach to
+        elif on:
+            self._close()          # the MCP link arrives in a toast with a Copy button
+
+    def _regen(self):
+        _p().SetBool('RegenerateAgent', True)
+        App.saveParameter()
+        self.form.leAgentUrl.setText('')
+        self.form.btnCopyMcp.setEnabled(False)
+        self.form.btnRegen.setEnabled(False)
+        self._close()
+
+    def _clear(self, which):
+        _touched['clear_' + which] = True
+        le, lab = ((self.form.leViewerPw, self.form.lVpwState) if which == 'viewer'
+                   else (self.form.leEditorPw, self.form.lEpwState))
+        le.clear()
+        lab.setText('will be cleared')
+
+
 def install():
     """Register the page, the icon and the commands. Idempotent."""
     global _obs
@@ -407,7 +631,7 @@ def install():
     except Exception as e:
         _log('addIcon failed: %r' % (e,))
     try:
-        Gui.addPreferencePage('/fcweb-am/fcweb_share.ui', 'Sharing')
+        Gui.addPreferencePage(FcwebSharingPage, 'Sharing')
         _log('sharing preference page registered')
     except Exception as e:
         _log('sharing page FAILED: %r' % (e,))
@@ -432,33 +656,13 @@ def _camera():
 
 def tick():
     """Called from the page's 1.5 s autosave tick. Everything the page needs to know goes
-    into STATE, written only when it changes. Passwords are moved out of the parameter
-    tree the moment they appear: Gui::PrefLineEdit persists them as plaintext into
-    user.cfg, which is now a file we publish."""
+    into STATE, written only when it changes. Passwords never enter the parameter tree:
+    the Sharing page hands them to the browser half through PWFILE (mode 0600), because
+    user.cfg is a file the session publishes."""
     global _last_state, _tick_n, _pin
     _tick_n += 1
     try:
         p = _p()
-        pw = {}
-        for k in ('ViewerPassword', 'EditorPassword'):
-            v = p.GetString(k, '')
-            if v:
-                pw[k] = v
-                p.SetString(k, '')
-        if pw:
-            fd = os.open(PWFILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            os.write(fd, json.dumps(pw).encode())
-            os.close(fd)
-            App.saveParameter()
-        # Expiry is an ABSOLUTE time, fixed when the choice is made: the page compares it
-        # with the server's and only re-sends on a real change, so a reload no longer
-        # restarts the countdown. ponytail: SetInt is 32-bit, fine until 2038.
-        choice = p.GetInt('ExpiryDays', 0)
-        if choice != p.GetInt('ExpiryChoice', 0):
-            days = [0, 7, 30, 90][choice] if 0 <= choice < 4 else 0
-            p.SetInt('Expires', int(time.time()) + days * 86400 if days else 0)
-            p.SetInt('ExpiryChoice', choice)
-            App.saveParameter()
         c = _ctl()
         enabled = p.GetBool('Enabled', False)
         if (enabled or c.get('session')) and not _pin:
@@ -505,7 +709,7 @@ def tick():
             'regen_agent': p.GetBool('RegenerateAgent', False),
             'expires': p.GetInt('Expires', 0), 'session': p.GetString('SessionId', ''),
             'key': p.GetString('WriteKey', ''), 'agent_url': p.GetString('AgentUrl', ''),
-            'pw_pending': bool(pw) or os.path.exists(PWFILE), 'staged': staged, 'revert_t': _revert_t,
+            'pw_pending': os.path.exists(PWFILE), 'staged': staged, 'revert_t': _revert_t,
             'cam': _camera(), 'docs': sorted(App.listDocuments().keys()),
             'active': App.ActiveDocument.Name if App.ActiveDocument else None,
             'obs_changed': _obs.changed if _obs else None, 'last_pub': _last_pub_change,

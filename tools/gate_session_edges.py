@@ -30,7 +30,7 @@ def scenario_edges(ctx, url, args, fail):
 
     # 2. owner shares with a VIEWER password; a viewer must give it (real prompt), and a
     #    wrong one is refused with a hint
-    s1, sid = gs._owner_up(ctx, url, args, fail, extra="p.SetString('ViewerPassword', 'v1')")
+    s1, sid = gs._owner_up(ctx, url, args, fail, extra=gs._pw_py(viewer='v1'))
     if not sid:
         return s1
     if not gs._wait(s1, 'share: passwords updated', 40):

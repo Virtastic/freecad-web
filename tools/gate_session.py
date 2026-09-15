@@ -122,6 +122,14 @@ def _wait_volume(s, fail, target, seconds=90):
     return v
 
 
+# Passwords never enter the parameter tree (user.cfg is published); the Sharing page
+# hands them to the browser half through this file, and so does the gate.
+def _pw_py(**pw):
+    return ('import os, json\n'
+            '_fd = os.open("/tmp/fcweb_share_pw", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n'
+            'os.write(_fd, json.dumps(%r).encode())\nos.close(_fd)\n' % (pw,))
+
+
 def _enable_sharing(s, name='Alice', extra=''):
     s.run_python("import FreeCAD as A\np = A.ParamGet(%r)\np.SetString('DisplayName', %r)\n%s\np.SetBool('Enabled', True)\nA.saveParameter()\n"
                  % (GROUP, name, extra))
@@ -258,7 +266,7 @@ def scenario_share(ctx, url, args, fail):
 
 def scenario_control(ctx, url, args, fail):
     """Read-only is enforced, handover flips roles, force keeps displaced work, auto-grant."""
-    s1, sid = _owner_up(ctx, url, args, fail, extra="p.SetString('EditorPassword', 'e1')")
+    s1, sid = _owner_up(ctx, url, args, fail, extra=_pw_py(editor='e1'))
     if not sid:
         return s1
     if not _wait(s1, 'share: passwords updated', 40):
