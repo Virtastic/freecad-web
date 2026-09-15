@@ -76,7 +76,7 @@ env:
 jobs:
   pydeps:
     timeout-minutes: 360
-    runs-on: [self-hosted, ovh, virtastic]
+    runs-on: [self-hosted, builder, virtastic]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The key MUST change when any lane's recipe changes. It hashed five configure

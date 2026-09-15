@@ -77,7 +77,7 @@ jobs:
     # still lands there. The other way round, run 32231308018 was handed
     # labels=[ubuntu-latest], never got a runner, and failed in four seconds with no
     # steps and no message.
-    runs-on: ${{ inputs.runner == 'hosted' && 'ubuntu-latest' || fromJSON('["self-hosted","ovh","virtastic"]') }}
+    runs-on: ${{ (inputs.runner || 'builder') == 'hosted' && 'ubuntu-latest' || (inputs.runner || 'builder') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || fromJSON('["self-hosted","builder","virtastic"]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Free disk (hosted runners are tight)

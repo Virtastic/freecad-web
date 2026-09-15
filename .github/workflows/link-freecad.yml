@@ -104,8 +104,8 @@ on:
       runner:
         description: "where to build"
         type: choice
-        options: [vps, hosted]
-        default: vps
+        options: [builder, vps, hosted]
+        default: builder
       ccache:
         description: "compile cache: on, off (baseline), clear (drop it first)"
         type: choice
@@ -143,9 +143,14 @@ jobs:
     # pipeline is self-hosted in the first place. The option is kept because it is correct
     # and costs nothing, and because the alternative is someone rediscovering the budget
     # wall in an hour when a build box is down. If the box is down, the box is the fix.
-    runs-on: ${{ (inputs.runner || 'vps') == 'hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "ovh", "virtastic"]') }}
+    runs-on: ${{ (inputs.runner || 'builder') == 'hosted' && 'ubuntu-latest' || (inputs.runner || 'builder') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || fromJSON('["self-hosted","builder","virtastic"]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The build tree store lives in the RUNNER's home, whichever box that is: /home/ubuntu
+      # on the VPS, /home/jenkins on the LAN builder (the default since 2026-09-15).
+      - name: Store path for this box
+        run: echo "BUILDTREE_STORE=$HOME/.cache/fcweb-buildtree" >> "$GITHUB_ENV"
 
       # A hosted runner starts with ~14 GB free and this stack needs rather more. Same
       # reclamation build-deps.yml does. Never on the build box, which owns its own disk.
