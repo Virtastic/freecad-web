@@ -2343,26 +2343,16 @@ window.fcRunPy = fcRunPy;
    try { await caches.delete(ENGINE_CACHE); } catch(e){}
    try { location.reload(); } catch(e){}
  };
- // Shown only after a real abort. Plain DOM rather than fcwebNotify, because the abort
- // may well have taken the toast machinery down with it.
+ // Shown only after a real abort. This used to build its own bottom-centre box on the
+ // theory that the abort had taken the toast machinery down -- but fcwebNotify is plain
+ // DOM defined before the engine loads and does not touch wasm, so a wasm abort cannot
+ // break it. It was the one notice not stacked bottom-right with the others.
  let __cacheResetShown = false;
  function __offerCacheReset(){
-   if (__cacheResetShown) { return; } __cacheResetShown = true;
-   try {
-     const d = document.createElement('div');
-     d.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;'
-       + 'background:#2b2f36;color:#e6e6e6;border:1px solid #555;border-radius:6px;padding:12px 16px;'
-       + 'font:13px system-ui,sans-serif;max-width:min(560px,92vw);box-shadow:0 4px 16px rgba(0,0,0,.5)';
-     const p = document.createElement('div');
-     p.textContent = 'FreeCAD stopped unexpectedly. If this repeats on every reload, the '
-       + 'downloaded engine may be damaged — clearing it re-downloads about 115 MB.';
-     const b = document.createElement('button');
-     b.textContent = 'Clear cached engine and reload';
-     b.style.cssText = 'margin-top:10px;padding:6px 12px;cursor:pointer;border-radius:4px;'
-       + 'border:1px solid #777;background:#3a3f48;color:#fff;font:inherit';
-     b.onclick = function(){ window.fcwebClearEngineCache(); };
-     d.appendChild(p); d.appendChild(b); document.body.appendChild(d);
-   } catch(e){}
+   if (__cacheResetShown || typeof window.fcwebNotify !== 'function') { return; } __cacheResetShown = true;
+   window.fcwebNotify('FreeCAD stopped unexpectedly. If this repeats on every reload, the '
+     + 'downloaded engine may be damaged — clearing it re-downloads about 115 MB.', 'error',
+     [{ label: 'Clear cached engine and reload', onClick: function () { window.fcwebClearEngineCache(); } }]);
  }
 
  async function init(){
