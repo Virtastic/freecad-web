@@ -225,6 +225,21 @@ def _patch_modal_launch():
     orig_load_ui = fci.loadUi
 
     def load_ui(path, *args, **kwargs):
+        # fci binds loadUi ONCE, at its import: FreeCADGui.PySideUic.loadUi if PySideUic
+        # exists then, else None. This overlay imports fci at boot, before FreeCADGuiInit
+        # has installed PySideUic, so the captured original was None -- and the first-run
+        # consent dialog (first_run.ui, shown on a fresh profile) died with
+        # "'NoneType' object is not callable", after which the half-built dialog window's
+        # pointer handlers hit a freed QWindow (user report 2026-09-15). The gate never saw
+        # it: it sets readWarning2022 to skip that dialog. Resolve late, the way the desktop
+        # effectively does by importing the Addon Manager only when it is opened.
+        nonlocal orig_load_ui
+        if orig_load_ui is None:
+            import FreeCADGui
+            uic = getattr(FreeCADGui, "PySideUic", None)
+            orig_load_ui = getattr(uic, "loadUi", None)
+            if orig_load_ui is None:
+                raise RuntimeError("FreeCADGui.PySideUic.loadUi is not available yet")
         widget = orig_load_ui(path, *args, **kwargs)
         try:
             if os.path.basename(str(path)) == "AddonManager.ui":
