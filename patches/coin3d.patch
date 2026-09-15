@@ -420,3 +420,41 @@ diff --git a/src/rendering/SoGL.cpp b/src/rendering/SoGL.cpp
    // used to cache last stack's data
    SbVec3f coords[129];
    SbVec3f normals[129];
+diff --git a/src/shapenodes/SoShape.cpp b/src/shapenodes/SoShape.cpp
+--- a/src/shapenodes/SoShape.cpp
++++ b/src/shapenodes/SoShape.cpp
+@@ -321,16 +321,34 @@
+ 
+ static SbStorage * soshape_staticstorage;
+ 
++#ifdef __EMSCRIPTEN__
++/* FCWEB: SbStorage::get() takes a mutex and looks the thread up in a dictionary on every
++   call, and SoShape::shapeVertex() calls this once per vertex of every generated primitive
++   -- on a large assembly that lock/unlock pair was a quarter of a preselection ray pick
++   (2026-09-15). Per-thread storage is thread local by definition; cache the pointer. */
++static thread_local soshape_staticdata * soshape_tls_staticdata = NULL;
++#endif
++
+ static soshape_staticdata *
+ soshape_get_staticdata(void)
+ {
++#ifdef __EMSCRIPTEN__
++  if (!soshape_tls_staticdata) {
++    soshape_tls_staticdata = (soshape_staticdata*) soshape_staticstorage->get();
++  }
++  return soshape_tls_staticdata;
++#else
+   return (soshape_staticdata*) soshape_staticstorage->get();
++#endif
+ }
+ 
+ // called by atexit
+ void
+ SoShapeP::cleanup(void)
+ {
++#ifdef __EMSCRIPTEN__
++  soshape_tls_staticdata = NULL;
++#endif
+   delete soshape_staticstorage;
+   soshape_staticstorage = NULL;
+ 

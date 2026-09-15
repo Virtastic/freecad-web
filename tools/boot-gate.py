@@ -1325,6 +1325,13 @@ CAPTURE_JS = """
 })();
 """
 
+BRIDGE_STATE_JS = """() => {
+  const m = window.fcInstance, A = m && m.Asyncify, c = m && m.qtSuspendResumeControl;
+  return JSON.stringify({ pyBusy: !!window.__fcPyBusy, live: A ? A.__live : null, pyActive: A ? A.__pyActive : null,
+    pyQueued: A && A.__pyQueue ? A.__pyQueue.length : 0, yields: m ? m.__fcYields : null,
+    qtResumeHeld: !!(c && c.resume), qtPending: c ? c.pendingEvents.length : null, pyErrors: (window.__fcPyErrors || []).length });
+}"""
+
 DISPATCH_JS = """(code) => {
   const m = window.fcInstance;
   if (!m || !m._fcweb_run_python) return 'no-bridge';
@@ -1532,7 +1539,18 @@ class Session:
             if trap_deadline is not None and time.time() > trap_deadline:
                 return None
             time.sleep(2)
+        # Say what the Python bridge was doing. Since 00e39b1 a fcweb_run_python call made
+        # while another is in flight is QUEUED, so a probe that never reports may simply be
+        # waiting behind a parked call (a document restore yielding, a suspended fetch) --
+        # which looks exactly like an engine abort from the marker alone (link 35000359734).
+        print('==> %s never arrived; bridge state: %s' % (marker, self.bridge_state()))
         return None
+
+    def bridge_state(self):
+        try:
+            return self.page.evaluate(BRIDGE_STATE_JS)
+        except Exception as e:
+            return 'unavailable (%s)' % e
 
 
 # What is the heap ceiling?
