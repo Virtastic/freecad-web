@@ -1366,11 +1366,14 @@ PATCHES += [
         'try{r=p.apply(null,arguments)}catch(e){stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
         'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;Asyncify.__live=(Asyncify.__live|0)+1;'
         'try{r=p.apply(null,arguments)}catch(e){if(Asyncify.__live>0)Asyncify.__live--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+        # 4th field: the python-bridge entries below insert into the catch and into done.
+        'var r;Asyncify.__live=(Asyncify.__live|0)+1;try{r=p.apply(null,arguments)}',
     ),
     (
         'JSPI live: a promising export completes',
         'var done=function(){if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
         'var done=function(){if(Asyncify.__live>0)Asyncify.__live--;if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
+        'var done=function(){if(Asyncify.__live>0)Asyncify.__live--;',
     ),
     (
         'JSPI live: main counts too',
@@ -1383,6 +1386,40 @@ PATCHES += [
         'finally{stackRestore(sp);runtimeKeepalivePop()}}',
         'var __dec=false;try{var pr=startAsync();if(Asyncify.__live>0)Asyncify.__live--;__dec=true;if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
         'finally{if(__dec)Asyncify.__live++;stackRestore(sp);runtimeKeepalivePop()}}',
+    ),
+]
+
+# ---- one Python bridge activation at a time -----------------------------------------------
+#
+# CPython's GIL and thread state are per OS THREAD. Two fcweb_run_python activations
+# interleaved on the one browser thread -- one parked in a yield (document load), a
+# dialog or a solver bridge, the other running -- cannot both be right about who holds
+# the GIL: the parked one either releases it (and the other, suspended inside Python with
+# the lock, resumes to a NULL thread state) or keeps it (and the other's release strands
+# the first). Both were measured as 'Fatal Python error: PyThreadState_Get' in the boot
+# gate (runs 34913239544 and 34976825287: an autosave restore parked in a yield while the
+# gate's FEM probe started and suspended in the mesher bridge). Qt-event Python is safe --
+# a parked load holds Qt's resume slot and delivers those events itself, synchronously --
+# so what remains is this: a second bridge call waits until the first has completed.
+PATCHES += [
+    (
+        'python bridge: a call made while one is in flight waits for it',
+        'return function(){var S=Asyncify.__stk;S.init();var outer=stackSave(),oreg=S.of(outer),ogen=oreg?oreg.gen:0;',
+        'return function(){var A=Asyncify;if(name==="fcweb_run_python"){if((A.__pyActive|0)>0){var qa=arguments,qs=this;'
+        'return new Promise(function(res,rej){(A.__pyQueue=A.__pyQueue||[]).push(function(){try{res(Module["_fcweb_run_python"].apply(qs,qa))}catch(e){rej(e)}})})}'
+        'A.__pyActive=(A.__pyActive|0)+1}'
+        'var S=Asyncify.__stk;S.init();var outer=stackSave(),oreg=S.of(outer),ogen=oreg?oreg.gen:0;',
+    ),
+    (
+        'python bridge: completion lets the next waiting call in',
+        'stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
+        'stackRestore(S.safe(outer,oreg,ogen));S.release(reg);'
+        'if(name==="fcweb_run_python"){A.__pyActive--;var q=A.__pyQueue;if(q&&q.length&&A.__pyActive<=0){A.__pyActive=0;setTimeout(q.shift(),0)}}};',
+    ),
+    (
+        'python bridge: a call that threw synchronously is not in flight',
+        'catch(e){if(Asyncify.__live>0)Asyncify.__live--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+        'catch(e){if(Asyncify.__live>0)Asyncify.__live--;if(name==="fcweb_run_python")A.__pyActive--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
     ),
 ]
 
