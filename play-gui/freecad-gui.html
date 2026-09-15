@@ -4345,7 +4345,12 @@ window.fcRunPy = fcRunPy;
           // ...or the canvas bridgeGpu resized to carry the 3D layer across: still an
           // offscreen surface, just no longer 1x1. Presenting onto it blacked the window
           // the first time the GPU bridge ran (2026-09-11).
-          if (gl && (gl.drawingBufferWidth <= 1 || (gl.canvas && gl.canvas.__fcBridge))) {
+          // ...or NO context at all: the last 3D view was just closed, its context deleted
+          // and its REG entry with it. Returning here left the previous frame on screen
+          // forever -- File > Close showed the closed document, its tree and its tab until
+          // the next document opened (measured 2026-09-15, scratchpad/close-probe.py). The
+          // UI-only compose below is exactly what that state needs; it just needs a context.
+          if (!gl || gl.drawingBufferWidth <= 1 || (gl.canvas && gl.canvas.__fcBridge)) {
             // Qt 6.5+ hangs the whole screen off ONE shadow root, so the canvas is not
             // reachable from document.querySelectorAll -- hence the walk.
             var dom = null;
