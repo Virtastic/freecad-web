@@ -1478,7 +1478,7 @@ _DLISTS = (
     'var so=__fcDL.snapArrays(R,first,count,it,ip);'
     'if(so){for(var j=0;j<so.length;j++)R.ops.push(so[j]);var da=a.slice();if(so.idx)da[ii]=BigInt(so.idx);R.ops.push(f,da)}else{R.ops.push(f,a)}}'
     'else R.ops.push(f,a);'
-    'if(R.exec)return f.apply(null,arguments)}}};'
+    'if(R.exec||CL!==undefined||CS||BB)return f.apply(null,arguments)}}};'
     'if(typeof Module!=="undefined"){Module.__fcDL=__fcDL;Module.__fcPThread=function(){return typeof PThread!=="undefined"?PThread:null}}'
 )
 PATCHES += [
@@ -1492,6 +1492,22 @@ PATCHES += [
         'display lists: every GL import can be recorded',
         'function getWasmImports(){assignWasmImports();',
         'function getWasmImports(){ assignWasmImports();__fcDL.wrap(wasmImports);',
+    ),
+    # Client state is never compiled into a display list -- GL executes glBindBuffer, the
+    # gl*Pointer calls and gl{Enable,Disable}ClientState immediately even under GL_COMPILE
+    # (the draw dereferences them at compile time). The first recorder only recorded them,
+    # so a node that QUERIES between them saw the real, unbound state: MeshGui's
+    # SoFCMeshObjectShape asks glGetBufferParameteriv(GL_BUFFER_SIZE) after binding its VBO,
+    # got 0 through the un-executed bind, and compiled glDrawElements(count=0) -- every STL
+    # mesh invisible with lists on, visible for one frame whenever the cache was rebuilt
+    # (measured 2026-09-15, scratchpad/mesh-ab.py, 372k facets: 21-op list, count 0). They
+    # are executed AND recorded now (the replay still needs them bound). This entry migrates
+    # an asset patched with the earlier form; a fresh link gets it from _DLISTS directly.
+    (
+        'display lists: client-state calls execute under GL_COMPILE too',
+        'if(R.exec)return f.apply(null,arguments)}}};',
+        'if(R.exec||CL!==undefined||CS||BB)return f.apply(null,arguments)}}};',
+        'if(R.exec||CL!==undefined||CS||BB)return f.apply(null,arguments)}}};',
     ),
 ]
 
