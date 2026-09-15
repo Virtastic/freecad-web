@@ -991,7 +991,12 @@ DRAINS_MERGE = [('var _glDrawArrays=(mode,first,count)=>{if(GLImmediate.totalEna
 MERGE_PATCHES = [
     # 4th field: the strip cap below inserts into __mrgPrep, so `new` stops appearing whole.
     ('immediate-mode line batching: glEnd defers', OLD_END_MERGE, NEW_END_MERGE, 'GLImmediate.__mrgPrep=function(){'),
-    ('immediate-mode line batching: glBegin continues', OLD_VC_MERGE, NEW_VC_MERGE),
+    # 4th field: the marker is the part common to the shipped (lines-only) and current
+    # (points too, 2026-09-14) forms; the migration entry below moves a shipped asset on.
+    ('immediate-mode line batching: glBegin continues', OLD_VC_MERGE, NEW_VC_MERGE,
+     'GLImmediate.mode=mode;if(GLImmediate.__mrgPend&&(mode===3||mode===1'),
+    ('immediate-mode line batching: glBegin continues for GL_POINTS too',
+     NEW_VC_MERGE.replace('||mode===0', ''), NEW_VC_MERGE),
     # Only SHORT strips are worth converting. A LINE_STRIP of n vertices becomes 2(n-1)
     # LINES vertices through an O(n) in-place expansion, every frame; Draft wires and
     # circles run to hundreds of vertices and the object under the cursor is re-sent through
