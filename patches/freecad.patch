@@ -5396,6 +5396,28 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
      glBegin(GL_TRIANGLES);
      while (viptr + 2 < viendptr) {
          v1 = *viptr++;
+diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProviderExt.cpp
+--- a/src/Mod/Part/Gui/ViewProviderExt.cpp
++++ b/src/Mod/Part/Gui/ViewProviderExt.cpp
+@@ -1097,7 +1097,18 @@ void ViewProviderPartExt::setupCoinGeome
+     meshParams.Deflection = deflection;
+     meshParams.Relative = Standard_False;
+     meshParams.Angle = AngDeflectionRads;
++#if defined(__EMSCRIPTEN__)
++    // wasm: serial. Measured 2026-09-15 on the 42 MB a2plus assembly (scratchpad/yield-probe.py,
++    // same engine, ?occthreads=N): InParallel with the bounded 6-thread OSD_ThreadPool from
++    // AppPart.cpp opened it in 31.4 s, with 3 threads 21.7 s, serial 21.6 s -- and the
++    // longest frozen stretch (one part's mesh) did not shrink either. The per-face tasks are
++    // small and the main thread's wait for the pool is a futex spin on this platform, so the
++    // parallel path only adds synchronisation. The pool still serves the algorithms that
++    // benefit (booleans, checks); the visual mesh does not.
++    meshParams.InParallel = Standard_False;
++#else
+     meshParams.InParallel = Standard_True;
++#endif
+     meshParams.AllowQualityDecrease = Standard_True;
+ 
+     // Clear triangulation and PCurves from geometry which can slow down the process
 diff -ruNp a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
 --- a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
 +++ b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
@@ -6288,16 +6310,17 @@ diff -ruNp a/src/Mod/TechDraw/Gui/CommandExtensionDims.cpp b/src/Mod/TechDraw/Gu
 diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
-@@ -38,6 +38,8 @@
+@@ -38,6 +38,9 @@
  #include <Inventor/SoPrimitiveVertex.h>
  #include <Inventor/actions/SoGetBoundingBoxAction.h>
  #include <Inventor/actions/SoGLRenderAction.h>
 +#include <Inventor/actions/SoRayPickAction.h>
 +#include <Inventor/details/SoPointDetail.h>
++#include <Inventor/SbViewVolume.h>
  #include <Inventor/bundles/SoMaterialBundle.h>
  #include <Inventor/details/SoLineDetail.h>
  #include <Inventor/elements/SoCoordinateElement.h>
-@@ -57,6 +59,118 @@
+@@ -57,6 +60,118 @@
  
  #include <Gui/Inventor/So3DAnnotation.h>
  
@@ -6416,7 +6439,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
  
  using namespace PartGui;
  
-@@ -334,7 +448,84 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+@@ -334,7 +449,84 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
          state->pop();
      }
      else {
@@ -6501,7 +6524,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
      }
  
      // Workaround for #0000433
-@@ -761,3 +952,89 @@ SoDetail* SoBrepEdgeSet::createLineSegme
+@@ -761,3 +953,107 @@ SoDetail* SoBrepEdgeSet::createLineSegme
      line_detail->setPartIndex(index);
      return detail;
  }
@@ -6555,7 +6578,25 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +        pickBoxesNode = nid;
 +        pickBoxesCoord = cid;
 +    }
-+    if (pickBoxesAll.isEmpty() || !action->intersect(pickBoxesAll, TRUE)) {
++    // A straight edge's box is a line, and Coin's box test finds the closest point on a box
++    // among its face planes, so the pick cone (radius in pixels) never reaches a degenerate
++    // box that the segment test would have counted as a near miss -- measured 2026-09-15:
++    // 3 of 1008 grid picks lost their edge. Grow every box by the cone's radius at its depth,
++    // read off the object-space pick volume (its width is the pick region's width at the
++    // near plane; a perspective cone widens with depth).
++    const SbViewVolume& vv = action->getViewVolume();
++    const float rNear = 0.5f * std::max(vv.getWidth(), vv.getHeight());
++    const bool persp = vv.getProjectionType() == SbViewVolume::PERSPECTIVE;
++    const float nearDist = std::max(vv.getNearDist(), 1e-6f);
++    auto grown = [&](const SbBox3f& bb) {
++        float m = rNear;
++        if (persp) {
++            const float depth = (bb.getCenter() - vv.getProjectionPoint()).dot(vv.getProjectionDirection());
++            m = rNear * std::max(1.0f, depth / nearDist);
++        }
++        return SbBox3f(bb.getMin() - SbVec3f(m, m, m), bb.getMax() + SbVec3f(m, m, m));
++    };
++    if (pickBoxesAll.isEmpty() || !action->intersect(grown(pickBoxesAll), TRUE)) {
 +        return;
 +    }
 +
@@ -6566,7 +6607,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
 +    size_t edge = 0;
 +    while (cindices + 1 < end) {
 +        const bool skip = edge < pickBoxes.size()
-+            && (pickBoxes[edge].isEmpty() || !action->intersect(pickBoxes[edge], TRUE));
++            && (pickBoxes[edge].isEmpty() || !action->intersect(grown(pickBoxes[edge]), TRUE));
 +        if (!skip) {
 +            this->beginShape(action, LINE_STRIP, &lineDetail);
 +        }

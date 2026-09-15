@@ -118,7 +118,25 @@ void SoBrepEdgeSet::rayPick(SoRayPickAction* action)
         pickBoxesNode = nid;
         pickBoxesCoord = cid;
     }
-    if (pickBoxesAll.isEmpty() || !action->intersect(pickBoxesAll, TRUE)) {
+    // A straight edge's box is a line, and Coin's box test finds the closest point on a box
+    // among its face planes, so the pick cone (radius in pixels) never reaches a degenerate
+    // box that the segment test would have counted as a near miss -- measured 2026-09-15:
+    // 3 of 1008 grid picks lost their edge. Grow every box by the cone's radius at its depth,
+    // read off the object-space pick volume (its width is the pick region's width at the
+    // near plane; a perspective cone widens with depth).
+    const SbViewVolume& vv = action->getViewVolume();
+    const float rNear = 0.5f * std::max(vv.getWidth(), vv.getHeight());
+    const bool persp = vv.getProjectionType() == SbViewVolume::PERSPECTIVE;
+    const float nearDist = std::max(vv.getNearDist(), 1e-6f);
+    auto grown = [&](const SbBox3f& bb) {
+        float m = rNear;
+        if (persp) {
+            const float depth = (bb.getCenter() - vv.getProjectionPoint()).dot(vv.getProjectionDirection());
+            m = rNear * std::max(1.0f, depth / nearDist);
+        }
+        return SbBox3f(bb.getMin() - SbVec3f(m, m, m), bb.getMax() + SbVec3f(m, m, m));
+    };
+    if (pickBoxesAll.isEmpty() || !action->intersect(grown(pickBoxesAll), TRUE)) {
         return;
     }
 
@@ -129,7 +147,7 @@ void SoBrepEdgeSet::rayPick(SoRayPickAction* action)
     size_t edge = 0;
     while (cindices + 1 < end) {
         const bool skip = edge < pickBoxes.size()
-            && (pickBoxes[edge].isEmpty() || !action->intersect(pickBoxes[edge], TRUE));
+            && (pickBoxes[edge].isEmpty() || !action->intersect(grown(pickBoxes[edge]), TRUE));
         if (!skip) {
             this->beginShape(action, LINE_STRIP, &lineDetail);
         }
@@ -158,7 +176,7 @@ void SoBrepEdgeSet::rayPick(SoRayPickAction* action)
 
 CPP_EDITS = [
     (b'#include <Inventor/actions/SoGLRenderAction.h>\n',
-     b'#include <Inventor/actions/SoGLRenderAction.h>\n#include <Inventor/actions/SoRayPickAction.h>\n#include <Inventor/details/SoPointDetail.h>\n', 1),
+     b'#include <Inventor/actions/SoGLRenderAction.h>\n#include <Inventor/actions/SoRayPickAction.h>\n#include <Inventor/details/SoPointDetail.h>\n#include <Inventor/SbViewVolume.h>\n', 1),
 ]
 
 
@@ -167,11 +185,20 @@ def section(rel, mod_fn):
     assert b'\r\n' not in src
     raw = io.open(P, 'rb').read()
     hdr = b'diff -ruNp a/' + rel.encode() + b' b/' + rel.encode() + b'\n'
-    if hdr in raw:
-        i = raw.index(hdr); j = raw.index(b'\ndiff -ruNp ', i + 10) + 1
-        cur = apply_section(src, raw[i:j])
+    # Anchors are for the section as it was BEFORE the edge culling (b604a68); the current
+    # section is replaced wholesale so the script can be re-run.
+    base_raw = subprocess.check_output(['git', 'show', 'b604a68:patches/freecad.patch'], cwd=ROOT)
+    if hdr in base_raw:
+        bi = base_raw.index(hdr); bj = base_raw.index(b'\ndiff -ruNp ', bi + 10) + 1
+        cur = apply_section(src, base_raw[bi:bj])
     else:
-        i = j = None; cur = src
+        cur = src
+    if hdr in raw:
+        i = raw.index(hdr)
+        nxt = raw.find(b'\ndiff -ruNp ', i + 10)
+        j = len(raw) if nxt < 0 else nxt + 1
+    else:
+        i = j = None
     mod = mod_fn(cur)
     a = os.path.join(WORK, 'a', rel); b = os.path.join(WORK, 'b', rel)
     os.makedirs(os.path.dirname(a), exist_ok=True); os.makedirs(os.path.dirname(b), exist_ok=True)
