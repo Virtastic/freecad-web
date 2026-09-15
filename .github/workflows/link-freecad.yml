@@ -881,6 +881,10 @@ jobs:
           # fails with "node: command not found" AFTER the patches have been applied --
           # a green link reported as a failure.
           . ./toolchain/env.sh
+          # ...and the SDK's node BY PATH, not whichever node the box puts first: the LAN
+          # builder ships node 22 in /usr/bin, which rejects a memory64 module that node 24
+          # (emsdk's) validates -- a good link reported as "does not validate" (2026-09-15).
+          node() { "${EMSDK_NODE:-$(command -v node)}" "$@"; }
           js=build-freecad-gui-weh/bin/FreeCAD.js
           # Keep a copy with the logs. It is 489 KB, it rides along with an artifact that is
           # uploaded on always(), and when a patch site moves it is the only way to see what
