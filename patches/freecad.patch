@@ -6386,3 +6386,61 @@ diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
  
      glTexCoord2f(flip ? 0.F : 1.F, 1.F);
      glVertex2f(-this->imgWidth / 2, this->imgHeight / 2);
+--- a/src/App/Document.cpp
++++ b/src/App/Document.cpp
+@@ -64,6 +64,11 @@
+ #include <Base/UnitsApi.h>
+ 
+ #include "Document.h"
++#if defined(__EMSCRIPTEN__)
++// FCWEB: gl_legacy_stubs.c. Parks the load for one turn of the browser event loop
++// (JSPI), at most every 100 ms, so the tab paints and Chrome does not call it hung.
++extern "C" void fcweb_maybe_yield(void);
++#endif
+ #include "private/DocumentP.h"
+ #include "Application.h"
+ #include "AutoTransaction.h"
+@@ -1546,6 +1551,9 @@ std::vector<DocumentObject*> Document::r
+             try {
+                 FC_TRACE("restoring " << pObj->getFullName());
+                 pObj->Restore(reader);
++#if defined(__EMSCRIPTEN__)
++                fcweb_maybe_yield();
++#endif
+             }
+             // Try to continue only for certain exception types if not handled
+             // by the feature type. For all other exception types abort the process.
+@@ -2092,6 +2100,9 @@ bool Document::afterRestore(const std::v
+                 d->addRecomputeLog(returnCode);
+             }
+             obj->onDocumentRestored();
++#if defined(__EMSCRIPTEN__)
++            fcweb_maybe_yield();
++#endif
+             if (touched) {
+                 d->touchedObjs.insert(obj);
+             }
+--- a/src/Gui/Document.cpp
++++ b/src/Gui/Document.cpp
+@@ -56,6 +56,11 @@
+ #include <Base/Tools.h>
+ 
+ #include "Document.h"
++#if defined(__EMSCRIPTEN__)
++// FCWEB: gl_legacy_stubs.c. Parks the load for one turn of the browser event loop
++// (JSPI), at most every 100 ms, so the tab paints and Chrome does not call it hung.
++extern "C" void fcweb_maybe_yield(void);
++#endif
+ #include "DocumentPy.h"
+ #include "Application.h"
+ #include "Command.h"
+@@ -1969,6 +1974,9 @@ void Document::RestoreDocFile(Base::Read
+             // check if this feature has been registered
+             if (pObj) {
+                 pObj->Restore(*localreader);
++#if defined(__EMSCRIPTEN__)
++                fcweb_maybe_yield();
++#endif
+             }
+ 
+             if (pObj && treeRank >= 0) {
