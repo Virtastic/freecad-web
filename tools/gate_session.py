@@ -391,7 +391,10 @@ def scenario_mcp(ctx, url, args, fail):
         if st_ != 200:
             return {'ok': False, 'code': 'http_%d' % st_, 'hint': str(j)[:200]}
         try:
-            return json.loads(j['result']['content'][0]['text'])
+            blocks = j['result']['content']
+            out = json.loads([b for b in blocks if b.get('type') == 'text'][0]['text'])
+            out['_blocks'] = [(b.get('type'), b.get('mimeType')) for b in blocks]
+            return out
         except Exception:
             return {'ok': False, 'code': 'bad_response', 'hint': str(j)[:300]}
 
@@ -421,6 +424,34 @@ def scenario_mcp(ctx, url, args, fail):
         fail('fc_eval print(6*7) -> %r' % r)
     else:
         print('==> fc_eval: 42')
+    r = tool('fc_eval', {'code': 'x = 6\nx * 7'})
+    if r.get('value') != '42':
+        fail('fc_eval must return a trailing expression\'s value like a REPL: %r' % r)
+    else:
+        print('==> fc_eval: value of a trailing expression comes back')
+    if not info.get('share_url') or ('?s=' + sid) not in info['share_url']:
+        fail('fc_session_info must return the human share_url: %r' % info.get('share_url'))
+    # a tool that needs a document, with none active: a code and a hint, not a traceback
+    # App.ActiveDocument is a module attribute the C++ side rewrites on every document
+    # switch; clearing it is exactly 'no active document' as _tool sees it
+    tool('fc_eval', {'code': 'import FreeCAD as App\nApp.ActiveDocument = None'})
+    r = tool('fc_find', {'label': 'Box'})
+    tool('fc_eval', {'code': 'import FreeCAD as App\nApp.setActiveDocument("GateShare")'})
+    if r.get('ok') or r.get('code') != 'no_document' or 'newDocument' not in (r.get('hint') or ''):
+        fail('a document-less call must say no_document with a hint: %r' % {k: r.get(k) for k in ('ok', 'code', 'hint', 'error')})
+    else:
+        print('==> no active document -> no_document, with the hint')
+    # two callers at once: both answered (queued), neither refused
+    outs = {}
+    def _par(k):
+        outs[k] = tool('fc_eval', {'code': 'import time\ntime.sleep(0.5)\nprint(%r)' % k})
+    import threading
+    ths = [threading.Thread(target=_par, args=(k,)) for k in ('A', 'B')]
+    [t.start() for t in ths]; [t.join() for t in ths]
+    if not (outs['A'].get('ok') and outs['B'].get('ok') and 'A' in outs['A'].get('out', '') and 'B' in outs['B'].get('out', '')):
+        fail('parallel tool calls must both be answered, not refused as busy: %r' % {k: (v.get('ok'), v.get('code')) for k, v in outs.items()})
+    else:
+        print('==> two parallel fc_eval calls both answered')
     r = tool('fc_tree')
     if not r.get('ok') or not any(o['name'] == 'Box' for o in r.get('objects', [])):
         fail('fc_tree does not list the Box: %r' % str(r)[:200])
@@ -451,8 +482,10 @@ def scenario_mcp(ctx, url, args, fail):
         elif not w.get('ok') or (w['width'], w['height']) == (r['width'], r['height']):
             fail('viewport and window returned the same frame: %r vs %r'
                  % ((r['width'], r['height']), (w.get('width'), w.get('height'))))
+        elif ('image', 'image/png') not in r.get('_blocks', []):
+            fail('fc_screenshot must return an image content block the model can see, got blocks %r' % r.get('_blocks'))
         else:
-            print('==> fc_screenshot: viewport %dx%d (cropped, luminance %d), window %dx%d'
+            print('==> fc_screenshot: viewport %dx%d (cropped, luminance %d) as an image block, window %dx%d'
                   % (r['width'], r['height'], r['mean_luminance'], w['width'], w['height']))
     else:
         if r.get('ok') or not r.get('hint'):
@@ -479,6 +512,15 @@ def scenario_mcp(ctx, url, args, fail):
     else:
         dt = time.time() - t0
         print('==> assistant edit reached the viewer in %.1fs' % dt)
+        # where the time went: the owner's publish and the viewer's apply, relative to the call
+        try:
+            t0ms = int(t0 * 1000)
+            own = s1.page.evaluate('(window.__fcSessionRing || []).filter(r => r.t >= %d).map(r => [r.t - %d, r.sub + ": " + r.msg.slice(0, 60)])' % (t0ms, t0ms))
+            vw = s2.page.evaluate('(window.__fcSessionRing || []).filter(r => r.t >= %d).map(r => [r.t - %d, r.sub + ": " + r.msg.slice(0, 60)])' % (t0ms, t0ms))
+            print(('==> timeline owner: %s' % '; '.join('+%dms %s' % (t, m) for t, m in own[:8])).encode('ascii', 'replace').decode())
+            print(('==> timeline viewer: %s' % '; '.join('+%dms %s' % (t, m) for t, m in vw[:8])).encode('ascii', 'replace').decode())
+        except Exception as e:
+            print('==> timeline unavailable: %s' % e)
         if dt > 4.0:
             fail('an assistant edit took %.1fs to reach a viewer; the cadence budgets ~2s' % dt)
     st = _wait_state(s2, lambda x: 'stretched the box' in (x.get('note') or ''), 15)
@@ -487,9 +529,27 @@ def scenario_mcp(ctx, url, args, fail):
     v = _volumes(s2, fail)
     if not any(abs(x['volume'] - 18000.0) < 1e-6 for x in v.values()):
         fail('viewer volume after the assistant edit: %r' % {k: x['volume'] for k, x in v.items()})
-    r = tool('fc_view_set', {'standard': 'top'})
+    cam_before = _state(s2).get('cam')
+    r = tool('fc_view_set', {'standard': 'front', 'note': 'looking from the front'})
     if not r.get('ok'):
         fail('fc_view_set -> %r' % r)
+    elif not _wait_state(s2, lambda x: x.get('cam') and x.get('cam') != cam_before, 20):
+        fail('the assistant moved the camera but the viewer did not follow')
+    else:
+        print('==> fc_view_set moved the viewer\'s camera')
+    r = tool('fc_export', {'format': 'stl', 'objects': ['Box'], 'name': 'gate-box', 'linear_deflection': 0.05}, 60)
+    if not r.get('ok') or not r.get('bytes') or not r.get('sha256') or r.get('name') != 'gate-box.stl':
+        fail('fc_export stl -> %r' % {k: r.get(k) for k in ('ok', 'code', 'hint', 'name', 'bytes', 'sha256', 'error')})
+    elif not _wait(s1, 'export offered gate-box.stl', 10):
+        fail('the export was not offered to the person as a download')
+    else:
+        print('==> fc_export: gate-box.stl, %d bytes, %s facets, downloaded in the owner\'s browser%s'
+              % (r['bytes'], (r.get('mesh') or {}).get('facets', '?'), ', inlined' if r.get('bytes_b64') else ''))
+    r = tool('fc_export', {'format': '3mf', 'objects': ['Box']}, 60)
+    if not r.get('ok') or not r.get('bytes'):
+        fail('fc_export 3mf -> %r' % {k: r.get(k) for k in ('ok', 'code', 'hint', 'error')})
+    else:
+        print('==> fc_export: 3mf, %d bytes' % r['bytes'])
     r = tool('fc_install_addon', {'repo': 'FreeCAD/FreeCAD-addons'})
     if r.get('ok') or r.get('code') != 'consent_required':
         fail('fc_install_addon must return consent_required until a click: %r' % r)

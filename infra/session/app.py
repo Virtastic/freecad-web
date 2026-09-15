@@ -42,6 +42,9 @@ share.CFG.update(share._cfg())
 os.makedirs(share.CFG['dir'], exist_ok=True)
 
 CURRENT = contextvars.ContextVar('fcweb_session', default=None)   # (session id, token)
+# The public origin, for share_url: FCWEB_PUBLIC_URL when the operator set it, else what
+# the request itself came in on (nginx forwards Host and X-Forwarded-Proto).
+ORIGIN = contextvars.ContextVar('fcweb_origin', default='')
 
 INSTRUCTIONS = """You are attached to a live FreeCAD session running in someone's browser tab.
 
@@ -114,7 +117,7 @@ async def fc_session_info() -> dict:
         # the assistant edits through the attached tab, so it can edit exactly when that
         # tab's client holds control -- compared by client id, never by display name
         attached_holder = holder is not None and any(s['tabs'][t].get('client') == holder for t in live)
-        pub = share.CFG['public_url'].rstrip('/')
+        pub = share.CFG['public_url'].rstrip('/') or ORIGIN.get()
         return {'ok': True, 'session': sid, 'document': m.get('n', ''), 'version': m.get('v', 0),
                 'env_version': m.get('env_v', 0), 'owner': m.get('owner', ''),
                 'holder': hn, 'holder_silent': holder is not None and share._now() - s['holder_seen'] > share.HOLDER_SILENCE_S,
@@ -524,11 +527,16 @@ class McpGate:
             await send({'type': 'http.response.body', 'body': body})
             return
         token = CURRENT.set((m.group(1), m.group(2)))
+        hdr = {k.decode().lower(): v.decode() for k, v in scope.get('headers', [])}
+        host = hdr.get('x-forwarded-host') or hdr.get('host', '')
+        proto = hdr.get('x-forwarded-proto') or scope.get('scheme', 'http')
+        otoken = ORIGIN.set(proto + '://' + host if host else '')
         try:
             inner = dict(scope, path=rp + '/', raw_path=(rp + '/').encode())
             await self.app(inner, receive, send)
         finally:
             CURRENT.reset(token)
+            ORIGIN.reset(otoken)
 
 
 async def share_route(request):
