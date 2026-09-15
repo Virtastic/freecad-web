@@ -5324,24 +5324,6 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
      glBegin(GL_TRIANGLES);
      while (viptr + 2 < viendptr) {
          v1 = *viptr++;
-diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProviderExt.cpp
---- a/src/Mod/Part/Gui/ViewProviderExt.cpp
-+++ b/src/Mod/Part/Gui/ViewProviderExt.cpp
-@@ -1097,7 +1097,14 @@ void ViewProviderPartExt::setupCoinGeome
-     meshParams.Deflection = deflection;
-     meshParams.Relative = Standard_False;
-     meshParams.Angle = AngDeflectionRads;
-+#if defined(__EMSCRIPTEN__)
-+    // wasm: parallel OCCT meshing deadlocks/aborts on the browser main thread (pthread pool
-+    // exhaustion), leaving the visual mesh empty -- the 3D view then has nothing to draw.
-+    // Mesh single-threaded.
-+    meshParams.InParallel = Standard_False;
-+#else
-     meshParams.InParallel = Standard_True;
-+#endif
-     meshParams.AllowQualityDecrease = Standard_True;
- 
-     // Clear triangulation and PCurves from geometry which can slow down the process
 diff -ruNp a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
 --- a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
 +++ b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
@@ -6234,7 +6216,16 @@ diff -ruNp a/src/Mod/TechDraw/Gui/CommandExtensionDims.cpp b/src/Mod/TechDraw/Gu
 diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
-@@ -57,6 +57,118 @@
+@@ -38,6 +38,8 @@
+ #include <Inventor/SoPrimitiveVertex.h>
+ #include <Inventor/actions/SoGetBoundingBoxAction.h>
+ #include <Inventor/actions/SoGLRenderAction.h>
++#include <Inventor/actions/SoRayPickAction.h>
++#include <Inventor/details/SoPointDetail.h>
+ #include <Inventor/bundles/SoMaterialBundle.h>
+ #include <Inventor/details/SoLineDetail.h>
+ #include <Inventor/elements/SoCoordinateElement.h>
+@@ -57,6 +59,118 @@
  
  #include <Gui/Inventor/So3DAnnotation.h>
  
@@ -6353,7 +6344,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
  
  using namespace PartGui;
  
-@@ -334,7 +446,84 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+@@ -334,7 +448,84 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
          state->pop();
      }
      else {
@@ -6438,6 +6429,96 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet
      }
  
      // Workaround for #0000433
+@@ -761,3 +952,89 @@ SoDetail* SoBrepEdgeSet::createLineSegme
+     line_detail->setPartIndex(index);
+     return detail;
+ }
++
++#if defined(__EMSCRIPTEN__)
++// FCWEB: per-edge culling for ray picks. Coin tests this node's bounding box once
++// (SoShape::rayPick) and SoIndexedLineSet::generatePrimitives then hands every segment of
++// every edge to SoRayPickAction::intersect(line) -- closest points plus two matrix
++// multiplies per segment -- which was ~15% of a preselection pick on a large assembly and
++// the whole of it once faces are culled (2026-09-15, 900a_GA3DtechProject). Each edge is one
++// -1-terminated run of coordIndex; an edge whose bounding box misses the pick cone has no
++// segment that can hit, so only the survivors are generated. Same structure as
++// SoShape::rayPick (pick style, object-space ray, shape box, primitives), with the shape box
++// being the union of the cached edge boxes. The picked points and their SoLineDetail line
++// indices are the same as Coin's; the material/normal/texture indices on a picked point are
++// not, and nothing reads those for an edge (getElementPicked uses getLineIndex()).
++// SoIndexedLineSet::generatePrimitives is private, hence the override one level up.
++void SoBrepEdgeSet::rayPick(SoRayPickAction* action)
++{
++    if (this->coordIndex.getNum() < 2 || this->vertexProperty.getValue()) {
++        inherited::rayPick(action);
++        return;
++    }
++    if (!this->shouldRayPick(action)) {
++        return;
++    }
++    this->computeObjectSpaceRay(action);
++
++    SoState* state = action->getState();
++    const SoCoordinateElement* coords = SoCoordinateElement::getInstance(state);
++    const int32_t* cindices = this->coordIndex.getValues(0);
++    const int32_t* const end = cindices + this->coordIndex.getNum();
++
++    const SbUniqueId nid = this->getNodeId();
++    const SbUniqueId cid = coords->getNodeId();
++    if (pickBoxesNode != nid || pickBoxesCoord != cid) {
++        pickBoxes.clear();
++        pickBoxesAll.makeEmpty();
++        for (const int32_t* ip = cindices; ip + 1 < end;) {
++            SbBox3f bb;
++            while (ip < end && *ip >= 0) {
++                bb.extendBy(coords->get3(*ip));
++                ++ip;
++            }
++            if (ip < end) {
++                ++ip;
++            }
++            pickBoxes.push_back(bb);
++            pickBoxesAll.extendBy(bb);
++        }
++        pickBoxesNode = nid;
++        pickBoxesCoord = cid;
++    }
++    if (pickBoxesAll.isEmpty() || !action->intersect(pickBoxesAll, TRUE)) {
++        return;
++    }
++
++    SoPrimitiveVertex vertex;
++    SoPointDetail pointDetail;
++    SoLineDetail lineDetail;
++    vertex.setDetail(&pointDetail);
++    size_t edge = 0;
++    while (cindices + 1 < end) {
++        const bool skip = edge < pickBoxes.size()
++            && (pickBoxes[edge].isEmpty() || !action->intersect(pickBoxes[edge], TRUE));
++        if (!skip) {
++            this->beginShape(action, LINE_STRIP, &lineDetail);
++        }
++        int32_t i = 0;
++        bool first = true;
++        while (cindices < end && (i = *cindices++) >= 0) {
++            if (!skip) {
++                pointDetail.setCoordinateIndex(i);
++                vertex.setPoint(coords->get3(i));
++                this->shapeVertex(&vertex);
++                if (!first) {
++                    lineDetail.incPartIndex();
++                }
++            }
++            first = false;
++        }
++        if (!skip) {
++            this->endShape();
++        }
++        lineDetail.incLineIndex();
++        ++edge;
++    }
++}
++#endif
 diff -ruNp a/src/Mod/Surface/Gui/AppSurfaceGui.cpp b/src/Mod/Surface/Gui/AppSurfaceGui.cpp
 --- a/src/Mod/Surface/Gui/AppSurfaceGui.cpp
 +++ b/src/Mod/Surface/Gui/AppSurfaceGui.cpp
@@ -6645,3 +6726,32 @@ diff -ruNp a/src/Gui/Document.cpp b/src/Gui/Document.cpp
              }
  
              if (pObj && treeRank >= 0) {
+diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.h b/src/Mod/Part/Gui/SoBrepEdgeSet.h
+--- a/src/Mod/Part/Gui/SoBrepEdgeSet.h
++++ b/src/Mod/Part/Gui/SoBrepEdgeSet.h
+@@ -69,6 +69,10 @@ protected:
+     ) override;
+ 
+     void getBoundingBox(SoGetBoundingBoxAction* action) override;
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: ray picks skip edges whose bounding box misses the pick cone (see the .cpp).
++    void rayPick(SoRayPickAction* action) override;
++#endif
+ 
+ private:
+     struct SelContext;
+@@ -92,6 +96,14 @@ private:
+ 
+     // backreference to viewprovider that owns this node
+     ViewProviderPartExt* viewProvider = nullptr;
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: per-edge bounding boxes for ray picks, keyed on this node's id
++    // (coordIndex) and the coordinate node's id.
++    SbUniqueId pickBoxesNode = 0;
++    SbUniqueId pickBoxesCoord = 0;
++    std::vector<SbBox3f> pickBoxes;
++    SbBox3f pickBoxesAll;
++#endif
+ };
+ 
+ }  // namespace PartGui
