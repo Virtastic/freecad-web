@@ -1353,30 +1353,35 @@ PATCHES += [
 # while a promising activation is executing; from a raw callback into wasm the suspend
 # traps. Nothing in JSPI says which is the case, so count it: +1 when a promising export
 # (or main) is entered, -1 when it suspends, +1 when it resumes, -1 when it completes.
-# Exactly one promising activation executes at a time, so the count is 0 or 1.
+# Exactly one promising activation executes at a time, so the count is 0 or 1. It may
+# only ever err LOW: a false 'yes' is an illegal suspend with the shadow stack pointer
+# already handed back -- a corrupted stack -- while a false 'no' is a skipped yield.
+# Hence main counts in and never out (its promise was seen resolving mid-session while
+# Qt's loop kept suspending and resuming, measured 2026-09-15, which then refused every
+# yield), and decrements clamp at 0.
 PATCHES += [
     (
         'JSPI live: entering a promising export',
         'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;'
         'try{r=p.apply(null,arguments)}catch(e){stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
         'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;Asyncify.__live=(Asyncify.__live|0)+1;'
-        'try{r=p.apply(null,arguments)}catch(e){Asyncify.__live--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+        'try{r=p.apply(null,arguments)}catch(e){if(Asyncify.__live>0)Asyncify.__live--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
     ),
     (
         'JSPI live: a promising export completes',
         'var done=function(){if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
-        'var done=function(){Asyncify.__live--;if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
+        'var done=function(){if(Asyncify.__live>0)Asyncify.__live--;if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
     ),
     (
         'JSPI live: main counts too',
         'if(name==="main"||name==="__main_argc_argv")return p;',
-        'if(name==="main"||name==="__main_argc_argv")return function(){Module.__fcLive=function(){return Asyncify.__live|0};Asyncify.__live=(Asyncify.__live|0)+1;var r=p.apply(null,arguments);var d=function(){Asyncify.__live--};if(r&&typeof r.then==="function")r.then(d,d);else d();return r};',
+        'if(name==="main"||name==="__main_argc_argv")return function(){Module.__fcLive=function(){return Asyncify.__live|0};Asyncify.__live=(Asyncify.__live|0)+1;return p.apply(null,arguments)};',
     ),
     (
         'JSPI live: a suspend leaves, a resume comes back',
         'try{var pr=startAsync();if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
         'finally{stackRestore(sp);runtimeKeepalivePop()}}',
-        'var __dec=false;try{var pr=startAsync();Asyncify.__live--;__dec=true;if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
+        'var __dec=false;try{var pr=startAsync();if(Asyncify.__live>0)Asyncify.__live--;__dec=true;if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
         'finally{if(__dec)Asyncify.__live++;stackRestore(sp);runtimeKeepalivePop()}}',
     ),
 ]
