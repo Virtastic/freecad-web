@@ -133,7 +133,23 @@ typedef unsigned int GLuint;
  * Rate-limited to one turn per 100 ms, like the desktop's pump.
  */
 EM_JS(int, fcweb_yield_ok, (void), { try { return (typeof Asyncify !== "undefined" && (Asyncify.__live | 0) > 0) ? 1 : 0; } catch (e) { return 0; } });
-EM_ASYNC_JS(void, fcweb_yield_js, (void), { await new Promise(function (r) { setTimeout(r, 0); }); if (typeof Module !== "undefined") Module.__fcYields = (Module.__fcYields | 0) + 1; });
+/* While parked, the load stands in for Qt's suspended main loop: if nobody holds
+ * Module.qtSuspendResumeControl.resume (Qt-wasm's loop normally returns to the browser
+ * rather than parking, so it is usually free), take it. Native events that arrive during
+ * the park then QUEUE in control.pendingEvents and wake the park instead of being
+ * dispatched on a raw stack in the middle of a half-restored document -- which is what
+ * they did before (measured 2026-09-15: 26 of 44 parks with the slot free, and an
+ * emscripten::val assert in QWasmSuspendResumeControl::sendPendingEvents behind them).
+ * The C++ caller drains the queue synchronously after the park, as the desktop's
+ * processEvents() inside a load does. */
+EM_ASYNC_JS(void, fcweb_yield_js, (void), {
+    await new Promise(function (r) {
+        var c = (typeof Module !== "undefined") ? Module.qtSuspendResumeControl : null, mine = null;
+        if (c && !c.resume) { mine = function () { if (c.resume === mine) c.resume = null; r(); }; c.resume = mine; }
+        setTimeout(function () { if (mine && c.resume === mine) c.resume = null; r(); }, 0);
+    });
+    if (typeof Module !== "undefined") Module.__fcYields = (Module.__fcYields | 0) + 1;
+});
 static double fc_last_yield = 0;
 /* Is a turn due (100 ms since the last one) AND legal right now? Split from the yield so a
  * C++ caller can do its bookkeeping between the two -- the document loader releases the GIL

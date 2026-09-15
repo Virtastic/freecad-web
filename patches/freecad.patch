@@ -6374,7 +6374,7 @@ diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
 diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
 --- a/src/App/Document.cpp
 +++ b/src/App/Document.cpp
-@@ -64,6 +64,36 @@
+@@ -64,6 +64,44 @@
  #include <Base/UnitsApi.h>
  
  #include "Document.h"
@@ -6389,6 +6389,12 @@ diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
 +// state -- fatal PyThreadState_Get, gate run 34913239544. So the park is a proper
 +// blocking call: the GIL is released before it and taken back after, and if another
 +// activation holds it when the turn ends, the load parks again until it is free.
++// Native events that arrived during the park queued in Qt's suspend-resume control
++// (the park holds its resume slot, gl_legacy_stubs.c); they are delivered here,
++// synchronously, exactly where the desktop's progress bar pumps processEvents() --
++// never on a raw stack in the middle of the restore, which asserted in
++// QWasmSuspendResumeControl::sendPendingEvents (2026-09-15). Input stays out: the
++// wait cursor is up and a click into a half-restored document is a desktop bug too.
 +extern "C" int fcweb_yield_due(void);
 +extern "C" void fcweb_yield_now(void);
 +static void fcweb_yield_point()
@@ -6396,22 +6402,24 @@ diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
 +    if (!fcweb_yield_due()) {
 +        return;
 +    }
-+    if (!PyGILState_Check()) {
++    if (PyGILState_Check()) {
++        PyThreadState* ts = PyEval_SaveThread();
 +        try { fcweb_yield_now(); } catch (...) {}
-+        return;
++        for (int spin = 0; PyGILState_Check() && spin < 100000; ++spin) {
++            try { fcweb_yield_now(); } catch (...) {}
++        }
++        PyEval_RestoreThread(ts);
 +    }
-+    PyThreadState* ts = PyEval_SaveThread();
-+    try { fcweb_yield_now(); } catch (...) {}
-+    for (int spin = 0; PyGILState_Check() && spin < 100000; ++spin) {
++    else {
 +        try { fcweb_yield_now(); } catch (...) {}
 +    }
-+    PyEval_RestoreThread(ts);
++    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 +}
 +#endif
  #include "private/DocumentP.h"
  #include "Application.h"
  #include "AutoTransaction.h"
-@@ -1546,6 +1576,9 @@ std::vector<DocumentObject*> Document::r
+@@ -1546,6 +1584,9 @@ std::vector<DocumentObject*> Document::r
              try {
                  FC_TRACE("restoring " << pObj->getFullName());
                  pObj->Restore(reader);
@@ -6421,7 +6429,7 @@ diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
              }
              // Try to continue only for certain exception types if not handled
              // by the feature type. For all other exception types abort the process.
-@@ -2092,6 +2125,9 @@ bool Document::afterRestore(const std::v
+@@ -2092,6 +2133,9 @@ bool Document::afterRestore(const std::v
                  d->addRecomputeLog(returnCode);
              }
              obj->onDocumentRestored();
@@ -6434,7 +6442,7 @@ diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
 diff -ruNp a/src/Gui/Document.cpp b/src/Gui/Document.cpp
 --- a/src/Gui/Document.cpp
 +++ b/src/Gui/Document.cpp
-@@ -57,6 +57,36 @@
+@@ -57,6 +57,44 @@
  
  #include "Document.h"
  #include "DocumentPy.h"
@@ -6449,6 +6457,12 @@ diff -ruNp a/src/Gui/Document.cpp b/src/Gui/Document.cpp
 +// state -- fatal PyThreadState_Get, gate run 34913239544. So the park is a proper
 +// blocking call: the GIL is released before it and taken back after, and if another
 +// activation holds it when the turn ends, the load parks again until it is free.
++// Native events that arrived during the park queued in Qt's suspend-resume control
++// (the park holds its resume slot, gl_legacy_stubs.c); they are delivered here,
++// synchronously, exactly where the desktop's progress bar pumps processEvents() --
++// never on a raw stack in the middle of the restore, which asserted in
++// QWasmSuspendResumeControl::sendPendingEvents (2026-09-15). Input stays out: the
++// wait cursor is up and a click into a half-restored document is a desktop bug too.
 +extern "C" int fcweb_yield_due(void);
 +extern "C" void fcweb_yield_now(void);
 +static void fcweb_yield_point()
@@ -6456,22 +6470,24 @@ diff -ruNp a/src/Gui/Document.cpp b/src/Gui/Document.cpp
 +    if (!fcweb_yield_due()) {
 +        return;
 +    }
-+    if (!PyGILState_Check()) {
++    if (PyGILState_Check()) {
++        PyThreadState* ts = PyEval_SaveThread();
 +        try { fcweb_yield_now(); } catch (...) {}
-+        return;
++        for (int spin = 0; PyGILState_Check() && spin < 100000; ++spin) {
++            try { fcweb_yield_now(); } catch (...) {}
++        }
++        PyEval_RestoreThread(ts);
 +    }
-+    PyThreadState* ts = PyEval_SaveThread();
-+    try { fcweb_yield_now(); } catch (...) {}
-+    for (int spin = 0; PyGILState_Check() && spin < 100000; ++spin) {
++    else {
 +        try { fcweb_yield_now(); } catch (...) {}
 +    }
-+    PyEval_RestoreThread(ts);
++    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 +}
 +#endif
  #include "Application.h"
  #include "Command.h"
  #include "Control.h"
-@@ -1969,6 +1999,9 @@ void Document::RestoreDocFile(Base::Read
+@@ -1969,6 +2007,9 @@ void Document::RestoreDocFile(Base::Read
              // check if this feature has been registered
              if (pObj) {
                  pObj->Restore(*localreader);
