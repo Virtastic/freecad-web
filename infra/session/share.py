@@ -123,6 +123,7 @@ def _sessions():
     except OSError:
         return out
     for n in names:
+        # ponytail: O(n) scandir per GC pass; an index file if the volume ever holds thousands
         if n.endswith('.json') and not n.endswith('.env.json') and n != 'evicted.json':
             i = n[:-5]
             if ID_RE.match(i):
@@ -203,6 +204,7 @@ def _st(i):
             result=None,
             ev=threading.Event(),
             cmd_ev=threading.Event(),
+            turn=threading.Lock(),   # submit() callers take turns instead of being refused
         )
     return s
 
@@ -263,8 +265,8 @@ HINTS = {
     'quota': 'The server is out of space; the operator can raise FCWEB_SHARE_MAX_GB.',
     'already_pending': 'Someone else is already asking for control. Try again in a moment.',
     'no_holder_to_grant': 'Nobody is holding control right now, so there is no one to grant it. The editor password lets you take it yourself.',
-    'no_tab': 'No browser tab is attached to this session. Open the session and tick "Allow an AI assistant" in Edit > Share Session.',
-    'busy': 'One command at a time. Wait for the previous call to return.',
+    'no_tab': 'No browser tab is attached. The OWNER\'s FreeCAD tab -- the one that ticked "Allow an AI assistant" in Edit > Share Session -- must be open; a joined viewer\'s tab does not relay.',
+    'busy': 'Another command was still running when yours timed out waiting its turn. Retry.',
     'bad_request': 'The request body was not what this endpoint expects.',
 }
 
@@ -402,6 +404,9 @@ def _route(method, path, fullpath, h, body):
             'holder': {'name': _name(s, s['holder']), 'silent': stale} if s['holder'] else None,
             'pending': {'name': _name(s, s['pending'])} if s['pending'] else None,
             'watching': _watching(s), 'expires': m['expires'], 'owner': m.get('owner', ''),
+            # whether a password is in force, for the owner's Sharing page: the page never
+            # sees the passwords themselves after they are set
+            'has_pw': {'viewer': bool(m.get('pw_view')), 'editor': bool(m.get('pw_edit'))} if admin else None,
             'you': {'holder': client is not None and cid == s['holder'],
                     'role': client['role'] if client else 'admin',
                     # their own capability, returned only to them: granted control
@@ -618,7 +623,9 @@ def _relay(method, i, op, fullpath, h, body):
         if method != 'POST' or not _agent_ok(i, h.get('x-fcweb-agent', '')):
             return _err(404, 'not_found', 'No such endpoint.')
         t = secrets.token_hex(16)
-        s['tabs'] = {t: {'seen': _now()}}      # one relay target at a time; the newest wins
+        # one relay target at a time; the newest wins. The client id is what fc_session_info
+        # compares with the holder -- identity, not a display name.
+        s['tabs'] = {t: {'seen': _now(), 'client': h.get('x-fcweb-client', '')}}
         return _json(200, {'tab': t})
     tab = h.get('x-fcweb-tab', '')
     if tab not in s['tabs']:
@@ -663,24 +670,35 @@ def submit(i, tok, kind, args, timeout=30.0):
         live = [t for t, v in s['tabs'].items() if _now() - v['seen'] <= HOLDER_SILENCE_S]
         if not live:
             return {'ok': False, 'code': 'no_tab', 'hint': HINTS['no_tab']}
-        if s['queue'] is not None or s['inflight'] is not None:
-            return {'ok': False, 'code': 'busy', 'hint': HINTS['busy']}
-        cid = secrets.token_hex(4)
-        s['queue'] = {'id': cid, 'kind': kind, 'args': args}
-        s['result'] = None
-        s['ev'].clear()
-        s['cmd_ev'].set()
-    ok = s['ev'].wait(min(timeout, 120.0))
-    with LOCK:
-        if not ok:
-            s['queue'] = None
-            s['inflight'] = None
-            return {'ok': False, 'code': 'timeout',
-                    'hint': 'The tab did not answer in %ds -- it may be busy in a long operation '
-                            '(document restore, recompute). Try fc_status, then again.' % int(timeout)}
-        r = s['result']
-        s['result'] = None
-        return r
+    timeout = min(float(timeout), 120.0)
+    # One command runs in the tab at a time (one interpreter), but callers QUEUE for it
+    # rather than being refused: an AI client that issues two tool calls in parallel gets
+    # both answered, in order, instead of one 'busy'.
+    # ponytail: fairness is the lock's; a real deque if ordering ever matters.
+    if not s['turn'].acquire(timeout=timeout):
+        return {'ok': False, 'code': 'busy', 'hint': HINTS['busy']}
+    try:
+        with LOCK:
+            cid = secrets.token_hex(4)
+            # the tab bounds its own wait to this, so a stuck interpreter answers 'timeout'
+            # instead of leaving the relay wedged
+            s['queue'] = {'id': cid, 'kind': kind, 'args': args, 'timeout': timeout}
+            s['result'] = None
+            s['ev'].clear()
+            s['cmd_ev'].set()
+        ok = s['ev'].wait(timeout)
+        with LOCK:
+            if not ok:
+                s['queue'] = None
+                s['inflight'] = None
+                return {'ok': False, 'code': 'timeout',
+                        'hint': 'The tab did not answer in %ds -- it may be busy in a long operation '
+                                '(document restore, recompute). Try fc_status, then again.' % int(timeout)}
+            r = s['result']
+            s['result'] = None
+            return r
+    finally:
+        s['turn'].release()
 
 
 # --------------------------------------------------------------------------- selftest
@@ -720,6 +738,9 @@ def selftest():
     owner, oedit = j['client'], j['edit']
     st, j, _, _ = call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)
     assert j['holder']['name'] == 'Alice' and j['you']['holder'] is True
+    assert j['has_pw'] is None, 'has_pw must be admin-only'
+    jo = call('GET', '/share/%s/v' % sid, X_Fcweb_Key=key)[1]
+    assert jo['has_pw'] == {'viewer': False, 'editor': False}, jo['has_pw']
 
     # document publish: wrong/no edit token, then holder
     assert call('PUT', '/share/' + sid, b'ONE', X_Fcweb_Client=owner)[0] == 403
@@ -817,8 +838,9 @@ def selftest():
     # relay: attach needs the MCP token; submit needs a live tab; one at a time
     assert call('POST', '/api/s/%s/attach' % sid, X_Fcweb_Agent='x' * 32)[0] == 404
     assert submit(sid, tok2, 'eval', {'code': '1'})['code'] == 'no_tab'
-    st, j, _, _ = call('POST', '/api/s/%s/attach' % sid, X_Fcweb_Agent=tok2)
+    st, j, _, _ = call('POST', '/api/s/%s/attach' % sid, X_Fcweb_Agent=tok2, X_Fcweb_Client=owner)
     tab = j['tab']
+    assert _st(sid)['tabs'][tab]['client'] == owner, 'attach must record the tab\'s client id'
     assert call('GET', '/api/s/%s/cmd' % sid, X_Fcweb_Tab='nope')[0] == 409
     assert call('GET', '/api/s/%s/cmd?wait=0' % sid, X_Fcweb_Tab=tab)[0] == 204
     done = {}
@@ -836,6 +858,25 @@ def selftest():
     r = submit(sid, tok2, 'eval', {'code': 'print(6*7)'}, timeout=5)
     th.join()
     assert r == {'id': done['cmd']['id'], 'ok': True, 'out': '42'} and done['cmd']['kind'] == 'eval', r
+    assert done['cmd']['timeout'] == 5.0, 'the tab must learn the caller\'s timeout'
+    # two callers at once: both are answered, in order, none refused
+    seen = []
+
+    def tab_loop():
+        for _ in range(400):
+            st, j, _, _ = call('GET', '/api/s/%s/cmd?wait=0.05' % sid, X_Fcweb_Tab=tab)
+            if st == 200:
+                seen.append(j['args']['code'])
+                call('POST', '/api/s/%s/result' % sid, {'id': j['id'], 'ok': True, 'out': j['args']['code']}, X_Fcweb_Tab=tab)
+                if len(seen) == 2:
+                    return
+            time.sleep(0.01)
+    th = threading.Thread(target=tab_loop)
+    th.start()
+    outs = {}
+    ths = [threading.Thread(target=lambda c=c: outs.__setitem__(c, submit(sid, tok2, 'eval', {'code': c}, timeout=5))) for c in ('A', 'B')]
+    [t.start() for t in ths]; [t.join() for t in ths]; th.join()
+    assert outs['A']['ok'] and outs['B']['ok'] and sorted(seen) == ['A', 'B'], (outs, seen)
     assert call('DELETE', '/share/%s/agent' % sid, X_Fcweb_Key=key)[0] == 200
     assert call('POST', '/mcp/%s/%s' % (sid, tok2))[0] == 404             # AllowAgent off
 
