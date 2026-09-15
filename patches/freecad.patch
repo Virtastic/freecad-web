@@ -2076,7 +2076,7 @@ diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
 +#ifndef __EMSCRIPTEN__
                  qApp->processEvents();
 +#else
-+                fcweb_maybe_yield();
++                try { fcweb_maybe_yield(); } catch (...) {}
 +#endif
              }
          }
@@ -2098,7 +2098,7 @@ diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
 +                // so the tab froze for the whole load and Chrome offered to kill it. Yield instead.
                  qApp->processEvents();
 +#else
-+                fcweb_maybe_yield();
++                try { fcweb_maybe_yield(); } catch (...) {}
 +#endif
              }
          }
@@ -6386,6 +6386,7 @@ diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
  
      glTexCoord2f(flip ? 0.F : 1.F, 1.F);
      glVertex2f(-this->imgWidth / 2, this->imgHeight / 2);
+diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
 --- a/src/App/Document.cpp
 +++ b/src/App/Document.cpp
 @@ -64,6 +64,11 @@
@@ -6405,7 +6406,7 @@ diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
                  FC_TRACE("restoring " << pObj->getFullName());
                  pObj->Restore(reader);
 +#if defined(__EMSCRIPTEN__)
-+                fcweb_maybe_yield();
++                try { fcweb_maybe_yield(); } catch (...) {}
 +#endif
              }
              // Try to continue only for certain exception types if not handled
@@ -6415,11 +6416,12 @@ diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
              }
              obj->onDocumentRestored();
 +#if defined(__EMSCRIPTEN__)
-+            fcweb_maybe_yield();
++            try { fcweb_maybe_yield(); } catch (...) {}
 +#endif
              if (touched) {
                  d->touchedObjs.insert(obj);
              }
+diff -ruNp a/src/Gui/Document.cpp b/src/Gui/Document.cpp
 --- a/src/Gui/Document.cpp
 +++ b/src/Gui/Document.cpp
 @@ -56,6 +56,11 @@
@@ -6439,7 +6441,7 @@ diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
              if (pObj) {
                  pObj->Restore(*localreader);
 +#if defined(__EMSCRIPTEN__)
-+                fcweb_maybe_yield();
++                try { fcweb_maybe_yield(); } catch (...) {}
 +#endif
              }
  
