@@ -22,6 +22,7 @@ fcweb_run_python, where it would look like a hang.
 """
 import json
 import os
+import re
 import sys
 import time
 import hashlib
@@ -563,16 +564,41 @@ def unpublished():
     return bool(_obs and _obs.changed > _last_pub_change)
 
 
+# Tools that need a document. Without one they would raise AttributeError deep inside;
+# the AI gets a code and a hint instead, from one place.
+NEEDS_DOC = {'get_object', 'find', 'shape_info', 'add_object', 'set_property', 'set_expression',
+             'call', 'delete_object', 'undo', 'redo', 'selection_set', 'export', 'recompute'}
+
+
+class ToolError(Exception):
+    def __init__(self, code, hint):
+        Exception.__init__(self, hint)
+        self.code, self.hint = code, hint
+
+
 def _tool(kind, a):
     Gui = _gui()
     d = App.ActiveDocument
+    if d is None and kind in NEEDS_DOC:
+        raise ToolError('no_document', 'No document is open. Create one first: fc_eval(\'App.newDocument("Part")\'), or fc_open_bytes.')
     if kind == 'eval':
         import io
+        import ast
         import contextlib
         buf = io.StringIO()
+        code = a.get('code', '')
+        ns = {'__name__': '__agent__'}
+        # like a REPL: if the last statement is an expression, its value comes back too
+        tree = ast.parse(code, '<agent>')
+        last = tree.body.pop() if tree.body and isinstance(tree.body[-1], ast.Expr) else None
+        value = None
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            exec(compile(a.get('code', ''), '<agent>', 'exec'), {'__name__': '__agent__'})
-        return {'out': buf.getvalue()[-16000:]}
+            exec(compile(tree, '<agent>', 'exec'), ns)
+            if last is not None:
+                v = eval(compile(ast.Expression(last.value), '<agent>', 'eval'), ns)
+                if v is not None:
+                    value = repr(v)[:4000]
+        return {'out': buf.getvalue()[-16000:], 'value': value}
     if kind == 'document_info':
         if d is None:
             return {'document': None}
@@ -704,12 +730,10 @@ def _tool(kind, a):
         elif a.get('camera'):
             v.setCamera(a['camera'])
         return {'camera': v.getCamera()}
-    if kind == 'fit_all':
-        Gui.SendMsgToActiveView('ViewFit')
-        return {'ok': True}
-    if kind == 'fit_selection':
-        Gui.SendMsgToActiveView('ViewSelection')
-        return {'ok': True}
+    if kind in ('fit_all', 'fit_selection'):
+        Gui.SendMsgToActiveView('ViewFit' if kind == 'fit_all' else 'ViewSelection')
+        # the camera travels to the watchers through the page's /live, like view_set
+        return {'camera': Gui.ActiveDocument.ActiveView.getCamera()}
     if kind == 'console_tail':
         from PySide6 import QtWidgets
         w = Gui.getMainWindow().findChild(QtWidgets.QTextEdit, 'Report view')
@@ -717,25 +741,49 @@ def _tool(kind, a):
         n = int(a.get('n', 50))
         return {'lines': lines[-n:]}
     if kind == 'export':
+        import hashlib
         import importlib
-        fmt = a.get('format', 'step').lower()
+        import math
+        fmt = (a.get('format') or 'step').lower().lstrip('.')
         objs = [_o(d, n) for n in a.get('objects', [])] or list(d.Objects)
-        out = os.path.join(MCP, a['id'] + '.out')
-        mod = {'step': 'ImportGui', 'stp': 'ImportGui', 'iges': 'ImportGui', 'stl': 'Mesh',
-               'obj': 'Mesh', 'brep': 'Part', 'fcstd': None}.get(fmt)
+        stem = re.sub(r'[^A-Za-z0-9._-]+', '_', a.get('name') or d.Label or d.Name).strip('_') or 'export'
+        name = stem + '.' + fmt
+        out = os.path.join(MCP, a['id'] + '.' + fmt)   # a real extension: the writers pick by it
+        mod = {'step': 'ImportGui', 'stp': 'ImportGui', 'iges': 'ImportGui', 'igs': 'ImportGui',
+               'stl': 'Mesh', '3mf': 'Mesh', 'obj': 'Mesh', 'brep': 'Part', 'fcstd': None}.get(fmt)
+        meshed = None
         if fmt == 'fcstd':
             d.saveCopy(out)
         elif mod == 'Mesh':
             import Mesh
-            Mesh.export(objs, out + '.' + fmt)
-            os.replace(out + '.' + fmt, out)
+            # Tessellate with the caller's deflections: a print-ready mesh is a choice, not
+            # Mesh.export's default. Objects without a solid shape (existing meshes) go
+            # through the plain exporter.
+            ld = float(a.get('linear_deflection') or 0.1)
+            ad = math.radians(float(a.get('angular_deflection') or 0.5))
+            try:
+                import MeshPart
+            except ImportError:
+                MeshPart = None
+            solids = [o for o in objs if MeshPart is not None and hasattr(o, 'Shape') and not o.Shape.isNull()]
+            if solids:
+                m = Mesh.Mesh()
+                for o in solids:
+                    m.addMesh(MeshPart.meshFromShape(Shape=o.Shape, LinearDeflection=ld, AngularDeflection=ad, Relative=False))
+                m.write(out)
+                meshed = {'facets': m.CountFacets, 'linear_deflection': ld, 'angular_deflection_deg': float(a.get('angular_deflection') or 0.5)}
+            else:
+                Mesh.export(objs, out)
         elif mod:
-            m = importlib.import_module(mod)
-            m.export(objs, out + '.' + fmt)
-            os.replace(out + '.' + fmt, out)
+            importlib.import_module(mod).export(objs, out)
         else:
-            raise ValueError('unsupported format %r' % fmt)
-        return {'file': out, 'bytes': os.path.getsize(out), 'format': fmt}
+            raise ToolError('bad_format', 'Unsupported format %r; use step, iges, stl, 3mf, obj, brep or fcstd.' % fmt)
+        data = open(out, 'rb').read()
+        res = {'file': out, 'name': name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
+               'format': fmt, 'inline': bool(a.get('inline')) or len(data) <= 262144}
+        if meshed:
+            res['mesh'] = meshed
+        return res
     if kind in ('import_bytes', 'open_bytes'):
         src = os.path.join(MCP, a['id'] + '.in')
         name = a.get('name', 'import.' + a.get('format', 'step'))
@@ -745,7 +793,14 @@ def _tool(kind, a):
             nd = App.openDocument(dst)
             return {'document': nd.Name}
         import importlib
-        importlib.import_module('ImportGui' if name.lower().endswith(('.step', '.stp', '.iges', '.igs')) else 'Mesh').insert(dst, d.Name)
+        fmt = (a.get('format') or name.rsplit('.', 1)[-1]).lower().lstrip('.')
+        mod = {'step': 'ImportGui', 'stp': 'ImportGui', 'iges': 'ImportGui', 'igs': 'ImportGui',
+               'stl': 'Mesh', '3mf': 'Mesh', 'obj': 'Mesh', 'brep': 'Part'}.get(fmt)
+        if not mod:
+            raise ToolError('bad_format', 'Unsupported format %r; use step, iges, stl, 3mf, obj or brep.' % fmt)
+        if d is None:
+            d = App.newDocument(name.rsplit('.', 1)[0] or 'Import')
+        importlib.import_module(mod).insert(dst, d.Name)
         return {'imported': name, 'objects': len(d.Objects)}
     if kind == 'screenshot':
         return {'screenshot': a.get('region', 'viewport'), 'max_px': int(a.get('max_px', 1280))}
@@ -787,8 +842,8 @@ def run_agent(cid):
                 _obs.changed = time.time()
     except Exception as e:
         tb = traceback.format_exc()
-        res.update(code=res.get('code', 'tool_error'), error=str(e)[:2000], trace=tb[-4000:],
-                   hint=res.get('hint', 'Read the error; fc_console_tail() shows FreeCAD\'s own report.'))
+        res.update(code=getattr(e, 'code', res.get('code', 'tool_error')), error=str(e)[:2000], trace=tb[-4000:],
+                   hint=getattr(e, 'hint', res.get('hint', 'Read the error; fc_console_tail() shows FreeCAD\'s own report.')))
     try:
         open(os.path.join(MCP, cid + '.result.json'), 'w').write(json.dumps(res))
     except Exception:
