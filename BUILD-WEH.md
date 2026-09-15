@@ -531,6 +531,34 @@ The fix is one export and one JS class:
 If the export is missing (older binary), the shim leaves Qt's own listener alone: dialogs
 and drag stay broken, but input keeps working.
 
+## Qt's timers: the main loop is dead after the first Python call, so the page pumps
+
+Measured 2026-09-15 (`scratchpad/am-seq-probe.py`, `idle-pump-probe.py`; Qt 6.11.2 sources
+under `scratchpad/qt6112/`). Right after boot `Module.qtSuspendResumeControl.resume` is held:
+main() is parked in `QEventDispatcherWasm::asyncifyWait()`, exactly as upstream intends, and
+every native timer resumes it. The first `processEvents(AllEvents)` from any OTHER promising
+activation -- a Python bridge call, `FreeCADGui.updateGui()`, a recompute's progress pump --
+runs `sendNativeEvents()`' suspend loop, whose `qtSuspendJs` overwrites the single `resume`
+slot; main's resolver is gone and the main loop never runs again. From then on the app is
+callback-driven, and `QEventDispatcherWasm::onTimer()` is a no-op under asyncify ("the
+instance will resume and process timers in processEvents()"): a QTimer fires only when
+something else happens to process events. Symptoms before the fix: the Addon Manager's
+startup sequence stalled in every FULL gate run (standalone it passed), a 1 s QTimer ticked
+five times and died, Qt's own `setTimeout` count froze at idle.
+
+The fix lives in `freecad-gui.html`, deliberately OUTSIDE the compositor IIFE (that one
+returns under `?no3d`, and until this fix the pump sat inside it, so every gate ran with dead
+timers): `Module.qtSendPendingEvents` -- which every native timer and wake-up passes through
+-- is wrapped to count calls, and the pump runs `FreeCADGui.updateGui()` once per call on the
+next animation frame, one event-loop iteration per expiry, the way the desktop's loop does.
+It stays skipped while a Python call is in flight (`__fcPyBusy`) or while someone holds the
+resume slot (a yielding load), which is what keeps it clear of the GIL/reentrancy failures a
+resurrected main loop would walk into. Cost at idle: 24 pumps/s, 2.6% of main-thread wall
+(`window.__fcWakePumps`, `__fcPumpMs`); PythonConsole's 100 ms flusher and the MainWindow
+activity timer are what fire. Do not try to keep main parked by stacking resume slots
+without re-reading the shadow-stack notes: that experiment asserted inside
+`QWasmSuspendResumeControl::sendPendingEvents` (reentrancy across a suspended handler).
+
 ## Getting work out: two save paths, and only one is scriptable
 
 `File > Save` and `File > Export` clicked for real both deliver a file

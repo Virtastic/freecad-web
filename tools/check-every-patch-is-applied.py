@@ -43,8 +43,10 @@ ELSEWHERE = {
     'ccx-wasm-automatic-array.patch': ('.github/workflows/build-ccx.yml', 'patches/ccx-*.patch'),
     'ccx-hcfs-inputerror-ier.patch': ('.github/workflows/build-ccx.yml', 'patches/ccx-*.patch'),
     # Qt is fetched into qt-src/ by its own workflow, not into deps/src/, so apply.sh never
-    # sees it; the Qt sources step applies this one itself, zero-fuzz and fail-closed.
-    'qt-wasm-embind-int64.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-wasm-embind-int64.patch'),
+    # sees it; the Qt sources step applies them itself, zero-fuzz and fail-closed, and loops
+    # over the glob the same way the ccx lane does, so a new qt patch needs no code change.
+    'qt-wasm-embind-int64.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-*.patch'),
+    'qt-wasm-gl-context-rehome.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-*.patch'),
     # libffi is a release tarball that configure-ctypes.sh fetches into deps/src/libffi
     # itself, outside apply.sh's build-deps run; the same script applies this one,
     # zero-fuzz and fail-closed, before configure.

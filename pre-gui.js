@@ -6,19 +6,194 @@ Module['preRun'] = Module['preRun'] || [];
 Module['preRun'].push(function () {
   try {
     ENV.FCWEB_PYLIB = '/pylib:/fc-ext:/pyside-pkg';
+    // NO OpenSSL IN THIS BUILD, AND THAT KILLED THE ADDON MANAGER.
+    //
+    // CPython is linked without _ssl, so the stdlib ssl.py raises on import, so
+    // FreeCAD's Mod/AddonManager/InitGui.py dies during startup and Std_AddonMgr is
+    // never registered -- NO addon can be installed, on the shipped release as much as
+    // on dev. Measured by the addonmgr gate scenario, which fails with
+    // FreeCADError(No such command Std_AddonMgr).
+    //
+    // FCWEB_PYLIB becomes config.pythonpath_env, which sits AHEAD of the stdlib in
+    // sys.path, so a stub at the front of it shadows the broken module. It has to be
+    // written here, before main(): the Addon Manager overlay is injected from the page
+    // long after InitGui.py has already run and failed.
+    try {
+      FS.mkdirTree('/fcweb-py');
+      FS.writeFile('/fcweb-py/ssl.py', [
+        '# SPDX-License-Identifier: LGPL-2.1-or-later',
+        '\'\'\'Import-only stand-in for the stdlib ssl module.',
+        '',
+        'CPython here is linked WITHOUT OpenSSL: there is no _ssl in the build (no _ssl.so, no',
+        'lib-dynload), and the stdlib ssl.py imports it on its first line with an explicit',
+        'comment that the error should propagate. So `import ssl` raises ImportError, and',
+        'FreeCAD dies on it while running Mod/AddonManager/InitGui.py -- which means',
+        'Std_AddonMgr is never registered and NO addon can be installed at all. Measured by the',
+        'addonmgr gate scenario, on the shipped release as well as on dev.',
+        '',
+        'Nothing in this port does TLS from Python -- every request is proxied through the',
+        'page\'s fetch() -- so the import needs to SUCCEED, not to work. Anything that actually',
+        'reaches for a TLS socket raises with the reason rather than failing obscurely later.',
+        '\'\'\'',
+        '',
+        '_REASON = (\'this build has no OpenSSL: CPython was linked without _ssl, and network\'',
+        '           \' access goes through the page proxy instead\')',
+        '',
+        '',
+        'class SSLError(OSError):',
+        '    pass',
+        '',
+        '',
+        'class SSLZeroReturnError(SSLError):',
+        '    pass',
+        '',
+        '',
+        'class SSLWantReadError(SSLError):',
+        '    pass',
+        '',
+        '',
+        'class SSLWantWriteError(SSLError):',
+        '    pass',
+        '',
+        '',
+        'class SSLSyscallError(SSLError):',
+        '    pass',
+        '',
+        '',
+        'class SSLEOFError(SSLError):',
+        '    pass',
+        '',
+        '',
+        'class SSLCertVerificationError(SSLError, ValueError):',
+        '    pass',
+        '',
+        '',
+        'CertificateError = SSLCertVerificationError',
+        '',
+        'OPENSSL_VERSION = \'none (built without OpenSSL)\'',
+        'OPENSSL_VERSION_NUMBER = 0',
+        'OPENSSL_VERSION_INFO = (0, 0, 0, 0, 0)',
+        'HAS_SNI = HAS_ECDH = HAS_ALPN = HAS_NPN = HAS_TLSv1_3 = False',
+        'CERT_NONE, CERT_OPTIONAL, CERT_REQUIRED = 0, 1, 2',
+        'VERIFY_DEFAULT = 0',
+        'PROTOCOL_TLS = PROTOCOL_TLS_CLIENT = PROTOCOL_TLS_SERVER = PROTOCOL_TLSv1_2 = 2',
+        'OP_NO_SSLv2 = OP_NO_SSLv3 = OP_NO_COMPRESSION = OP_ALL = 0',
+        '',
+        '',
+        'class Purpose(object):',
+        '    SERVER_AUTH = \'serverAuth\'',
+        '    CLIENT_AUTH = \'clientAuth\'',
+        '',
+        '',
+        'class SSLContext(object):',
+        '    def __init__(self, *a, **k):',
+        '        self.check_hostname = False',
+        '        self.verify_mode = CERT_NONE',
+        '        self.options = 0',
+        '        self.protocol = PROTOCOL_TLS_CLIENT',
+        '',
+        '    def load_default_certs(self, *a, **k):',
+        '        pass',
+        '',
+        '    def load_verify_locations(self, *a, **k):',
+        '        pass',
+        '',
+        '    def load_cert_chain(self, *a, **k):',
+        '        pass',
+        '',
+        '    def set_ciphers(self, *a, **k):',
+        '        pass',
+        '',
+        '    def set_alpn_protocols(self, *a, **k):',
+        '        pass',
+        '',
+        '    def wrap_socket(self, *a, **k):',
+        '        raise SSLError(_REASON)',
+        '',
+        '    def wrap_bio(self, *a, **k):',
+        '        raise SSLError(_REASON)',
+        '',
+        '',
+        'class SSLSocket(object):',
+        '    def __init__(self, *a, **k):',
+        '        raise SSLError(_REASON)',
+        '',
+        '',
+        'class SSLObject(object):',
+        '    def __init__(self, *a, **k):',
+        '        raise SSLError(_REASON)',
+        '',
+        '',
+        'def create_default_context(*a, **k):',
+        '    return SSLContext()',
+        '',
+        '',
+        'def _create_unverified_context(*a, **k):',
+        '    return SSLContext()',
+        '',
+        '',
+        '_create_default_https_context = create_default_context',
+        '',
+        '',
+        'def wrap_socket(*a, **k):',
+        '    raise SSLError(_REASON)',
+        '',
+        '',
+        'def match_hostname(*a, **k):',
+        '    return True',
+        '',
+        '',
+        'def get_default_verify_paths():',
+        '    return (None, None, None, None)',
+        '',
+        '',
+        'def cert_time_to_seconds(*a, **k):',
+        '    return 0',
+        '',
+        '',
+        'def RAND_status():',
+        '    return False',
+        '',
+        '',
+        'def RAND_add(*a, **k):',
+        '    pass',
+        '',
+        '',
+        'def __getattr__(name):',
+        '    # Anything not modelled above still IMPORTS; it only fails if something calls it.',
+        '    # A stub whose whole job is to let an import succeed must not fall over on the one',
+        '    # attribute I did not think of.',
+        '    if name.startswith(\'__\'):',
+        '        raise AttributeError(name)',
+        '',
+        '    def _missing(*a, **k):',
+        '        raise SSLError(\'ssl.%s: %s\' % (name, _REASON))',
+        '',
+        '    return _missing'
+      ].join('\n'));
+      ENV.FCWEB_PYLIB = '/fcweb-py:' + ENV.FCWEB_PYLIB;
+    } catch (e) {}
     ENV.FREECAD_WASM_HOME = '/freecad';
     ENV.HOME = '/home/web_user';
     ENV.QT_QPA_PLATFORM = 'wasm';
-    // Disable Coin render caching: display lists are stubbed in wasm and cache
-    // creation loops forever in the emulated GL path.
-    ENV.COIN_AUTO_CACHING = '0';
-    ENV.IV_SEPARATOR_MAX_CACHES = '0';
+    // Coin render caching. Display lists were stubs until 2026-09-14 (glGenLists returned 0,
+    // so Coin retried cache creation on every frame -- that is why this was off); the GL
+    // shim now records and replays them (gl_legacy_stubs.c -> tools/patch-freecad-js.py
+    // __fcDL), which is what makes the desktop fast on big static scenes. ?dlists=0 goes
+    // back to no lists and no caching, both, because one without the other is the loop.
+    try {
+      var __noDL = new URLSearchParams((typeof location !== 'undefined' && location.search) || '').get('dlists') === '0';
+    } catch (e) { var __noDL = false; }
+    if (__noDL) { ENV.COIN_AUTO_CACHING = '0'; ENV.IV_SEPARATOR_MAX_CACHES = '0'; }
     // WASM init-bisection: forward ?skipCoin / ?skipWb URL params to env vars so
     // init substeps can be toggled across page reloads without a rebuild.
     try {
       var qs = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
       if (qs.has('skipCoin')) { ENV.FCWEB_SKIP_COIN = '1'; }
       if (qs.has('skipWb'))   { ENV.FCWEB_SKIP_WB = '1'; }
+      // OCC's thread pool size (patches/freecad.patch, AppPart.cpp): bounded to 6 by default;
+      // ?occthreads=1 is the old serial pool, for A/Bs of tessellation and booleans.
+      if (qs.has('occthreads')) { ENV.FCWEB_OCC_THREADS = String(parseInt(qs.get('occthreads'), 10) || 1); }
       // 3D viewport is ON by default now that the render pipeline works; ?no3d opts out.
       if (!qs.has('no3d'))     { ENV.FCWEB_ENABLE_3D = '1'; ENV.FCWEB_NO_FBO0 = '1'; }
       if (qs.has('nofbo0'))    { ENV.FCWEB_NO_FBO0 = '1'; }
@@ -31,6 +206,91 @@ Module['preRun'].push(function () {
       // tools/patch-freecad-js.py (INDEX_TYPE) fixes the emulation; ?vbo=0 opts back
       // into immediate mode for A/B and as the escape hatch.
       if (qs.get('vbo') !== '0') { ENV.FCWEB_VBO = '1'; }
+      // Part face sets specifically. SoBrepFaceSet::renderShape force-disables its
+      // VBO path on wasm because it rasterised NOTHING under LEGACY_GL_EMULATION,
+      // so every Part solid draws through immediate mode instead: measured at 47,000
+      // draw calls per frame on a 1.13M-triangle assembly, 99.8% of them under 100
+      // vertices, against ~34 indexed draws the VBO path would issue. That is the
+      // whole performance story for large assemblies.
+      //
+      // ON by default (2026-09-09). It is much faster, two emulation bugs behind it are
+      // fixed (the VBO branch never called bindBuffer; then the generated shader had no
+      // GL_COLOR_MATERIAL, so every face came out black), and the colour question that
+      // kept it off for a week is settled below.
+      //
+      // Everything here was measured on a REAL GPU (RTX 4080, ANGLE/D3D11) with ONE
+      // document per browser. That is not a detail: every earlier verdict on this flag
+      // was taken from a session with several documents open, which is exactly when the
+      // compositor served a stale frame, so those measurements were of the bug.
+      //
+      // SPEED, on the user's own 42 MB a2plus assembly:
+      //
+      //   faces OFF   1404 ms/frame   109.9 MB uploaded per frame
+      //   faces ON     367 ms/frame    23.7 MB uploaded per frame
+      //
+      // 3.8x, and the mechanism is data movement rather than draw calls: both paths
+      // issue ~140 draws for the same 4.2M vertices, and the immediate path re-uploads
+      // the entire scene every single frame.
+      //
+      // COLOUR, per object: the two paths agree. Identical hue counts pixel for pixel on
+      // four primary-coloured boxes and on AssemblyExample, and on the a2plus assembly
+      // 0.0% of pixels differ (191 of 921,600). What differs is SHADING -- a flat face
+      // reads (242,0,0) on the immediate path and (208,17,17) here: ~14% darker with a
+      // small ambient term, hue exact.
+      //
+      // COLOUR, per FACE: the immediate path is the broken one. A cube with six
+      // different DiffuseColor entries, viewed from a corner:
+      //
+      //   faces OFF   the whole cube is RED          -- one colour for the whole object
+      //   faces ON    green / blue / cyan in thirds  -- the three faces actually visible
+      //
+      // A default flip is a new code path (VBO-on once routed Mesh nodes onto emulation
+      // code that had never run), so one document per node class was checked in a fresh
+      // browser each: Part primitives with curved surfaces, an STL through Mesh,
+      // draft_test_objects and BIMExample all render with the same lit-pixel count in
+      // both modes.
+      //
+      // ?vbofaces=0 is the escape hatch back to immediate mode.
+      if (qs.get('vbofaces') !== '0') { ENV.FCWEB_VBO_FACES = '1'; }
+      // Edges, the other 96%. With faces on a vertex array, EVERY remaining
+      // millisecond of a large assembly is the edge path: SoBrepEdgeSet redraws
+      // each edge through glBegin(GL_LINE_STRIP) and one glVertex3fv per index on
+      // every frame. Measured on an RTX 4080 with the 42 MB a2plus assembly:
+      // 431 ms/frame with edges, 16 ms/frame for the same scene in DrawStyle
+      // Shaded, and 23.99 MB of vertex data uploaded per frame attributed to LINES
+      // against 0.00 MB for the faces. The patch expands the index list into
+      // GL_LINES pairs once and caches it on the node. ?vboedges=0 opts out.
+      //
+      // OPT-IN for now (?vboedges=1), because it is not yet colour-clean on
+      // documents whose neighbouring nodes have different materials. On the
+      // a2plus assembly, the Skyrim mesh and Part primitives it is PIXEL-IDENTICAL
+      // to immediate mode at 130 ms/frame against 1404. On draft_test_objects and
+      // BIMExample it is not: sending the node's material leaves Coin's lazy cache
+      // and GL disagreeing, so later nodes draw in the wrong colour. Draft loses
+      // 1510 of its 1535 purple annotation pixels; BIM's dominant surface goes from
+      // (167,166,159) to (216,215,209).
+      //
+      // Two attempts, both measured, neither sufficient: dropping the state
+      // push/pop around SoMaterialBundle::sendFirst changed nothing, and
+      // SoGLLazyElement::reset(DIFFUSE_MASK) after the draw made Coin re-send --
+      // but re-send the DEFAULT 204,204,204, on 378 draws of draft and 2451 of BIM,
+      // where immediate mode has 25,25,25 / 84,0,125 / 109,133,169. Whoever picks
+      // this up: the answer is in how the material BINDING is resolved, not in when
+      // the send happens -- Coin's SoIndexedLineSet computes findMaterialBinding
+      // first and this path does not.
+      //
+      // RESOLVED 2026-09-11, and it was neither: Coin's lazy cache believed GL still
+      // held the colour it sent the frame before, while a later draw had changed the
+      // current colour behind its back (no glPushAttrib/glPopAttrib in the emulation
+      // to put it back), so sendFirst() sent nothing and every cached edge set drew in
+      // the previous frame's last colour. The immediate path survives because it sends
+      // per part. The path now sends the node's own line colour itself (and scopes its
+      // light-model change with a state push, like Coin). Measured on that engine:
+      // EngineBlock 0 of 2,593,200 pixels differ from immediate mode, draft_test_objects
+      // 0.02%, BIMExample 0.05% (line-join pixels); a red-edged box and a blue polyline
+      // come out identical; BIMExample rotates at 48 fps against 31. ON by default;
+      // ?vboedges=0 is the escape hatch back to immediate mode.
+      if (qs.get('vboedges') !== '0') { ENV.FCWEB_VBO_EDGES = '1'; }
     } catch (e) {}
     FS.mkdirTree('/home/web_user/.FreeCAD');
     FS.mkdirTree('/home/web_user/.local/share');

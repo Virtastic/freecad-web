@@ -22,14 +22,28 @@
 
 // Runs gmsh on `geoPath` (which Merges `brepPath`) and writes `unvPath`, all paths in
 // FreeCAD's FS. Returns 0 on success, non-zero on failure; -1 if the bridge is missing.
+// wasm64: EM_ASYNC_JS builds a WebAssembly.Suspending import, and its ARGUMENTS are not
+// given emscripten's signature conversion -- a `const char*` parameter arrives as a raw
+// i64, i.e. a BigInt. UTF8ToString does pointer arithmetic, so passing the BigInt straight
+// in throws
+//     TypeError: Cannot mix BigInt and other types, use explicit conversions
+// from inside the body, where the bridge's own catch turns it into a plain non-zero return.
+// That is what the FEM gate's "gmsh (wasm): returned 1" was, and every bridge here has
+// the same shape. Number() is correct on both targets: it
+// converts a BigInt and leaves a Number alone.
+//
+// The RETURN is not symmetric, and assuming it was cost a build: converting the `char*`
+// results to BigInt as well crashed the renderer in the addoninstall scenario, which had
+// passed on the build immediately before. Emscripten's wrapper does convert the result. So
+// the arguments are raw and the result is not -- measured, not reasoned.
 EM_ASYNC_JS(int, fcweb_gmsh_run_js,
             (const char* geoPath, const char* brepPath, const char* unvPath, int verbosity), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
     if (!g || typeof g.fcwebGmshRun !== 'function') { return -1; }
     try {
-        var rc = await g.fcwebGmshRun(UTF8ToString(geoPath),
-                                      UTF8ToString(brepPath),
-                                      UTF8ToString(unvPath),
+        var rc = await g.fcwebGmshRun(UTF8ToString(Number(geoPath)),
+                                      UTF8ToString(Number(brepPath)),
+                                      UTF8ToString(Number(unvPath)),
                                       verbosity | 0);
         return rc | 0;
     } catch (e) {

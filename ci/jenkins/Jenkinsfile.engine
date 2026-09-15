@@ -1,0 +1,97 @@
+// Jenkins pipeline for the freecad-web ENGINE build (the dev loop), on the LAN builder.
+//
+// The compile recipe -- emsdk 6.0.9, the dependency caches, ccache, the link, the boot
+// gate -- lives in .github/workflows/build-freecad.yml and link-freecad.yml; ~1,500 lines
+// that already work. Since 2026-09-15 those workflows run by default on the GitHub Actions
+// runner INSTALLED ON THIS BOX (`builder` label, service actions.runner.Virtastic-freecad-web
+// .builder, user jenkins, ~/actions-runner-freecad), not on the production VPS. This job is
+// the Jenkins-side button for it: dispatch the link workflow for a branch on the builder
+// runner, follow it, fail if it fails, and point at the log. The boot gate runs inside the
+// workflow; nothing here deploys anything.
+//
+// Credential github-virtastic (the same one freecad-web-dev uses to read releases) needs
+// the `workflow` scope for the dispatch -- a 403 on the first stage means it does not.
+pipeline {
+  agent any
+  options { timestamps(); disableConcurrentBuilds(); timeout(time: 240, unit: 'MINUTES') }
+  parameters {
+    string(name: 'REF', defaultValue: 'dev', description: 'branch (or sha reachable from a branch) to build')
+    choice(name: 'WORKFLOW', choices: ['link-freecad.yml', 'build-freecad.yml'], description: 'link = compile what changed + link + boot gate (the usual); build = compile lane only')
+    booleanParam(name: 'REBUILD', defaultValue: false, description: 'link only: drop the cached build tree first (a cold ~1 h ninja build)')
+  }
+  environment { REPO = 'Virtastic/freecad-web' }
+  stages {
+    stage('Dispatch on the builder runner') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'github-virtastic', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
+          sh '''
+            python3 - <<'PY'
+import json, os, sys, time, urllib.request
+repo, wf, ref = os.environ['REPO'], os.environ['WORKFLOW'], os.environ['REF']
+tok = os.environ['GH_TOKEN']
+H = {'Authorization': 'Bearer ' + tok, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}
+def api(path, data=None):
+    req = urllib.request.Request('https://api.github.com' + path, headers=H, data=(json.dumps(data).encode() if data is not None else None), method=('POST' if data is not None else 'GET'))
+    with urllib.request.urlopen(req, timeout=60) as r:
+        body = r.read()
+        return json.loads(body) if body else {}
+inputs = {'runner': 'builder'}
+if wf == 'link-freecad.yml' and os.environ.get('REBUILD') == 'true':
+    inputs['rebuild'] = True
+t0 = time.time()
+api('/repos/%s/actions/workflows/%s/dispatches' % (repo, wf), {'ref': ref, 'inputs': inputs})
+print('dispatched %s on %s (runner=builder)' % (wf, ref), flush=True)
+# find the run this dispatch created: newest workflow_dispatch run on this ref, created after t0
+run = None
+for _ in range(40):
+    time.sleep(6)
+    runs = api('/repos/%s/actions/workflows/%s/runs?event=workflow_dispatch&branch=%s&per_page=5' % (repo, wf, ref)).get('workflow_runs', [])
+    for r in runs:
+        created = time.mktime(time.strptime(r['created_at'], '%Y-%m-%dT%H:%M:%SZ')) - time.timezone
+        if created >= t0 - 90:
+            run = r; break
+    if run: break
+if not run:
+    sys.exit('no run appeared for the dispatch -- is the builder runner online (Settings > Actions > Runners)?')
+print('run %s  %s' % (run['id'], run['html_url']), flush=True)
+open('run.env', 'w').write('RUN_ID=%s\nRUN_URL=%s\n' % (run['id'], run['html_url']))
+PY
+          '''
+        }
+      }
+    }
+    stage('Follow it') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'github-virtastic', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
+          sh '''
+            . ./run.env
+            python3 - "$RUN_ID" <<'PY'
+import json, os, sys, time, urllib.request
+repo, run_id, tok = os.environ['REPO'], sys.argv[1], os.environ['GH_TOKEN']
+H = {'Authorization': 'Bearer ' + tok, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}
+def api(path):
+    with urllib.request.urlopen(urllib.request.Request('https://api.github.com' + path, headers=H), timeout=60) as r:
+        return json.loads(r.read())
+last = None
+while True:
+    run = api('/repos/%s/actions/runs/%s' % (repo, run_id))
+    jobs = api('/repos/%s/actions/runs/%s/jobs' % (repo, run_id)).get('jobs', [])
+    cur = ' | '.join('%s: %s%s' % (j['name'], j['status'], (' ' + (j.get('conclusion') or '')) if j.get('conclusion') else '') for j in jobs) or run['status']
+    steps = [s['name'] for j in jobs for s in j.get('steps', []) if s['status'] == 'in_progress']
+    line = cur + ((' -- ' + steps[0]) if steps else '')
+    if line != last:
+        print(time.strftime('%H:%M:%S ') + line, flush=True); last = line
+    if run['status'] == 'completed':
+        print('conclusion: %s  %s' % (run['conclusion'], run['html_url']), flush=True)
+        sys.exit(0 if run['conclusion'] == 'success' else 1)
+    time.sleep(60)
+PY
+          '''
+        }
+      }
+    }
+  }
+  post {
+    always { sh 'cat run.env 2>/dev/null || true' }
+  }
+}

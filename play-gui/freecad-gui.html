@@ -186,6 +186,62 @@ document.addEventListener('DOMContentLoaded', function () {
 // Blocking HTML confirm used by the JSPI dialog bridge (_fcwebdlg.confirm ->
 // fcweb_html_confirm EM_ASYNC_JS -> here). Returns a Promise resolving to the
 // clicked button index; the wasm side suspends (JSPI) until then.
+// ---- proxy rewrite, at the transport layer --------------------------------
+// Requests to these hosts cannot succeed cross-origin: the page is COEP:require-corp, so
+// the browser refuses them and the caller sees "HTTP status code 0" or a CORS error. The
+// app rewrites them onto /proxy/<key>/ in FreeCAD's NetworkManager, but only requests built
+// by NetworkManager.__create_request go through it -- and the Addon Manager's status ping
+// does not. Measured: FCWEB_PROXY_HOSTS holds addons.freecad.org, fcweb_proxy_url resolves
+// it to /proxy/addons/status, and a wrapper on that function recorded zero calls while the
+// request still left as an absolute URL and the startup sequence hung waiting for it.
+//
+// XMLHttpRequest and fetch are where Qt, python-requests and urllib all end up, so doing it
+// here catches every path at once. Only these exact hosts are touched.
+(function () {
+  // ONLY the host the application's own rewrite misses.
+  //
+  // Everything else already goes through FreeCAD's NetworkManager, which is overlay-aware:
+  // play-gui/am/fcweb_am_boot.py's _fix_proxy_host_map points www.freecad.org at its own
+  // key, docswww, deliberately -- /proxy/docs/ carries a poisoned cached 301 and
+  // /proxy/docswww/ is a different cache key that bypasses it. A transport-layer rewrite
+  // that also claimed www.freecad.org would undo that on its way out, which is exactly
+  // what it did: addon_stats.json stopped arriving.
+  var HOSTS = {
+    'addons.freecad.org': 'addons'
+  };
+  function proxied(url) {
+    var u;
+    try { u = new URL(String(url), location.href); } catch (e) { return null; }
+    if (u.origin === location.origin) { return null; }
+    var key = HOSTS[u.hostname.toLowerCase()];
+    if (!key) { return null; }
+    return '/proxy/' + key + u.pathname + u.search;
+  }
+  var xhrOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    var to = proxied(url);
+    if (to) {
+      try { console.log('[fcweb] proxying ' + url + ' -> ' + to); } catch (e) {}
+      arguments[1] = to;
+    }
+    return xhrOpen.apply(this, arguments);
+  };
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function (input, init) {
+      try {
+        var url = (typeof input === 'string') ? input : (input && input.url);
+        var to = proxied(url);
+        if (to) {
+          try { console.log('[fcweb] proxying ' + url + ' -> ' + to); } catch (e) {}
+          input = (typeof input === 'string') ? to : new Request(to, input);
+        }
+      } catch (e) {}
+      return origFetch.call(this, input, init);
+    };
+  }
+})();
+
 // ---- gmsh bridge ---------------------------------------------------------
 // gmsh is a SEPARATE wasm module (play-gui/gmsh.wasm) with its own filesystem, loaded
 // the first time someone meshes so the 152 MB main binary does not grow. FreeCAD writes
@@ -1862,11 +1918,22 @@ window.fcwebNotify = function (text, kind, actions) {
  // the user sees the title bar flash away (it used to be visible ~2.5s: overlay dropped at
  // ~1.5s, showFullScreen ran at 4s). Gate the reveal on both, with a timeout so the overlay
  // can never get stuck covering a working app.
- var __bootReady=false, __fsReady=false;
- function __maybeReveal(){ if(__bootReady && __fsReady && __bootEl) __bootEl.classList.add('hide'); }
+ // Two more gates (2026-09-11): Qt's onLoaded fires while FreeCAD is still loading its
+ // workbenches, so the overlay used to drop onto a bare four-menu window (File Edit View
+ // Help, no toolbars) that filled in seconds later, and the HiDPI window-state cycle below
+ // then flashed and resized it in front of the user. Measured on a cold boot: overlay gone at
+ // 18 s, workbench active at 33 s. Now the overlay stays until the workbench is active
+ // (__fcWorkReady) AND that cycle has run, so the first thing shown is the finished window.
+ var __bootReady=false, __fsReady=false, __workReady=false, __dprReady=false;
+ function __maybeReveal(){ if(__bootReady && __fsReady && __workReady && __dprReady && __bootEl) __bootEl.classList.add('hide'); }
  function __hideBoot(){ __bootReady=true; __maybeReveal(); }
  function __fsApplied(){ __fsReady=true; __maybeReveal(); }
+ function __workApplied(){ __workReady=true; __maybeReveal(); }
+ function __dprApplied(){ __dprReady=true; __maybeReveal(); }
  setTimeout(function(){ __fsReady=true; __maybeReveal(); }, 15000); // safety net
+ // The work/dpr gates have their own nets: 120 s for the workbench (matches __fcWorkReady's
+ // own fallback) and 40 s after the app is up for the cycle, so the overlay can never stick.
+ setTimeout(function(){ __workReady=true; __maybeReveal(); }, 120000);
  // FCWEB: append() was THE boot bottleneck. FreeCAD prints thousands of lines at
  // startup; the old impl created a DOM node per line AND forced a synchronous
  // reflow every line (scrollTop=scrollHeight), making boot O(n^2) — ~90s of pure
@@ -1929,7 +1996,23 @@ window.fcwebNotify = function (text, kind, actions) {
    // Python (only Qt knows the MDI layout). Capture it for the overlay compositor
    // and don't spam the log with it.
    if(typeof t==='string'){ const mR=t.indexOf('FCRECT '); if(mR>=0){
-     try{ window.__fcWidgetRect=JSON.parse(t.slice(mR+7)); }catch(e){} return; } }
+     try{ window.__fcWidgetRect=JSON.parse(t.slice(mR+7)); }catch(e){} return; }
+     // Which MDI view is in front (Python hook on QMdiArea.subWindowActivated, installed
+     // with the window-state cycle). renderScene publishes the rect and framebuffer of
+     // the visible 3D view but nothing withdraws them when that view goes behind the
+     // Start page or another document's tab: the present pass kept painting the last
+     // 3D frame over whatever was in front (measured 2026-09-11, a restored session
+     // showing a2plus across the Start page). Not a 3D view in front: no 3D layer
+     // until the next renderScene of a visible view republishes.
+     const mA=t.indexOf('FCACTIVE-'); if(mA>=0){
+       window.__fcActive3D = t.indexOf('FCACTIVE-3D')>=0;
+       if(!window.__fcActive3D){ window.__fcVisibleFbo=null; window.__fcWidgetRect=null; }
+       return; } }
+   // The two reveal gates used to grep the visible log for their markers; a boot that
+   // floods the log can trim a marker out before the 200 ms poll sees it, and the gate
+   // then waits for its 15 s net (measured 2026-09-13: work-ready at 9.0 s, overlay gone
+   // at 15.2 s, 6 s idle). Flag them here, at the source.
+   if(typeof t==='string'){ if(t.indexOf('FCFS-DONE')>=0) window.__fcFsDone=true; if(t.indexOf('FCDPR-DONE')>=0) window.__fcDprDone=true; }
    try { __maybeNotify(t); } catch(e){}
    try { if (window.fcwebLogRing) window.fcwebLogRing(t); } catch(e){}
    const noise = typeof t==='string' && __NOISE.test(t);
@@ -2061,12 +2144,50 @@ window.fcRunPy = fcRunPy;
      try{
        const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
        if(window.__fcPyBusy) return;   // don't re-enter CPython while a call is suspended
-       if(/FCFS-DONE/.test(logEl.textContent||'')){ clearInterval(iv); __fsApplied(); return; }
+       if(window.__fcFsDone || /FCFS-DONE/.test(logEl.textContent||'')){ clearInterval(iv); __fsApplied(); return; }
        const n=new TextEncoder().encode(FS_PY).length+1, q=m._malloc(n);
        m.stringToUTF8(FS_PY,q,n); fcRunPy(m,q);
      }catch(e){}
    },200);
    setTimeout(()=>clearInterval(iv), 60000);
+ })();
+
+ // __fcAppReady is Qt's signal, not FreeCAD's: qt.onLoaded fires once the application object
+ // is up, while FreeCAD's own GUI startup runs on afterwards. Until it has activated a
+ // workbench, creating a document takes a path that traps inside Coin --
+ //     View3DInventorViewer::init -> SoBase::addName -> cc_memalloc_allocate
+ //     RuntimeError: memory access out of bounds
+ // Measured on this build: at Ready+0s activeWorkbench() raises "No active workbench" and the
+ // Part::Box smoke test traps every time; at Ready+2s it returns NoneWorkbench and the same
+ // test passes every time. That race is why the boot gate failed while the app was fine when
+ // driven by hand -- the gate dispatches the instant the overlay says Ready.
+ //
+ // So publish a second flag meaning "can actually do work". Anything that creates documents --
+ // the boot gate, an autosave restore, a deep link -- should wait for this one, not Ready.
+ (function(){
+   const WORK_PY=[
+     "import FreeCADGui as _g, sys as _s",
+     "_wb=None",
+     "try:",
+     " _wb=_g.activeWorkbench()",
+     "except Exception:",
+     " _wb=None",
+     "if _wb is not None:",
+     " _s.__stderr__.write('FCWORKREADY\\n'); _s.__stderr__.flush()",
+     ""].join("\n");
+   const iv3=setInterval(()=>{
+     try{
+       if(window.__fcWorkReady){ clearInterval(iv3); __workApplied(); return; }
+       const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
+       if(window.__fcPyBusy) return;   // don't re-enter CPython while a call is suspended
+       if(/FCWORKREADY/.test(logEl.textContent||'')){
+         window.__fcWorkReady=true; clearInterval(iv3); __workApplied(); return; }
+       const n=new TextEncoder().encode(WORK_PY).length+1, q=m._malloc(n);
+       m.stringToUTF8(WORK_PY,q,n); fcRunPy(m,q);
+     }catch(e){}
+   },300);
+   // Never block forever on a signal that never comes: after 2 minutes let callers proceed.
+   setTimeout(()=>{ window.__fcWorkReady=true; clearInterval(iv3); }, 120000);
  })();
 
  // Close the Report view once the app is actually up. It is a developer panel and upstream
@@ -2091,6 +2212,7 @@ window.fcRunPy = fcRunPy;
        " for _d in _mw.findChildren(_qw.QDockWidget):",
        "  if _d.objectName()=='Report view' and _d.isVisible(): _d.hide()",
        ""].join("\n");
+   let stopAt=null;
    const iv=setInterval(()=>{
      try{
        const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
@@ -2100,9 +2222,14 @@ window.fcRunPy = fcRunPy;
        // so a user who opens it themselves keeps it after that window.
        const n=new TextEncoder().encode(RPT_PY).length+1, q=m._malloc(n);
        m.stringToUTF8(RPT_PY,q,n); fcRunPy(m,q);
+       // The 20 s window counts from the WORKBENCH being active, not from Qt's Ready: the
+       // dock is re-shown by FreeCAD's GUI init, which on a slow or cold boot finishes
+       // 15-20 s after Ready -- measured, the window had already closed and the Report
+       // view stayed open behind every document (2026-09-11).
+       if(window.__fcWorkReady && !stopAt){ stopAt=setTimeout(()=>clearInterval(iv), 20000); }
      }catch(e){}
    },500);
-   setTimeout(()=>clearInterval(iv), 20000);   // bounded: stop re-asserting after 20s
+   setTimeout(()=>clearInterval(iv), 180000);   // absolute bound if the workbench never comes
  })();
 
  // One window-state cycle once the app has settled. At startup Qt sizes the window
@@ -2119,22 +2246,70 @@ window.fcRunPy = fcRunPy;
      "_mw=_g.getMainWindow()",
      "if _mw is not None and not getattr(_f,'_fcweb_dpr_done',False):",
      " _mw.showNormal(); _mw.showFullScreen(); _f._fcweb_dpr_done=True",
+     // The same dispatch installs a guard. Opening a document takes the window OUT of
+     // fullscreen -- measured, 1400x900 fullscreen becomes 933x600 with Qt's frame back, on
+     // every document open -- and nothing restores it. A Qt-side timer costs nothing (no
+     // JS->Python call per tick) and re-asserts only when the state has actually slipped.
+     " from PySide6 import QtCore as _qc",
+     " def _fcweb_keep_fs():",
+     "  try:",
+     "   _w=_g.getMainWindow()",
+     "   if _w is not None and not _w.isFullScreen(): _w.showFullScreen()",
+     "  except Exception: pass",
+     " _t=_qc.QTimer(); _t.timeout.connect(_fcweb_keep_fs); _t.start(1000)",
+     " _f._fcweb_fs_timer=_t",
+     // Which MDI view is in front, for the present pass (see append(): FCACTIVE-).
+     // metaObject().className() is the real C++ class even without a binding for it.
+     " from PySide6 import QtWidgets as _qw",
+     " import sys as _s",
+     " def _fcweb_on_sub(sub):",
+     "  try:",
+     "   w=sub.widget() if sub is not None else None",
+     "   is3d=w is not None and 'View3DInventor' in w.metaObject().className()",
+     "   _s.__stderr__.write('FCACTIVE-%s\\n' % ('3D' if is3d else 'OTHER')); _s.__stderr__.flush()",
+     // A 3D view coming (back) to the front must render once, or the page has no rect and
+     // no framebuffer for it and paints black until the user moves the mouse: measured
+     // 2026-09-13 after the Preferences dialog closed (activation went OTHER then 3D, the
+     // page cleared the rect on OTHER, and Qt saw nothing to repaint on the way back).
+     "   if is3d:",
+     "    for c in w.findChildren(_qw.QWidget):",
+     "     if 'QOpenGLWidget' in c.metaObject().className(): c.update()",
+     "  except Exception: pass",
+     " _mdi=_mw.findChild(_qw.QMdiArea)",
+     " if _mdi is not None and not getattr(_f,'_fcweb_sub_hook',None):",
+     "  _mdi.subWindowActivated.connect(_fcweb_on_sub); _f._fcweb_sub_hook=_fcweb_on_sub",
+     "  _fcweb_on_sub(_mdi.activeSubWindow())",
+     // Tells the page the cycle ran, so the boot overlay can come down AFTER it (the
+     // FCFS-DONE pattern above). Written whether or not this dispatch did the cycle.
+     "import sys as _s; _s.__stderr__.write('FCDPR-DONE\\n'); _s.__stderr__.flush()",
      ""].join("\n");
-   let armed=false;
+   // Runs once the workbench is active (__fcWorkReady) and at least 5 s after Ready -- the
+   // 5 s is the measured minimum for the cycle to stick; on a cold boot the workbench comes
+   // later and the cycle waits for it. Retries while the interpreter is busy instead of
+   // dropping the call: a dropped call left the window at 1/dpr size for the session.
+   //
+   // The bound is measured from READY, not from page load, and a sent call that never
+   // reports back is sent again. The old form gave up 120 s after load: a boot that took
+   // 140 s (measured 2026-09-14 in the user's own Chrome, machine under load) never ran
+   // the cycle, the app sat at 840x617 in a 1261x926 window with its raster store at
+   // 1/dpr for the whole session, and the probes -- which boot in under two minutes --
+   // never saw it.
+   let readyAt=0, sentAt=0, tries=0;
    const iv2=setInterval(()=>{
      try{
        const m=window.fcInstance; if(!window.__fcAppReady||!m||!m._fcweb_run_python) return;
-       if(!armed){ armed=true; setTimeout(()=>{
-         try{
-           const mm=window.fcInstance;
-           if(!mm||window.__fcPyBusy) return;   // a dropped call here just leaves the old size
-           const n=new TextEncoder().encode(DPR_PY).length+1, q=mm._malloc(n);
-           mm.stringToUTF8(DPR_PY,q,n); fcRunPy(mm,q);
-         }catch(e){}
-       }, 5000); clearInterval(iv2); }
+       const now=performance.now();
+       if(!readyAt){ readyAt=now; return; }
+       if(window.__fcDprDone || /FCDPR-DONE/.test(logEl.textContent||'')){ clearInterval(iv2); __dprApplied(); return; }
+       if(window.__fcWorkReady && now-readyAt>=5000 && !window.__fcPyBusy && (!sentAt || now-sentAt>=15000) && tries<8){
+         const n=new TextEncoder().encode(DPR_PY).length+1, q=m._malloc(n);
+         m.stringToUTF8(DPR_PY,q,n); fcRunPy(m,q); sentAt=now; tries++;
+       }
+       if(now-readyAt>300000){ clearInterval(iv2); __dprApplied(); }
      }catch(e){}
-   },500);
-   setTimeout(()=>clearInterval(iv2), 120000);
+   },250);
+   // Overlay safety net for this gate: 40 s after the app is up, reveal regardless.
+   const iv2b=setInterval(()=>{ if(window.__fcAppReady){ clearInterval(iv2b); setTimeout(__dprApplied, 40000); } },500);
  })();
 
  // The HTML dialog bridge that used to live here has been REMOVED: Qt's own dialogs
@@ -2211,26 +2386,16 @@ window.fcRunPy = fcRunPy;
    try { await caches.delete(ENGINE_CACHE); } catch(e){}
    try { location.reload(); } catch(e){}
  };
- // Shown only after a real abort. Plain DOM rather than fcwebNotify, because the abort
- // may well have taken the toast machinery down with it.
+ // Shown only after a real abort. This used to build its own bottom-centre box on the
+ // theory that the abort had taken the toast machinery down -- but fcwebNotify is plain
+ // DOM defined before the engine loads and does not touch wasm, so a wasm abort cannot
+ // break it. It was the one notice not stacked bottom-right with the others.
  let __cacheResetShown = false;
  function __offerCacheReset(){
-   if (__cacheResetShown) { return; } __cacheResetShown = true;
-   try {
-     const d = document.createElement('div');
-     d.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;'
-       + 'background:#2b2f36;color:#e6e6e6;border:1px solid #555;border-radius:6px;padding:12px 16px;'
-       + 'font:13px system-ui,sans-serif;max-width:min(560px,92vw);box-shadow:0 4px 16px rgba(0,0,0,.5)';
-     const p = document.createElement('div');
-     p.textContent = 'FreeCAD stopped unexpectedly. If this repeats on every reload, the '
-       + 'downloaded engine may be damaged — clearing it re-downloads about 115 MB.';
-     const b = document.createElement('button');
-     b.textContent = 'Clear cached engine and reload';
-     b.style.cssText = 'margin-top:10px;padding:6px 12px;cursor:pointer;border-radius:4px;'
-       + 'border:1px solid #777;background:#3a3f48;color:#fff;font:inherit';
-     b.onclick = function(){ window.fcwebClearEngineCache(); };
-     d.appendChild(p); d.appendChild(b); document.body.appendChild(d);
-   } catch(e){}
+   if (__cacheResetShown || typeof window.fcwebNotify !== 'function') { return; } __cacheResetShown = true;
+   window.fcwebNotify('FreeCAD stopped unexpectedly. If this repeats on every reload, the '
+     + 'downloaded engine may be damaged — clearing it re-downloads about 115 MB.', 'error',
+     [{ label: 'Clear cached engine and reload', onClick: function () { window.fcwebClearEngineCache(); } }]);
  }
 
  async function init(){
@@ -2385,20 +2550,38 @@ window.fcRunPy = fcRunPy;
            // and replace the string inside _b64.b64decode('...'). It makes
            // Python-triggered modal dialogs non-blocking so they don't asyncify-
            // suspend across the CPython stack (which crashes the instance).
-           try { setTimeout(function(){
-             var m=window.fcInstance; if(!m) return;
+           // Dispatch only when the call can actually LAND. fcRunPy is a silent
+           // no-op while __fcPyBusy, so a single fire-and-forget setTimeout drops the
+           // whole warmup whenever the app happens to be busy at t+8s -- and this
+           // block carries the VBO render preference, the MainWindow wrapper pin, the
+           // non-blocking dialog patch AND the addons proxy host. Losing it is not
+           // cosmetic: without the host, the Addon Manager pings addons.freecad.org
+           // cross-origin, COEP drops it, and the modal it raises from the network
+           // callback takes the page down. That is the intermittent failure the gate
+           // reported as 'addons.freecad.org is not rewritten onto the proxy' on two
+           // of three consecutive runs.
+           //
+           // Re-arm rather than clear on the first pass: an interval that cleared
+           // itself immediately is how this class of bug was introduced before.
+           // The 8s delay is kept: it is the earliest point CPython is safe (see
+           // above), and this only changes what happens if the app is busy THEN.
+           try { setTimeout(function(){ var __wTries = 0; var __wT = setInterval(function(){
+             var m=window.fcInstance;
+             if(!m || window.__fcPyBusy){ if(++__wTries < 600) return;
+                                          clearInterval(__wT); return; }
+             clearInterval(__wT);
              // Render preferences FIRST, at the earliest point CPython is safe, and persist
              // them: a 3D view created before UseVBO is true renders every mesh through the
              // JS immediate-mode emulation (measured 2026-09-02: 668-993 ms per frame for a
              // 443k-triangle mesh vs 6 ms on the VBO path). The autosave installer used to
              // set this seconds later, after a user could already have opened a document.
              // saveParameter() writes user.cfg so every later boot starts with it on.
-             var code="import FreeCAD as _A\n_A.ParamGet('User parameter:BaseApp/Preferences/View').SetBool('UseVBO', " + (new URLSearchParams(location.search).get('vbo') === '0' ? 'False' : 'True') + ")\n_A.ParamGet('User parameter:BaseApp/Preferences/Document').SetBool('SaveThumbnail', False)\ntry: _A.saveParameter()\nexcept Exception as _e: print('[fcweb] saveParameter failed:', _e)\nimport shiboken6, sys\nimport PySide6.QtCore, PySide6.QtGui, PySide6.QtWidgets\nimport FreeCADGui\n# Pin the MainWindow wrapper for the app lifetime: shiboken parents runtime\n# widgets (addToolBar etc.) to this wrapper, and if it gets GC'd the children's\n# wrappers are cascade-invalidated even though the C++ objects live on.\nsys._fcweb_mw = FreeCADGui.getMainWindow()\nprint('[fcweb] mw wrapper singleton:', sys._fcweb_mw is FreeCADGui.getMainWindow())\nprint('[fcweb] pyside warmup done')\n# FCWEB: the Addon Manager pings addons.freecad.org/status on open and posts usage\n# stats there. That host is absent from FCWEB_PROXY_HOSTS in patches/freecad.patch, so\n# the request was never rewritten onto /proxy, went cross-origin, and COEP:require-corp\n# dropped it -- reported as 'HTTP status code 0' / 'No data received', after which the\n# workbench raised a modal from the network callback. That stack is not promising, so\n# the JSPI suspend threw SuspendError and took the page down (reported 2026-09-03).\n# Done here, not in the patch, because the map is baked into FreeCAD.data and only a\n# relink changes it. Fold it into FCWEB_PROXY_HOSTS at the next link and delete this.\nimport sys as _sy\n_sy.path.append('/freecad/Mod/AddonManager')\ntry:\n    import NetworkManager as _nm\n    _nm.FCWEB_PROXY_HOSTS['addons.freecad.org']='addons'\n    print('[fcweb] addons proxy host registered')\nexcept Exception as _e9: print('[fcweb] addons-proxy patch FAILED:', repr(_e9))";
+             var code="import FreeCAD as _A\n_A.ParamGet('User parameter:BaseApp/Preferences/View').SetBool('UseVBO', " + (new URLSearchParams(location.search).get('vbo') === '0' ? 'False' : 'True') + ")\n_A.ParamGet('User parameter:BaseApp/Preferences/View').SetInt('RenderCache', " + (new URLSearchParams(location.search).get('rendercache') || '1') + ")\n_A.ParamGet('User parameter:BaseApp/Preferences/Document').SetBool('SaveThumbnail', False)\ntry: _A.saveParameter()\nexcept Exception as _e: print('[fcweb] saveParameter failed:', _e)\nimport shiboken6, sys\nimport PySide6.QtCore, PySide6.QtGui, PySide6.QtWidgets\nimport FreeCADGui\n# Pin the MainWindow wrapper for the app lifetime: shiboken parents runtime\n# widgets (addToolBar etc.) to this wrapper, and if it gets GC'd the children's\n# wrappers are cascade-invalidated even though the C++ objects live on.\nsys._fcweb_mw = FreeCADGui.getMainWindow()\nprint('[fcweb] mw wrapper singleton:', sys._fcweb_mw is FreeCADGui.getMainWindow())\nprint('[fcweb] pyside warmup done')\n# FCWEB: the Addon Manager pings addons.freecad.org/status on open and posts usage\n# stats there. That host is absent from FCWEB_PROXY_HOSTS in patches/freecad.patch, so\n# the request was never rewritten onto /proxy, went cross-origin, and COEP:require-corp\n# dropped it -- reported as 'HTTP status code 0' / 'No data received', after which the\n# workbench raised a modal from the network callback. That stack is not promising, so\n# the JSPI suspend threw SuspendError and took the page down (reported 2026-09-03).\n# Done here, not in the patch, because the map is baked into FreeCAD.data and only a\n# relink changes it. Fold it into FCWEB_PROXY_HOSTS at the next link and delete this.\nimport sys as _sy\n_sy.path.append('/freecad/Mod/AddonManager')\ntry:\n    import NetworkManager as _nm\n    _nm.FCWEB_PROXY_HOSTS['addons.freecad.org']='addons'\n    print('[fcweb] addons proxy host registered')\nexcept Exception as _e9: print('[fcweb] addons-proxy patch FAILED:', repr(_e9))";
              if(window.FC_JSPI){ code += "\nimport base64 as _b64; exec(compile(_b64.b64decode('IyBTUERYLUxpY2Vuc2UtSWRlbnRpZmllcjogTEdQTC0yLjEtb3ItbGF0ZXIKIyBDb3B5cmlnaHQgKGMpIFZpcnRhc3RpYwojIEZyZWVDQUQtV2ViIEpTUEkgYnVpbGQ6IHJvdXRlIFB5dGhvbi10cmlnZ2VyZWQgbW9kYWwgZGlhbG9ncyB0aHJvdWdoIGEgQkxPQ0tJTkcKIyBIVE1MIG1vZGFsIChfZmN3ZWJkbGcuY29uZmlybSkgdGhhdCByZXR1cm5zIHRoZSB1c2VyJ3MgUkVBTCBjaG9pY2UuIE5hdGl2ZSBRdAojIFFNZXNzYWdlQm94IHdpbmRvd3MgZG9uJ3QgY29tcG9zaXRlIHRoZWlyIGJvZHkvYnV0dG9ucyBvbiB0aGlzIFF0LXdhc20gYnVpbGQsCiMgc28gdGhpcyBicmlkZ2UgZGVsaXZlcnMgYWN0dWFsIHVzZXIgY2hvaWNlIHZpYSB0aGUgSlNQSSBzdXNwZW5kIGluc3RlYWQuCmltcG9ydCBzeXMKCmRlZiBpbnN0YWxsKCk6CiAgICBmcm9tIFB5U2lkZTYgaW1wb3J0IFF0V2lkZ2V0cyBhcyBXCiAgICBpbXBvcnQgX2Zjd2ViZGxnCgogICAgTUIgPSBXLlFNZXNzYWdlQm94CgogICAgIyBNYXAgYSBRTWVzc2FnZUJveC5TdGFuZGFyZEJ1dHRvbnMgZmxhZyBzZXQgdG8gYW4gb3JkZXJlZCBsaXN0IG9mIChmbGFnLCBsYWJlbCkuCiAgICBfT1JERVIgPSBbCiAgICAgICAgKE1CLk9rLCAiT0siKSwgKE1CLlllcywgIlllcyIpLCAoTUIuWWVzVG9BbGwsICJZZXMgdG8gQWxsIiksCiAgICAgICAgKE1CLk5vLCAiTm8iKSwgKE1CLk5vVG9BbGwsICJObyB0byBBbGwiKSwgKE1CLkFib3J0LCAiQWJvcnQiKSwKICAgICAgICAoTUIuUmV0cnksICJSZXRyeSIpLCAoTUIuSWdub3JlLCAiSWdub3JlIiksIChNQi5TYXZlLCAiU2F2ZSIpLAogICAgICAgIChNQi5TYXZlQWxsLCAiU2F2ZSBBbGwiKSwgKE1CLkRpc2NhcmQsICJEaXNjYXJkIiksCiAgICAgICAgKE1CLkFwcGx5LCAiQXBwbHkiKSwgKE1CLlJlc2V0LCAiUmVzZXQiKSwgKE1CLkNsb3NlLCAiQ2xvc2UiKSwKICAgICAgICAoTUIuQ2FuY2VsLCAiQ2FuY2VsIiksCiAgICBdCgogICAgZGVmIF9idXR0b25zX2ZvcihmbGFncyk6CiAgICAgICAgcGFpcnMgPSBbKGYsIGxibCkgZm9yIChmLCBsYmwpIGluIF9PUkRFUiBpZiBpbnQoZmxhZ3MpICYgaW50KGYpXQogICAgICAgIGlmIG5vdCBwYWlyczoKICAgICAgICAgICAgcGFpcnMgPSBbKE1CLk9rLCAiT0siKV0KICAgICAgICByZXR1cm4gcGFpcnMKCiAgICBkZWYgX2Fzayh0aXRsZSwgdGV4dCwgZmxhZ3MpOgogICAgICAgIHBhaXJzID0gX2J1dHRvbnNfZm9yKGZsYWdzKQogICAgICAgIGxhYmVscyA9IFtsYmwgZm9yIChfZiwgbGJsKSBpbiBwYWlyc10KICAgICAgICBpZHggPSBfZmN3ZWJkbGcuY29uZmlybShzdHIodGl0bGUgb3IgIkZyZWVDQUQiKSwgc3RyKHRleHQgb3IgIiIpLCBsYWJlbHMpCiAgICAgICAgaWYgaWR4IDwgMCBvciBpZHggPj0gbGVuKHBhaXJzKToKICAgICAgICAgICAgaWR4ID0gMAogICAgICAgIHJldHVybiBwYWlyc1tpZHhdWzBdCgogICAgZGVmIF9tYWtlX3N0YXRpYyhkZWZhdWx0X2ZsYWdzKToKICAgICAgICBkZWYgX2YoKmEsICoqayk6CiAgICAgICAgICAgIHBhcmVudCA9IGFbMF0gaWYgbGVuKGEpID4gMCBlbHNlIGsuZ2V0KCJwYXJlbnQiKQogICAgICAgICAgICB0aXRsZSAgPSBhWzFdIGlmIGxlbihhKSA+IDEgZWxzZSBrLmdldCgidGl0bGUiLCAiIikKICAgICAgICAgICAgYm9keSAgID0gYVsyXSBpZiBsZW4oYSkgPiAyIGVsc2Ugay5nZXQoInRleHQiLCAiIikKICAgICAgICAgICAgZmxhZ3MgID0gYVszXSBpZiBsZW4oYSkgPiAzIGVsc2Ugay5nZXQoImJ1dHRvbnMiLCBkZWZhdWx0X2ZsYWdzKQogICAgICAgICAgICByZXR1cm4gX2Fzayh0aXRsZSwgYm9keSwgZmxhZ3MpCiAgICAgICAgcmV0dXJuIHN0YXRpY21ldGhvZChfZikKCiAgICBNQi5xdWVzdGlvbiAgICA9IF9tYWtlX3N0YXRpYyhNQi5ZZXMgfCBNQi5ObykKICAgIE1CLmluZm9ybWF0aW9uID0gX21ha2Vfc3RhdGljKE1CLk9rKQogICAgTUIud2FybmluZyAgICAgPSBfbWFrZV9zdGF0aWMoTUIuT2spCiAgICBNQi5jcml0aWNhbCAgICA9IF9tYWtlX3N0YXRpYyhNQi5PaykKCiAgICAjIGluc3RhbmNlIC5leGVjKCkvLmV4ZWNfKCkgb24gUU1lc3NhZ2VCb3ggLT4gYmxvY2tpbmcgSFRNTCB3aXRoIGl0cyBvd24gYnV0dG9ucwogICAgZGVmIF9tYl9leGVjKHNlbGYsICphLCAqKmspOgogICAgICAgIHRyeToKICAgICAgICAgICAgZmxhZ3MgPSBzZWxmLnN0YW5kYXJkQnV0dG9ucygpCiAgICAgICAgICAgIHJldHVybiBfYXNrKHNlbGYud2luZG93VGl0bGUoKSwgc2VsZi50ZXh0KCksIGZsYWdzKQogICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgICAgIHJldHVybiBNQi5PawogICAgTUIuZXhlYyA9IF9tYl9leGVjCiAgICBNQi5leGVjXyA9IF9tYl9leGVjCgogICAgIyBRSW5wdXREaWFsb2cgaXMgZGVsaWJlcmF0ZWx5IE5PVCBzdHViYmVkLgogICAgIwogICAgIyBJdCB1c2VkIHRvIGJlLCByZXR1cm5pbmcgKHZhbHVlLCBGYWxzZSkgLS0gaS5lLiAidGhlIHVzZXIgY2FuY2VsbGVkIiAtLSBmb3IgZ2V0VGV4dCwKICAgICMgZ2V0SXRlbSwgZ2V0SW50IGFuZCBnZXREb3VibGUuIFRoYXQgc2lsZW50bHkgYnJva2UgZXZlcnkgbWFjcm8gYW5kIFB5dGhvbi13b3JrYmVuY2gKICAgICMgY29tbWFuZCB0aGF0IGFza3MgZm9yIGEgbmFtZSwgYSBjb3VudCBvciBhIGxlbmd0aDogdGhleSB0b29rIHRoZSBjYW5jZWwgYnJhbmNoIGFuZAogICAgIyBxdWlldGx5IGRpZCBub3RoaW5nLgogICAgIwogICAgIyBUaGUgc3RhdGVkIHJlYXNvbiB3YXMgdGhhdCBuYXRpdmUgUXQgZGlhbG9ncyAiZG9uJ3QgY29tcG9zaXRlIHRoZWlyIGJvZHkvYnV0dG9ucyIgb24KICAgICMgdGhpcyBRdC13YXNtIGJ1aWxkLiBUaGF0IGlzIG5vIGxvbmdlciB0cnVlLCBhbmQgd2FzIG1lYXN1cmVkIG9uIHByb2R1Y3Rpb24gYmVmb3JlCiAgICAjIHJlbW92aW5nIHRoaXM6IGEgbmF0aXZlIFFJbnB1dERpYWxvZyBjb25zdHJ1Y3RlZCBhbmQgc2hvd24gcmVwb3J0cwogICAgIyB2aXNpYmxlPVRydWUgc2l6ZT0yMDh4MTA5IGNoaWxkcmVuPTQgd2l0aCByZWFsIGdlb21ldHJ5LiBRTWVzc2FnZUJveCBsaWtld2lzZSAtLQogICAgIyBzY3JhdGNocGFkL3JlZy1wcm9kLmpzIGNsaWNrcyBhIG5hdGl2ZSBvbmUgYXQgcmVhbCBwaXhlbHMgYW5kIHJlcXVpcmVzIHRoZSByZWFsCiAgICAjIHJldHVybiB2YWx1ZSAoMTYzODQpLCBhbmQgZGxnc3VpdGUuanMgb3BlbnMgUHJlZmVyZW5jZXMgd2l0aCAxNjMxIHdpZGdldHMuCiAgICAjCiAgICAjIFRoZSBibG9ja2luZyBleGVjKCkgdGhlc2Ugc3RhdGljcyBwZXJmb3JtIHN1c3BlbmRzIGNvcnJlY3RseSBiZWNhdXNlCiAgICAjIF9mY3dlYl9ydW5fcHl0aG9uIGlzIGluIEFTWU5DSUZZX0VYUE9SVFMsIHdoaWNoIGlzIHRoZSBzYW1lIG1lY2hhbmlzbSB0aGUgUU1lc3NhZ2VCb3gKICAgICMgYnJpZGdlIGFib3ZlIHJlbGllcyBvbi4KICAgICMKICAgICMgTk9URSB0aGUgc3R1YnMgY291bGQgbm90IHNpbXBseSBiZSBkZWxldGVkIGF0IHJ1bnRpbWUgdG8gdGVzdCB0aGlzOiBTaGlib2tlbiB0eXBlcwogICAgIyByYWlzZSBBdHRyaWJ1dGVFcnJvciBvbiBgZGVsYCwgc28gdGhlIG5hdGl2ZXMgYXJlIHVucmVjb3ZlcmFibGUgb25jZSBvdmVyd3JpdHRlbi4KICAgICMgVGhhdCBpcyB3aHkgdGhpcyBpcyBhIHNvdXJjZSBjaGFuZ2UgcmF0aGVyIHRoYW4gYSBwcm9iZS4KCnRyeToKICAgIGluc3RhbGwoKQogICAgcHJpbnQoIltmY3dlYl0gSlNQSSBibG9ja2luZy1kaWFsb2cgYnJpZGdlIGluc3RhbGxlZCIpCmV4Y2VwdCBFeGNlcHRpb24gYXMgX2U6CiAgICBwcmludCgiW2Zjd2ViXSBKU1BJIGRpYWxvZyBicmlkZ2UgRkFJTEVEOiIsIF9lKQo=').decode(), 'wasm_dialog_jspi', 'exec'))"; }
              if(!window.FC_JSPI){ code += "\nimport base64 as _b64\ntry:\n exec(compile(_b64.b64decode('IyBTUERYLUxpY2Vuc2UtSWRlbnRpZmllcjogTEdQTC0yLjEtb3ItbGF0ZXIKIyBDb3B5cmlnaHQgKGMpIFZpcnRhc3RpYwojIEZyZWVDQUQtV0FTTTogbWFrZSBQeXRob24tdHJpZ2dlcmVkIG1vZGFsIGRpYWxvZ3Mgc2FmZSB1bmRlciBFbXNjcmlwdGVuIEFzeW5jaWZ5LgojCiMgV2h5OiBvbiB0aGUgd2FzbSBidWlsZCAoUXQtZm9yLVdlYkFzc2VtYmx5ICsgLXNBU1lOQ0lGWSksIGEgbW9kYWwgUURpYWxvZy8KIyBRTWVzc2FnZUJveCBleGVjKCkgc3RhcnRlZCBmcm9tIFB5dGhvbiBtdXN0IGFzeW5jaWZ5LXN1c3BlbmQgYWNyb3NzIHRoZSBDUHl0aG9uCiMgaW50ZXJwcmV0ZXIncyBDIHN0YWNrIGZyYW1lLiBDUHl0aG9uIGtlZXBzIGl0cyBmcmFtZSBzdGF0ZSBpbiB0aHJlYWQtc3RhdGUKIyBnbG9iYWxzIHRoYXQgYXN5bmNpZnkncyBsb2NhbCBzYXZlL3Jlc3RvcmUgZG9lcyBub3QgY2FwdHVyZSwgc28gdGhlIHN1c3BlbmQKIyBjb3JydXB0cyB0aGUgaW50ZXJwcmV0ZXIgLT4gIlJ1bnRpbWVFcnJvcjogdW5yZWFjaGFibGUiIC8gbnVsbC1mdW5jdGlvbiB0cmFwcwojIHRoYXQga2lsbCB0aGUgd2hvbGUgaW5zdGFuY2UuIChDKystdHJpZ2dlcmVkIGRpYWxvZ3MgaGF2ZSBubyBQeXRob24gZnJhbWUgb24gdGhlCiMgc3RhY2sgYW5kIHdvcmsgZmluZTsgdGhpcyBvbmx5IGFmZmVjdHMgbWFjcm9zIGFuZCBQeXRob24td29ya2JlbmNoIGRpYWxvZ3MuKQojCiMgQSBibG9ja2luZyBleGVjKCkgdGhhdCByZXR1cm5zIHRoZSB1c2VyJ3MgcmVhbCBjaG9pY2UgaXMgdGhlcmVmb3JlIGltcG9zc2libGUgaW4KIyB0aGlzIGFyY2hpdGVjdHVyZS4gVGhpcyBzaGltIGRlZ3JhZGVzIGdyYWNlZnVsbHkgaW5zdGVhZCBvZiBjcmFzaGluZzogdGhlIGRpYWxvZwojIGlzIHNob3duIE5PTi1ibG9ja2luZyAoc2hvdygpLCBub3QgZXhlYygpKSBhbmQgdGhlIGNhbGwgcmV0dXJucyBhIHNhZmUgZGVmYXVsdAojIGltbWVkaWF0ZWx5IChOb0J1dHRvbiAvIFJlamVjdGVkIC8gKHZhbHVlLCBGYWxzZSkpIHNvIHRoZSBtYWNybyBrZWVwcyBydW5uaW5nIGFuZAojIGZhaWxzIHRvd2FyZCAiY2FuY2VsIC8gbm8gY2hhbmdlIi4gVGhlIGRpYWxvZyBzdGF5cyBvbiBzY3JlZW4gYW5kIGludGVyYWN0aXZlLgojCiMgTG9hZGVkIG9uY2UgYXQgYm9vdCBmcm9tIHRoZSB3YXNtIGhhcm5lc3MgKGZyZWVjYWQtZ3VpLmh0bWwpLCBhZnRlciBQeVNpZGU2IGlzCiMgaW1wb3J0ZWQuIEltcG9ydC1ndWFyZGVkIHNvIGEgbWlzc2luZy9yZW5hbWVkIEFQSSBuZXZlciBhYm9ydHMgYm9vdC4KCmltcG9ydCBzeXMKCgpkZWYgaW5zdGFsbCgpOgogICAgZnJvbSBQeVNpZGU2IGltcG9ydCBRdFdpZGdldHMgYXMgVywgUXRDb3JlIGFzIEMsIFF0R3VpIGFzIEcKCiAgICBOQiA9IDAgICMgUU1lc3NhZ2VCb3guTm9CdXR0b24gPT0gUURpYWxvZy5SZWplY3RlZCA9PSAwIC0+IHNhZmUgIm5vIGNob2ljZSIKCiAgICAjIC0tLS0gaW5zdGFuY2UgLmV4ZWMgLyAuZXhlY18gOiBRRGlhbG9nIHN1YmNsYXNzZXMsIFFNZXNzYWdlQm94KCksIFFJbnB1dERpYWxvZygpCiAgICBkZWYgX2V4ZWMoc2VsZiwgKmEsICoqayk6CiAgICAgICAgdHJ5OgogICAgICAgICAgICBzZWxmLnNldFdpbmRvd01vZGFsaXR5KEMuUXQuTm9uTW9kYWwpCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICAgICAgcGFzcwogICAgICAgIHNlbGYuc2hvdygpCiAgICAgICAgdHJ5OgogICAgICAgICAgICBzZWxmLnJhaXNlXygpCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICAgICAgcGFzcwogICAgICAgIHJldHVybiBOQgoKICAgIGZvciBjbHMgaW4gKFcuUURpYWxvZywgVy5RTWVzc2FnZUJveCwgVy5RSW5wdXREaWFsb2cpOgogICAgICAgIGNscy5leGVjID0gX2V4ZWMKICAgICAgICBjbHMuZXhlY18gPSBfZXhlYwoKICAgICMgLS0tLSBzdGF0aWMgUU1lc3NhZ2VCb3gucXVlc3Rpb24gLyBpbmZvcm1hdGlvbiAvIHdhcm5pbmcgLyBjcml0aWNhbAogICAgZGVmIF9tYWtlX21zZ2JveF9zdGF0aWMoZGVmYXVsdF9idXR0b25zKToKICAgICAgICBkZWYgX2YoKmEsICoqayk6CiAgICAgICAgICAgIHBhcmVudCA9IGFbMF0gaWYgbGVuKGEpID4gMCBlbHNlIGsuZ2V0KCJwYXJlbnQiKQogICAgICAgICAgICB0aXRsZSA9IGFbMV0gaWYgbGVuKGEpID4gMSBlbHNlIGsuZ2V0KCJ0aXRsZSIsICIiKQogICAgICAgICAgICB0ZXh0ID0gYVsyXSBpZiBsZW4oYSkgPiAyIGVsc2Ugay5nZXQoInRleHQiLCAiIikKICAgICAgICAgICAgYnV0dG9ucyA9IGFbM10gaWYgbGVuKGEpID4gMyBlbHNlIGsuZ2V0KCJidXR0b25zIiwgZGVmYXVsdF9idXR0b25zKQogICAgICAgICAgICBtYiA9IFcuUU1lc3NhZ2VCb3gocGFyZW50KQogICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICBtYi5zZXRXaW5kb3dUaXRsZShzdHIodGl0bGUpKQogICAgICAgICAgICAgICAgbWIuc2V0VGV4dChzdHIodGV4dCkpCiAgICAgICAgICAgICAgICBtYi5zZXRTdGFuZGFyZEJ1dHRvbnMoYnV0dG9ucykKICAgICAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICAgICAgICAgIHBhc3MKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgbWIuc2V0V2luZG93TW9kYWxpdHkoQy5RdC5Ob25Nb2RhbCkKICAgICAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICAgICAgICAgIHBhc3MKICAgICAgICAgICAgbWIuc2hvdygpCiAgICAgICAgICAgIHJldHVybiBOQgogICAgICAgIHJldHVybiBzdGF0aWNtZXRob2QoX2YpCgogICAgVy5RTWVzc2FnZUJveC5xdWVzdGlvbiA9IF9tYWtlX21zZ2JveF9zdGF0aWMoVy5RTWVzc2FnZUJveC5ZZXMgfCBXLlFNZXNzYWdlQm94Lk5vKQogICAgVy5RTWVzc2FnZUJveC5pbmZvcm1hdGlvbiA9IF9tYWtlX21zZ2JveF9zdGF0aWMoVy5RTWVzc2FnZUJveC5PaykKICAgIFcuUU1lc3NhZ2VCb3gud2FybmluZyA9IF9tYWtlX21zZ2JveF9zdGF0aWMoVy5RTWVzc2FnZUJveC5PaykKICAgIFcuUU1lc3NhZ2VCb3guY3JpdGljYWwgPSBfbWFrZV9tc2dib3hfc3RhdGljKFcuUU1lc3NhZ2VCb3guT2spCgogICAgIyAtLS0tIHN0YXRpYyBRSW5wdXREaWFsb2cuZ2V0VGV4dCAvIGdldEl0ZW0gLyBnZXRJbnQgLyBnZXREb3VibGUgIC0+ICh2YWx1ZSwgb2s9RmFsc2UpCiAgICBXLlFJbnB1dERpYWxvZy5nZXRUZXh0ID0gc3RhdGljbWV0aG9kKGxhbWJkYSAqYSwgKiprOiAoIiIsIEZhbHNlKSkKICAgIFcuUUlucHV0RGlhbG9nLmdldE11bHRpTGluZVRleHQgPSBzdGF0aWNtZXRob2QobGFtYmRhICphLCAqKms6ICgiIiwgRmFsc2UpKQogICAgVy5RSW5wdXREaWFsb2cuZ2V0SXRlbSA9IHN0YXRpY21ldGhvZCgKICAgICAgICBsYW1iZGEgKmEsICoqazogKChhWzNdWzBdIGlmIGxlbihhKSA+IDMgYW5kIGFbM10gZWxzZSAiIiksIEZhbHNlKSkKICAgIFcuUUlucHV0RGlhbG9nLmdldEludCA9IHN0YXRpY21ldGhvZCgKICAgICAgICBsYW1iZGEgKmEsICoqazogKChhWzNdIGlmIGxlbihhKSA+IDMgZWxzZSAwKSwgRmFsc2UpKQogICAgVy5RSW5wdXREaWFsb2cuZ2V0RG91YmxlID0gc3RhdGljbWV0aG9kKAogICAgICAgIGxhbWJkYSAqYSwgKiprOiAoKGFbM10gaWYgbGVuKGEpID4gMyBlbHNlIDAuMCksIEZhbHNlKSkKCiAgICAjIC0tLS0gc3RhdGljIFFGaWxlRGlhbG9nIHBpY2tlcnMgLT4gZW1wdHkgc2VsZWN0aW9uIChtYWNyb3Mgc2hvdWxkIHByZWZlciB0aGUKICAgICMgICAgICBuYXRpdmUgRnJlZUNBRCBmaWxlIGJyaWRnZTsgYSByYXcgUUZpbGVEaWFsb2cgZnJvbSBQeXRob24gd291bGQgY3Jhc2gpLgogICAgVy5RRmlsZURpYWxvZy5nZXRPcGVuRmlsZU5hbWUgPSBzdGF0aWNtZXRob2QobGFtYmRhICphLCAqKms6ICgiIiwgIiIpKQogICAgVy5RRmlsZURpYWxvZy5nZXRPcGVuRmlsZU5hbWVzID0gc3RhdGljbWV0aG9kKGxhbWJkYSAqYSwgKiprOiAoW10sICIiKSkKICAgIFcuUUZpbGVEaWFsb2cuZ2V0U2F2ZUZpbGVOYW1lID0gc3RhdGljbWV0aG9kKGxhbWJkYSAqYSwgKiprOiAoIiIsICIiKSkKICAgIFcuUUZpbGVEaWFsb2cuZ2V0RXhpc3RpbmdEaXJlY3RvcnkgPSBzdGF0aWNtZXRob2QobGFtYmRhICphLCAqKms6ICIiKQoKICAgICMgLS0tLSBzdGF0aWMgUUNvbG9yRGlhbG9nIC8gUUZvbnREaWFsb2cgLT4gaW52YWxpZC9kZWZhdWx0ICsgb2s9RmFsc2UKICAgIFcuUUNvbG9yRGlhbG9nLmdldENvbG9yID0gc3RhdGljbWV0aG9kKGxhbWJkYSAqYSwgKiprOiBHLlFDb2xvcigpKQogICAgVy5RRm9udERpYWxvZy5nZXRGb250ID0gc3RhdGljbWV0aG9kKGxhbWJkYSAqYSwgKiprOiAoRy5RRm9udCgpLCBGYWxzZSkpCgoKdHJ5OgogICAgaW5zdGFsbCgpCiAgICBwcmludCgiW2Zjd2ViXSB3YXNtIGRpYWxvZyBzaGltIGluc3RhbGxlZCIpCmV4Y2VwdCBFeGNlcHRpb24gYXMgX2U6CiAgICBwcmludCgiW2Zjd2ViXSB3YXNtIGRpYWxvZyBzaGltIEZBSUxFRDoiLCBfZSkK').decode('utf-8'),'wasm_dialog_shim','exec'))\nexcept Exception as _e:\n print('[fcweb] dialog shim loader failed:', _e)"; }
              var n=new TextEncoder().encode(code).length+1; var pp=m._malloc(n); m.stringToUTF8(code,pp,n);
              try { fcRunPy(m,pp); } catch(e){ append('pyside warmup threw: '+e,'err'); }
-           }, 8000); } catch(e){}
+           }, 250); }, 8000); } catch(e){}
            // FCWEB autotest: ?autotest=1 creates a doc+box+fit automatically
            try { if (new URLSearchParams(location.search).has('autotest')) {
              setTimeout(function(){
@@ -2449,18 +2632,138 @@ window.fcRunPy = fcRunPy;
   P.getParameter=function(pn){
     if(pn===FB_BINDING && this._fcFB!==undefined) return this._fcFB;
     if(pn===VIEWPORT && this._fcVP) return this._fcVP;
+    if(pn===DEPTH_RANGE && this._fcDR) return this._fcDR;
+    if(pn===UNPACK_ALIGNMENT && this._fcUA!==undefined) return this._fcUA;
     return _gp.apply(this,arguments);
   };
+  // drawAxisCross reads DEPTH_RANGE and UNPACK_ALIGNMENT back every frame (measured
+  // 2026-09-12); both only change through these two entry points.
+  var DEPTH_RANGE=0x0B70, UNPACK_ALIGNMENT=0x0CF5;
+  // ... and the blend function, which the present pass changes and must put back.
+  var _blf=P.blendFunc, _blfs=P.blendFuncSeparate;   // NOT _bf: that is bindFramebuffer above
+  P.blendFunc=function(s,d){ this._fcBF=[s,d,s,d]; return _blf.apply(this,arguments); };
+  P.blendFuncSeparate=function(s,d,sa,da){ this._fcBF=[s,d,sa,da]; return _blfs.apply(this,arguments); };
+  var _dr=P.depthRange;
+  P.depthRange=function(n,f){ var a=this._fcDR||(this._fcDR=new Float32Array(2)); a[0]=n;a[1]=f; return _dr.apply(this,arguments); };
   var _bf=P.bindFramebuffer;
   P.bindFramebuffer=function(target,fb){ this._fcFB=(target===TARGET_FRAMEBUFFER)?fb:undefined; return _bf.apply(this,arguments); };
   var _vp=P.viewport;
   P.viewport=function(x,y,w,h){ var a=this._fcVP||(this._fcVP=new Int32Array(4)); a[0]=x;a[1]=y;a[2]=w;a[3]=h; return _vp.apply(this,arguments); };
+  // useProgram(null) is deferred: the emulation unbinds its renderer program after a
+  // batch and binds it again for the next one (2 useProgram per draw, measured 2026-09-14
+  // on BIMExample). A null bind is only observable at a draw or a uniform upload, so it is
+  // remembered there and cancelled when the same program comes back.
   var _up=P.useProgram;
-  P.useProgram=function(prog){ if(this._fcProg===prog) return; this._fcProg=prog; return _up.apply(this,arguments); };
+  function applyPN(gl){ gl._fcPN=false; gl._fcProg=null; _up.call(gl,null); }
+  P.useProgram=function(prog){ if(!prog){ if(this._fcProg===null||this._fcProg===undefined) return; this._fcPN=true; return; }
+    if(this._fcProg===prog){ this._fcPN=false; return; } this._fcPN=false; this._fcProg=prog; return _up.apply(this,arguments); };
+  ['drawArrays','drawElements','drawArraysInstanced','drawElementsInstanced','drawRangeElements','deleteProgram'].forEach(function(nm){
+    var o=P[nm]; P[nm]=function(){ if(this._fcPN) applyPN(this); return o.apply(this,arguments); }; });
+  Object.getOwnPropertyNames(P).forEach(function(nm){ if(!/^uniform/.test(nm)) return; var o=P[nm]; if(typeof o!=='function') return;
+    P[nm]=function(){ if(this._fcPN) applyPN(this); return o.apply(this,arguments); }; });
+  var _gpp=P.getParameter; P.getParameter=function(pn){ if(pn===35725 && this._fcProg!==undefined) return this._fcPN?null:this._fcProg; return _gpp.apply(this,arguments); };
+  // Not a skip -- a truthful record of the last VAO requested, for the present pass to restore.
+  var _bva=P.bindVertexArray;
+  P.bindVertexArray=function(vao){ this._fcVAO=vao; return _bva.apply(this,arguments); };
   // Skip redundant ARRAY_BUFFER re-binds (global state, not VAO-scoped, so safe to cache).
   var ARRAY_BUFFER=0x8892;
   var _bb=P.bindBuffer;
-  P.bindBuffer=function(target,buf){ if(target===ARRAY_BUFFER){ if(this._fcAB===buf) return; this._fcAB=buf; } return _bb.apply(this,arguments); };
+  // An ARRAY_BUFFER unbind is deferred the same way as a null program: Coin binds a VBO,
+  // draws, unbinds, and the next draw binds the next one (or the emulation's temp buffer).
+  // A null binding is observable only by the calls that read it -- vertexAttribPointer,
+  // bufferData/bufferSubData, getBufferParameter -- so it is applied there.
+  function applyABN(gl){ gl._fcABN=false; gl._fcAB=null; _bb.call(gl,ARRAY_BUFFER,null); }
+  P.bindBuffer=function(target,buf){ if(target===ARRAY_BUFFER){ if(!buf){ if(this._fcAB===null||this._fcAB===undefined) return; this._fcABN=true; return; }
+      if(this._fcAB===buf){ this._fcABN=false; return; } this._fcABN=false; this._fcAB=buf; } return _bb.apply(this,arguments); };
+  ['vertexAttribPointer','vertexAttribIPointer','bufferData','bufferSubData','getBufferParameter','getBufferSubData','copyBufferSubData','deleteBuffer','bindBufferBase','bindBufferRange'].forEach(function(nm){
+    var o=P[nm]; if(typeof o!=='function') return; P[nm]=function(){ if(this._fcABN) applyABN(this); return o.apply(this,arguments); }; });
+  var _gpab=P.getParameter; P.getParameter=function(pn){ if(pn===34964 && this._fcAB!==undefined) return this._fcABN?null:this._fcAB; return _gpab.apply(this,arguments); };
+  // Not a skip -- a record of UNPACK_FLIP_Y_WEBGL, so the GPU bridge reads it without a
+  // synchronous getParameter (two per presented frame, measured 2026-09-12).
+  var UNPACK_FLIP_Y=0x9240;
+  var _ps=P.pixelStorei;
+  P.pixelStorei=function(pn,v){ if(pn===UNPACK_FLIP_Y) this._fcFlipY=!!v; else if(pn===UNPACK_ALIGNMENT) this._fcUA=v; return _ps.apply(this,arguments); };
+})();
+// FCWEB PERF: the rest of the per-draw churn. With GL_UNSAFE_OPTS=0 the emulation tears
+// every immediate-mode batch down and builds the next one up from nothing: enable/
+// disableVertexAttribArray, vertexAttribPointer, uniform4fv x4 (ambient, diffuse,
+// specular, emission on every material bump), lineWidth on every element push/pop.
+// Measured on ArchDetail, 2026-09-14: 17,900 WebGL calls per scene frame for ~950 draws,
+// 2,471 disableVertexAttribArray, 2,538 uniform4fv, 565 lineWidth, 398 disable. Each is
+// state that only changes through these prototype methods, so a shadow of the last value
+// makes the repeat a no-op. Vertex-array state is per VAO, so that shadow is keyed on the
+// VAO the page tracked in bindVertexArray; uniform values are per program object, so
+// theirs is keyed on the (stable, emscripten-cached) location object and invalidated by
+// linkProgram, which resets a program's uniforms. ?glshadow=0 turns all of it off.
+(function(){
+  var P=WebGL2RenderingContext.prototype;
+  try { if (new URLSearchParams(location.search).get('glshadow') === '0') return; } catch (e) {}
+  var stats = window.__glShadow = { attribEn: 0, attribPtr: 0, uniform: 0, lineWidth: 0, cap: 0, viewport: 0 };
+  function vaoState(gl){ var m=gl._fcVaoSt||(gl._fcVaoSt=new Map()); var k=gl._fcVAO||null; var s=m.get(k); if(!s){ s={en:new Uint8Array(32), pd:new Uint8Array(32), ptr:new Array(32)}; m.set(k,s); } return s; }
+  var _dva=P.deleteVertexArray;
+  P.deleteVertexArray=function(vao){ try { if(this._fcVaoSt){ var st=this._fcVaoSt.get(vao); if(st&&this._fcPD===st) this._fcPD=null; this._fcVaoSt.delete(vao); } if(this._fcVAO===vao) this._fcVAO=null; } catch(e){} return _dva.apply(this,arguments); };
+  // A disable is deferred to the next draw (or VAO switch) and cancelled by an enable in
+  // between: the emulation disables its attributes after every batch and the next
+  // renderer enables the same locations again (position is location 0 in every one).
+  var _en=P.enableVertexAttribArray, _dis=P.disableVertexAttribArray;
+  function applyPD(gl){ var s=gl._fcPD; gl._fcPD=null; if(!s) return; for(var i=0;i<32;i++){ if(s.pd[i]){ s.pd[i]=0; _dis.call(gl,i); } } }
+  P.enableVertexAttribArray=function(i){ if(i<0||i===4294967295) return; if(i<32){ var s=vaoState(this); if(s.en[i]===1){ stats.attribEn++; return; } s.en[i]=1; if(s.pd[i]){ s.pd[i]=0; stats.attribEn++; return; } } return _en.call(this,i); };
+  P.disableVertexAttribArray=function(i){ if(i<0||i===4294967295) return; if(i<32){ var s=vaoState(this); if(s.en[i]===2){ stats.attribEn++; return; } var was=s.en[i]; s.en[i]=2; if(was===1){ s.pd[i]=1; this._fcPD=s; return; } } return _dis.call(this,i); };
+  // Applied at the next draw: leaving them through a draw of a program that does not
+  // consume them was tried -- ANGLE's D3D11 vertex path validates every enabled attribute
+  // (85 GL_INVALID_OPERATION in VertexDataManager on one BIMExample redraw). And at a
+  // VAO switch, because the state belongs to the old VAO.
+  ['drawArrays','drawElements','drawArraysInstanced','drawElementsInstanced','drawRangeElements'].forEach(function(nm){
+    var o=P[nm]; P[nm]=function(){ if(this._fcPD) applyPD(this); return o.apply(this,arguments); }; });
+  var _bva2=P.bindVertexArray; P.bindVertexArray=function(vao){ if(this._fcPD) applyPD(this); return _bva2.apply(this,arguments); };
+  var _vap=P.vertexAttribPointer;
+  P.vertexAttribPointer=function(i,size,type,norm,stride,off){ if(i<0||i===4294967295) return;
+    if(i<32){ var s=vaoState(this), buf=this._fcAB, p=s.ptr[i];
+      if(p && p[0]===buf && p[1]===size && p[2]===type && p[3]===!!norm && p[4]===stride && p[5]===off){ stats.attribPtr++; return; }
+      s.ptr[i]=[buf,size,type,!!norm,stride,off]; }
+    return _vap.apply(this,arguments); };
+  var _gul=P.getUniformLocation, _lp=P.linkProgram;
+  P.getUniformLocation=function(prog,name){ var l=_gul.apply(this,arguments); if(l && !l.__fcP){ l.__fcP=prog; } return l; };
+  P.linkProgram=function(prog){ prog.__fcGen=(prog.__fcGen|0)+1; return _lp.apply(this,arguments); };
+  function same(loc, v, n){ var p=loc.__fcP, g=p?p.__fcGen|0:0; var c=loc.__fcV; if(c && loc.__fcG===g && c.length===n){ for(var i=0;i<n;i++){ if(c[i]!==v[i]) break; } if(i===n) return true; c.set ? c.set(v) : 0; for(i=0;i<n;i++) c[i]=v[i]; return false; } loc.__fcG=g; loc.__fcV=new Float32Array(n); for(i=0;i<n;i++) loc.__fcV[i]=v[i]; return false; }
+  var _u4=P.uniform4fv, _u3=P.uniform3fv, _u2=P.uniform2fv, _u1f=P.uniform1f, _u1i=P.uniform1i, _um4=P.uniformMatrix4fv, _um3=P.uniformMatrix3fv;
+  P.uniform4fv=function(loc,v){ if(loc && v.length===4 && arguments.length===2 && same(loc,v,4)){ stats.uniform++; return; } return _u4.apply(this,arguments); };
+  P.uniform3fv=function(loc,v){ if(loc && v.length===3 && arguments.length===2 && same(loc,v,3)){ stats.uniform++; return; } return _u3.apply(this,arguments); };
+  P.uniform2fv=function(loc,v){ if(loc && v.length===2 && arguments.length===2 && same(loc,v,2)){ stats.uniform++; return; } return _u2.apply(this,arguments); };
+  P.uniform1f=function(loc,x){ if(loc && same(loc,[x],1)){ stats.uniform++; return; } return _u1f.apply(this,arguments); };
+  P.uniform1i=function(loc,x){ if(loc && same(loc,[x],1)){ stats.uniform++; return; } return _u1i.apply(this,arguments); };
+  P.uniformMatrix4fv=function(loc,tr,v){ if(loc && !tr && v.length===16 && arguments.length===3 && same(loc,v,16)){ stats.uniform++; return; } return _um4.apply(this,arguments); };
+  P.uniformMatrix3fv=function(loc,tr,v){ if(loc && !tr && v.length===9 && arguments.length===3 && same(loc,v,9)){ stats.uniform++; return; } return _um3.apply(this,arguments); };
+  var _lw=P.lineWidth;
+  P.lineWidth=function(w){ if(this._fcLW===w){ stats.lineWidth++; return; } this._fcLW=w; return _lw.apply(this,arguments); };
+  var _cen=P.enable, _cdis=P.disable;
+  P.enable=function(cap){ var c=this._fcCap||(this._fcCap={}); if(c[cap]===1){ stats.cap++; return; } c[cap]=1; return _cen.call(this,cap); };
+  P.disable=function(cap){ var c=this._fcCap||(this._fcCap={}); if(c[cap]===2){ stats.cap++; return; } c[cap]=2; return _cdis.call(this,cap); };
+  // glGetError is a GPU-process round trip; View3DInventorViewer::actualRedraw asks four
+  // times a frame (measured 2026-09-14, 3.7% of an EngineBlock drag). GL errors are sticky
+  // until read, so answering NO_ERROR for 50 ms after a real read loses nothing: the next
+  // real read still reports whatever happened.
+  var _ge=P.getError;
+  P.getError=function(){ var now=performance.now(); if(this._fcGEat!==undefined && now-this._fcGEat<50) return 0; this._fcGEat=now; return _ge.call(this); };
+  // The raster text in gl_legacy_stubs.c (axis letters, colour bar numbers) saves and
+  // restores the texture binding and blend function around its quad; asked of WebGL those
+  // are round trips -- 12 a frame for three letters, 12.5% of a PartDesignExample drag
+  // (measured 2026-09-14). All of it is state that passes through here.
+  var TEXTURE_2D=0x0DE1, TEXTURE0=0x84C0, TEXTURE_BINDING_2D=0x8069, BLEND_SRC_RGB=0x80C9, BLEND_DST_RGB=0x80C8, BLEND_SRC_ALPHA=0x80CB, BLEND_DST_ALPHA=0x80CA;
+  var _at=P.activeTexture; P.activeTexture=function(u){ this._fcUnit=u-TEXTURE0; return _at.apply(this,arguments); };
+  var _bt=P.bindTexture; P.bindTexture=function(target,tex){ if(target===TEXTURE_2D){ (this._fcTex2D||(this._fcTex2D=[]))[this._fcUnit||0]=tex||null; } return _bt.apply(this,arguments); };
+  var _dt=P.deleteTexture; P.deleteTexture=function(tex){ var a=this._fcTex2D; if(a){ for(var i=0;i<a.length;i++) if(a[i]===tex) a[i]=null; } return _dt.apply(this,arguments); };
+  var _gp2=P.getParameter;
+  P.getParameter=function(pn){
+    if(pn===TEXTURE_BINDING_2D){ var a=this._fcTex2D, u=this._fcUnit||0; if(a && u in a) return a[u]; }
+    else if(pn===BLEND_SRC_RGB){ if(this._fcBF) return this._fcBF[0]; }
+    else if(pn===BLEND_DST_RGB){ if(this._fcBF) return this._fcBF[1]; }
+    else if(pn===BLEND_SRC_ALPHA){ if(this._fcBF) return this._fcBF[2]; }
+    else if(pn===BLEND_DST_ALPHA){ if(this._fcBF) return this._fcBF[3]; }
+    return _gp2.apply(this,arguments); };
+  var _ie=P.isEnabled; P.isEnabled=function(cap){ var c=this._fcCap; if(c){ if(c[cap]===1) return true; if(c[cap]===2) return false; } return _ie.call(this,cap); };
+  var _vp2=P.viewport;
+  P.viewport=function(x,y,w,h){ var a=this._fcVP; if(a && a[0]===x && a[1]===y && a[2]===w && a[3]===h){ stats.viewport++; return; } return _vp2.apply(this,arguments); };
 })();
 </script>
 <script>
@@ -2778,6 +3081,14 @@ window.fcRunPy = fcRunPy;
       // Coin nulls glBindBuffer and the pref silently does nothing. ?vbo=0 flips both off.
       "_App.ParamGet('User parameter:BaseApp/Preferences/View').SetBool('UseVBO', " +
         (new URLSearchParams(location.search).get('vbo') === '0' ? 'False' : 'True') + ")",
+      // RenderCache 1 = Distributed: every view provider's separator keeps its own render
+      // cache (a GL display list, real since 2026-09-14 -- see gl_legacy_stubs.c and the
+      // __fcDL recorder in the glue). FreeCAD's own default, 0/Auto, resolves to the same
+      // because View3DInventorViewer disables Coin auto-caching. 2/Centralized was chosen
+      // while lists were stubs (it stopped Coin from re-walking into empty caches); with
+      // lists working it is the one mode that caches NOTHING. ?rendercache=N overrides.
+      "_App.ParamGet('User parameter:BaseApp/Preferences/View').SetInt('RenderCache', " +
+        (new URLSearchParams(location.search).get('rendercache') || '1') + ")",
       "if not getattr(_App, '_fcweb_saver', None):",
       "    class _FcwebSaver(object):",
       "        DIR = '" + AUTOSAVE_DIR + "'",
@@ -2879,6 +3190,7 @@ window.fcRunPy = fcRunPy;
     ].join("\n");
     var RESTORE_PY = [
       "import FreeCAD as _App, os as _os, sys as _s",
+      "import FreeCAD as App, FreeCADGui as Gui",   // what FreeCADGuiInit.py binds; harmless twice, fatal to be early without
       "_rec = '" + AUTOSAVE_DIR + "'",
       "_n = 0",
       "import time as _t",
@@ -3074,6 +3386,12 @@ window.fcRunPy = fcRunPy;
           }
           installed = true; append('[autosave] observer installed'); return;
         }
+        // Not before the workbench is up. Ready is Qt's, not FreeCAD's: opening a document
+        // makes Gui::Document run `Gui.SendMsgToActiveView(...)` through the interpreter,
+        // and in one boot in four the restore won the race against FreeCADGuiInit.py, which
+        // is what binds `Gui` in __main__ -- a NameError traceback in the Report view on a
+        // clean start (measured 2026-09-14, 2 of 8 boots).
+        if (!restored && !window.__fcWorkReady) return;
         if (!restored) { runPy(RESTORE_PY); restored = true; return; }
         clearInterval(poll);
         setInterval(function(){ runPy(AUTOSAVE_PY); }, 1500);
@@ -3369,6 +3687,92 @@ window.fcRunPy = fcRunPy;
     // a single-threaded build, or a future Qt with the bug fixed), this pass sees the
     // foreign draw and goes dormant, so it cannot double-present or fight a working
     // compositor. ?nojspresent=1 disables it outright.
+    // OUTSIDE the compositor IIFE below on purpose: that one returns under ?no3d, and the
+    // pump is the event loop's heartbeat, not a rendering feature. It sat inside it until
+    // 2026-09-15, so every ?no3d gate ran with Qt's timers starved (see the wake-up note).
+    // QT'S PAINT CHAIN IS DRIVEN FROM HERE WHILE INPUT IS LIVE.
+    //
+    // Qt 6.11 for wasm expects its event loop to sit suspended in processEvents() and to
+    // be resumed by every DOM event, timer and animation frame. In this app main() has
+    // returned and the loop is callback-driven, so the chain behind QWidget::update() --
+    // posted UpdateLater -> dispatcher wake-up timer -> requestAnimationFrame -> paint --
+    // only advances when something else happens to pump posted events. Measured
+    // 2026-09-11 with a timestamped event log: pointer moves handled every 33 ms, no
+    // wake-up, no frame request and no render for 600 ms at a stretch; 2-6 scene frames
+    // in a 4 s drag while the CPU sat 44 % idle. Asking Qt to process posted events once
+    // per animation frame while a button is down (and for 600 ms after any input) gave
+    // 68 frames in the same drag -- paint-bound at ~35 ms per frame. FreeCADGui.updateGui()
+    // is QApplication::processEvents(); the Python round trip is ~1 ms when idle.
+    // ponytail: a C++ export doing sendPostedEvents() would skip the Python hop; add it
+    // when this shows in a profile. Skipped while a py() call is in flight (__fcPyBusy).
+    //
+    // AND WHENEVER QT'S OWN NATIVE TIMER FIRES. QEventDispatcherWasm::onTimer() is a no-op
+    // under asyncify ("the instance will resume and process timers in processEvents()",
+    // qeventdispatcher_wasm.cpp) -- true for a loop parked in processEvents(), false for
+    // this one. So a QTimer whose expiry coincided with no input and no posted event never
+    // fired: measured 2026-09-15 (scratchpad/am-seq-probe.py), Qt's setTimeout count froze
+    // and a 1 s QTimer stopped after 5 ticks; the Addon Manager's startup sequence, all
+    // timers and signals, stalled at check_missing_dependencies in every full gate run
+    // ("the Addon Manager never reported"). Every native timer and wake-up reaches
+    // Module.qtSendPendingEvents, so count those calls and pump once per call on the next
+    // frame -- one event-loop iteration per timer expiry, which is what the desktop does.
+    (function () {
+      var down = 0, armedUntil = 0, busy = false, busyAt = 0, wakeSeen = 0;
+      var CODE = 'import FreeCADGui' + String.fromCharCode(10) + 'FreeCADGui.updateGui()' + String.fromCharCode(10);
+      // Observable from probes: gpu-cycle-fps.py found the pump silent (0 calls) on
+      // every document after the first close, 2026-09-12, and nothing said why.
+      window.__fcPumpState = function () {
+        var m = window.fcInstance, c = m && m.qtSuspendResumeControl;
+        return { busy: busy, busyFor: busy ? Math.round(performance.now() - busyAt) : 0, down: down, armed: performance.now() < armedUntil,
+                 pyBusy: !!window.__fcPyBusy, resume: !!(c && c.resume), pending: c ? c.pendingEvents.length : -1,
+                 exclusive: c ? c.exclusiveEventHandler : null };
+      };
+      // ?pumpmin=<ms>: never pump more often than this. A/B knob, measured 2026-09-13 on
+      // draft_test_objects drags: 0 (every animation frame) 32/62 fps, 30 ms 23/55, 60 ms
+      // 17/42 -- fewer pumps, fewer frames, so the default stays 0.
+      var PUMP_MIN = 0, lastPump = 0;
+      try { PUMP_MIN = Math.max(0, parseInt(new URLSearchParams(location.search).get('pumpmin') || '0', 10) || 0); } catch (e) {}
+      function arm() { armedUntil = performance.now() + 600; }
+      window.addEventListener('pointerdown', function () { down++; arm(); }, true);
+      window.addEventListener('pointerup', function () { down = Math.max(0, down - 1); arm(); }, true);
+      window.addEventListener('pointercancel', function () { down = 0; arm(); }, true);
+      window.addEventListener('pointermove', function () { if (down) arm(); }, true);
+      window.addEventListener('wheel', arm, true);
+      window.addEventListener('keydown', arm, true);
+      function tick() {
+        try {
+          var m = window.fcInstance, c = m && m.qtSuspendResumeControl;
+          if (m && !m.__fcQtWakeHooked && typeof m.qtSendPendingEvents === 'function') {
+            m.__fcQtWakeHooked = true;
+            var oq = m.qtSendPendingEvents;
+            m.qtSendPendingEvents = function () { window.__fcQtWake = (window.__fcQtWake | 0) + 1; return oq.apply(this, arguments); };
+          }
+          var wake = (window.__fcQtWake | 0) !== wakeSeen;
+          // queued native events first: a suspended loop drains itself on resume,
+          // an exclusive wait is left alone
+          if (c && c.pendingEvents.length && !c.resume && !(c.exclusiveEventHandler > 0) && typeof m.qtSendPendingEvents === 'function') {
+            window.__fcQtDrained = (window.__fcQtDrained || 0) + c.pendingEvents.length;
+            m.qtSendPendingEvents();
+          }
+          // Watchdog: a call whose promise never settles would park the pump for the
+          // session. __fcPyBusy is the real re-entry guard, so after 3 s treat the local
+          // flag as lost and count it.
+          if (busy && performance.now() - busyAt > 3000) { busy = false; window.__fcPumpLost = (window.__fcPumpLost || 0) + 1; }
+          if (m && window.__fcAppReady && (down > 0 || performance.now() < armedUntil || wake) && !busy && !window.__fcPyBusy && !(c && c.resume)
+              && performance.now() - lastPump >= PUMP_MIN) {
+            busy = true; busyAt = lastPump = performance.now(); wakeSeen = window.__fcQtWake | 0;
+            if (wake && !(down > 0 || performance.now() < armedUntil)) window.__fcWakePumps = (window.__fcWakePumps | 0) + 1;
+            var n = new TextEncoder().encode(CODE).length + 1, q = m._malloc(n);
+            m.stringToUTF8(CODE, q, n);
+            var r = (window.fcRunPy || function (mm, pp) { window.fcwebCallPy(mm, pp); mm._free(pp); })(m, q);
+            var done = function () { busy = false; window.__fcPumped = (window.__fcPumped || 0) + 1; window.__fcPumpMs = (window.__fcPumpMs || 0) + (performance.now() - busyAt); };
+            if (r && typeof r.then === 'function') r.then(done, done); else done();
+          }
+        } catch (e) { busy = false; window.__fcPumpErr = String(e); }
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    })();
     (function () {
       if (qp.has('no3d') || qp.has('nojspresent')) return;
       var P2 = WebGL2RenderingContext.prototype;
@@ -3380,6 +3784,7 @@ window.fcRunPy = fcRunPy;
       var lastUi = null;                  // last good canvas-sized UI texture
       var keepTex = null, keepFbo = null, keepSz = [0, 0]; // page-owned composite of the last frame
       var PLOG = /[?&]presentlog=1/.test(location.search) ? (window.__fcPresentLog = []) : null;
+      if (PLOG) { window.__fcClickLog = []; window.addEventListener('pointerdown', function (ev) { window.__fcLastClick = performance.now(); PLOG.push({ t: Math.round(performance.now()), click: [ev.clientX, ev.clientY] }); }, true); }
       var hadWidget = false, holdFrames = 0;   // see the 3D-layer hold in present()
       var HOLD_MAX = 20;                       // ~0.3s at 60Hz, then let the UI through anyway
       var everLive = false;                    // latched __fcNativeComposite; see present()
@@ -3407,6 +3812,7 @@ window.fcRunPy = fcRunPy;
                 tex:  gl.getParameter(gl.TEXTURE_BINDING_2D),
                 act:  gl.getParameter(gl.ACTIVE_TEXTURE),
                 draw: gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING),
+                read: gl.getParameter(gl.READ_FRAMEBUFFER_BINDING),
                 vp:   Array.prototype.slice.call(gl.getParameter(gl.VIEWPORT)),
                 scissor: gl.isEnabled(gl.SCISSOR_TEST),
                 depth:   gl.isEnabled(gl.DEPTH_TEST),
@@ -3432,6 +3838,9 @@ window.fcRunPy = fcRunPy;
       track('bindFramebuffer', function (s, a) {
         // DRAW_FRAMEBUFFER (36009) and FRAMEBUFFER (36160) both set the draw binding.
         if (a[0] === 36009 || a[0] === 36160) s.draw = a[1];
+        // READ_FRAMEBUFFER (36008), and FRAMEBUFFER again, set the read binding --
+        // which is how the SOURCE of the native composite's blit is identified.
+        if (a[0] === 36008 || a[0] === 36160) s.read = a[1];
       });
       track('enable',  function (s, a) {
         if (a[0] === 3089) s.scissor = true; else if (a[0] === 2929) s.depth = true;
@@ -3516,16 +3925,94 @@ window.fcRunPy = fcRunPy;
       P2.texSubImage2D = function () {
         try {
           var t = shadowFor(this).tex;
-          if (t) { t.__fcUpl = performance.now(); if (UPL.indexOf(t) < 0) UPL.push(t); }
+          if (t) { t.__fcUpl = performance.now(); t.__fcGl = this;
+                   if (UPL.indexOf(t) < 0) UPL.push(t); }
         } catch (e) {}
         return oTexSub.apply(this, arguments);
       };
+      // WHICH FRAMEBUFFER IS COIN ACTUALLY DRAWING INTO?
+      //
+      // Every other way of answering this proved wrong. blitFrom is stamped from the
+      // page's SHADOW of the bindings, and the shadow disagrees with the driver: it named
+      // fb2 as the blit source while the real READ_FRAMEBUFFER_BINDING was fb17. And the
+      // blit itself is no guide at all -- from the second document onward the C++ blits a
+      // framebuffer TO ITSELF (fb17->fb17, fb21->fb21, measured), which is INVALID_OPERATION
+      // and is why __fcNativeComposite goes false. So the compositor was choosing a buffer
+      // nothing renders into, and the viewport kept showing the first document.
+      //
+      // Ask the driver instead, on a sample of draws. getParameter is a synchronous stall,
+      // so this runs once every SAMPLE_EVERY draws -- at the ~150 draws a frame this port
+      // now issues that is a couple of stalls per frame, against a wrong picture entirely.
+      var drawTick = 0, SAMPLE_EVERY = 64;
+      function noteSceneDraw(gl) {
+        if (inPresent) return;                 // this pass's own quad is not the scene
+        if ((++drawTick % SAMPLE_EVERY) !== 0) return;
+        try {
+          var fb = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+          if (fb && fb.__fcId && REG[fb.__fcId]) {
+            REG[fb.__fcId].drewAt = performance.now();
+            // AND the context doing it. REG.gl is whatever context CREATED the
+            // framebuffer, and Qt recreates contexts per view -- binding a
+            // framebuffer from another context is a silent INVALID_OPERATION that
+            // leaves the previous binding in place, so a readback through the wrong
+            // context returns some other buffer, identically, forever. That is what
+            // made three documents in a row read back byte-identical while Coin was
+            // demonstrably clearing and drawing this one.
+            REG[fb.__fcId].drewGl = gl;
+          }
+        } catch (e) {}
+      }
+      // QT'S OWN COMPOSE STILL REACHES THE CANVAS ON A CLICK, and it is wrong.
+      //
+      // Measured 2026-09-14 in the user's Chrome with a tap on every draw to the window's
+      // default framebuffer: 13-17 ms after each pointerdown, and every ~180 s on its own,
+      // a clear + two full-window quads arrive from Qt's compositor -- the second one, the
+      // QOpenGLWidget's rect, sampling the WINDOW texture (the widget texture lives on
+      // another context, so its bind fails silently and the last bound one is drawn):
+      // the whole FreeCAD window, upside down, inside the 3D view for one frame, until
+      // this pass's next animation frame paints over it. Exactly what was reported.
+      //
+      // The user's Chrome presents at 240 Hz and the probes at 60, which is why a
+      // one-frame frame was never photographed. So: whenever anything but this pass draws
+      // to the window's framebuffer 0, re-present the kept composite in a microtask --
+      // after Qt's compose task has finished, before the browser composites the canvas.
+      var presentGl = null, foreignQueued = false;
+      function noteForeignFb0(gl) {
+        if (inPresent || gl !== presentGl || !keepValid) return;
+        var fb = gl._fcFB;
+        if (fb === undefined) { try { fb = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING); } catch (e) { return; } }
+        if (fb !== null) return;
+        window.__fcForeignFb0 = (window.__fcForeignFb0 || 0) + 1;
+        if (foreignQueued) return;
+        foreignQueued = true;
+        queueMicrotask(function () { foreignQueued = false; try { representKept(gl); } catch (e) { window.__fcPresentErr = String(e); } });
+      }
+      var oDrawArrays2 = P2.drawArrays, oDrawElements2 = P2.drawElements, oClear2 = P2.clear;
+      P2.drawArrays = function () { noteSceneDraw(this); noteForeignFb0(this); return oDrawArrays2.apply(this, arguments); };
+      P2.drawElements = function () { noteSceneDraw(this); noteForeignFb0(this); return oDrawElements2.apply(this, arguments); };
+      P2.clear = function () { noteForeignFb0(this); return oClear2.apply(this, arguments); };
       var oBlitFb = P2.blitFramebuffer;
       var lastBlit = null;                 // the REG entry the C++ composite blitted into last
       P2.blitFramebuffer = function () {
         try {
-          var db = shadowFor(this).draw;
+          var S = shadowFor(this), db = S.draw, rb = S.read;
           if (db && db.__fcId && REG[db.__fcId]) { REG[db.__fcId].blitTo = performance.now(); lastBlit = REG[db.__fcId]; }
+          // AND THE SOURCE. renderScene blits Coin's framebuffer INTO the
+          // QOpenGLWidget's, so blitTo marks Qt's destination -- which holds nothing
+          // at all when the blit is refused. What this pass wants to present is the
+          // SOURCE, the one Coin rendered into. Selecting on blitTo picked the empty
+          // destination and painted the whole viewport black, while Coin's own
+          // framebuffer sat in the registry carrying the scene and no stamp.
+          if (rb && rb.__fcId && REG[rb.__fcId]) { REG[rb.__fcId].blitFrom = performance.now(); }
+          // AND A RESOLVE. With anti-aliasing on, renderScene draws into a multisampled
+          // renderbuffer pair (no texture, so never presentable) and resolves into fcTex's
+          // framebuffer with this blit -- no draw call ever touches that one, so it never
+          // earned drewAt and the pass presented nothing: 55 frames in a session that
+          // rendered thousands (measured 2026-09-11, link 8, AntiAliasing=4). A blit whose
+          // source has no texture is that resolve; its destination is where the scene is.
+          if (rb && rb.__fcId && REG[rb.__fcId] && !REG[rb.__fcId].tex && db && db.__fcId && REG[db.__fcId]) {
+            REG[db.__fcId].drewAt = performance.now(); REG[db.__fcId].drewGl = this;
+          }
         } catch (e) {}
         return oBlitFb.apply(this, arguments);
       };
@@ -3552,6 +4039,299 @@ window.fcRunPy = fcRunPy;
       // frame for nothing; the draw path is the hottest in the renderer and now has no
       // wrapper on it at all.
 
+      // Every OTHER top-level window's canvas. Qt gives a dialog its own canvas
+      // (measured: Preferences is 1024x620 beside the main 1280x720), and once a 3D view
+      // exists Qt's own compositing puts nothing on screen -- which is why this pass
+      // exists. It composited only the canvas it picked, so the dialog stayed at its
+      // cleared colour: alpha:false, nothing drawn, solid black, with the DOM title bar
+      // still drawn around it.
+      //
+      // A texture belongs to the context that created it; binding it anywhere else is the
+      // INVALID_OPERATION the console fills with. So each canvas is presented from a
+      // texture uploaded IN ITS OWN context, and canvases with none are left alone.
+      // Every canvas in the document, shadow roots included (Qt 6.5+ hangs the screen off
+      // one). Walked at most once a second: this pass runs on every animation frame (213/s
+      // measured idle on a 240 Hz display, 2026-09-12) and the full-document walk was the
+      // second-largest idle cost after the pass itself. A canvas that appears between
+      // walks is picked up within a second, which is well inside a window's first paint.
+      var __cvList = [], __cvAt = -1e9;
+      function allCanvases() {
+        var now = performance.now();
+        if (now - __cvAt < 1000) return __cvList;
+        var out = [];
+        (function walk(r) {
+          r.querySelectorAll('*').forEach(function (el) {
+            if (el.tagName === 'CANVAS') out.push(el);
+            if (el.shadowRoot) walk(el.shadowRoot);
+          });
+        })(document);
+        __cvList = out; __cvAt = now;
+        return out;
+      }
+      function presentOtherWindows(mainGl) {
+        var canvases = allCanvases();
+        for (var ci = 0; ci < canvases.length; ci++) {
+          var g = null;
+          try { g = canvases[ci].getContext('webgl2'); } catch (e) { continue; }
+          if (!g || g === mainGl || canvases[ci].__fcBridge || !g.drawingBufferWidth || g.drawingBufferWidth <= 1) continue;
+          var best = null, t, i;
+          for (i = UPL.length - 1; i >= 0; i--) {
+            t = UPL[i];
+            if (!t || t.__fcDead || t.__fcPage || t.__fcGl !== g || !t.__fcSz) continue;
+            if (t.__fcSz[0] !== g.drawingBufferWidth || t.__fcSz[1] !== g.drawingBufferHeight) continue;
+            if (!best || (t.__fcUpl || 0) > (best.__fcUpl || 0)) best = t;
+          }
+          if (!best) continue;
+          var p = progFor(g);
+          if (!p) continue;
+          // SAVE AND RESTORE THIS CONTEXT'S STATE, exactly as the main pass does. This
+          // context is Qt's own window context, and Qt's RHI tracks what it bound: it
+          // does not re-issue useProgram for a pipeline it believes is current. Leaving
+          // the quad program bound here meant every uniform Qt set next frame landed on
+          // a program that was not bound -- 'location is not from the associated
+          // program', 252-805 per session, the last of the console noise. Measured
+          // 2026-09-11 from inside the glue: emscripten's shadow and Qt agreed on program
+          // 62, the driver had a program with no emscripten name -- ours. The shadow S
+          // is the app's state (track() ignores calls made while presenting); snapshot
+          // it first in case this pass runs with inPresent clear.
+          var S0 = shadowFor(g), sv = { prog: (g._fcProg !== undefined) ? g._fcProg : S0.prog,
+                                        vao: (g._fcVAO !== undefined) ? g._fcVAO : S0.vao, tex: S0.tex, act: S0.act,
+                                        draw: S0.draw, vp: S0.vp, scissor: S0.scissor,
+                                        depth: S0.depth, blend: S0.blend };
+          try {
+            g.bindFramebuffer(g.DRAW_FRAMEBUFFER, null);
+            g.viewport(0, 0, g.drawingBufferWidth, g.drawingBufferHeight);
+            g.disable(g.DEPTH_TEST); g.disable(g.BLEND); g.disable(g.SCISSOR_TEST);
+            g.useProgram(p.pr);
+            g.uniform1f(p.flip, 0.0);        // Qt's raster texture is y-down already
+            g.uniform1i(p.loc, 0);
+            g.activeTexture(g.TEXTURE0);
+            g.bindTexture(g.TEXTURE_2D, best);
+            g.bindVertexArray(p.vao);
+            g.drawArrays(g.TRIANGLES, 0, 6);
+            window.__fcPresentedAux = (window.__fcPresentedAux || 0) + 1;
+          } catch (e) { window.__fcAuxErr = String(e); }
+          try {
+            g.useProgram(sv.prog); g.bindVertexArray(sv.vao);
+            g.activeTexture(sv.act); g.bindTexture(g.TEXTURE_2D, sv.tex);
+            g.bindFramebuffer(g.DRAW_FRAMEBUFFER, sv.draw);
+            if (sv.vp) g.viewport(sv.vp[0], sv.vp[1], sv.vp[2], sv.vp[3]);
+            if (sv.scissor) g.enable(g.SCISSOR_TEST);
+            if (sv.depth) g.enable(g.DEPTH_TEST);
+            if (sv.blend) g.enable(g.BLEND);
+          } catch (e) { window.__fcAuxErr = String(e); }
+        }
+      }
+
+      // THE 3D LAYER LIVES IN ANOTHER GL CONTEXT.
+      //
+      // Qt renders QOpenGLWidget on a context made current against a QOffscreenSurface
+      // whose canvas is 1x1, and uploads the window's raster into the VISIBLE canvas's
+      // context. Two WebGL contexts share nothing: bindTexture on a texture belonging to
+      // the other one is INVALID_OPERATION, which is SILENT and leaves the PREVIOUS
+      // texture bound. So the widget quad drew the UI texture into the viewport rect --
+      // the whole window, scaled and upside down, inside itself, with the scene nowhere.
+      // Measured: __fcXCtx=1, widget rect 1014x588, on a Part::Box exactly as on a 42 MB
+      // assembly. Every other counter in this pass looked healthy throughout, which is
+      // why it needed the flag rather than an eye.
+      //
+      // This became reachable when the display-context fallback above started presenting
+      // to the visible canvas. Before that this pass presented to the 1x1 context -- same
+      // context as the widget, so the bind worked, and nothing reached the screen at all.
+      //
+      // Two WebGL contexts share no objects, but the browser copies one context's CANVAS
+      // into another's texture on the GPU (bridgeGpu above, 2026-09-11). This readback is
+      // the fallback when that fails. It runs
+      // once per 3D FRAME, not once per present: keyed on the blit stamp, so a 60 Hz
+      // present pass over a viewport redrawing at 1-10 Hz pays it 1-10 times a second,
+      // against the ~700 ms that redraw already costs. Skipped entirely when both live in
+      // the same context, which is every build where Qt's own compositing works.
+      var BR = { tex: null, gl: null, w: 0, h: 0, at: 0, when: 0, buf: null, src: null,
+                 // undefined: try the GPU copy; true: it works; false: readback only
+                 gpu: (/[?&]cpubridge=1/.test(location.search) ? false : undefined) };
+      // At most every BRIDGE_MS, and immediately when the blit stamp moves.
+      //
+      // Keying on the blit stamp ALONE froze the viewport. Measured over five document
+      // opens: one copy, total. Coin keeps rendering into the framebuffer but
+      // blitFramebuffer -- the only thing that stamps blitTo -- fires about once per
+      // document, and two of the three registered framebuffers never report a blit at
+      // all. So the first document looked right and every one after it showed the copy
+      // taken for the first: a frozen or blank 3D view that a page reload cleared.
+      //
+      // A stamp that is not reliably updated cannot be the only cache key. The viewport
+      // redraws at 1-10 Hz, so refreshing at 10 Hz costs at most 24 MB/s of readback and
+      // cannot fall behind by more than a frame.
+      var BRIDGE_MS = 100;
+      // The GPU copy: widget texture -> source context's canvas -> destination texture.
+      // A guest on Coin's context, so it saves and restores exactly what it touches (the
+      // presentOtherWindows pattern). Returns false when the copy cannot be trusted.
+      function bridgeGpu(w, dgl, sgl, W, H) {
+        // The texture is bindable only on the context that created it, which the glue
+        // stamps on every GL object. drewGl is the context that last drew into the
+        // framebuffer and is not always that one: with two documents open the census
+        // counted 754 'object does not belong to this context' binds here (2026-09-11).
+        if (!w.tex || !w.tex.__fcGl) return false;
+        sgl = w.tex.__fcGl;
+        var cv = sgl.canvas;
+        if (!cv || sgl === dgl) return false;
+        var p = progFor(sgl);
+        if (!p) return false;
+        if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+        // The present pass must never mistake a bridge canvas for the window: every view's
+        // context has its own canvas, so flag the canvas rather than remember one.
+        cv.__fcBridge = true; BR.cv = cv;
+        var S0 = shadowFor(sgl), sv = { prog: (sgl._fcProg !== undefined) ? sgl._fcProg : S0.prog,
+                                        vao: (sgl._fcVAO !== undefined) ? sgl._fcVAO : S0.vao, tex: S0.tex, act: S0.act,
+                                        draw: S0.draw, read: sgl.getParameter(sgl.READ_FRAMEBUFFER_BINDING), vp: S0.vp,
+                                        scissor: S0.scissor, depth: S0.depth, blend: S0.blend,
+                                        cull: sgl.isEnabled(sgl.CULL_FACE) };
+        var drew = false;
+        try {
+          sgl.bindFramebuffer(sgl.FRAMEBUFFER, null);
+          sgl.viewport(0, 0, W, H);
+          sgl.disable(sgl.DEPTH_TEST); sgl.disable(sgl.BLEND); sgl.disable(sgl.SCISSOR_TEST); sgl.disable(sgl.CULL_FACE);
+          sgl.useProgram(p.pr);
+          // flip=1 is a 1:1 copy with this quad (see progFor): framebuffer row r <- texel
+          // row r, so the canvas image is upright and the upload below flips it back into
+          // the bottom-up layout the widget quad expects (the layout readPixels produced).
+          sgl.uniform1f(p.flip, 1.0);
+          sgl.uniform1i(p.loc, 0);
+          sgl.activeTexture(sgl.TEXTURE0);
+          sgl.bindTexture(sgl.TEXTURE_2D, w.tex);
+          sgl.bindVertexArray(p.vao);
+          sgl.drawArrays(sgl.TRIANGLES, 0, 6);
+          drew = true;
+        } catch (e) { window.__fcBridgeGpuErr = String(e); }
+        try {
+          sgl.useProgram(sv.prog); sgl.bindVertexArray(sv.vao);
+          sgl.activeTexture(sv.act); sgl.bindTexture(sgl.TEXTURE_2D, sv.tex);
+          sgl.bindFramebuffer(sgl.DRAW_FRAMEBUFFER, sv.draw);
+          sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, sv.read);
+          if (sv.vp) sgl.viewport(sv.vp[0], sv.vp[1], sv.vp[2], sv.vp[3]);
+          if (sv.scissor) sgl.enable(sgl.SCISSOR_TEST);
+          if (sv.depth) sgl.enable(sgl.DEPTH_TEST);
+          if (sv.blend) sgl.enable(sgl.BLEND);
+          if (sv.cull) sgl.enable(sgl.CULL_FACE);
+        } catch (e) { window.__fcBridgeGpuErr = String(e); }
+        if (!drew) return false;
+        var fresh = !BR.tex || BR.w !== W || BR.h !== H;
+        if (!BR.tex) {
+          BR.tex = dgl.createTexture(); BR.tex.__fcPage = true;
+          dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_MIN_FILTER, dgl.LINEAR);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_MAG_FILTER, dgl.LINEAR);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_WRAP_S, dgl.CLAMP_TO_EDGE);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_WRAP_T, dgl.CLAMP_TO_EDGE);
+        } else {
+          dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
+        }
+        var pf = dgl._fcFlipY !== undefined ? dgl._fcFlipY : dgl.getParameter(dgl.UNPACK_FLIP_Y_WEBGL);
+        if (!pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, true);
+        // oTexImg/oTexSub: the page's own texture must never enter UPL.
+        if (fresh) oTexImg.call(dgl, dgl.TEXTURE_2D, 0, dgl.RGBA, dgl.RGBA, dgl.UNSIGNED_BYTE, cv);
+        else oTexSub.call(dgl, dgl.TEXTURE_2D, 0, 0, 0, dgl.RGBA, dgl.UNSIGNED_BYTE, cv);
+        if (!pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, false);
+        if (BR.gpu === undefined) {
+          // Decide once: any error on either side means the copy is not trustworthy.
+          var e1 = sgl.getError(), e2 = dgl.getError();
+          if (e1 || e2) { window.__fcBridgeGpuErr = 'gl error ' + e1 + '/' + e2; return false; }
+          BR.gpu = true;
+        }
+        return true;
+      }
+      function bridgeWidget(w, dgl) {
+        var sz = w.tex && w.tex.__fcSz;
+        if (!sz || sz[0] < 2 || sz[1] < 2 || !w.fb || !w.gl) return null;
+        var W = sz[0], H = sz[1];
+        if (BR.gl !== dgl) { BR.gl = dgl; BR.tex = null; }
+        // A different source framebuffer is a different picture, whatever the
+        // clock says: switching documents must not show the old one's last frame.
+        if (BR.src !== w) { BR.src = w; BR.at = -1; BR.when = 0; }
+        var nowMs = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+        // The resolve blit stamps drewAt on the destination and blitTo as well; take the
+        // newer of the two so every scene frame refreshes the copy. Keyed on blitTo alone,
+        // half the frames of a drag were rendered and never shown (36 copies for 73 frames,
+        // measured 2026-09-11), because the timer below was doing the work at 10 Hz.
+        var stamp = Math.max(w.blitTo || 0, w.drewAt || 0);
+        if (BR.tex && BR.w === W && BR.h === H && BR.at === stamp
+            && (nowMs - BR.when) < BRIDGE_MS) return BR.tex;
+        var sgl = w.drewGl || w.gl, n = W * H * 4;
+        // GPU PATH FIRST. readPixels is a full pipeline stall: 14-17 ms per copy on the
+        // user's machine shape (2026-09-11), a third of every frame of a drag. Two WebGL
+        // contexts share no objects, but the browser can copy one context's CANVAS into
+        // another's texture on the GPU: draw the widget texture onto the source context's
+        // own (offscreen, 1x1 until now) canvas, then texImage2D that canvas here. No bytes
+        // cross to the CPU. Falls back to the readback below on the first GL error, or on
+        // ?cpubridge=1.
+        if (BR.gpu !== false) {
+          var okGpu = false;
+          try { okGpu = bridgeGpu(w, dgl, sgl, W, H); } catch (e) { window.__fcBridgeGpuErr = String(e); okGpu = false; }
+          if (okGpu) {
+            BR.w = W; BR.h = H; BR.at = stamp; BR.when = nowMs;
+            window.__fcBridgeMs = (window.__fcBridgeMs || 0) +
+              (((typeof performance !== 'undefined') ? performance.now() : Date.now()) - nowMs);
+            window.__fcBridged = (window.__fcBridged || 0) + 1;
+            window.__fcBridgedGpu = (window.__fcBridgedGpu || 0) + 1;
+            return BR.tex;
+          }
+          if (BR.gpu === undefined) {
+            // First attempt failed: this session uses the readback. Decided once, because
+            // the check that decides it (getError) is itself a round-trip.
+            BR.gpu = false; window.__fcBridgeGpuOff = window.__fcBridgeGpuErr || 'gl error';
+          }
+        }
+        try {
+          if (!BR.buf || BR.buf.length < n) BR.buf = new Uint8Array(n);
+          // Restore the source context's read binding: this pass is a guest there.
+          var prev = sgl.getParameter(sgl.READ_FRAMEBUFFER_BINDING);
+          sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, w.fb);
+          // CHECK THE BIND TOOK. A framebuffer from another context is refused
+          // silently and the previous binding stays, so readPixels would quietly
+          // return a different buffer -- which is exactly how this pass presented
+          // the first document's frame for the rest of the session.
+          if (sgl.getParameter(sgl.READ_FRAMEBUFFER_BINDING) !== w.fb) {
+            sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, prev);
+            window.__fcBridgeBindFail = (window.__fcBridgeBindFail || 0) + 1;
+            return BR.tex;
+          }
+          sgl.readPixels(0, 0, W, H, sgl.RGBA, sgl.UNSIGNED_BYTE, BR.buf);
+          sgl.bindFramebuffer(sgl.READ_FRAMEBUFFER, prev);
+        } catch (e) { window.__fcBridgeErr = String(e); return BR.tex; }
+        var fresh = !BR.tex || BR.w !== W || BR.h !== H;
+        if (!BR.tex) {
+          BR.tex = dgl.createTexture(); BR.tex.__fcPage = true;
+          dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_MIN_FILTER, dgl.LINEAR);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_MAG_FILTER, dgl.LINEAR);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_WRAP_S, dgl.CLAMP_TO_EDGE);
+          dgl.texParameteri(dgl.TEXTURE_2D, dgl.TEXTURE_WRAP_T, dgl.CLAMP_TO_EDGE);
+        } else {
+          dgl.bindTexture(dgl.TEXTURE_2D, BR.tex);
+        }
+        // readPixels hands back GL row order, bottom-up -- the same order the widget's own
+        // texture is in, so the quad's flip=1 stays correct. That only holds if the upload
+        // does not flip as well, and Qt is free to have left UNPACK_FLIP_Y_WEBGL on.
+        var pf = dgl._fcFlipY !== undefined ? dgl._fcFlipY : dgl.getParameter(dgl.UNPACK_FLIP_Y_WEBGL);
+        if (pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, false);
+        var view = BR.buf.length === n ? BR.buf : BR.buf.subarray(0, n);
+        // oTexImg/oTexSub, not the wrapped pair: this texture is the page's own and must
+        // never enter UPL, where it would compete to be chosen as the UI layer.
+        if (fresh) oTexImg.call(dgl, dgl.TEXTURE_2D, 0, dgl.RGBA, W, H, 0,
+                                dgl.RGBA, dgl.UNSIGNED_BYTE, view);
+        else oTexSub.call(dgl, dgl.TEXTURE_2D, 0, 0, 0, W, H,
+                          dgl.RGBA, dgl.UNSIGNED_BYTE, view);
+        if (pf) dgl.pixelStorei(dgl.UNPACK_FLIP_Y_WEBGL, true);
+        BR.w = W; BR.h = H; BR.at = stamp; BR.when = nowMs;
+        // Time it. An empty scene still costs 95-129 ms a frame with every object
+        // hidden, so the floor is per-frame overhead rather than geometry, and this
+        // readback -- 2.4 MB out of the GPU on the main thread -- is one of the few
+        // things in that path this code owns.
+        window.__fcBridgeMs = (window.__fcBridgeMs || 0) +
+          (((typeof performance !== 'undefined') ? performance.now() : Date.now()) - nowMs);
+        window.__fcBridged = (window.__fcBridged || 0) + 1;
+        return BR.tex;
+      }
+
       function progFor(gl) {
         if (gl.__fcPresProg) return gl.__fcPresProg;
         var vsrc = '#version 300 es\nout vec2 uv;\nuniform float uFlip;\nvoid main(){\n'
@@ -3574,6 +4354,36 @@ window.fcRunPy = fcRunPy;
         return gl.__fcPresProg;
       }
 
+      // The kept composite, drawn again over whatever someone else just put on the
+      // canvas. State is saved and restored from the shadows exactly as present() does.
+      function representKept(gl) {
+        if (inPresent || !keepValid || !keepTex || !gl || gl.isContextLost()) return;
+        var p = progFor(gl); if (!p) return;
+        var S = shadowFor(gl);
+        var sProg = (gl._fcProg !== undefined) ? gl._fcProg : S.prog,
+            sVao = (gl._fcVAO !== undefined) ? gl._fcVAO : S.vao, sTex = S.tex, sAct = S.act,
+            sDraw = S.draw, sVp = S.vp, sScis = S.scissor, sDep = S.depth, sBl = S.blend;
+        inPresent = true;
+        try {
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+          gl.disable(gl.SCISSOR_TEST); gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+          gl.useProgram(p.pr); gl.bindVertexArray(p.vao);
+          gl.activeTexture(gl.TEXTURE0); gl.uniform1i(p.loc, 0);
+          gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+          gl.uniform1f(p.flip, 1.0);
+          gl.bindTexture(gl.TEXTURE_2D, keepTex);
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+          gl.useProgram(sProg); gl.bindVertexArray(sVao);
+          gl.activeTexture(sAct); gl.bindTexture(gl.TEXTURE_2D, sTex);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, sDraw);
+          if (sVp) gl.viewport(sVp[0], sVp[1], sVp[2], sVp[3]);
+          if (sScis) gl.enable(gl.SCISSOR_TEST);
+          if (sDep) gl.enable(gl.DEPTH_TEST);
+          if (sBl) gl.enable(gl.BLEND);
+          window.__fcRepresented = (window.__fcRepresented || 0) + 1;
+        } catch (ex) { window.__fcPresentErr = String(ex); }
+        inPresent = false;
+      }
       function present() {
         requestAnimationFrame(present);
         if (inPresent) return;
@@ -3608,6 +4418,32 @@ window.fcRunPy = fcRunPy;
         try {
           // The widget FBO: the one the C++ blit writes into most recently.
           var widget = null, k, e;
+          // Prefer the framebuffer most recently DRAWN into -- observed from the driver,
+          // not inferred from a blit that may be a self-blit or a stale shadow. Falls back
+          // to the blit source, which is right while the native composite still works.
+          var src = null;
+          // THE VISIBLE VIEW FIRST. Hidden MDI views keep rendering, and "most recently
+          // drawn" can be one of them -- its frame then lands over whatever is on screen
+          // (measured 2026-09-10: a 600x450 view painted across the Start page). renderScene
+          // publishes the GL name of the framebuffer belonging to the view that is actually
+          // visible as __fcVisibleFbo; emscripten stores that name on the object (.name),
+          // so prefer the entry whose framebuffer carries it, and fall back to recency only
+          // when the app has not said.
+          var vis = window.__fcVisibleFbo, how = '';
+          if (vis) {
+            for (k in REG) { e = REG[k];
+              if (e.fb && e.fb.name === vis && e.tex && e.drewAt && !e.tex.__fcDead) { src = e; how = 'vis:' + k; break; } }
+          }
+          if (!src) {
+            for (k in REG) { e = REG[k];
+              if (!e.tex || !e.drewAt || e.tex.__fcDead) continue;
+              if (!src || e.drewAt > src.drewAt) { src = e; how = 'recent:' + k; } }
+          }
+          if (!src) {
+            for (k in REG) { e = REG[k];
+              if (!e.tex || !e.blitFrom || e.tex.__fcDead) continue;
+              if (!src || e.blitFrom > src.blitFrom) { src = e; how = 'blit:' + k; } }
+          }
           for (k in REG) { e = REG[k];
             // The ACTIVE view is the largest recently-blitted framebuffer, not the most
             // recently blitted one: hidden MDI views of other documents also render
@@ -3620,9 +4456,49 @@ window.fcRunPy = fcRunPy;
             var wRecent = widget && performance.now() - widget.blitTo < 1500;
             if (!widget || (eRecent && !wRecent) || (eRecent === wRecent && (eA > wA || (eA === wA && e.blitTo > widget.blitTo)))) widget = e; }
           if (widget && widget.tex && widget.tex.__fcDead) { widget.tex = null; widget = null; }
+          if (src) { widget = src; }
           var gl = widget && widget.gl;
           if (!gl) { for (k in REG) { if (REG[k].gl) { gl = REG[k].gl; break; } } }
+          // REG holds only offscreen contexts -- Qt makes QOpenGLWidget's context current
+          // on a QOffscreenSurface whose canvas is 1x1, and that is the context that lands
+          // here. Everything below sizes itself against this gl, so a 1x1 one means the
+          // canvas-sized UI texture in UPL can never match and this pass starves: measured
+          // at 2540 consecutive frames returning with nothing presented, on a canvas that
+          // shows an undrawn frame as solid black. Take the context that owns the visible
+          // canvas instead; getContext hands back the one already created for it.
+          //
+          // This did not bite while Qt's own shaders were broken: Qt painted the widget
+          // layer by another route then, and this pass was not what reached the canvas.
+          // Fixing glShaderSource made this the only route, which is why the window went
+          // black on a build whose shaders had just started working.
+          // ...or the canvas bridgeGpu resized to carry the 3D layer across: still an
+          // offscreen surface, just no longer 1x1. Presenting onto it blacked the window
+          // the first time the GPU bridge ran (2026-09-11).
+          // ...or NO context at all: the last 3D view was just closed, its context deleted
+          // and its REG entry with it. Returning here left the previous frame on screen
+          // forever -- File > Close showed the closed document, its tree and its tab until
+          // the next document opened (measured 2026-09-15, scratchpad/close-probe.py). The
+          // UI-only compose below is exactly what that state needs; it just needs a context.
+          if (!gl || gl.drawingBufferWidth <= 1 || (gl.canvas && gl.canvas.__fcBridge)) {
+            // Qt 6.5+ hangs the whole screen off ONE shadow root, so the canvas is not
+            // reachable from document.querySelectorAll -- hence the walk.
+            var dom = null;
+            allCanvases().forEach(function (el) {
+              if (!dom || el.width * el.height > dom.width * dom.height) dom = el;
+            });
+            try {
+              var dgl = dom && dom.getContext('webgl2');
+              if (dgl) gl = dgl;
+            } catch (e) { /* incompatible context on that canvas: keep what we had */ }
+          }
           if (!gl) { inPresent = false; return; }
+          // A texture belongs to the context that created it. If the widget FBO was
+          // made on Qt's offscreen context and gl is the visible canvas's, then
+          // binding widget.tex below is a silent INVALID_OPERATION -- the previously
+          // bound texture stays bound, and the widget quad paints THAT into the
+          // viewport rect instead. Recorded, not assumed: a wrong picture here is
+          // indistinguishable from a wrong flip or a wrong rect by eye.
+          window.__fcXCtx = (widget && widget.gl && widget.gl !== gl) ? 1 : 0;
           // The raster UI: newest canvas-sized uploaded texture.
           var ui = null, i, t;
           for (i = UPL.length - 1; i >= 0; i--) { t = UPL[i];
@@ -3630,8 +4506,22 @@ window.fcRunPy = fcRunPy;
             // change, post-crash teardown). Binding a deleted one raises
             // INVALID_OPERATION and the UI layer draws garbage -- prune instead.
             if (t.__fcDead || t.__fcPage) { UPL.splice(i, 1); continue; }
-            if (t.__fcSz && t.__fcSz[0] === gl.drawingBufferWidth
-                         && t.__fcSz[1] === gl.drawingBufferHeight
+            // ...and from THIS context. A texture from another one cannot be bound here:
+            // it is a silent INVALID_OPERATION that leaves the previous texture bound and
+            // paints that instead (see bridgeWidget). With a dialog open Qt has more than
+            // one context uploading, and the console fills with exactly that warning.
+            // Every UPL member has __fcGl -- the same hook records both -- so this can
+            // only skip a texture that could never have been drawn anyway.
+            if (t.__fcGl && t.__fcGl !== gl) {
+              window.__fcUiXCtx = (window.__fcUiXCtx || 0) + 1; continue; }
+            // WITHIN TWO PIXELS, not equal. At devicePixelRatio 1.5 a 1707-px-wide window
+            // is 2560.5 device pixels: the canvas rounds to 2561 and Qt's backing texture
+            // to 2560, so an exact match never happens and the pass presents NOTHING --
+            // a black window with a fragment of the 3D quad in it, which is what the
+            // user's own Chrome showed on 2026-09-10. Every integer-sized test window
+            // (1280x720 at 1.0 and 1.5) matched exactly, which is how this shipped.
+            if (t.__fcSz && Math.abs(t.__fcSz[0] - gl.drawingBufferWidth) <= 2
+                         && Math.abs(t.__fcSz[1] - gl.drawingBufferHeight) <= 2
                          && (!ui || (t.__fcUpl || 0) > (ui.__fcUpl || 0))) ui = t; }
           // A frame with no UI layer must NOT be presented. Qt deletes and recreates
           // its backingstore texture during interaction (repaint churn, resize, DPR
@@ -3644,8 +4534,9 @@ window.fcRunPy = fcRunPy;
           // than showing half of this one.
           if (ui) { lastUi = ui; }
           else if (lastUi && !lastUi.__fcDead
-                   && lastUi.__fcSz && lastUi.__fcSz[0] === gl.drawingBufferWidth
-                   && lastUi.__fcSz[1] === gl.drawingBufferHeight) { ui = lastUi; }
+                   && !(lastUi.__fcGl && lastUi.__fcGl !== gl)
+                   && lastUi.__fcSz && Math.abs(lastUi.__fcSz[0] - gl.drawingBufferWidth) <= 2
+                   && Math.abs(lastUi.__fcSz[1] - gl.drawingBufferHeight) <= 2) { ui = lastUi; }
           // No live UI texture at all (Qt deleted it and has not uploaded the next one
           // yet -- a selection click re-rasterises the whole window and the main thread
           // stalls ~1 s on the 443k-triangle pick + rebuild). Painting nothing here lets
@@ -3675,7 +4566,17 @@ window.fcRunPy = fcRunPy;
           // frame. The shadow is maintained by the wrappers below, so this costs
           // nothing; it is seeded once from the driver on the first frame.
           var S = shadowFor(gl);
-          var sProg = S.prog, sVao = S.vao, sTex = S.tex, sAct = S.act,
+          presentGl = gl;
+          // The PROGRAM and VAO come from the low-level wrappers (_fcProg/_fcVAO), which
+          // record every request that reaches the driver, not from S: measured 2026-09-11
+          // from inside the glue, 224-805 times per session the restore below re-bound a
+          // program Qt had long since replaced (and by then deleted) -- S had gone stale,
+          // and Qt's RHI, which trusts its own binding, then set every uniform against the
+          // wrong program: 'location is not from the associated program'. __fcShadowDrift
+          // counts how often S and the truth disagree here.
+          if (S.prog !== gl._fcProg) { window.__fcShadowDrift = (window.__fcShadowDrift || 0) + 1; }
+          var sProg = (gl._fcProg !== undefined) ? gl._fcProg : S.prog,
+              sVao = (gl._fcVAO !== undefined) ? gl._fcVAO : S.vao, sTex = S.tex, sAct = S.act,
               sDraw = S.draw, sVp = S.vp,
               sScis = S.scissor, sDep = S.depth, sBl = S.blend;
           var W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
@@ -3707,19 +4608,42 @@ window.fcRunPy = fcRunPy;
           //
           // Bounded by HOLD_MAX: a viewport that is legitimately gone (last document
           // closed) must not freeze the UI, so after ~0.3s the UI-only compose goes ahead.
-          var wUsable = !!window.__fcNativeComposite &&
-                        !!(widget && (widget.rect || window.__fcWidgetRect));
+          // ...and only while a 3D view is the active MDI window. A view that just went
+          // behind the Start page still renders once more at its restored 400x300 and
+          // republishes its rect (measured 2026-09-11), which would paint it over the
+          // Start page; the Python hook (FCACTIVE-) says what is actually in front.
+          var wHave = !!(widget && (widget.rect || window.__fcWidgetRect)) && window.__fcActive3D !== false;
+          var wUsable = !!window.__fcNativeComposite && wHave;
           if (wUsable) { hadWidget = true; holdFrames = 0; }
           var holdThisFrame = (ui && !wUsable && hadWidget && !useKeep && keepValid &&
                                holdFrames < HOLD_MAX);
           if (holdThisFrame) { holdFrames++; }
+          // ONCE THE HOLD IS SPENT, DRAW THE 3D LAYER WE HAVE.
+          //
+          // __fcNativeComposite is republished by renderScene as that frame's BLIT
+          // RESULT, and the C++ publishes a failure on purpose so this pass can cover
+          // for it. Treating it as the gate on the widget layer inverts that: when the
+          // blit fails EVERY frame, the hold expires and the compositor settles into
+          // painting the UI alone -- a permanently black viewport with no error anywhere.
+          // Measured over five document opens: native True for the first, False for every
+          // one after, 2221 frames presented and the 3D layer bridged exactly once.
+          //
+          // The blit's failure says nothing about the framebuffer Coin rendered INTO,
+          // which is what this pass reads. So keep the hold for a genuinely transient
+          // stale frame -- that is what stops the black flash on a click -- and once the
+          // budget is spent, composite the layer rather than dropping it.
+          var wDraw = wUsable || (wHave && everLive && holdFrames >= HOLD_MAX);
           var composing = (ui && !holdThisFrame);
           // ?presentlog=1: one entry per frame, so a frame that came out wrong can be
           // identified instead of guessed at. A bad frame is 8-16 ms -- long enough to see
           // as a flash, far too short to screenshot.
           if (PLOG) { PLOG.push({ t: Math.round(performance.now()), ui: !!ui, keep: !!useKeep,
-                                  widget: wUsable, hold: holdThisFrame, size: W + 'x' + H });
-                      if (PLOG.length > 600) PLOG.shift(); }
+                                  widget: wUsable, hold: holdThisFrame, size: W + 'x' + H,
+                                  how: how, tex: (widget && widget.tex && widget.tex.__fcSz) ? widget.tex.__fcSz.join('x') : '',
+                                  rect: (widget && (widget.rect || window.__fcWidgetRect) || []).join(','),
+                                  vis: vis || 0, a3d: window.__fcActive3D, draw: !!wDraw, nat: !!window.__fcNativeComposite });
+                      // Plain frames are evicted first; clicks and the sampled frames after them stay.
+                      if (PLOG.length > 2000) { var __i0 = PLOG.findIndex(function (e) { return !e.click && e.grid === undefined; }); if (__i0 >= 0 && PLOG.length < 20000) PLOG.splice(__i0, 1); else PLOG.shift(); } }
 
           if (composing) {
             // (Re)size the kept framebuffer ONLY here, where a real compose is about to
@@ -3744,18 +4668,65 @@ window.fcRunPy = fcRunPy;
               keepValid = false;            // reallocated: holds nothing yet
             }
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, keepFbo);
-            gl.viewport(0, 0, W, H);
-            gl.uniform1f(p.flip, 0.0);   // QImage upload: already top-left origin
-            gl.bindTexture(gl.TEXTURE_2D, ui);
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            if (wUsable) {
-              var r = widget.rect || window.__fcWidgetRect;   // [x, y, w, h], top-left, device px
-              gl.viewport(r[0], H - r[1] - r[3], r[2], r[3]);
+            // THE 3D LAYER GOES UNDER THE UI LAYER, not over it. Qt punches a transparent
+            // hole in its raster backing store where the QOpenGLWidget sits (measured
+            // 2026-09-13: RGBA 0,0,0,0 across the view) and paints anything that overlaps
+            // the view -- the Tasks overlay panel, its translucent title bar -- into that
+            // same store on top. Drawing the widget quad last covered all of it: every
+            // task panel was invisible in the browser while Qt reported it visible. So:
+            // the widget quad first, then the UI texture blended over the whole canvas
+            // (premultiplied, as Qt's ARGB32_Premultiplied store is), and the hole shows
+            // the 3D frame through.
+            // widget.tex is only bindable here when the widget shares this context; when
+            // it does not, bridgeWidget copies it across. A null means the copy failed and
+            // the frame keeps the UI layer alone -- never the wrong texture stretched over
+            // the viewport, which is what the failed bind used to produce.
+            var wtex = wDraw ? ((widget.gl === gl) ? widget.tex : bridgeWidget(widget, gl))
+                             : null;
+            if (wtex) {
+              var r = widget.rect || window.__fcWidgetRect;   // [x, y, w, h], top-left, Qt LOGICAL px
+              // The C++ multiplies by QOpenGLWidget::devicePixelRatio() meaning to publish
+              // device pixels, and on wasm that returns 1 while the window's ratio is 1.5:
+              // measured 2026-09-10, rect [0,24,1280,411] beside a 1920x616 widget
+              // framebuffer on a 1920x1080 canvas. Drawn as-is, the 3D layer landed at
+              // two-thirds size in the wrong place and the rest of Qt's widget hole stayed
+              // black -- the production screenshot. So scale by the canvas's own ratio of
+              // device to CSS pixels, exactly as the screenshot crop below already does.
+              // NOT by the picked texture's size over the rect: that ratio is only a unit
+              // conversion when the picked framebuffer IS the one the rect describes, and
+              // it is not always -- a hidden MDI view keeps rendering, is the most recently
+              // drawn framebuffer, and came out painted over the Start page at its own
+              // 600x450 (measured 2026-09-10, first version of this fix).
+              var __cv = gl.canvas;
+              var __sx = W / ((__cv && __cv.clientWidth) || W);
+              var __sy = H / ((__cv && __cv.clientHeight) || H);
+              var __rx = Math.round(r[0] * __sx), __ry = Math.round(r[1] * __sy);
+              var __rw = Math.round(r[2] * __sx), __rh = Math.round(r[3] * __sy);
+              // NO size test between the framebuffer and the rect here. One was tried on
+              // 2026-09-10 to keep a hidden MDI view's frame off the Start page, and under
+              // AntiAliasing=4 at devicePixelRatio 1.5 it skipped 240 of 242 frames -- a
+              // black viewport, which is the worse of the two failures by a distance. The
+              // hidden-view case is handled at the pick instead: renderScene publishes the
+              // visible view's framebuffer name and the pick above prefers it.
+              gl.viewport(__rx, H - __ry - __rh, __rw, __rh);
               gl.uniform1f(p.flip, 1.0);   // GL-rendered y-up: invert sampling so the nav
               // cube sits top-right, top faces shade light, and labels read forward
-              gl.bindTexture(gl.TEXTURE_2D, widget.tex);
+              gl.bindTexture(gl.TEXTURE_2D, wtex);
               gl.drawArrays(gl.TRIANGLES, 0, 6);
+              // Counted, because 'the viewport is black' has been THREE different
+              // bugs today and every one of them left this draw un-run while every
+              // other number in this pass looked healthy. A frame count says the
+              // compositor is alive; only this says the 3D layer is in the frame.
+              window.__fcWidgetDrawn = (window.__fcWidgetDrawn || 0) + 1;
             }
+            gl.viewport(0, 0, W, H);
+            gl.uniform1f(p.flip, 0.0);   // QImage upload: already top-left origin
+            gl.enable(gl.BLEND);
+            gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.bindTexture(gl.TEXTURE_2D, ui);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            gl.disable(gl.BLEND);
+            if (gl._fcBF) gl.blendFuncSeparate(gl._fcBF[0], gl._fcBF[1], gl._fcBF[2], gl._fcBF[3]);
             keepValid = true;             // this frame is complete and safe to re-present
           }
           // ?presentlog=1 only: what did this frame's composite actually LOOK like? Draw
@@ -3771,6 +4742,17 @@ window.fcRunPy = fcRunPy;
               var __s = 0;
               for (var __q = 0; __q < 64; __q += 4) { __s += __px[__q] + __px[__q+1] + __px[__q+2]; }
               PLOG[PLOG.length - 1].lum = Math.round(__s / 16 / 3);
+              // Within half a second of a click, a 4x4 grid of samples across the 3D rect
+              // as well: a wrong picture in the viewport (the whole window drawn into it)
+              // moves these while the centre pixel can stay the same.
+              var __lc = window.__fcLastClick || 0, __rr = window.__fcWidgetRect;
+              if (__rr && performance.now() - __lc < 500) {
+                var __g = [], __p1 = new Uint8Array(4), __cv2 = gl.canvas, __sx2 = W / (__cv2.clientWidth || W), __sy2 = H / (__cv2.clientHeight || H);
+                for (var __j = 0; __j < 4; __j++) for (var __i = 0; __i < 4; __i++) {
+                  var __x = Math.round((__rr[0] + __rr[2] * (__i + 0.5) / 4) * __sx2), __y = H - Math.round((__rr[1] + __rr[3] * (__j + 0.5) / 4) * __sy2);
+                  gl.readPixels(__x, __y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, __p1); __g.push(((__p1[0] >> 4) << 8) | ((__p1[1] >> 4) << 4) | (__p1[2] >> 4)); }
+                PLOG[PLOG.length - 1].grid = __g.map(function (v) { return v.toString(16).padStart(3, '0'); }).join(' ');
+              }
             } catch (e) { PLOG[PLOG.length - 1].lum = -1; }
           }
           // Present whenever we hold a complete frame -- which, after the first one, is
@@ -3819,16 +4801,133 @@ window.fcRunPy = fcRunPy;
           if (sDep) gl.enable(gl.DEPTH_TEST);
           if (sBl) gl.enable(gl.BLEND);
           window.__fcPresented = (window.__fcPresented || 0) + 1;
+          presentOtherWindows(gl);
         } catch (ex) { window.__fcPresentErr = String(ex); }
         inPresent = false;
       }
       // Both registries are closure-private, so a leak in them is unobservable from
       // outside -- which is how the REG one survived. One accessor makes it checkable:
       // open and close documents, call this, and the numbers must come back down.
+      // WHAT IS ACTUALLY IN THE FRAMEBUFFER THIS PASS PRESENTS?
+      //
+      // Four attempts at 'the viewport shows the previous document' have now died on the
+      // same gap: every instrument reported which framebuffer was chosen and how often it
+      // was copied, and none reported its CONTENT. Coin draws the new document into fb2,
+      // the bridge copies fb2, and the screen shows neither -- a set of facts that cannot
+      // all be true, so one of the measurements is describing something other than what I
+      // think it is. This reads the source directly and reports its dominant colours, which
+      // separates upstream (the framebuffer really holds the old scene) from downstream
+      // (it holds the new one and the copy or the quad loses it).
+      window.__fcProbeSrc = function () {
+        var e = BR.src;
+        if (!e || !e.gl || !e.fb) return { error: 'no source framebuffer picked yet' };
+        var sz = e.tex && e.tex.__fcSz;
+        if (!sz) return { error: 'source has no recorded size' };
+        // Through the context that DRAWS, not the one that created it, and only if the
+        // bind takes -- reading through the creating context is what made this report
+        // byte-identical content for three different documents.
+        var g = e.drewGl || e.gl, W = Math.min(sz[0], 640), H = Math.min(sz[1], 360);
+        try {
+          var prev = g.getParameter(g.READ_FRAMEBUFFER_BINDING);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, e.fb);
+          if (g.getParameter(g.READ_FRAMEBUFFER_BINDING) !== e.fb) {
+            g.bindFramebuffer(g.READ_FRAMEBUFFER, prev);
+            return { error: 'bind refused: this framebuffer belongs to another context' };
+          }
+          var buf = new Uint8Array(W * H * 4);
+          g.readPixels(0, 0, W, H, g.RGBA, g.UNSIGNED_BYTE, buf);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, prev);
+          var hist = {}, i, k;
+          for (i = 0; i < buf.length; i += 64) {
+            k = buf[i] + ',' + buf[i + 1] + ',' + buf[i + 2];
+            hist[k] = (hist[k] || 0) + 1;
+          }
+          var keys = Object.keys(hist).sort(function (a, b) { return hist[b] - hist[a]; });
+          return { size: [W, H], distinct: keys.length,
+                   top: keys.slice(0, 5).map(function (x) { return x + ' x' + hist[x]; }) };
+        } catch (err) { return { error: String(err).slice(0, 120) }; }
+      };
+      // A CONTEXT QT DESTROYED IS RELEASED HERE TOO. The glue calls this from
+      // GL.deleteContext. The browser reclaims a WebGL context only when nothing holds
+      // it, and REG/UPL/lastUi/lastBlit hold framebuffers and textures that hold the
+      // context: measured 2026-09-11, one live 1x1 context per closed document, forever,
+      // and Chrome evicts the oldest at 16 -- the visible view. Drop every reference.
+      window.__fcContextDeleted = function (gl) {
+        try {
+          var k, e, n = 0;
+          var ve = window.__fcVisibleFbo && REG[window.__fcVisibleFbo];
+          var visGone = !!(ve && (ve.gl === gl || ve.drewGl === gl));
+          for (k in REG) { e = REG[k]; if (e && (e.gl === gl || e.drewGl === gl)) { if (e.tex) e.tex.__fcDead = true; delete REG[k]; n++; } }
+          for (var i = UPL.length - 1; i >= 0; i--) { if (UPL[i] && UPL[i].__fcGl === gl) { UPL[i].__fcDead = true; UPL.splice(i, 1); } }
+          if (lastUi && lastUi.__fcGl === gl) lastUi = null;
+          if (lastBlit && lastBlit.gl === gl) lastBlit = null;
+          if (BR && BR.src && BR.src.gl === gl) BR.src = null;
+          if (BR && BR.gl === gl) { BR.gl = null; BR.tex = null; BR.buf = null; }
+          // The bridge canvas belongs to the source context; a closed view takes it along.
+          if (BR && BR.cv && gl.canvas === BR.cv) BR.cv = null;
+          try { delete gl.__fcPresProg; } catch (e2) {}
+          // And the 3D layer itself: renderScene published the rect and the visible
+          // framebuffer for the view that just died and nothing else ever resets them, so
+          // the pass kept compositing the last frame over the Start page after the document
+          // closed (reported 2026-09-11: 'frozen, still showing the engine block'). The next
+          // visible view republishes both on its first frame.
+          //
+          // ONLY when the dead context is the one behind the visible view. Every top-level
+          // Qt window has a context of its own -- the Preferences dialog included -- and
+          // clearing here on any deletion left the viewport black after that dialog closed:
+          // nothing had changed in the view, so Qt repainted nothing, and the page had no
+          // rect to composite (measured 2026-09-13: drawn stuck, rect null, 95% dark until
+          // the next mouse drag).
+          if (visGone) { window.__fcWidgetRect = null; window.__fcVisibleFbo = null; }
+          window.__fcCtxReleased = (window.__fcCtxReleased || 0) + 1;
+        } catch (e3) { window.__fcCtxReleaseErr = String(e3); }
+      };
+      // Diagnostic: RGBA of the current UI layer texture at canvas pixel (x, y), top-left
+      // origin. Reads through a scratch framebuffer on the UI texture's own context.
+      window.__fcUiPixel = function (x, y) {
+        try {
+          var ui = lastUi; if (!ui) return null;
+          var g = ui.__fcGl; if (!g) return null;
+          var fb = g.createFramebuffer(), prev = g.getParameter(g.READ_FRAMEBUFFER_BINDING);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, fb);
+          g.framebufferTexture2D(g.READ_FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, ui, 0);
+          var px = new Uint8Array(4); g.readPixels(x, (ui.__fcSz ? ui.__fcSz[1] : g.drawingBufferHeight) - 1 - y, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, prev); g.deleteFramebuffer(fb);
+          return { rgba: Array.from(px), size: ui.__fcSz || null, err: g.getError() };
+        } catch (e) { return { error: String(e) }; }
+      };
+      // Diagnostic: RGBA of the visible 3D view's colour texture at texture pixel (x, y),
+      // top-left origin of the VIEW (the texture is GL y-up; flipped here).
+      window.__fcWidgetPixel = function (x, y) {
+        try {
+          var e = window.__fcVisibleFbo && REG[window.__fcVisibleFbo]; if (!e || !e.tex) return null;
+          var g = e.gl; if (!g) return null;
+          var fb = g.createFramebuffer(), prev = g.getParameter(g.READ_FRAMEBUFFER_BINDING);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, fb);
+          g.framebufferTexture2D(g.READ_FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, e.tex, 0);
+          var h = window.__fcCoinH || 0;
+          var px = new Uint8Array(4); g.readPixels(x, h ? h - 1 - y : y, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px);
+          g.bindFramebuffer(g.READ_FRAMEBUFFER, prev); g.deleteFramebuffer(fb);
+          return { rgba: Array.from(px), size: [window.__fcCoinW || 0, h], err: g.getError() };
+        } catch (ex) { return { error: String(ex) }; }
+      };
       window.__fcPresentStats = function () {
-        var n = 0, k;
-        for (k in REG) { n++; }
-        return { reg: n, upl: UPL.length, presented: window.__fcPresented || 0 };
+        // The SIZES too. A count cannot tell you WHICH framebuffer the widget quad
+        // draws from, and picking the wrong one puts the wrong picture in the
+        // viewport with every other number in this pass still looking healthy.
+        var n = 0, k, fbs = [], e;
+        for (k in REG) { n++; e = REG[k];
+          // blitFrom AND the id, not just blitTo. The source stamp is what selects the
+          // framebuffer this pass presents, so a report that omits it cannot answer the
+          // one question that matters when the viewport shows the wrong document.
+          fbs.push({ id: k,
+                     sz: (e.tex && e.tex.__fcSz) || null,
+                     blitAge: e.blitTo ? Math.round(performance.now() - e.blitTo) : null,
+                     srcAge: e.blitFrom ? Math.round(performance.now() - e.blitFrom) : null,
+                     drewAge: e.drewAt ? Math.round(performance.now() - e.drewAt) : null,
+                     picked: (BR.src === e) }); }
+        return { reg: n, upl: UPL.length, presented: window.__fcPresented || 0,
+                 fbs: fbs, rect: window.__fcWidgetRect || null };
       };
       requestAnimationFrame(present);
       console.log('[fcweb] page present pass armed (threaded-Qt compose never executes its present)');
@@ -4034,7 +5133,8 @@ window.fcRunPy = fcRunPy;
   // These are plain files under play-gui/am/ COPYed into the image, so changing one is an
   // image rebuild (seconds) rather than a relink (~2 h).
   var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_install.py', 'fcweb_am_boot.py',
-                    'fcweb_share.py', 'fcweb_share.ui'];   // shared sessions: the FreeCAD-side half + its preferences page
+                    'fcweb_share.py', 'fcweb_share.ui',    // shared sessions: the FreeCAD-side half + its preferences page
+                    'fcweb_asyncio.py'];                    // asyncio without socketpair (CAM's asset manager runs on asyncio.run)
   var amOverlayDone = false;
   async function installAmOverlay(){
     if(amOverlayDone || !ready()) return;

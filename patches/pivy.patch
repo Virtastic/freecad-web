@@ -1,0 +1,44 @@
+diff --git a/interfaces/pivy_common_typemaps.i b/interfaces/pivy_common_typemaps.i
+--- a/interfaces/pivy_common_typemaps.i
++++ b/interfaces/pivy_common_typemaps.i
+@@ -17,6 +17,8 @@
+ /* header include needed to let nodekit extensions find the SbTime header */
+ %{
+ #include <Inventor/SbTime.h>
++#include <map>
++#include <string>
+ 
+ #if (PY_VERSION_HEX < 0x02050000)
+ /* Py_ssize_t needed for Python 2.5 compatibility, but isn't defined
+@@ -40,6 +42,22 @@
+    * e.g. "SoSeparator" becomes "SoSeparator *" - so that SWIG_TypeQuery()
+    * can do its job.
+    */
++  /*
++   * FCWEB: remember the answer per type name. The first query below asks for
++   * "<TypeName> *" ("SFVec3f *"), which no module has, and SWIG's own cache only
++   * remembers hits -- so every autocast (every getField, getChild, createInstance
++   * from Python) paid a linear scan of every type table before the 'So' retry
++   * succeeded: ~50 us a call on wasm, 25,000 calls and 1.35 s in one BIM document
++   * open. Type tables only grow, so a remembered hit stays right.
++   */
++  static std::map<std::string, swig_type_info *> fcweb_types;
++  const std::string fcweb_key(type_name, (size_t)type_len);
++  {
++    std::map<std::string, swig_type_info *>::const_iterator it = fcweb_types.find(fcweb_key);
++    if (it != fcweb_types.end()) { swig_type = it->second; }
++  }
++
++  if (!swig_type) {
+   if (!(ptr_type = (char*)malloc(type_len+3))) { SWIG_fail; }
+ 
+   memset(ptr_type, 0, type_len+3);
+@@ -62,6 +80,8 @@
+   }
+ 
+   free(ptr_type);
++  fcweb_types[fcweb_key] = swig_type;
++  }
+ 
+   SWIG_ConvertPtr(obj, (void**)&cast_obj, NULL, SWIG_POINTER_EXCEPTION | 0);
+   if (SWIG_arg_fail(1)) { SWIG_fail; }

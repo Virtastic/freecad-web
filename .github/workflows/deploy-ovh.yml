@@ -32,7 +32,11 @@ on:
 # To unfreeze: delete FCWEB_PINNED_RELEASE and the fallback returns to /releases/latest.
 # A workflow_dispatch release_tag still overrides it either way.
 env:
-  FCWEB_PINNED_RELEASE: v1.0.0
+  # Moved to the wasm64 release on 2026-09-10. The pin stays -- a half-converted publish
+  # must still not become production on the next push -- but at v1.0.0 it meant every
+  # push to ovhcloud put the wasm32 build back on the site for the minutes until an
+  # explicit-tag dispatch caught up. That happened twice on 2026-09-10.
+  FCWEB_PINNED_RELEASE: build-20260910-wasm64
 
 concurrency:
   group: deploy-ovh-freecad

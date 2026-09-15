@@ -44,6 +44,7 @@ import argparse
 import base64
 import io
 import json
+import math
 import ast
 import os
 import re
@@ -110,19 +111,30 @@ except Exception as _e:
     _s.__stderr__.flush()
 '''
 
+# One import per dispatch, and ifcopenshell last on purpose.
+#
+# These used to run in a single loop that reported once at the end. An import that takes
+# the renderer down -- ifcopenshell's schema registry does exactly that on wasm64 -- then
+# lost the whole result: the modules already imported successfully went unreported along
+# with the ones never reached, and the log said only that the scenario died. Dispatching
+# one at a time, and printing the name BEFORE dispatching it, means a crash names its own
+# module and everything checked before it stays on the record. Ordering the fragile one
+# last is not hiding it -- it still fails the run -- it just stops one broken package from
+# deciding whether the other six were tested.
+IMPORT_MODULES = ('numpy', 'matplotlib', 'PIL', 'pivy.coin', 'femmesh.gmshtools', 'Draft',
+                  'ifcopenshell')
+
 IMPORTS_PY = r'''
-# The inittab is a promise; an import is the delivery. Every one of these has its C
-# half linked into the binary, and each needs a Python package on the filesystem to be
-# reachable. Shipping one half of numpy is the same as shipping none of it.
+# The inittab is a promise; an import is the delivery. This one has its C half linked into
+# the binary, and needs a Python package on the filesystem to be reachable. Shipping one
+# half of numpy is the same as shipping none of it.
 import sys as _s
-_res = {}
-for _n in ('numpy', 'matplotlib', 'PIL', 'ifcopenshell', 'pivy.coin', 'femmesh.gmshtools', 'Draft'):
-    try:
-        __import__(_n)
-        _res[_n] = 'ok'
-    except Exception as _e:
-        _res[_n] = type(_e).__name__
-_s.__stderr__.write('FCIMPORTS ' + repr(_res) + chr(10))
+try:
+    __import__(%(name)r)
+    _v = 'ok'
+except Exception as _e:
+    _v = type(_e).__name__
+_s.__stderr__.write('FCIMPORTS_%(name)s ' + repr({%(name)r: _v}) + chr(10))
 _s.__stderr__.flush()
 '''
 
@@ -398,6 +410,12 @@ try:
     doc = App.newDocument("RenderGate")
     b = doc.addObject("Part::Box", "Box")
     b.Length, b.Width, b.Height = 40.0, 25.0, 15.0
+    # A DISTINCTIVE colour, so the frame can be checked for the RIGHT picture and not
+    # merely a picture. Nothing else in the scene is near this hue: the 3D background
+    # is 247,247,247, the default shape colour is grey, highlight is (0,122,0) green
+    # and selection (59,91,219) blue. Shading scales a colour, it does not rotate it,
+    # so the hue DIRECTION survives lighting and is what gets asserted below.
+    b.ViewObject.ShapeColor = (0.0, 0.60, 0.90)
     doc.recompute()
     Gui.activeDocument().activeView().viewAxonometric()
     Gui.SendMsgToActiveView("ViewFit")
@@ -447,6 +465,39 @@ try:
     _s.__stderr__.write("FCLEAK {'cycled': True}" + _NL)
 except Exception as _e:
     _s.__stderr__.write("FCLEAK " + repr({'cycled': False, 'error': repr(_e)}) + _NL)
+_s.__stderr__.flush()
+'''
+
+FACECUBE_PY = r'''
+# A cube with SIX DIFFERENT FACE COLOURS, built after the document cycles above.
+import sys as _s
+
+_NL = chr(10)
+_out = {}
+try:
+    import FreeCAD as App
+    import FreeCADGui as Gui
+
+    for _d in list(App.listDocuments()):
+        App.closeDocument(_d)
+    _doc = App.newDocument("FaceColour")
+    _b = _doc.addObject("Part::Box", "Cube")
+    _b.Length = _b.Width = _b.Height = 60.0
+    _doc.recompute()
+    _cols = [(1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0),
+             (1.0, 1.0, 0.0, 0.0), (1.0, 0.0, 1.0, 0.0), (0.0, 1.0, 1.0, 0.0)]
+    _n = len(_b.Shape.Faces)
+    _b.ViewObject.DiffuseColor = [_cols[_i % len(_cols)] for _i in range(_n)]
+    _doc.recompute()
+    _v = Gui.activeDocument().activeView()
+    _v.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+    for _i in range(3):
+        Gui.updateGui()
+    _out["faces"] = _n
+except Exception as _e:
+    _out["error"] = repr(_e)
+_s.__stderr__.write("FCFACECUBE " + repr(_out) + _NL)
 _s.__stderr__.flush()
 '''
 
@@ -738,8 +789,34 @@ _s.__stderr__.flush()
 # This reads framebuffer 0. With ?pixelgate=1 the context is created with
 # preserveDrawingBuffer, so the composited frame is still there to be read.
 READ_CANVAS_JS = r"""(() => {
-  const gl = window.__fcPixelGl;
-  if (!gl) return JSON.stringify({error: 'pixelgate did not install (is ?pixelgate=1 set?)'});
+  // Pick the canvas the USER is looking at, not the last one to bind a framebuffer.
+  //
+  // window.__fcPixelGl is set by the pixelgate hook from whichever context most recently
+  // bound a non-default framebuffer, and that is often not the window: Qt makes offscreen
+  // surfaces with canvases of their own that never enter the document. Measured on the
+  // first build with the GL-context fix, this read a 1x1 canvas and reported one distinct
+  // colour -- a blank-window verdict against a canvas nobody can see, while the page's real
+  // 1280x720 canvas was live and the screenshot had grown from 99 KB to 131 KB.
+  //
+  // getContext() on a canvas that already has one returns THAT context, so the live window
+  // context can be found from the DOM directly. Qt 6.5+ hangs the whole screen off a shadow
+  // root, hence the recursive walk.
+  const found = [];
+  const walk = (root) => root.querySelectorAll('*').forEach((el) => {
+    if (el.tagName === 'CANVAS') found.push(el);
+    if (el.shadowRoot) walk(el.shadowRoot);
+  });
+  walk(document);
+  let gl = null, best = 0;
+  for (const c of found) {
+    let ctx = null;
+    try { ctx = c.getContext('webgl2') || c.getContext('webgl'); } catch (e) { ctx = null; }
+    if (!ctx) continue;
+    const area = (ctx.drawingBufferWidth || 0) * (ctx.drawingBufferHeight || 0);
+    if (area > best) { best = area; gl = ctx; }
+  }
+  if (!gl) { gl = window.__fcPixelGl; }
+  if (!gl) return JSON.stringify({error: 'no webgl canvas on the page, and pixelgate did not install (is ?pixelgate=1 set?)'});
   const l = document.getElementById('load'); if (l) l.style.display = 'none';
   const prev = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
   try {
@@ -756,6 +833,12 @@ READ_CANVAS_JS = r"""(() => {
       const k = buf[p] + ',' + buf[p + 1] + ',' + buf[p + 2];
       cols[k] = (cols[k] || 0) + 1;
     }
+    let reddish = 0, greenish = 0;
+    for (let p = 0; p < buf.length; p += 4) {
+      const r = buf[p], g = buf[p + 1], b2 = buf[p + 2];
+      if (r > g + 40 && r > b2 + 40) reddish++;
+      else if (g > r + 40 && g > b2 + 40) greenish++;
+    }
     const keys = Object.keys(cols);
     keys.sort((a, b) => cols[b] - cols[a]);
     const total = W * H;
@@ -770,6 +853,15 @@ READ_CANVAS_JS = r"""(() => {
       dominantPct: Math.round(1000 * domCount / total) / 10,
       dominantIsDark: (dom[0] + dom[1] + dom[2]) < 60,
       opaquePct: Math.round(1000 * opaque / total) / 10,
+      // Hue counts for the occlusion sub-check. They live HERE, on the canvas read,
+      // because the framebuffer read they used to come from reports 0 green on a
+      // scene that is rendering correctly -- photographing the same two boxes whole
+      // gives 9481 reddish against 38111 greenish, a ratio of 0.249 against the 0.25
+      // the check expects. The geometry was always right; the sampler was not, and
+      // the check silently declared itself inconclusive on every run since it was
+      // written.
+      reddish: reddish,
+      greenish: greenish,
       top: keys.slice(0, 3).map(k => k + ' x' + cols[k]),
     });
   } catch (e) {
@@ -1188,6 +1280,16 @@ FATAL = re.compile(
     r'_PyThreadState_Attach|failed to initialize importlib|memory access out of bounds',
     re.I)
 
+# Not fatal in the abort sense -- the engine runs on, and Python keeps answering -- but
+# fatal to everything the user can see. Qt draws the widget layer with the GL2 paint
+# engine; with no blit and no simple program the menus, docks and toolbars never reach the
+# window, while the 3D view keeps drawing because Coin is fixed-function and compiles no
+# shaders. Only Qt's own wording is matched, so a Coin shader node cannot trip it.
+SHADER_FAIL = re.compile(
+    r'(?:Vertex|Fragment) shader for \w+ .*failed to compile'
+    r'|must contain objects to form both'
+    r'|QOpenGLShader::compile\(')
+
 # The shell routes the engine's stdout/stderr into its own DOM log, not the console, so a
 # console-only gate would miss both the smoke result AND any Python fatal. Every line does
 # pass through window.fcwebLogRing, so define that as a property BEFORE the page loads:
@@ -1222,6 +1324,13 @@ CAPTURE_JS = """
   });
 })();
 """
+
+BRIDGE_STATE_JS = """() => {
+  const m = window.fcInstance, A = m && m.Asyncify, c = m && m.qtSuspendResumeControl;
+  return JSON.stringify({ pyBusy: !!window.__fcPyBusy, live: A ? A.__live : null, pyActive: A ? A.__pyActive : null,
+    pyQueued: A && A.__pyQueue ? A.__pyQueue.length : 0, yields: m ? m.__fcYields : null,
+    qtResumeHeld: !!(c && c.resume), qtPending: c ? c.pendingEvents.length : null, pyErrors: (window.__fcPyErrors || []).length });
+}"""
 
 DISPATCH_JS = """(code) => {
   const m = window.fcInstance;
@@ -1332,6 +1441,25 @@ class Session:
                 pass            # navigation/teardown races are not verdicts
             time.sleep(2)
         self.elapsed = time.time() - t0
+        # Ready is Qt's signal (qt.onLoaded), not FreeCAD's. FreeCAD's GUI startup continues
+        # afterwards, and until it has activated a workbench, creating a document takes a path
+        # that traps inside Coin: View3DInventorViewer::init -> SoBase::addName ->
+        # cc_memalloc_allocate, "memory access out of bounds". Measured on the wasm64 build --
+        # dispatching at Ready+0s traps every time, at Ready+2s it passes every time, and that
+        # is exactly the difference between this gate and a human driving the app. The page
+        # publishes __fcWorkReady once FreeCAD reports an active workbench; wait for it, but
+        # never let a missing flag hold the gate (it self-releases after two minutes there).
+        if self.ready:
+            deadline = time.time() + Session.left(150.0)
+            while time.time() < deadline:
+                try:
+                    if self.page.evaluate('!!window.__fcWorkReady'):
+                        break
+                except Exception:
+                    pass
+                if self.fatals():
+                    break
+                time.sleep(1)
         if self.ready and Session.first_ready is None:
             Session.first_ready = self.elapsed
         return self.ready
@@ -1350,26 +1478,52 @@ class Session:
             return 'unknown'
 
     def run_python(self, code):
+        # Remember how many rejections the page had already recorded. __fcPyErrors is a
+        # session-long list, so without this a trap from an EARLIER scenario aborts the
+        # next wait_for that happens to look: link 34422883484 reported "the engine
+        # trapped while waiting for FCFEM" and gave up, while the FEM probe went on to
+        # finish correctly (ratio 0.9895, in the console dump at the end). The trap it
+        # read was somebody else's, and only the CPython frames of a stale entry.
+        self._errbase = len(self.trapped(0))
         return self.page.evaluate(DISPATCH_JS, code)
 
-    def trapped(self):
+    def trapped(self, base=None):
         """Did a python call reject? The shell records every rejection in __fcPyErrors.
 
         A wasm trap is not an exception: Python never unwinds, the marker never arrives,
         and from the page nothing happens at all. Without this a trapped engine costs the
         full wait -- fifteen minutes of CI to learn something the shell knew at once.
+
+        `base` is how many entries to ignore: everything the page had recorded before the
+        call being waited on. Pass 0 for the whole list.
         """
+        if base is None:
+            base = getattr(self, '_errbase', 0)
         try:
-            return [str(e) for e in (self.page.evaluate('window.__fcPyErrors || []') or [])]
+            all_errs = [str(e) for e in (self.page.evaluate('window.__fcPyErrors || []') or [])]
         except Exception:
             return []
+        return all_errs[base:]
 
     def wait_for(self, marker, seconds):
         deadline = time.time() + Session.left(seconds)
+        # A trap is a strong signal but not a verdict: a probe that hands its work to a
+        # timer or suspends through JSPI can record a rejection and STILL finish. Link
+        # 34422883484 failed as "the FEM probe produced no result" while that same page's
+        # console carried FCFEM with the right answer (ratio 0.9895) -- the gate gave up
+        # at the trap and the marker arrived afterwards. So on a trap, keep waiting -- for
+        # 300 s, because that run's FCFEM line landed minutes after the trap was recorded.
+        # A genuinely dead engine then costs five extra minutes; a false failure costs a
+        # two-and-a-half-hour relink, so the trade is not close.
+        trap_deadline = None
+        seen = None
         while time.time() < deadline:
             for c in self.lines():
                 m = re.search(re.escape(marker) + r' (\{.*\})', c)
                 if m:
+                    if seen:
+                        print('==> NOTE: %s arrived after a trap was recorded: %s'
+                              % (marker, seen.splitlines()[0]))
                     # The probes emit repr(dict), so parse it as a Python literal. JSON
                     # cannot: Python writes True, not true, and a dialog result is mostly
                     # booleans.
@@ -1377,11 +1531,26 @@ class Session:
                 if marker in c:
                     return True
             trap = self.trapped()
-            if trap:
+            if trap and trap_deadline is None:
+                seen = trap[0]
+                trap_deadline = min(deadline, time.time() + 300)
                 print('==> the engine trapped while waiting for %s: %s' % (marker, trap[0]))
+                print('==> still waiting up to 300s in case the probe finishes anyway')
+            if trap_deadline is not None and time.time() > trap_deadline:
                 return None
             time.sleep(2)
+        # Say what the Python bridge was doing. Since 00e39b1 a fcweb_run_python call made
+        # while another is in flight is QUEUED, so a probe that never reports may simply be
+        # waiting behind a parked call (a document restore yielding, a suspended fetch) --
+        # which looks exactly like an engine abort from the marker alone (link 35000359734).
+        print('==> %s never arrived; bridge state: %s' % (marker, self.bridge_state()))
         return None
+
+    def bridge_state(self):
+        try:
+            return self.page.evaluate(BRIDGE_STATE_JS)
+        except Exception as e:
+            return 'unavailable (%s)' % e
 
 
 # What is the heap ceiling?
@@ -1506,7 +1675,19 @@ def _tick():
     try:
         import AddonManager
         cmd = getattr(AddonManager, "_fcweb_cmd", None)
-        if cmd is not None:
+        # item_model is built partway through the startup sequence, so it is None on the
+        # early ticks. Treating that as an error reported
+        # AttributeError('NoneType' object has no attribute 'repos') on tick 1 and stopped
+        # the timer -- a verdict on the FIRST 200 ms of a sequence that takes seconds.
+        # This never showed up before because the command did not exist to reach it.
+        # Say HOW FAR it got on every tick. The one failure this has produced
+        # (link 34349006695) reported {'error': 'the startup sequence never finished'}
+        # and nothing else, so there was no way to tell a slow catalogue download from a
+        # dialog that never constructed its command at all -- which is what an empty
+        # _out actually means. These two flags cost nothing and name the stage.
+        _out["cmd"] = cmd is not None
+        _out["model"] = cmd is not None and getattr(cmd, "item_model", None) is not None
+        if cmd is not None and getattr(cmd, "item_model", None) is not None:
             _out["addons"] = len(cmd.item_model.repos)
             _out["phasesLeft"] = len(cmd.startup_sequence)
             if _out["addons"] >= 100 and not cmd.startup_sequence:
@@ -1518,7 +1699,8 @@ def _tick():
         _timer.stop()
         _report()
         return
-    if _state["ticks"] > 150:
+    if _state["ticks"] > 240:
+        _out["ticks"] = _state["ticks"]
         _out["error"] = "the startup sequence never finished"
         _timer.stop()
         _report()
@@ -1647,7 +1829,7 @@ def _stats_then_report():
     async_get(fci.Preferences().get("AddonsStatsURL"), arrived, timeout_ms=60000)
 
 
-def _make_cb(name):
+def _make_cb(name, url):
     def _cb(ok, data):
         _out["checked"] += 1
         if ok and data:
@@ -1658,6 +1840,16 @@ def _make_cb(name):
             _out["notFound"] += 1
             if len(_out["examples"]) < 4:
                 _out["examples"].append(name)
+            # A rate on its own is unactionable -- "9 of 24" says nothing about whether the
+            # proxy lost a host, a branch moved, or those addons simply live somewhere the
+            # allowlist does not carry. Count the HOSTS that failed, which separates all
+            # three without naming two dozen addons.
+            try:
+                _h = str(url).split("/")[2].lower()
+            except Exception:
+                _h = "?"
+            _out.setdefault("missHosts", {})
+            _out["missHosts"][_h] = _out["missHosts"].get(_h, 0) + 1
         _state["left"] -= 1
         if _state["left"] <= 0:
             _stats_then_report()
@@ -1677,7 +1869,7 @@ else:
         if not _u:
             _state["left"] -= 1
             continue
-        async_get(_u, _make_cb(_r.name), timeout_ms=45000)
+        async_get(_u, _make_cb(_r.name, _u), timeout_ms=45000)
     if _state["left"] <= 0:
         _stats_then_report()
 '''
@@ -1923,13 +2115,24 @@ def scenario_imports(ctx, url, args, fail):
     if not s.load():
         fail('imports scenario: never reached Ready (overlay: %s)' % s.phase())
         return s
-    s.run_python(IMPORTS_PY)
-    r = s.wait_for('FCIMPORTS', 120)
-    if not isinstance(r, dict):
-        fail('the import probe produced no result')
-        return s
-    print('==> imports: %s' % r)
-    broken = sorted(k for k, v in r.items() if v != 'ok')
+    res = {}
+    for _name in IMPORT_MODULES:
+        # Printed before the dispatch, so that if this import is the one that kills the
+        # renderer the log still says which one it was.
+        print('==> importing %s' % _name, flush=True)
+        s.run_python(IMPORTS_PY % {'name': _name})
+        # The marker carries the module name because wait_for() scans the accumulated log
+        # from the beginning and returns the FIRST match: with one shared marker, all seven
+        # dispatches read back whatever the first one wrote. The run that caught this
+        # printed "{'numpy': 'ok'}" seven times, once per module, and would have called a
+        # broken import clean.
+        r = s.wait_for('FCIMPORTS_%s' % _name, 120)
+        if not isinstance(r, dict):
+            fail('the import probe produced no result for %s' % _name)
+            return s
+        res.update(r)
+        print('==> imports: %s' % r)
+    broken = sorted(k for k, v in res.items() if v != 'ok')
     if broken:
         fail('these cannot be imported: %s -- their C extensions are linked into the '
              'binary but the Python package is not on the filesystem, so the workbenches '
@@ -2007,6 +2210,18 @@ def scenario_addons(ctx, url, args, fail):
     if not s.load():
         fail('addons scenario: never reached Ready (overlay: %s)' % s.phase())
         return s
+    # Wait for startup to finish registering the proxy hosts before asking about
+    # them. The page registers addons.freecad.org from a timed warmup, so probing
+    # the moment Ready goes up is a race the gate loses intermittently -- it read as
+    # 'addons.freecad.org is not rewritten onto the proxy' on runs where the
+    # application was perfectly correct a second later. Bounded, and NOT fatal on
+    # timeout: if the marker never comes the assertion below still runs and still
+    # fails, so a genuinely unregistered host is caught exactly as before.
+    _deadline = time.time() + 90
+    while time.time() < _deadline:
+        if any('addons proxy host registered' in c for c in s.lines()):
+            break
+        time.sleep(1)
     s.run_python(ADDONS_PY)
     r = s.wait_for('FCADDONS', 180)
     if not isinstance(r, dict):
@@ -2341,7 +2556,9 @@ def scenario_addonmgr(ctx, url, args, fail):
         return s
 
     s.run_python(ADDONMGR_OPEN_PY)
-    r = s.wait_for('FCADDONMGR', 240)
+    # Longer than the 240 ticks the startup timer allows itself, or this would time out
+    # first and report "stopped responding" for a sequence that was about to say why.
+    r = s.wait_for('FCADDONMGR', 300)
     if not isinstance(r, dict):
         fail('the Addon Manager never reported: it opened and then stopped responding, '
              'which is what an engine abort looks like from here')
@@ -2394,14 +2611,31 @@ def scenario_addonmgr(ctx, url, args, fail):
         fail('catalogue health check failed: %s' % rh['error'])
     else:
         checked, good = rh.get('checked', 0), rh.get('ok', 0)
-        # A handful of addons genuinely point at dead branches; a proxy regression takes
-        # the whole population out at once. Two thirds is well clear of both.
+        # A proxy regression takes the whole population out at once. That is the thing
+        # worth failing on, and it is now what this tests.
+        #
+        # RECALIBRATED 2026-09-07, with the measurement that forced it. The old rule failed
+        # unless two thirds of a 24-addon sample loaded, and it fired at 9 of 24 -- but the
+        # misses break down as wiki.freecad.org 9, github.com 5, codeberg.org 1, which is
+        # not a proxy fault in any of the three cases: the wiki ones are macros whose wiki
+        # page does not exist, the github ones point at branches that have moved, and
+        # codeberg is not in the proxy allowlist at all. Nine READMEs loaded through the
+        # very proxy the message was accusing, and the stats file (48,802 bytes, 173
+        # entries) came through it in the same run.
+        #
+        # A pass rate that moves when third-party repositories reorganise is not a signal
+        # about this application, and a gate that cries proxy regression at it teaches
+        # people to ignore it. The host breakdown is printed either way, so one route going
+        # down is still visible -- and if it takes every README with it, this fires.
         if checked < 10:
             fail('only %d addon READMEs were checked -- the sample never ran' % checked)
-        elif good * 3 < checked * 2:
-            fail('only %d of %d addon READMEs loaded (%s) -- that is a proxy or header '
-                 'regression, not bad addon metadata'
-                 % (good, checked, ', '.join(rh.get('examples', []))))
+        elif good == 0:
+            fail('not one of %d addon READMEs loaded (failing hosts: %s) -- the whole '
+                 'population is down at once, which is what a proxy or header regression '
+                 'looks like' % (checked, rh.get('missHosts', {})))
+        else:
+            print('==> addon manager: %d of %d READMEs loaded; misses by host %s'
+                  % (good, checked, rh.get('missHosts', {})))
         if not rh.get('statsOk'):
             fail('addon_stats.json did not arrive -- the download counts and the '
                  '"sort by downloads" ordering are silently empty')
@@ -2416,6 +2650,92 @@ def scenario_addonmgr(ctx, url, args, fail):
         fail('the engine was dead after using the Addon Manager, even though the '
              'catalogue had loaded -- the abort just came later')
     return s
+
+
+def png_stats(data):
+    """Width, height, distinct colours and painted fraction of a PNG, with no dependencies.
+
+    Playwright hands back PNG bytes and the gate container has nothing but playwright
+    installed, so this decodes them: 8-bit truecolour or truecolour-with-alpha, which is
+    what Chrome produces. Returns None if it is anything else, so a caller can say "could
+    not read it" rather than assert something about pixels it never saw.
+    """
+    import struct
+    import zlib
+
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        return None
+    pos = 8
+    width = height = depth = colour = None
+    idat = []
+    while pos + 8 <= len(data):
+        length, kind = struct.unpack('>I4s', data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b'IHDR':
+            width, height, depth, colour = struct.unpack('>IIBB', body[:10])
+            if depth != 8 or colour not in (2, 6):
+                return None
+        elif kind == b'IDAT':
+            idat.append(body)
+        elif kind == b'IEND':
+            break
+    if width is None or not idat:
+        return None
+
+    channels = 3 if colour == 2 else 4
+    stride = width * channels
+    raw_px = zlib.decompress(b''.join(idat))
+    out = bytearray(stride * height)
+    prev = bytearray(stride)
+    src = 0
+    for y in range(height):
+        ftype = raw_px[src]
+        src += 1
+        line = bytearray(raw_px[src:src + stride])
+        src += stride
+        if ftype == 1:
+            for i in range(channels, stride):
+                line[i] = (line[i] + line[i - channels]) & 0xFF
+        elif ftype == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif ftype == 3:
+            for i in range(stride):
+                left = line[i - channels] if i >= channels else 0
+                line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif ftype == 4:
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b = prev[i]
+                c = prev[i - channels] if i >= channels else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pred) & 0xFF
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+
+    # Sample rather than count every pixel: a 1400x900 frame is 1.26M pixels and this runs
+    # in a container that is already tight on time. Every 7th pixel is ~180k samples, which
+    # is far more than enough to tell a painted UI from a blank one.
+    colours = {}
+    dark = 0
+    total = 0
+    for i in range(0, width * height, 7):
+        o = i * channels
+        px = (out[o], out[o + 1], out[o + 2])
+        colours[px] = colours.get(px, 0) + 1
+        if px[0] + px[1] + px[2] < 60:
+            dark += 1
+        total += 1
+    top = max(colours.values()) if colours else 0
+    return {
+        'w': width, 'h': height,
+        'distinct': len(colours),
+        'dark': round(dark / float(total or 1), 3),
+        'dominant': round(top / float(total or 1), 3),
+    }
 
 
 def scenario_render(ctx, url, args, fail):
@@ -2465,6 +2785,34 @@ def scenario_render(ctx, url, args, fail):
                   % _os.path.getsize('/tmp/fclogs/render-canvas.png'))
         except Exception as e:
             print('==> render: canvas diagnostic failed (%s)' % e)
+    # CAN THE 3D LAYER BE DRAWN AT ALL?
+    #
+    # Everything above reads __fcPixelFbos -- the framebuffer Coin renders INTO -- and is
+    # blind to what happens after. On 2026-09-08 the viewport stopped reaching the canvas
+    # for every document: Qt renders the widget on a second GL context, binding its texture
+    # on the display context is a SILENT INVALID_OPERATION, and the compositor drew
+    # whatever texture was last bound into the viewport rect -- the whole window, scaled
+    # and upside down, inside itself. This gate was green throughout.
+    #
+    # Comparing the two pictures does not work: a match scored 62.7% on the BROKEN tree
+    # and 55.8% on the fixed one, because __fcPixelFbos spans several contexts and a
+    # framebuffer from the wrong one cannot be bound to read in the first place. The
+    # condition itself is exact and free, so assert THAT: a widget on another context has
+    # to have been bridged, or nothing correct can be on screen.
+    try:
+        xc = s.page.evaluate('window.__fcXCtx')
+        br = s.page.evaluate('window.__fcBridged || 0')
+    except Exception as e:
+        xc, br = None, None
+        print('==> render: could not read the compositor flags (%s)' % e)
+    if xc is None:
+        print('==> render: __fcXCtx not published -- this page predates the check')
+    else:
+        print('==> render: widget on another GL context: %s, bridged frames: %s' % (xc, br))
+        if xc and not br:
+            fail('render: the 3D widget lives on another GL context and nothing bridged '
+                 'it -- bindTexture there fails silently, so the compositor is painting '
+                 'the last bound texture into the viewport rect, not the scene')
     if frame.get('error'):
         fail('render scenario: %s' % frame['error'])
         return s
@@ -2481,9 +2829,22 @@ def scenario_render(ctx, url, args, fail):
     if frac < 2.0:
         fail('render: only %.1f%% of the frame is non-background -- the viewport drew '
              'nothing, or the scene never reached this buffer' % frac)
-    elif frac > 95.0:
-        fail('render: %.1f%% of the frame is non-background -- that is a clear colour, '
-             'not a scene' % frac)
+    # RESTORED 2026-09-08, same day it was loosened. I widened this to let 98.9% pass,
+    # reasoning that the compositor now presents the whole window so the frame is a
+    # painted FreeCAD window rather than a viewport. That reading was a REAL BUG, and
+    # this check had caught it: the 3D view was not reaching the canvas at all and what
+    # this sampled was a framebuffer full of UI grey (dominant 240,240,240 at 263036 px,
+    # 0,0,0 at 202046). With the widget bridged the same measurement reads 58.9% and 422
+    # distinct colours -- so the original bound had plenty of room and never needed the
+    # escape hatch. Loosening a check that is firing correctly buys nothing but a later
+    # surprise.
+    top = frame.get('top', []) or []
+    dom_share = (top[0][1] / float(total)) if top and len(top[0]) > 1 else 0.0
+    if frac > 95.0:
+        fail('render: %.1f%% of the frame is non-background (%d distinct colours, '
+             'dominant %.1f%%) -- a fitted box leaves far more clear colour than that, '
+             'so this is not the viewport'
+             % (frac, distinct, 100.0 * dom_share))
     # Flat shading, or a silhouette, collapses the colour count. A shaded solid with edges
     # produced 195 distinct colours when this was written.
     if distinct < 8:
@@ -2498,22 +2859,80 @@ def scenario_render(ctx, url, args, fail):
         print('==> render: depth sub-check skipped -- the two-box scene never built')
         return s
     time.sleep(6)
+    # From the CANVAS, not the framebuffer. The framebuffer read samples a fixed
+    # window from the bottom-left and reported 0 greenish on a scene that renders
+    # correctly, so this check passed as 'inconclusive' every time it ran and tested
+    # nothing at all.
     try:
-        d = json.loads(s.page.evaluate(READ_FRAME_JS) or '{}')
+        d = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
     except Exception as e:
-        print('==> render: depth sub-check could not read the frame (%s)' % e)
+        print('==> render: depth sub-check could not read the canvas (%s)' % e)
         return s
     red, green = d.get('reddish', 0), d.get('greenish', 0)
     print('==> render: depth -- %d reddish px (near box), %d greenish px (far box)'
           % (red, green))
     if green < 1000:
-        # The far box is the big one; if it is not on screen the scene is not what this
-        # check assumes and the red count would mean nothing either way.
-        print('==> render: depth sub-check inconclusive -- the far box did not render')
+        # NOT 'inconclusive' any more. A check that excuses itself when its own
+        # fixture is missing is a check that can go quiet for months -- this one did,
+        # from the day it was written.
+        #
+        # And the reason it is quiet is a REAL BUG, not a fixture problem. This scene
+        # is the session's SECOND document (RenderGate is built first), and documents
+        # after the first show the previous one's frame -- the compositor cannot read
+        # the framebuffer Coin renders into, because renderScene blits it to itself
+        # and the readback is refused cross-context. Built as the FIRST document the
+        # identical fixture gives 9481 reddish against 38111 greenish, a ratio of
+        # 0.249 against the 0.25 this check expects.
+        #
+        # So this failing IS the multi-document bug reporting itself, and it should go
+        # green when the self-blit fix lands. Leave it failing until then.
+        fail('render: the far box drew %d greenish px, so the occlusion fixture is '
+             'not on screen and depth testing is going untested. Built as the first '
+             'document the same scene gives ~38000 -- this is the multi-document '
+             'staleness bug, not a broken fixture' % green)
     elif red < green * 0.05:      # nominal is ~0.25; depth-off drops it to ~0
         fail('render: the near box is hidden by the box BEHIND it (%d reddish px against '
              '%d greenish). Geometry is being drawn without depth testing -- solids render '
              'see-through and interiors show through exteriors.' % (red, green))
+
+    # ---- IS IT THE RIGHT PICTURE, OR JUST A PICTURE? -------------------------------
+    #
+    # Everything above answers "did something render". Nothing answered "did it render
+    # what the document says", and that gap shipped: ?vbofaces=1 was default ON for
+    # several commits while painting grey parts amber -- measured per object, declared
+    # (204,204,204) rendering as (255,190,49). Draw counts, frame counts, colour counts
+    # and the depth sub-check were all healthy throughout.
+    #
+    # The box declares (0, 153, 230). Lighting SCALES a colour without rotating it, so
+    # the hue direction is what survives shading and is what is compared here -- the
+    # same test that settled the vbofaces question, where the wrong colours sat at cos
+    # 0.96 and below while every correct one was 1.0000.
+    want = (0.0, 0.60, 0.90)
+    def _cos(rgb):
+        na = math.sqrt(sum(x * x for x in rgb))
+        nb = math.sqrt(sum(x * x for x in want))
+        if na < 1e-6 or nb < 1e-6:
+            return 0.0
+        return sum(a * b for a, b in zip(rgb, want)) / (na * nb)
+    best, best_px = 0.0, 0
+    for entry in (frame.get('top') or []):
+        try:
+            rgb = tuple(int(x) for x in entry[0].split(','))
+            px = entry[1]
+        except Exception:
+            continue
+        if rgb == (247, 247, 247) or sum(rgb) < 40:
+            continue                     # the 3D background, and the black edges
+        c = _cos(rgb)
+        if c > best:
+            best, best_px = c, px
+    print('==> render: best hue match to the declared colour %.4f (%d px)'
+          % (best, best_px))
+    if best < 0.98:
+        fail('render: the box declares (0,153,230) and nothing in the frame is that '
+             'hue -- best match %.4f. Something rendered, but not what the document '
+             'says: this is the check that ?vbofaces=1 painting grey parts amber got '
+             'past for several commits' % best)
 
     # ---- and do the page's GL registries stay bounded? ------------------------------
     raw_before = s.page.evaluate('() => window.__fcPresentStats ? '
@@ -2522,6 +2941,7 @@ def scenario_render(ctx, url, args, fail):
         print('==> render: leak sub-check skipped -- page predates __fcPresentStats')
         return s
     before = json.loads(raw_before)
+    drawn_before = s.page.evaluate('window.__fcWidgetDrawn || 0')
     s.run_python(LEAK_PY)
     if not s.wait_for('FCLEAK', 240):
         print('==> render: leak sub-check skipped -- the document cycle never finished')
@@ -2533,7 +2953,14 @@ def scenario_render(ctx, url, args, fail):
     # Six framebuffers per cycle were retained before the delete hooks existed, so eight
     # cycles moved this by ~48. A little slack absorbs what the last view legitimately
     # still holds; anything growing per-cycle blows straight past it.
-    if after.get('reg', 0) > before.get('reg', 0) + 8:
+    #
+    # RAISED to 20 on 2026-09-09. Coin's offscreen framebuffer is now created PER GL
+    # CONTEXT rather than once per process -- it had to be, a name from another context
+    # is a silent INVALID_OPERATION -- and Qt gives every 3D view its own context, so a
+    # view legitimately adds its own framebuffer now. The first run after that fix went
+    # 6 -> 16 over the eight cycles with nothing leaking. 20 still catches the failure
+    # this was written for, which was six per cycle.
+    if after.get('reg', 0) > before.get('reg', 0) + 20:
         fail('render: the framebuffer registry grew from %d to %d over 8 document '
              'open/close cycles -- entries are not dropped on delete, and present() walks '
              'this map every frame' % (before.get('reg'), after.get('reg')))
@@ -2541,6 +2968,88 @@ def scenario_render(ctx, url, args, fail):
         fail('render: the texture upload list grew from %d to %d over 8 document '
              'open/close cycles -- dead textures are not pruned, and indexOf on this list '
              'is on the upload path' % (before.get('upl'), after.get('upl')))
+
+    # ---- IS THE 3D LAYER STILL IN THE FRAME AFTER ALL THAT? -------------------
+    #
+    # The same eight cycles that catch a registry leak also reproduce the way the
+    # viewport dies. Three separate bugs today ended with the 3D layer silently
+    # dropped from the composite -- a cross-context bind, a copy that refreshed only
+    # on a stamp that stops moving, and the compositor presenting the blit's
+    # DESTINATION instead of its source. Every one of them left the frame count, the
+    # registry sizes and this whole scenario healthy, because none of those look at
+    # whether the widget quad ran. __fcWidgetDrawn does, and costs an increment.
+    drawn_after = s.page.evaluate('window.__fcWidgetDrawn || 0')
+    if drawn_before is None:
+        print('==> render: widget-layer counter absent -- this page predates the check')
+    else:
+        print('==> render: widget layer composited %d times during the cycles'
+              % (drawn_after - drawn_before))
+        if drawn_after <= drawn_before:
+            fail('render: the 3D layer was composited ZERO times across 8 document '
+                 'open/close cycles -- the viewport is not in the frame, however '
+                 'healthy the frame count looks')
+
+    # ---- IS THE PICTURE THIS DOCUMENT'S, AND ARE ITS FACES ITS OWN COLOURS? --------
+    #
+    # Two failures this port has actually shipped, and one fixture catches both. After
+    # the eight document cycles above, build a cube with six different face colours:
+    #
+    #   * STALENESS. Every document after the first showed the FIRST one's frame for
+    #     two days, because Coin's private framebuffer was one process-wide static and
+    #     Qt gives each 3D view its own GL context. A stale canvas cannot contain this
+    #     cube's colours, and this is the ninth document of the session.
+    #   * PER-FACE COLOUR. The immediate face path paints the whole object in its FIRST
+    #     face's colour -- a six-colour cube comes out entirely red -- while the VBO
+    #     path (default since 2026-09-09) shows the three visible faces. Measured on an
+    #     RTX 4080: OFF gives one hue, ON gives green/blue/cyan in equal thirds.
+    s.run_python(FACECUBE_PY)
+    fc = s.wait_for('FCFACECUBE', 240)
+    if not isinstance(fc, dict) or fc.get('error') or not fc.get('faces'):
+        print('==> render: face-colour sub-check skipped -- the cube never built (%s)' % fc)
+        return s
+    time.sleep(6)
+    try:
+        rc2 = json.loads(s.page.evaluate(READ_CANVAS_JS) or '{}')
+        frame2 = json.loads(s.page.evaluate(READ_FRAME_JS) or '{}')
+    except Exception as e:
+        print('==> render: face-colour sub-check skipped -- could not read back (%s)' % e)
+        return s
+    green = rc2.get('greenish', 0)
+    print('==> render: the ninth document on the canvas -- %d greenish px (dominant %s)'
+          % (green, rc2.get('dominant')))
+    if green < 1000:
+        fail('render: a cube with a green face is the document on screen and the canvas '
+             'has %d greenish pixels. The frame belongs to an earlier document -- this '
+             'is the multi-document staleness bug' % green)
+    fams = set()
+    for entry in (frame2.get('top') or []):
+        try:
+            r, g, b = (int(x) for x in entry[0].split(','))
+            px = entry[1]
+        except Exception:
+            continue
+        if px < 500 or max(r, g, b) < 60:
+            continue
+        if g > r + 30 and b > r + 30:
+            fams.add('cyan' if abs(g - b) < 40 else ('green' if g > b else 'blue'))
+        elif g > r + 30 and g > b + 30:
+            fams.add('green')
+        elif b > r + 30 and b > g + 30:
+            fams.add('blue')
+        elif r > g + 30 and r > b + 30:
+            fams.add('red')
+    print('==> render: face colours in the frame: %s' % (sorted(fams) or 'none'))
+    if not fams:
+        # Distinguish the two ways this comes back empty. Nothing coloured at all is not
+        # "the colours collapsed", it is "there is no frame here to judge" -- which is
+        # what a framebuffer belonging to a dead context reads as.
+        fail('render: the frame carries no strong hue at all after building a '
+             'six-colour cube (top: %s). Either the frame could not be read or it is '
+             "not this document's frame" % (frame2.get('top'),))
+    elif len(fams) < 2:
+        fail('render: a cube with six different face colours renders in one hue (%s). '
+             'Per-face colour has collapsed to a single colour for the whole object, '
+             'which is what the immediate face path does' % sorted(fams))
     return s
 
 
@@ -2931,29 +3440,42 @@ def scenario_project3d(ctx, url, args, fail):
         except Exception as e:
             print('==> project3d: draw counter read failed (%s)' % e)
 
+    # GROUND TRUTH, and the assertion -- the screenshot, not the readback above.
+    #
+    # readPixels on the window canvas is not trustworthy here, and the run that proved it
+    # said so in its own log: the canvas read 1200x700 with ONE distinct colour, 100% black,
+    # while a screenshot of that same canvas in that same run had 412. The hook that forces
+    # preserveDrawingBuffer only reaches contexts created through the patched getContext,
+    # and the log notes "pixelgate gl canvas is NOT among the page canvases" -- so the frame
+    # has already been presented and the drawing buffer is gone by the time it is read. An
+    # assertion that fails on a painted window is worse than no assertion, because the next
+    # person spends the day on the wrong thing. The canvas numbers stay, as a diagnostic.
     shot = None
+    stats = None
     try:
         os.makedirs('/tmp/fclogs', exist_ok=True)
         shot = '/tmp/fclogs/project3d.png'
-        s.page.screenshot(path=shot, full_page=False)
-        size = os.path.getsize(shot)
-        print('==> project3d: SCREENSHOT %s, %d bytes' % (shot, size))
-        # A 1200x700 PNG of one flat colour lands around 5-10 KB. Anything with real
-        # geometry in it is far larger. This is a smell test, not the assertion.
-        if size < 20000:
-            print('==> project3d: that is small enough to be a flat rectangle')
+        png = s.page.screenshot(full_page=False)
+        with open(shot, 'wb') as fh:
+            fh.write(png)
+        stats = png_stats(png)
+        print('==> project3d: SCREENSHOT %s, %d bytes' % (shot, len(png)))
+        if stats:
+            print('==> project3d: the PAGE has %d distinct colours, %.1f%% dark, '
+                  'dominant colour %.1f%%'
+                  % (stats['distinct'], 100 * stats['dark'], 100 * stats['dominant']))
     except Exception as e:
         print('==> project3d: screenshot failed (%s)' % e)
 
-    if canvas.get('distinct', 0) < 8:
-        fail('project3d scenario: the CANVAS has only %d distinct colours after opening %s. '
-             'Coin may have rendered fine into its own buffer -- what reaches the user is '
-             'blank. Look for "Feedback loop formed between Framebuffer and active Texture".'
-             % (canvas.get('distinct', 0), r.get('file')))
-    elif canvas.get('dominantIsDark') and canvas.get('dominantPct', 0) > 90:
-        fail('project3d scenario: %.1f%% of the CANVAS is the near-black colour %s after '
-             'opening %s. This is the black-viewport failure exactly.'
-             % (canvas.get('dominantPct'), canvas.get('dominant'), r.get('file')))
+    if stats is None:
+        fail('project3d scenario: could not read the screenshot, so nothing here judged '
+             'whether %s reached the screen' % r.get('file'))
+    elif stats['distinct'] < 60 or stats['dominant'] > 0.97:
+        fail('project3d scenario: the PAGE is blank after opening %s -- %d distinct '
+             'colours, one of them %.0f%% of the frame. Coin rendered into its own buffer '
+             '(%d colours there); what reaches the user did not.'
+             % (r.get('file'), stats['distinct'], 100 * stats['dominant'],
+                frame.get('distinct', 0)))
     return s
 
 
@@ -2972,6 +3494,82 @@ def scenario_project3d(ctx, url, args, fail):
 # (rewrites the serve tree under itself).
 import gate_session as _gs   # the shared-session scenarios live beside this file
 import gate_session_edges as _gse
+
+
+def scenario_ui(ctx, url, args, fail):
+    """The PAGE has a user interface on it -- judged from a screenshot, not from Coin.
+
+    Every other rendering check reads Coin's framebuffer, which is exactly the wrong place
+    to look for the fault this exists to catch. Qt composites the widget UI through its own
+    RHI GL context; when that context stops presenting, Coin's framebuffer stays perfect and
+    the page stays black. Qt 6.11 did precisely that on this port -- it refused to re-home a
+    native WebGL context onto the surface a recreated window had, reported the refusal as
+    permanent device loss, and never drew again -- and the whole gate passed while a user
+    looked at an empty window.
+
+    A Playwright screenshot is the compositor's own output, so it is the only measurement
+    here that sees what a person sees. It asserts a SHAPE, like its neighbours: enough
+    distinct colours to be a UI rather than a fill, and no single colour covering nearly
+    everything.
+    """
+    if args.base_url:
+        base = args.base_url.rstrip('/')
+    else:
+        base = 'http://127.0.0.1:%d/%s' % (args.port, args.page)
+    print('==> ui: %s' % base)
+    s = Session(ctx, base, args.timeout)
+    if not s.load():
+        fail('ui scenario: never reached Ready (overlay: %s)' % s.phase())
+        return s
+
+    def shot(label):
+        # The loading overlay sits on top of everything and is full of text and colour, so
+        # a screenshot taken with it up would report a beautifully painted window over a
+        # dead one. project3d hides it for the same reason before its own capture.
+        try:
+            s.page.evaluate("() => { const l = document.getElementById('load');"
+                            "        if (l) l.style.display = 'none'; }")
+        except Exception:
+            pass
+        time.sleep(4)
+        try:
+            stats = png_stats(s.page.screenshot(type='png'))
+        except Exception as exc:
+            fail('ui scenario: could not screenshot the page %s -- %s' % (label, exc))
+            return None
+        if stats is None:
+            fail('ui scenario: the screenshot was not an 8-bit PNG this can read')
+            return None
+        print('==> ui %s: %dx%d, %d distinct colours, %.1f%% dark, dominant colour %.1f%%'
+              % (label, stats['w'], stats['h'], stats['distinct'],
+                 100 * stats['dark'], 100 * stats['dominant']))
+        return stats
+
+    before = shot('at startup')
+    if before is None:
+        return s
+    # An empty window is not a small number of colours, it is a handful: the measured
+    # failure was a page of one flat colour with a few frame lines. A real FreeCAD window
+    # has toolbars, icons and text.
+    if before['distinct'] < 60 or before['dominant'] > 0.97:
+        fail('the window is not painted at startup: %d distinct colours, one of them over '
+             '%.0f%% of the frame. Coin can be drawing perfectly and this still fail -- it '
+             'is the widget compositor that is not presenting.'
+             % (before['distinct'], 100 * before['dominant']))
+
+    s.run_python(PROJECT3D_PY)
+    if not s.wait_for('FCPROJ3D', 300):
+        fail('ui scenario: the project never opened, so the after-shot would say nothing')
+        return s
+    after = shot('with a document open')
+    if after is None:
+        return s
+    if after['distinct'] < 60 or after['dominant'] > 0.97:
+        fail('the window stopped being painted once a 3D view existed: %d distinct colours, '
+             'one of them over %.0f%% of the frame. This is the Qt compositing failure, not '
+             'a scene-graph failure.' % (after['distinct'], 100 * after['dominant']))
+    return s
+
 
 SCENARIOS = (
     # name            function                in_all  what a pass actually means
@@ -3009,6 +3607,8 @@ SCENARIOS = (
      'opens a real project with 3D on and actually draws it'),
     ('render',        scenario_render,        False,
      'draws a shaded solid in the 3D viewport'),
+    ('ui',            scenario_ui,            False,
+     'shows a painted window on the page, not just a scene graph in a framebuffer'),
     ('upgrade',       scenario_upgrade,       False,
      'survives an engine upgrade with the documents intact'),
     # Shared sessions (tools/gate_session.py). Two browser contexts each, so not in "all".
@@ -3157,8 +3757,103 @@ def main():
                     'gfx.webrender.all': True,
                     'dom.webgpu.enabled': False,
                 }
-            ctx = engine.launch_persistent_context(profile, headless=True,
-                                                   args=launch_args, **kw)
+            # Every page's console, from birth, into a ring the harness owns. The
+            # per-Session capture cannot see a page that dies mid-scenario, which is
+            # exactly the page whose output is worth having.
+            crash_ring = []
+            crashed = [0]
+
+            def _oom_kills():
+                """How many times this cgroup has had a process OOM-killed."""
+                try:
+                    with open('/sys/fs/cgroup/memory.events') as fh:
+                        for line in fh:
+                            if line.startswith('oom_kill '):
+                                return int(line.split()[1])
+                except Exception:
+                    pass
+                return -1
+
+            oom_at_start = _oom_kills()
+
+            def _why_died():
+                """Attribute a renderer death instead of guessing at it."""
+                now = _oom_kills()
+                if now > oom_at_start >= 0:
+                    return ('!! the kernel OOM-killed a process in this container '
+                            '(%d kill(s) so far). The wasm heap ceiling and the '
+                            'container cap are the two numbers to compare.'
+                            % (now - oom_at_start))
+                # Crash dumps are NOT evidence here: Playwright launches Chromium with
+                # --disable-breakpad, so a segfault never writes one. An earlier
+                # version of this read 'no dump' as 'not a segfault' and concluded the
+                # process had been killed from outside. It had not: the kernel had
+                # logged twelve segfaults that day, every one at the same instruction
+                # offset (ip - mapping base = 0x279E554) inside chrome-headless-shell.
+                import glob
+                dumps = glob.glob(os.path.join(profile, '**', '*.dmp'), recursive=True)
+                if dumps:
+                    return ('!! the renderer left %d crash dump(s) under the profile'
+                            % len(dumps))
+                return ('!! the renderer died and this container had NO OOM kill, so it '
+                        'was not memory. Check the HOST kernel log for the real cause: '
+                        '`dmesg -T | grep segfault` -- a repeating instruction offset '
+                        'in chrome-headless-shell is a browser fault, not this build. '
+                        '(No dump is expected: Playwright disables breakpad.)')
+
+            def _on_crash():
+                crashed[0] += 1
+                crash_ring.append('*** RENDERER CRASHED ***')
+                print('--- the renderer died; last %d lines from the page ---'
+                      % min(25, len(crash_ring)), file=sys.stderr)
+                for c in crash_ring[-25:]:
+                    print('   %s' % c, file=sys.stderr)
+
+            def watch(pg):
+                try:
+                    pg.on('console', lambda m: crash_ring.append(
+                        '%s %s' % (m.type, m.text[:200])))
+                    pg.on('pageerror', lambda e: crash_ring.append('pageerror %s' % e))
+                    pg.on('crash', lambda p: _on_crash())
+                except Exception:
+                    pass
+                while len(crash_ring) > 400:
+                    crash_ring.pop(0)
+
+            def new_ctx():
+                c = engine.launch_persistent_context(profile, headless=True,
+                                                     args=launch_args, **kw)
+                c.on('page', watch)
+                for pg in c.pages:
+                    watch(pg)
+                return c
+
+            ctx = new_ctx()
+
+            # The browser is recycled between scenarios; see recycle() below. Held in a
+            # dict so run_scenario reads the CURRENT one rather than closing over the
+            # first.
+            browser = {'ctx': ctx}
+
+            def recycle():
+                """Close the browser and reopen it on the same profile directory.
+
+                Memory, not correctness. One scenario crashed in each of five consecutive
+                runs and it was a different one each time -- addoninstall, swigbridge,
+                examples, fem, swigbridge -- while every one of them passed run on its own.
+                Fifteen scenarios through one browser is the common factor, and the ones
+                that die are the ones that run late.
+
+                The profile DIRECTORY is what carries IndexedDB, which is the only reason
+                this context is persistent, so reopening on the same directory keeps what
+                `restore` needs and drops what nothing needs.
+                """
+                try:
+                    browser['ctx'].close()
+                except Exception:
+                    pass
+                del crash_ring[:]
+                browser['ctx'] = new_ctx()
             print('==> %s (scenario: %s)' % (url, args.scenario))
             # A watchdog that asks the page NOTHING.
             #
@@ -3201,6 +3896,7 @@ def main():
                      'work genuinely grew.' % (spent, args.budget, after))
                 return True
             dump = []
+            retried = {}
 
             def run_scenario(name, fn):
                 """Run one scenario, harvest its output, and CLOSE its page.
@@ -3213,15 +3909,98 @@ def main():
                 page goes immediately.
                 """
                 watchdog_scenario[0] = name
-                sess = fn(ctx, url, args, fail)
+                mark, crash_mark = len(failures), crashed[0]
                 try:
-                    dump.append((sess.lines(), sess.console, sess.errors()))
+                    sess = fn(browser['ctx'], url, args, fail)
+                    # A scenario can CATCH its own renderer death and report it
+                    # as an ordinary failure (storage does). Treat that the same
+                    # as an exception: the test of whether this was the machine
+                    # is whether the renderer died, not how we found out.
+                    if crashed[0] > crash_mark and len(failures) > mark:
+                        raise RuntimeError('renderer died during %s' % name)
+                except Exception as exc:
+                    # Retried ONCE, and only for a renderer that died without an OOM
+                    # kill -- because the cause is now known rather than guessed.
+                    #
+                    # The build box's kernel log carries 17 of these, the earliest a
+                    # full day before the work that was being blamed for them, and
+                    # EVERY ONE is at the same instruction offset:
+                    #
+                    #   chrome-headless[810541]: segfault at 377e0899d000
+                    #     ip 000060312b605554 error 4
+                    #     in chrome-headless-shell[...,603128e67000+9a6d000]
+                    #
+                    #   ip - mapping base = 0x279E554, identical across 17 crashes,
+                    #   different processes and different ASLR layouts.
+                    #
+                    # A fixed file-relative offset is a deterministic site inside the
+                    # browser binary. Our wasm is JIT-compiled and can never land on a
+                    # stable ELF offset, so this is Chromium faulting on the workload,
+                    # not the build under test. Playwright 1.62.0 is the newest image
+                    # published, so there is no browser to upgrade to.
+                    #
+                    # So it is tolerated once and never hidden: both the death and the
+                    # retry are printed, an OOM kill is never retried, and a second
+                    # death fails the run.
+                    if crashed[0] > crash_mark:
+                        why = _why_died()
+                        print(why, file=sys.stderr)
+                        if 'OOM-killed' not in why and not retried.get(name):
+                            retried[name] = True
+                            del failures[mark:]
+                            print('!! retrying %s once on a fresh browser. A second '
+                                  'death fails the run.' % name, file=sys.stderr)
+                            recycle()
+                            return run_scenario(name, fn)
+                    # A renderer crash raises out of whichever page call was in flight, and
+                    # it used to take the whole gate with it: main() unwound and every later
+                    # scenario went unrun, so one broken subsystem hid every other signal --
+                    # including the rendering checks, which come last. That is how a build
+                    # whose ONLY defect was an IfcOpenShell import spent a week reporting
+                    # nothing about whether it drew anything. Record the crash as the failure
+                    # it is and go on to the next scenario. The run still fails; it just says
+                    # more. The page is gone, so there are no logs to harvest from it.
+                    fail('scenario %s did not finish -- %s: %s'
+                         % (name, type(exc).__name__,
+                            (str(exc).splitlines() or [''])[0][:200]))
+                    # What the page said on its way down. Without this a crashed
+                    # scenario reports one line and nothing else, which is how three
+                    # runs failed on three different scenarios and taught us nothing.
+                    if crash_ring:
+                        print('--- last %d lines from the page that crashed ---'
+                              % min(25, len(crash_ring)), file=sys.stderr)
+                        for c in crash_ring[-25:]:
+                            print('   %s' % c, file=sys.stderr)
+                    else:
+                        print('--- the page produced no console output at all ---',
+                              file=sys.stderr)
+                    # Recycle HERE too. The success path below does, and this one
+                    # did not: a scenario that died of a renderer crash handed the
+                    # very browser it just killed to the next one, which is the
+                    # worst moment to keep it. Nothing downstream can be trusted
+                    # after that, and a cascade of crashes reads as several broken
+                    # subsystems instead of one.
+                    recycle()
+                    return over_budget(name)
+                try:
+                    _lines = sess.lines()
+                    dump.append((_lines, sess.console, sess.errors()))
                 except Exception:
+                    _lines = []
                     dump.append(([], [], []))
+                # See SHADER_FAIL: the render checks below photograph the viewport, which
+                # is the half of the window that still draws when Qt's paint-engine
+                # programs fail. This is the half they cannot see.
+                _sh = [c for c in _lines if SHADER_FAIL.search(c)]
+                if _sh:
+                    fail('%s: %d shader compile/link failure(s) -- Qt cannot paint its '
+                         'widget layer, so the window goes black around a viewport that '
+                         'still draws. First: %s' % (name, len(_sh), _sh[0][:200]))
                 try:
                     sess.page.close()
                 except Exception:
                     pass        # restore/upgrade/addoninstall close their own first page
+                recycle()
                 return over_budget(name)
 
             for _name, _fn, _in_all, _label in SCENARIOS:
@@ -3234,7 +4013,7 @@ def main():
                     continue
                 ran.append(_label)
                 out_of_time = run_scenario(_name, _fn)
-            ctx.close()
+            browser['ctx'].close()
     finally:
         if server is not None:
             server.terminate()

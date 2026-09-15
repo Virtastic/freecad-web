@@ -33,6 +33,18 @@ on:
     paths:
       - '.github/workflows/link-freecad.yml'
       - 'build-weh-objs.sh'
+      # The sources that script compiles, not just the script. A fix inside one of
+      # the JSPI bridges -- the pointer-width bug that stopped gmsh from ever being
+      # reached lived in fcweb_gmsh_module.cpp -- would otherwise change a file the
+      # link builds and trigger no link, which is precisely the shape of a fix that
+      # ships as a no-op.
+      - 'gl_legacy_stubs.c'          # compiled by build-weh-objs.sh into the link; a raster-op change never re-linked before
+      - 'fcweb_ccx_module.cpp'
+      - 'fcweb_qtconv_module.cpp'
+      - 'fcweb_dlg_module.cpp'
+      - 'fcweb_gmsh_module.cpp'
+      - 'spe_sanitize.cpp'
+      - 'wasm_event_dispatch.cpp'
       - 'configure-gui-weh.sh'
       - 'scratchpad/linkcmds/fc-linkcmd-weh.sh'
       - 'scratchpad/stage-jspi.sh'
@@ -60,8 +72,16 @@ on:
       # relinked nothing shipped nothing (the wasm64 BigInt event-dispatch fix).
       - 'pre-gui.js'
       - 'play-gui/freecad-gui.html'
+      # The Addon Manager overlay the page fetches at startup. A change to one of
+      # these changes what the application runs, so it has to relink.
+      - 'play-gui/am/**'
       - 'play-gui/qtloader.js'
       - 'tools/boot-gate.py'
+      # The gate's serve environment: its proxy stand-in decides what the app can
+      # reach, so changing it changes what every scenario actually tests. A socket
+      # leak in it once failed three scenarios as "never reached Ready", which reads
+      # as an application boot failure and was not one.
+      - 'tools/serve-artifact.py'
       - 'tools/check-payload-packages.py'
       # The preloaded Python glue: patches/apply.sh copies it into deps/wasm/pyside-pkg,
       # which this link preloads, so a change to it ships only through a relink.
@@ -84,8 +104,8 @@ on:
       runner:
         description: "where to build"
         type: choice
-        options: [vps, hosted]
-        default: vps
+        options: [builder, vps, hosted]
+        default: builder
       ccache:
         description: "compile cache: on, off (baseline), clear (drop it first)"
         type: choice
@@ -105,7 +125,7 @@ env:
   # otherwise delete the very thing this is meant to preserve.
   BUILDTREE_STORE: /home/ubuntu/.cache/fcweb-buildtree
   DEPS_KEY: v2-wasm64-emsdk6.0.9-xerces3.2.5-occt7.8.1-vtk9.3.1-coin4.0.3-boost1.86
-  QT_KEY: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v1
+  QT_KEY: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v2
   PYDEPS_KEY: v2-wasm64-emsdk6.0.9-cpython3.13.3-numpy2.1.3-mpl3.9.2
 
 jobs:
@@ -123,9 +143,14 @@ jobs:
     # pipeline is self-hosted in the first place. The option is kept because it is correct
     # and costs nothing, and because the alternative is someone rediscovering the budget
     # wall in an hour when a build box is down. If the box is down, the box is the fix.
-    runs-on: ${{ (inputs.runner || 'vps') == 'hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "ovh", "virtastic"]') }}
+    runs-on: ${{ (inputs.runner || 'builder') == 'hosted' && 'ubuntu-latest' || (inputs.runner || 'builder') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || fromJSON('["self-hosted","builder","virtastic"]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The build tree store lives in the RUNNER's home, whichever box that is: /home/ubuntu
+      # on the VPS, /home/jenkins on the LAN builder (the default since 2026-09-15).
+      - name: Store path for this box
+        run: echo "BUILDTREE_STORE=$HOME/.cache/fcweb-buildtree" >> "$GITHUB_ENV"
 
       # A hosted runner starts with ~14 GB free and this stack needs rather more. Same
       # reclamation build-deps.yml does. Never on the build box, which owns its own disk.
@@ -577,22 +602,6 @@ jobs:
           done
           exit $fail
 
-      - name: weh-objs
-        run: |
-          set -e
-          . ./toolchain/env.sh
-          bash build-weh-objs.sh
-
-      # Before the hour-long compile, not after: an object built -fexceptions cannot link
-      # against this -fwasm-exceptions build, and wasm-ld's message names no file at all
-      # ("referenced by root reference (e.g. compiled C/C++ code)"). Two rounds were spent
-      # guessing which lane it was.
-      - name: Which objects were built with the wrong exception model?
-        run: |
-          set -e
-          . ./toolchain/env.sh 2>/dev/null || true
-          bash tools/check-eh-model.sh
-
       - name: Configure (the production configure, not a compile check)
         id: configure
         run: |
@@ -616,6 +625,26 @@ jobs:
             tail -60 build-freecad-gui-weh/CMakeFiles/CMakeError.log 2>/dev/null || true
           fi
           exit $rc
+
+      # AFTER the configure, not before: fcweb_qtconv_module.cpp includes FCGlobal.h, which
+      # includes <QtCore.h> -- a header FreeCAD's configure GENERATES into the build tree
+      # (src/QtCore.h.cmake). On a warm store the order never mattered; the first cold run
+      # on the LAN builder (2026-09-15) failed here with 'QtCore.h file not found'.
+      - name: weh-objs
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          bash build-weh-objs.sh
+
+      # Before the hour-long compile, not after: an object built -fexceptions cannot link
+      # against this -fwasm-exceptions build, and wasm-ld's message names no file at all
+      # ("referenced by root reference (e.g. compiled C/C++ code)"). Two rounds were spent
+      # guessing which lane it was.
+      - name: Which objects were built with the wrong exception model?
+        run: |
+          set -e
+          . ./toolchain/env.sh 2>/dev/null || true
+          bash tools/check-eh-model.sh
 
       - name: Compile
         id: compile
@@ -766,6 +795,38 @@ jobs:
           echo "  share: $(find freecad-gui-install/share -type f 2>/dev/null | wc -l) files"
           [ -d freecad-gui-install/Mod ] || { echo "::error::install produced no Mod tree"; exit 1; }
 
+      # Python compiled its own sources on EVERY boot. MEMFS forgets __pycache__ between
+      # sessions and the payload shipped none: 1,486 .py under Mod and 0 .pyc, a cold
+      # `import Draft` at 1.6 s against 2 ms from the bytecode it had just written, and the
+      # tokenizer and PEG parser among the warm-boot profile's top functions (2026-09-12,
+      # scratchpad/gpu-pyc-check.py, gpu-boot-profile.py). Compile every packaged tree with
+      # the host 3.13 -- the same magic number as the wasm interpreter, asserted below -- as
+      # UNCHECKED-HASH bytecode: the packager stamps every file with the unpack time, which
+      # would invalidate timestamp bytecode on every boot, and the payload is immutable.
+      - name: Precompile the packaged Python trees
+        if: ${{ inputs.stop_after != 'configure' && inputs.stop_after != 'compile' }}
+        run: |
+          set -e
+          py='${{ steps.hostpy.outputs.python-path }}'
+          host="$("$py" -c 'import importlib.util;print(int.from_bytes(importlib.util.MAGIC_NUMBER[:2],"little"))')"
+          wasm="$(grep -oE 'MAGIC_NUMBER = [(][0-9]+[)]' deps/src/cpython/Lib/importlib/_bootstrap_external.py | grep -oE '[0-9]+' | head -1)"
+          echo "  bytecode magic: host $host, wasm $wasm"
+          if [ -z "$wasm" ] || [ "$host" != "$wasm" ]; then
+            echo "::error::host interpreter bytecode magic $host does not match the wasm interpreter's $wasm -- the payload would ship bytecode nothing can load"
+            exit 1
+          fi
+          trees="freecad-gui-install/Mod freecad-gui-install/Ext build-freecad-gui-weh/Ext deps/wasm/pyside-pkg deps/src/cpython/Lib"
+          for d in $trees; do [ -d "$d" ] || { echo "::error::no such tree to precompile: $d"; exit 1; }; done
+          # Not fatal on a file that will not compile (upstream ships a few Python 2 relics
+          # under Mod); they simply stay source-only, as before.
+          "$py" -m compileall -q -j 0 --invalidation-mode unchecked-hash -x '/(test|tests|idlelib|tkinter|turtledemo|ensurepip|lib2to3|pydoc_data)/' $trees \
+            || echo "::warning::compileall reported files it could not compile (listed above); they stay source-only"
+          for d in $trees; do
+            echo "  $d: $(find "$d" -name '*.py' | wc -l) .py, $(find "$d" -name '*.pyc' | wc -l) .pyc, $(find "$d" -name '*.pyc' -printf '%s\n' | awk '{s+=$1} END {printf "%.1f MB", s/1048576}') of bytecode"
+          done
+          # The thing the boot pays for, by name: Draft's bytecode must exist.
+          [ -s freecad-gui-install/Mod/Draft/__pycache__/Draft.cpython-313.pyc ] || { echo "::error::Mod/Draft/__pycache__/Draft.cpython-313.pyc missing after compileall"; exit 1; }
+
       - name: Link
         id: link
         if: ${{ inputs.stop_after == '' || inputs.stop_after == 'link' }}
@@ -820,6 +881,10 @@ jobs:
           # fails with "node: command not found" AFTER the patches have been applied --
           # a green link reported as a failure.
           . ./toolchain/env.sh
+          # ...and the SDK's node BY PATH, not whichever node the box puts first: the LAN
+          # builder ships node 22 in /usr/bin, which rejects a memory64 module that node 24
+          # (emsdk's) validates -- a good link reported as "does not validate" (2026-09-15).
+          node() { "${EMSDK_NODE:-$(command -v node)}" "$@"; }
           js=build-freecad-gui-weh/bin/FreeCAD.js
           # Keep a copy with the logs. It is 489 KB, it rides along with an artifact that is
           # uploaded on always(), and when a patch site moves it is the only way to see what
@@ -952,6 +1017,19 @@ jobs:
             echo "  $f: $(stat -c%s gate-serve/$f) bytes"
           done
 
+          # The Addon Manager overlay. play-gui/am/ holds five modules the page fetches
+          # from am/ at startup and imports as fcweb_am_boot: two forks of upstream workers
+          # off QThread, the async HTTP primitive they are built on, and the class patches
+          # that rebuild the connection checker and open AddonManager.ui non-modally.
+          # nginx serves them in production; the gate served NOTHING, so every fetch 404'd
+          # and the addonmgr scenario has been exercising an unpatched Addon Manager for its
+          # whole life -- reported as "it opened and then stopped responding". With them
+          # served it lists 433 addons, completes all seven startup phases, and installs and
+          # removes an addon.
+          mkdir -p gate-serve/am
+          cp play-gui/am/*.py play-gui/am/*.ui gate-serve/am/
+          echo "  addon overlay: $(ls gate-serve/am | wc -l) file(s) staged"
+
           ver=$(grep -v '^#' patches/freecad.version | grep -v '^$' | head -1)
           echo "expecting App.Version() $ver"
           # Run the gate inside Playwright's own image rather than on the box. Chromium
@@ -975,7 +1053,15 @@ jobs:
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
           echo "  box has ${memgb}G; giving the gate ${cap}G"
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
+          # PYTHONDONTWRITEBYTECODE: this container runs as root with the workspace bind-mounted,
+          # and the gate imports infra/session/share.py through serve-artifact.py. CPython then
+          # writes infra/session/__pycache__/*.pyc owned by root into the checkout, and the NEXT
+          # run's actions/checkout cannot delete it:
+          #     File was unable to be removed Error: EACCES: permission denied, unlink
+          #     '.../infra/session/__pycache__/share.cpython-312.pyc'
+          # Every job on the runner failed at checkout until those two paths were removed by hand.
+          # Nothing here needs the bytecode cache, so do not produce it.
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8795 --timeout 900 --expect-version $ver --scenario all"
 
       # RENDERING, which has never been gated. Separate from the run above because it needs
       # the 3D pipeline, and that one deliberately runs ?no3d -- headless GL is not the GL a
@@ -990,8 +1076,14 @@ jobs:
       # continue-on-error while it earns trust: it is a new measurement on a software
       # rasteriser, and a rendering gate that blocks a release on its first flake gets
       # deleted rather than fixed.
+      # Runs whether or not the boot gate passed, as long as there is a tree to run
+      # against. These two ARE the rendering measurement, and skipping them on an
+      # unrelated gate failure is how a build whose only defect was an IfcOpenShell
+      # import reported nothing at all about whether it drew anything. The run still
+      # fails on the gate; this just stops one broken subsystem from hiding the rest.
       - name: Does the 3D viewport actually draw anything?
         id: render
+        if: ${{ always() && hashFiles('gate-serve/FreeCAD.wasm') != '' }}
         timeout-minutes: 25
         continue-on-error: true
         run: |
@@ -999,7 +1091,7 @@ jobs:
           set -e
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/render.txt
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8796 --timeout 900 --scenario render --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/render.txt
 
       # THE GATES RUN AFTER "What came out", so their results could never appear in it.
       # This one runs last and appends what the gates actually measured.
@@ -1038,15 +1130,44 @@ jobs:
       # because continue-on-error rewrites the conclusion, and only `outcome` carried the
       # truth. A gate whose failure is displayed as success is worse than no gate,
       # because it is trusted.
+      # Runs whether or not the boot gate passed, as long as there is a tree to run
+      # against. These two ARE the rendering measurement, and skipping them on an
+      # unrelated gate failure is how a build whose only defect was an IfcOpenShell
+      # import reported nothing at all about whether it drew anything. The run still
+      # fails on the gate; this just stops one broken subsystem from hiding the rest.
       - name: Does a real project actually reach the canvas?
         id: project3d
+        if: ${{ always() && hashFiles('gate-serve/FreeCAD.wasm') != '' }}
         timeout-minutes: 25
         run: |
           set -o pipefail
           set -e
           memgb=$(free -g | awk '/^Mem:/{print $2}')
           cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
-          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8798 --timeout 900 --scenario project3d --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/project3d.txt
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8798 --timeout 900 --scenario project3d --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/project3d.txt
+
+      # Both gates above read Coin's framebuffer, which is the right place to ask whether
+      # the scene graph drew and the wrong place to ask whether anyone can SEE it. Qt
+      # composites the widget UI through its own RHI GL context; when that stops presenting
+      # the page is black and Coin's framebuffer is still perfect. That is exactly what
+      # Qt 6.11 did on this port, and every gate was green while the window was empty.
+      #
+      # This one screenshots the page, which is the compositor's own output, and judges the
+      # image. continue-on-error while it earns its thresholds: they are a first estimate of
+      # what "a painted FreeCAD window" measures, and a rendering gate that blocks a release
+      # on its first miscalibration gets deleted rather than fixed. The numbers are printed
+      # either way, which is what calibrates them.
+      - name: Is there actually a window on the page?
+        id: uipaint
+        timeout-minutes: 25
+        continue-on-error: true
+        if: ${{ always() && hashFiles('gate-serve/FreeCAD.wasm') != '' }}
+        run: |
+          set -o pipefail
+          set -e
+          memgb=$(free -g | awk '/^Mem:/{print $2}')
+          cap=$(( memgb * 3 / 4 )); [ "$cap" -ge 4 ] || cap=4
+          docker run --rm --memory="${cap}g" --memory-swap="${cap}g" -v "$PWD:/w" -w /w -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 mcr.microsoft.com/playwright/python:v1.62.0-noble sh -c "pip install --quiet --break-system-packages playwright==1.62.0 >/dev/null 2>&1 || pip install --quiet playwright==1.62.0; python3 -u tools/boot-gate.py gate-serve --port 8799 --timeout 900 --scenario ui --with-3d --budget 900" 2>&1 | tee /tmp/fclogs/ui.txt
 
       - name: What the gates measured
         if: always()

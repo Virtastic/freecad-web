@@ -64,10 +64,11 @@ on:
       runner:
         description: "Where to build"
         type: choice
-        default: vps
+        default: builder
         options:
+          - builder
           - vps
-          - ubuntu-latest
+          - hosted
 
 permissions:
   contents: read
@@ -100,7 +101,7 @@ jobs:
     # to resolve to ubuntu-latest -- which has none of the caches and cannot build this
     # stack. The first push-triggered run failed before it ran a single step. Treat an
     # absent input as the dispatch default rather than as 'not vps'.
-    runs-on: ${{ (inputs.runner || 'vps') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (inputs.runner || 'builder') == 'hosted' && 'ubuntu-latest' || (inputs.runner || 'builder') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || fromJSON('["self-hosted","builder","virtastic"]') }}
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -109,13 +110,13 @@ jobs:
       # CI images, they are somebody's filesystem -- and that box also runs another product's
       # database. `|| true` would have hidden the mistake rather than prevented it.
       - name: Free disk (this stack is large)
-        if: ${{ inputs.runner != 'vps' }}
+        if: ${{ inputs.runner == 'hosted' }}
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
           df -h / | sed 's/^/  /'
 
       - name: Disk before (self-hosted)
-        if: ${{ inputs.runner == 'vps' }}
+        if: ${{ inputs.runner != 'hosted' }}
         run: |
           echo "building on $(hostname) -- NOT deleting anything on this box"
           df -h / | sed 's/^/  /'
@@ -461,13 +462,23 @@ jobs:
           # The cache restores deps/wasm, but no step consulted it, so every run rebuilt
           # the whole stack -- run 32077362742 spent 2h28m recompiling artifacts that were
           # already on disk. Honour the cache this workflow already pays to save.
-          if [ "${{ inputs.rebuild }}" != "true" ] && [ "$(ls -1 deps/wasm/lib/libCoin.a 2>/dev/null | wc -l)" -ge 1 ]; then
-            echo "  Coin3D: already built (cache hit), skipping"; exit 0
+          # ... but only for the coin3d.patch it was built from. The cache key hashes the
+          # patch, yet a miss falls back to the newest entry, which carries a libCoin.a --
+          # so a patch change restored the old archive and this step skipped the rebuild
+          # (2026-09-12, the sphere hunk). Stamp the archive with the patch hash.
+          stamp=deps/wasm/lib/libCoin.a.coin3d-patch.sha256
+          # The configure script is an input too: FreeType went from dlopen (never there in
+          # wasm) to linked-in through configure-coin-weh.sh alone, and a stamp on the patch
+          # alone would have kept serving the old library forever.
+          want="$(cat patches/coin3d.patch configure-coin-weh.sh | sha256sum | cut -d' ' -f1)"
+          if [ "${{ inputs.rebuild }}" != "true" ] && [ -s deps/wasm/lib/libCoin.a ] && [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then
+            echo "  Coin3D: already built from this coin3d.patch (cache hit), skipping"; exit 0
           fi
           export FCWEB_ALLOW_MISSING_GL_COMPAT=1   # a no-op once gl_compat.h is tracked
           t0=$SECONDS; rc=0
           bash configure-coin-weh.sh > /tmp/deplogs/coin.txt 2>&1 || rc=$?
           [ "$rc" = 0 ] && echo "secs=$((SECONDS-t0))" >> "$GITHUB_OUTPUT"
+          [ "$rc" = 0 ] && echo "$want" > "$stamp"
           echo "  coin exit=$rc in $((SECONDS-t0))s"; tail -30 /tmp/deplogs/coin.txt
           # The point of a diagnostic run is the error list, which tail -30 truncates.
           # Distinct undeclared identifiers, most frequent first: gl_compat.h's specification.

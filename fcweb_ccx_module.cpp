@@ -18,11 +18,25 @@
 
 // Runs ccx on `inpPath` (a full path in FreeCAD's FS) and writes the results next to it.
 // Returns ccx's exit code, or -1 if the bridge is missing.
+// wasm64: EM_ASYNC_JS builds a WebAssembly.Suspending import, and its ARGUMENTS are not
+// given emscripten's signature conversion -- a `const char*` parameter arrives as a raw
+// i64, i.e. a BigInt. UTF8ToString does pointer arithmetic, so passing the BigInt straight
+// in throws
+//     TypeError: Cannot mix BigInt and other types, use explicit conversions
+// from inside the body, where the bridge's own catch turns it into a plain non-zero return.
+// That is what the FEM gate's "gmsh (wasm): returned 1" was, and every bridge here has
+// the same shape. Number() is correct on both targets: it
+// converts a BigInt and leaves a Number alone.
+//
+// The RETURN is not symmetric, and assuming it was cost a build: converting the `char*`
+// results to BigInt as well crashed the renderer in the addoninstall scenario, which had
+// passed on the build immediately before. Emscripten's wrapper does convert the result. So
+// the arguments are raw and the result is not -- measured, not reasoned.
 EM_ASYNC_JS(int, fcweb_ccx_run_js, (const char* inpPath), {
     var g = (typeof window !== 'undefined') ? window : globalThis;
     if (!g || typeof g.fcwebCcxRun !== 'function') { return -1; }
     try {
-        var rc = await g.fcwebCcxRun(UTF8ToString(inpPath));
+        var rc = await g.fcwebCcxRun(UTF8ToString(Number(inpPath)));
         return rc | 0;
     } catch (e) {
         try { console.error('[fcweb] ccx run failed', e); } catch (_) {}

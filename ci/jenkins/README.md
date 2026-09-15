@@ -7,6 +7,17 @@ from SCM* job: every build clones latest **`dev`** from `github.com/Virtastic/fr
 (credential `github-virtastic`) and runs this repo's `Jenkinsfile` — Fetch release artifacts → GL-patch
 + build image → Deploy to `testapp@192.168.1.137:8084` → Smoke. Click **Build Now**; no manual sync.
 
+## Engine builds: `freecad-web-engine` (2026-09-15)
+
+The engine compile now has a home on this box too. `freecad-web-engine` runs
+`ci/jenkins/Jenkinsfile.engine`: it dispatches `.github/workflows/link-freecad.yml` (or
+`build-freecad.yml`) with `runner=builder` and follows the run. The `builder` label is a GitHub
+Actions runner installed on this machine (user `jenkins`, `~/actions-runner-freecad`, systemd
+service `actions.runner.Virtastic-freecad-web.builder`); the workflows default to it, so a push
+to `dev` compiles here as well. The production VPS runner (`ovh`) is only used with
+`runner=vps`. The result lands in `~/.cache/fcweb-buildtree/build-freecad-gui-weh/bin/` on this
+box and in the run's artifacts; publishing a Release is still a separate, deliberate step.
+
 ## Why this differs from the game ports
 
 freecad-web does **not** compile in CI. The WASM toolchain build (boost + cpython + gmsh + calculix +

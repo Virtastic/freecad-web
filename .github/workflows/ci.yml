@@ -45,6 +45,13 @@ jobs:
       - name: patch-freecad-js selftest
         run: python3 tools/patch-freecad-js.py --selftest
 
+      # boot-gate.py tolerates one renderer death per scenario, and only because the
+      # crash is a Chromium segfault at a fixed instruction offset with no newer
+      # browser to move to. This fails the moment there IS one, so the workaround
+      # cannot outlive its cause. An unreachable registry is not a build failure.
+      - name: A newer Playwright image would retire the renderer-death tolerance
+        run: python3 tools/check-playwright-current.py
+
       # Proves the patches are present in what production is actually serving. This is the
       # exact regression a relink causes, and it is invisible until the 3D view fails to come up.
       - name: Verify the deployed FreeCAD.js still carries the GL patches
@@ -101,6 +108,16 @@ jobs:
             fi
           done
           exit $fail
+
+      # The edge expansion in patches/freecad.patch is the only non-trivial logic in that
+      # patch, nothing else in this repository executes it, and getting it wrong draws the
+      # WRONG LINES rather than crashing -- a diagonal across the model where two strips
+      # meet. This compiles the helper out of the shipping patch bytes and runs it.
+      - name: The edge expansion in freecad.patch does what it says
+        run: |
+          set -e
+          . ./toolchain/env.sh
+          python3 tools/check-edge-expansion.py
 
       # gl_compat.h is GENERATED from gl_legacy_stubs.c: one declaration per entry point
       # the stub file defines. Regenerating here and diffing catches the case where someone
@@ -305,6 +322,22 @@ jobs:
       # cut at the first `fi`, which belonged to a nested if, and left a dangling else.
       - name: Every workflow run block is valid shell
         run: python3 tools/check-workflow-shell.py
+
+      # The page dispatches Python into the embedded interpreter as JS string arrays.
+      # Nothing compiles those: a JS linter sees string literals, a Python linter never
+      # opens the HTML, and a broken payload fails silently -- the startup step it was
+      # meant to perform simply never happens. Both the Report-view close and the window
+      # geometry fix were written, shipped into the page, and did nothing until each was
+      # traced by hand.
+      - name: Every Python payload in the page compiles
+        run: python3 tools/check-page-python.py
+
+      # The ui scenario decides whether the application painted a window by decoding a
+      # screenshot, with a PNG reader written by hand because the gate container has
+      # nothing installed but playwright. A bug in that reader would not look like a
+      # decoder error -- it would look like a rendering verdict.
+      - name: The gate's PNG reader still reads PNGs
+        run: python3 tools/check-png-stats.py
 
       # A patch that nothing applies is not a fix, however carefully it is written.
       # patches/vtk-expat-wasm-xmlsize.patch sat in the tree for months, named in the deps

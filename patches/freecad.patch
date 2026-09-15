@@ -1733,7 +1733,7 @@ diff -ruNp a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
          }
          glDisableClientState(GL_TEXTURE_COORD_ARRAY);
          glDisable(GL_TEXTURE_2D);
-@@ -982,12 +1031,20 @@ void NaviCubeImplementation::drawNaviCub
+@@ -982,14 +1031,28 @@ void NaviCubeImplementation::drawNaviCub
              QColor& c = m_HiliteId == pickId ? m_HiliteColor : m_BaseColor;
              glColor4f(c.redF(), c.greenF(), c.blueF(), c.alphaF() * opacity);
          }
@@ -1753,8 +1753,16 @@ diff -ruNp a/src/Gui/NaviCube.cpp b/src/Gui/NaviCube.cpp
 +#endif
      }
  
++    // upstream enables GL_VERTEX_ARRAY at the top of this function and never disables it;
++    // harmless on desktop, but under the GL emulation client-array state is global and a
++    // leftover enable routes Qt's own draws (the RHI sample resolve that follows this
++    // paint on the same context) into the fixed-function path -- measured 2026-09-11 as
++    // "location is not from the associated program" on every frame with a nav cube.
++    glDisableClientState(GL_VERTEX_ARRAY);
      // Restore original state.
-@@ -1069,7 +1126,17 @@ bool NaviCubeImplementation::mousePresse
+     glPopMatrix();
+     glMatrixMode(GL_PROJECTION);
+@@ -1069,7 +1132,17 @@ bool NaviCubeImplementation::mousePresse
  
  void NaviCubeImplementation::handleMenu()
  {
@@ -2058,7 +2066,7 @@ diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
              }
          }
      }
-@@ -292,7 +298,18 @@ void SequencerBar::setValue(int step)
+@@ -292,7 +298,21 @@ void SequencerBar::setValue(int step)
                      showRemainingTime();
                  }
                  d->bar->resetObserveEventFilter();
@@ -2071,7 +2079,10 @@ diff -ruNp a/src/Gui/ProgressBar.cpp b/src/Gui/ProgressBar.cpp
 +                // visibly GuiDocument.xml, so every ViewProvider's Proxy and Visibility
 +                // stay unrestored (FEMExample opened with all objects hidden and
 +                // Proxy=None). The progress bar cannot animate during synchronous wasm
-+                // work anyway, so skip the pump entirely here.
++                // work anyway, so skip the pump entirely here. (A JSPI yield in its place was
++                // tried 2026-09-15 and withdrawn: a parked load interleaves with other Python
++                // activations on the one thread and the GIL state no longer matches -- fatal
++                // PyThreadState_Get in the boot gate, run 34913239544.)
                  qApp->processEvents();
 +#endif
              }
@@ -2378,12 +2389,13 @@ diff -ruNp a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
  #include <ParamHandler.h>
  
  #ifdef FC_OS_WIN32
-@@ -32,6 +36,9 @@
+@@ -32,6 +36,10 @@
  #include <QImageReader>
  #include <QLabel>
  #include <QOpenGLContext>
 +#if defined(__EMSCRIPTEN__)
 +#include <Inventor/nodes/SoSeparator.h>
++#include <Inventor/C/tidbits.h>
 +#endif
  #include <QOpenGLFunctions>
  #include <QProcess>
@@ -2434,15 +2446,18 @@ diff -ruNp a/src/Gui/StartupProcess.cpp b/src/Gui/StartupProcess.cpp
      checkVersionMigration();
  }
  
-@@ -402,6 +436,12 @@ void StartupPostProcess::loadOpenInvento
+@@ -402,6 +436,15 @@ void StartupPostProcess::loadOpenInvento
          // init the Inventor subsystem
          Application::initOpenInventor();
      }
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: GL display lists are stubbed, so Coin separator render caches replay
-+    // NOTHING on 2nd+ frames (first render direct = geometry visible, every
-+    // redraw after = blank). Disable render caching engine-wide.
-+    SoSeparator::setNumRenderCaches(0);
++    // wasm: GL display lists are recorded and replayed by the glue since 2026-09-14
++    // (gl_legacy_stubs.c -> __fcDL), so Coin's separator render caches work as on the
++    // desktop. ?dlists=0 sets FCWEB_NO_DLISTS: lists answer 0 again and caching must
++    // then be off engine-wide, or every redraw after the first draws nothing.
++    if (coin_getenv("FCWEB_NO_DLISTS")) {
++        SoSeparator::setNumRenderCaches(0);
++    }
 +#endif
  }
  
@@ -2790,33 +2805,86 @@ diff -ruNp a/src/Gui/Tree.cpp b/src/Gui/Tree.cpp
 diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 --- a/src/Gui/View3DInventorViewer.cpp
 +++ b/src/Gui/View3DInventorViewer.cpp
-@@ -21,6 +21,9 @@
+@@ -21,6 +21,10 @@
   ***************************************************************************/
  
  #include <FCConfig.h>
 +#if defined(__EMSCRIPTEN__)
 +#include <emscripten.h>
++#include <emscripten/html5.h>   // emscripten_webgl_get_current_context
 +#endif
  
  #include <Inventor/SoFCPlacementIndicatorKit.h>
  
-@@ -1473,6 +1476,15 @@ void View3DInventorViewer::setRenderCach
+@@ -150,6 +154,36 @@
+ 
+ using namespace Gui;
+ 
++#if defined(__EMSCRIPTEN__)
++namespace
++{
++// FCWEB: the per-context offscreen framebuffers renderScene renders Coin into (the page
++// composites .tex). File scope so the Image render path (renderGLImage) can reach them.
++struct FcFboSet
++{
++    int ctx;
++    GLuint fbo, tex, depth;
++    int w, h;
++    GLuint msFbo, msColor, msDepth;
++    int msSamples;
++    GLuint imgTex;   // the frame frozen at setRenderType(Image), see renderGLImage
++    bool imgDirty;
++};
++FcFboSet fcSets[8] = {};
++int fcSetNext = 0;
++FcFboSet* fcwebCurrentSet()
++{
++    const int id = static_cast<int>(emscripten_webgl_get_current_context());
++    for (auto& s : fcSets) {
++        if (s.ctx == id && s.fbo != 0) {
++            return &s;
++        }
++    }
++    return nullptr;
++}
++}  // namespace
++#endif
++
+ /*!
+ As ProgressBar has no chance to control the incoming Qt events of Quarter so we need to stop
+ the event handling to prevent the scenegraph from being selected or deselected
+@@ -1473,6 +1507,17 @@
  
      auto caching = mode == 0 ? SoSeparator::AUTO : (mode == 1 ? SoSeparator::ON : SoSeparator::OFF);
  
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: display lists are stubbed (glGenLists returns 0), so ON/AUTO render
-+    // caching produces permanently-empty caches — children are never traversed
-+    // after the first frame and nothing draws. Force caching OFF.
-+    caching = SoSeparator::OFF;
-+    if (pcViewProviderRoot) {
-+        pcViewProviderRoot->renderCaching = SoSeparator::OFF;
++    // wasm: display lists are real since 2026-09-14 (recorded and replayed by the
++    // glue), so render caching behaves as on the desktop. With ?dlists=0 they answer 0
++    // again and caching must be OFF, or nothing draws after the first frame.
++    if (coin_getenv("FCWEB_NO_DLISTS")) {
++        caching = SoSeparator::OFF;
++        if (pcViewProviderRoot) {
++            pcViewProviderRoot->renderCaching = SoSeparator::OFF;
++        }
 +    }
 +#endif
      SoFCSeparator::setCacheMode(caching);
  }
  
-@@ -2490,6 +2502,32 @@ void View3DInventorViewer::renderGLImage
+@@ -2242,6 +2285,12 @@
+             break;
+         case Image: {
+             glImage = grabFramebuffer();
++#if defined(__EMSCRIPTEN__)
++            // grabFramebuffer made the GL widget current; freeze its last frame (renderGLImage).
++            if (FcFboSet* fcS = fcwebCurrentSet()) {
++                fcS->imgDirty = true;
++            }
++#endif
+         } break;
+     }
+ }
+@@ -2490,6 +2539,81 @@
      glRasterPos2f(0, 0);
      glDrawPixels(glImage.width(), glImage.height(), GL_BGRA, GL_UNSIGNED_BYTE, glImage.bits());
  
@@ -2839,17 +2907,85 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // (INVALID_ENUM getParameter storms) and the frame renders into the wrong
 +    // context ("no valid shader program", foreign attrib locations). Make the 3D
 +    // widget's context current before doing anything.
-+    if (auto* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
++    QOpenGLWidget* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget());
++    if (fcGlw) {
 +        fcGlw->makeCurrent();
 +    }
-+    // Signal the page (before ANY Coin draw this frame) that the C++ native
-+    // composite owns presentation, so the legacy JS overlay stays fully inert.
++    // glDrawPixels above is a no-op under the GL emulation, and the widget framebuffer
++    // this path paints is not what the page composites -- so box and lasso selection
++    // dragged a rubber band nobody could see, over a frozen frame that never moved
++    // (measured 2026-09-13: the band's fan and loop landed in the widget framebuffer,
++    // black, while the page kept showing the Coin framebuffer). Draw the frozen frame
++    // ourselves, INTO the Coin framebuffer the page reads: a copy of it taken when the
++    // render type switched (setRenderType), so it is exactly the last picture on screen;
++    // the graphics items and the cube then paint on top, as upstream intends.
++    FcFboSet* fcS = fcwebCurrentSet();
++    if (fcS) {
++        if (fcS->imgTex == 0) {
++            glGenTextures(1, &fcS->imgTex);
++            fcS->imgDirty = true;
++        }
++        if (fcS->imgDirty) {
++            glBindFramebuffer(GL_READ_FRAMEBUFFER, fcS->fbo);
++            glBindTexture(GL_TEXTURE_2D, fcS->imgTex);
++            glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, fcS->w, fcS->h, 0);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++            fcS->imgDirty = false;
++        }
++        glBindFramebuffer(GL_FRAMEBUFFER, fcS->fbo);
++        glViewport(0, 0, fcS->w, fcS->h);
++        glMatrixMode(GL_PROJECTION);
++        glLoadIdentity();
++        glOrtho(0, fcS->w, 0, fcS->h, 0, 100);
++        glMatrixMode(GL_MODELVIEW);
++        glLoadIdentity();
++        glDisable(GL_DEPTH_TEST);
++        glDisable(GL_BLEND);
++        glDisable(GL_LIGHTING);
++        glEnable(GL_TEXTURE_2D);
++        glBindTexture(GL_TEXTURE_2D, fcS->imgTex);
++        glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
++        const float fw = static_cast<float>(fcS->w);
++        const float fh = static_cast<float>(fcS->h);
++        // s, t, x, y per corner; the copy is GL y-up like the framebuffer, so t follows y.
++        const GLfloat fcQuad[16] = {0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, fw, 0.0F,
++                                    1.0F, 1.0F, fw, fh, 0.0F, 1.0F, 0.0F, fh};
++        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
++        glEnableClientState(GL_VERTEX_ARRAY);
++        glTexCoordPointer(2, GL_FLOAT, 4 * sizeof(GLfloat), fcQuad);
++        glVertexPointer(2, GL_FLOAT, 4 * sizeof(GLfloat), fcQuad + 2);
++        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
++        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
++        glDisableClientState(GL_VERTEX_ARRAY);
++        glDisable(GL_TEXTURE_2D);
++        glBindTexture(GL_TEXTURE_2D, 0);
++    }
 +    EM_ASM({ window.__fcNativeComposite = 1; });
 +#endif
      printDimension();
  
      for (auto it : this->graphicsItems) {
-@@ -2522,6 +2560,61 @@ void View3DInventorViewer::renderScene()
+@@ -2501,6 +2625,18 @@
+     }
+ 
+     glPopAttrib();
++#if defined(__EMSCRIPTEN__)
++    // Hand the frame to the page the way renderScene does, and give Qt its framebuffer back.
++    if (fcS && fcGlw) {
++        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(fcGlw->defaultFramebufferObject()));
++        if (fcGlw->isVisible()) {
++            const QPoint fcTl = fcGlw->mapTo(fcGlw->window(), QPoint(0, 0));
++            EM_ASM({ window.__fcWidgetRect = [$0].concat($1).concat($2).concat($3); },
++                   fcTl.x(), fcTl.y(), fcGlw->width(), fcGlw->height());
++            EM_ASM({ window.__fcVisibleFbo = $0; }, static_cast<int>(fcS->fbo));
++        }
++    }
++#endif
+ }
+ 
+ // #define ENABLE_GL_DEPTH_RANGE
+@@ -2522,6 +2658,123 @@
      const SbViewportRegion vp = this->getSoRenderManager()->getViewportRegion();
      SbVec2s origin = vp.getViewportOriginPixels();
      SbVec2s size = vp.getViewportSizePixels();
@@ -2867,8 +3003,50 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // Persist the private-FBO GL objects across frames AND expose them to the
 +    // end-of-render composite step below (hoisted out of the lambda so the final
 +    // blit can read fcTex).
-+    static GLuint fcFbo = 0, fcTex = 0, fcDepth = 0;
-+    static int fcW = 0, fcH = 0;
++    // ONE SET PER GL CONTEXT. Qt for wasm gives every 3D view its own WebGL
++    // context -- an OffscreenCanvas each; measured 2026-09-09, opening three
++    // documents produced contexts 1, 3 and 4 -- and a framebuffer name means
++    // nothing outside the context that created it. ONE static set meant that from
++    // the SECOND document on, Coin bound the FIRST view's framebuffer: a SILENT
++    // INVALID_OPERATION which leaves the previous binding in place, so the
++    // composite below blitted the widget framebuffer to ITSELF, failed 0x502,
++    // published __fcNativeComposite = 0, and the page held a stale frame for the
++    // rest of the session. 176 such binds in one document; document 1 was always
++    // fine, which is what made it look like a compositor bug for two days.
++    const int fcCtxId = (int)emscripten_webgl_get_current_context();
++    FcFboSet* fcSet = nullptr;
++    for (auto& s : fcSets) {
++        if (s.ctx == fcCtxId) { fcSet = &s; break; }
++    }
++    for (auto& s : fcSets) {
++        if (!fcSet && s.ctx == 0) { s.ctx = fcCtxId; fcSet = &s; }
++    }
++    if (!fcSet) {                 // >8 contexts in one session: recycle round-robin
++        fcSet = &fcSets[fcSetNext % 8];
++        fcSetNext++;
++        *fcSet = FcFboSet{fcCtxId, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false};
++    }
++    GLuint& fcFbo = fcSet->fbo;
++    GLuint& fcTex = fcSet->tex;
++    GLuint& fcDepth = fcSet->depth;
++    int& fcW = fcSet->w;
++    int& fcH = fcSet->h;
++    // ANTI-ALIASING, done where the scene is actually rendered. The preference
++    // (View/AntiAliasing) gives the QOpenGLWidget a multisampled backing framebuffer,
++    // and that is useless here twice over: Qt's own present of it never reaches the
++    // canvas, and WebGL refuses to blit INTO a multisampled framebuffer, so with
++    // AA=4 the composite below failed every frame (55 'Invalid operation on
++    // multisampled framebuffer' per session, measured 2026-09-10) while the picture
++    // stayed aliased. So render into a multisampled renderbuffer pair of our own and
++    // RESOLVE into fcTex, which is what the page composites. GL_MAX_SAMPLES bounds it.
++    int fcWantSamples = 0;
++    if (auto* fcGlwS = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
++        fcWantSamples = fcGlwS->format().samples();
++        static GLint fcMaxS = -1;   // a context constant: one query, not one a frame
++        if (fcMaxS < 0) { glGetIntegerv(0x8D57 /* GL_MAX_SAMPLES */, &fcMaxS); }
++        if (fcWantSamples > fcMaxS) { fcWantSamples = fcMaxS; }
++        if (fcWantSamples < 2) { fcWantSamples = 0; }
++    }
 +    auto fcwebBindCoinFbo = [&]() {
 +        if (fcFbo == 0) {
 +            glGenFramebuffers(1, &fcFbo);
@@ -2900,8 +3078,28 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +            glBindTexture(GL_TEXTURE_2D, 0);
 +            glBindRenderbuffer(GL_RENDERBUFFER, 0);
 +            fcW = fcVw; fcH = fcVh;
++            fcSet->msSamples = -1;   // storage below follows the new size
 +        }
-+        glBindFramebuffer(GL_FRAMEBUFFER, fcFbo);
++        if (fcWantSamples > 0) {
++            if (fcSet->msFbo == 0) {
++                glGenFramebuffers(1, &fcSet->msFbo);
++                glGenRenderbuffers(1, &fcSet->msColor);
++                glGenRenderbuffers(1, &fcSet->msDepth);
++            }
++            if (fcSet->msSamples != fcWantSamples) {
++                glBindRenderbuffer(GL_RENDERBUFFER, fcSet->msColor);
++                glRenderbufferStorageMultisample(GL_RENDERBUFFER, fcWantSamples, 0x8058 /* GL_RGBA8 */, fcVw, fcVh);
++                glBindRenderbuffer(GL_RENDERBUFFER, fcSet->msDepth);
++                glRenderbufferStorageMultisample(GL_RENDERBUFFER, fcWantSamples, GL_DEPTH_COMPONENT24, fcVw, fcVh);
++                glBindFramebuffer(GL_FRAMEBUFFER, fcSet->msFbo);
++                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, fcSet->msColor);
++                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fcSet->msDepth);
++                glBindRenderbuffer(GL_RENDERBUFFER, 0);
++                fcSet->msSamples = fcWantSamples;
++            }
++        }
++        const bool fcMs = (fcWantSamples > 0 && fcSet->msFbo != 0);
++        glBindFramebuffer(GL_FRAMEBUFFER, fcMs ? fcSet->msFbo : fcFbo);
 +        glViewport(0, 0, fcVw, fcVh);
 +        EM_ASM({ window.__fcCoinFbo = $0; window.__fcCoinW = $1; window.__fcCoinH = $2; },
 +               (int)fcFbo, fcVw, fcVh);
@@ -2911,7 +3109,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      glViewport(origin[0], origin[1], size[0], size[1]);
  
      const QColor col = this->backgroundColor();
-@@ -2535,6 +2614,15 @@ void View3DInventorViewer::renderScene()
+@@ -2535,6 +2788,15 @@
  #endif
  
      SoGLRenderAction* glra = this->getSoRenderManager()->getGLRenderAction();
@@ -2927,7 +3125,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
      SoState* state = glra->getState();
  
      // Render our scenegraph with the image.
-@@ -2545,6 +2633,10 @@ void View3DInventorViewer::renderScene()
+@@ -2545,6 +2807,10 @@
          SoGLRenderActionElement::set(state, glra);
          SoGLVBOActivatedElement::set(state, this->vboEnabled);
          drawSingleBackground(col);
@@ -2938,7 +3136,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          glra->apply(this->backgroundroot);
      }
  
-@@ -2555,6 +2647,32 @@ void View3DInventorViewer::renderScene()
+@@ -2555,6 +2821,32 @@
      }
  
      try {
@@ -2971,7 +3169,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
          // Render normal scenegraph.
          inherited::actualRedraw();
  
-@@ -2679,6 +2782,163 @@ void View3DInventorViewer::renderScene()
+@@ -2679,6 +2971,193 @@
      glClearColor(0, 0, 0, 1);
      glClear(GL_COLOR_BUFFER_BIT);
      glPopAttrib();
@@ -3011,13 +3209,35 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +        if (auto* fcGlw = qobject_cast<QOpenGLWidget*>(this->getGLWidget())) {
 +            widgetFbo = (GLuint)fcGlw->defaultFramebufferObject();
 +        }
-+        while (glGetError() != GL_NO_ERROR) { }   // start from a clean slate
++        if (fcWantSamples > 0 && fcSet->msFbo != 0) {
++            // Resolve the multisampled scene into fcTex, which is what the page reads.
++            glBindFramebuffer(GL_READ_FRAMEBUFFER, fcSet->msFbo);
++            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fcFbo);
++            glBlitFramebuffer(0, 0, fcVw, fcVh, 0, 0, fcVw, fcVh,
++                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
++        }
++        // Skip the copy when it is already in place -- and when the destination is
++        // multisampled, which WebGL refuses (INVALID_OPERATION, every frame, with
++        // AntiAliasing on). Nothing presents that framebuffer anyway; the page
++        // composites fcTex. Report it as a success so the page does not hold a frame.
++        glBindFramebuffer(GL_FRAMEBUFFER, widgetFbo);
++        // GL_SAMPLES is a property of the widget framebuffer: ask once per framebuffer
++        // object, not once per frame -- it is a synchronous read, as is glGetError,
++        // which is why the clean-slate drain sits under the branch that needs it.
++        static GLuint fcSamplesFbo = ~0u;
++        static GLint fcWidgetSamples = 0;
++        if (widgetFbo != fcSamplesFbo) {
++            fcWidgetSamples = 0;
++            glGetIntegerv(GL_SAMPLES, &fcWidgetSamples);
++            fcSamplesFbo = widgetFbo;
++        }
++        const bool fcSelfBlit = (fcFbo == widgetFbo) || fcWidgetSamples > 0;
++        if (!fcSelfBlit) { while (glGetError() != GL_NO_ERROR) { }   // a clean slate for blitErr
 +        glBindFramebuffer(GL_READ_FRAMEBUFFER, fcFbo);
 +        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, widgetFbo);
-+        glBlitFramebuffer(0, 0, fcVw, fcVh,
-+                          0, 0, fcVw, fcVh,
-+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
-+        const GLenum blitErr = glGetError();
++        glBlitFramebuffer(0, 0, fcVw, fcVh, 0, 0, fcVw, fcVh,
++                          GL_COLOR_BUFFER_BIT, GL_NEAREST); }
++        const GLenum blitErr = fcSelfBlit ? GL_NO_ERROR : glGetError();
 +        glBindFramebuffer(GL_FRAMEBUFFER, widgetFbo);
 +        //
 +        // ONLY claim the native composite if it actually worked.
@@ -3050,20 +3270,28 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
 +    // widget FBO holds Coin's frame via the blit above. The page therefore performs
 +    // the compose+present itself each animation frame (freecad-gui.html, "present
 +    // pass"). The one datum it cannot derive is where this widget sits inside the
-+    // window, so publish it, in device pixels.
++    // window, so publish it -- in Qt's LOGICAL pixels, and the page scales by the
++    // canvas's device/CSS ratio. This used to multiply by devicePixelRatio() meaning
++    // to publish device pixels, but QOpenGLWidget::devicePixelRatio() is 1 on wasm
++    // while the window's ratio is 1.5 (measured 2026-09-10), so the page has to
++    // scale anyway -- and if Qt ever fixed it, multiplying here would double it.
 +    //
 +    // Proven before it was written: injecting the same present pass as a browser
 +    // init script against the black build brought the complete window back --
 +    // menus, toolbars, model tree, tabs, and the 3D scene with the nav cube.
 +    if (auto* fcGlw2 = qobject_cast<QOpenGLWidget*>(this->getGLWidget()); fcGlw2 && fcGlw2->isVisible()) {
-+        const qreal fcDpr = fcGlw2->devicePixelRatio();
 +        const QPoint fcTl = fcGlw2->mapTo(fcGlw2->window(), QPoint(0, 0));
 +        // No commas inside the JS block: the C preprocessor splits EM_ASM macro
 +        // arguments on commas and only parentheses group -- an array literal
 +        // there fails to compile with "use of undeclared identifier $1".
 +        EM_ASM({ window.__fcWidgetRect = [$0].concat($1).concat($2).concat($3); },
-+               (int)(fcTl.x() * fcDpr), (int)(fcTl.y() * fcDpr),
-+               (int)(fcGlw2->width() * fcDpr), (int)(fcGlw2->height() * fcDpr));
++               fcTl.x(), fcTl.y(), fcGlw2->width(), fcGlw2->height());
++        // And WHICH framebuffer is the visible view's. Hidden MDI views keep rendering
++        // through this same function, and the page's pick of 'most recently drawn'
++        // could land on one of them -- measured 2026-09-10 as a 600x450 view painted
++        // across the Start page. The GL name is what the page can match: emscripten
++        // keeps it on the WebGLFramebuffer object as .name.
++        EM_ASM({ window.__fcVisibleFbo = $0; }, (int)fcFbo);
 +    }
 +    //
 +    // FCWEB GL STATE RESET -- hand Qt back a context it recognises.
@@ -3135,7 +3363,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  }
  
  void View3DInventorViewer::setSeekMode(bool on)
-@@ -2751,6 +2899,7 @@ void View3DInventorViewer::getDimensions
+@@ -2751,6 +3230,7 @@
      else {
          fHeight *= aspectRatio;
      }
@@ -3143,7 +3371,7 @@ diff -ruNp a/src/Gui/View3DInventorViewer.cpp b/src/Gui/View3DInventorViewer.cpp
  }
  
  void View3DInventorViewer::printDimension() const
-@@ -3564,9 +3713,13 @@ void View3DInventorViewer::viewAll()
+@@ -3564,9 +4044,13 @@
                                                                                / 4.0);  // NOLINT
              }
  
@@ -3810,7 +4038,7 @@ diff -ruNp a/src/Main/MainCmd.cpp b/src/Main/MainCmd.cpp
 diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 --- a/src/Main/MainGui.cpp
 +++ b/src/Main/MainGui.cpp
-@@ -130,8 +130,206 @@
+@@ -130,8 +130,208 @@
      }
  }
  
@@ -3874,6 +4102,7 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 +extern "C" PyObject* PyInit__fcwebdlg();  // FreeCAD-Web blocking HTML dialogs
 +extern "C" PyObject* PyInit__fcwebgmsh();  // FreeCAD-Web in-browser gmsh mesher
 +extern "C" PyObject* PyInit__fcwebccx();   // FreeCAD-Web in-browser CalculiX solver
++extern "C" PyObject* PyInit__fcwebqt();    // FreeCAD-Web PySide conversions (Base::Quantity)
 +extern "C" PyObject* PyInit__ifcopenshell_wrapper();  // IfcOpenShell (SWIG IFC bindings)
 +// numpy C extensions (static; numpy/__init__.py aliases them to dotted names)
 +extern "C" PyObject* PyInit__multiarray_umath();
@@ -3990,6 +4219,7 @@ diff -ruNp a/src/Main/MainGui.cpp b/src/Main/MainGui.cpp
 +    PyImport_AppendInittab("_fcwebdlg", PyInit__fcwebdlg);
 +    PyImport_AppendInittab("_fcwebgmsh", PyInit__fcwebgmsh);
 +    PyImport_AppendInittab("_fcwebccx", PyInit__fcwebccx);
++    PyImport_AppendInittab("_fcwebqt", PyInit__fcwebqt);
 +    PyImport_AppendInittab("_ifcopenshell_wrapper", PyInit__ifcopenshell_wrapper);
 +    // Register under the FULL dotted names numpy's own C code imports itself by
 +    // (PyImport_ImportModule("numpy._core._multiarray_umath"), etc.). A meta-path
@@ -4777,30 +5007,49 @@ diff -ruNp a/src/Mod/OpenSCAD/OpenSCADUtils.py b/src/Mod/OpenSCAD/OpenSCADUtils.
 diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
 --- a/src/Mod/Part/App/AppPart.cpp
 +++ b/src/Mod/Part/App/AppPart.cpp
-@@ -27,6 +27,9 @@
+@@ -27,6 +27,12 @@
  #include <IGESControl_Controller.hxx>
  #include <STEPControl_Controller.hxx>
  #include <Standard_Version.hxx>
 +#if defined(__EMSCRIPTEN__)
 +#include <OSD_ThreadPool.hxx>
++#include <algorithm>
++#include <cstdlib>
++#include <emscripten/threading.h>
 +#endif
  
  #include <FCConfig.h>
  
-@@ -222,6 +225,18 @@ PyMOD_INIT_FUNC(Part)
+@@ -222,6 +225,34 @@ PyMOD_INIT_FUNC(Part)
      }
      Base::Console().log("Module: Part\n");
  
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: OCC parallel algorithms share one process-global OSD_ThreadPool. FreeCAD runs
-+    // boolean ops parallel (mkFuse/mkCut/mkCommon SetRunParallel(true) in TopoShape.cpp);
-+    // that spins up the pool, and the NEXT parallel op (BRepMesh inside
-+    // MeshPart.meshFromShape) reuses it -- under emscripten's fixed pthread pool the reuse
-+    // DEADLOCKS and the browser tab hangs (the reproducible "boolean then mesh" crash).
-+    // Confirmed by forcing navigator.hardwareConcurrency=1 (a 0-worker pool => no crash).
-+    // Force OCC fully serial here, before any Part op can create the pool: correctness over
-+    // CPU parallelism, which is the right trade in a single browser tab anyway.
-+    OSD_ThreadPool::DefaultPool()->Init(1);
++    // wasm: OCC parallel algorithms share one process-global OSD_ThreadPool, sized by
++    // default to the machine's logical cores (32 here). emscripten's pthread pool holds
++    // 16 workers (PTHREAD_POOL_SIZE); a thread the pool cannot hand out is created lazily
++    // when the main thread next yields -- which it never does while it is blocked waiting
++    // for that very thread. That was the reproducible "boolean then mesh" hang: the first
++    // parallel op took every worker, the next one waited forever. It was fixed by forcing
++    // the pool serial, which also made every tessellation single-threaded: opening the
++    // 42 MB a2plus assembly spent 14 of 23 s in BRepMesh_IncrementalMesh::Perform
++    // (profiled 2026-09-14) on a machine with 15 idle workers.
++    //
++    // A BOUNDED pool is both: at most 6 threads (created once, kept), well inside the 15
++    // spare workers measured after boot + a document + a boolean/mesh round, never more
++    // than cores - 1. FCWEB_OCC_THREADS (?occthreads=N) overrides, 1 = the old serial.
++    {
++        int n = emscripten_num_logical_cores();
++        n = std::max(1, std::min(6, n - 1));
++        if (const char* env = std::getenv("FCWEB_OCC_THREADS")) {
++            int v = std::atoi(env);
++            if (v >= 1 && v <= 15) {
++                n = v;
++            }
++        }
++        OSD_ThreadPool::DefaultPool()->Init(n);
++        Base::Console().log("wasm: OCC thread pool %d\n", n);
++    }
 +#endif
 +
      // This is highly experimental and we should keep an eye on it
@@ -4809,7 +5058,29 @@ diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
 diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
-@@ -493,6 +493,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -37,6 +37,7 @@
+ #include <Inventor/SoPrimitiveVertex.h>
+ #include <Inventor/actions/SoGetBoundingBoxAction.h>
+ #include <Inventor/actions/SoGLRenderAction.h>
++#include <Inventor/actions/SoRayPickAction.h>
+ #include <Inventor/bundles/SoMaterialBundle.h>
+ #include <Inventor/bundles/SoTextureCoordinateBundle.h>
+ #include <Inventor/elements/SoLazyElement.h>
+@@ -101,6 +102,13 @@ public:
+     static SbBool vboAvailable;
+     uint32_t indice_array;
+     std::map<uint32_t, Buffer> vbomap;
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: per-face bounding boxes for ray picks, see generatePrimitives(). Keyed on this
++    // node's id (coordIndex/partIndex) and the coordinate node's id.
++    SbUniqueId pickBoxesNode = 0;
++    SbUniqueId pickBoxesCoord = 0;
++    std::vector<SbBox3f> pickBoxes;
++#endif
+ 
+     VBO()
+     {
+@@ -493,6 +501,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
              &mb,
              mindices,
              &tb,
@@ -4826,7 +5097,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
              tindices,
              nbind,
              mbind,
-@@ -508,6 +518,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -508,6 +526,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
  }
  
  //****************************************************************************
@@ -4846,7 +5117,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  // renderSimpleArray: normal and coord from vertex_array;
  // no texture, color, highlight or selection but highet possible speed;
  // all vertices written in one go!
-@@ -716,15 +739,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -716,15 +747,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
          }
      }
  
@@ -4879,7 +5150,205 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          Binding mbind = this->findMaterialBinding(state);
          Binding nbind = this->findNormalBinding(state);
  
-@@ -2005,6 +2044,22 @@ void SoBrepFaceSet::renderShape(
+@@ -1080,6 +1127,18 @@ void SoBrepFaceSet::getBoundingBox(SoGet
+ }
+ 
+ // this macro actually makes the code below more readable  :-)
++#if defined(__EMSCRIPTEN__)
++// FCWEB: a triangle of a face whose bounding box misses the pick cone is walked but not
++// handed to Coin (skipPart, generatePrimitives()). Whole triangles only, so the TRIANGLES
++// primitive stream stays aligned.
++#define FCWEB_SHAPE_VERTEX(v) \
++    if (!(skipPart && mode == TRIANGLES)) { \
++        this->shapeVertex(v); \
++    }
++#else
++#define FCWEB_SHAPE_VERTEX(v) this->shapeVertex(v)
++#endif
++
+ #define DO_VERTEX(idx) \
+     if (mbind == PER_VERTEX) { \
+         pointDetail.setMaterialIndex(matnr); \
+@@ -1110,7 +1169,7 @@ void SoBrepFaceSet::getBoundingBox(SoGet
+     } \
+     vertex.setPoint(coords->get3(idx)); \
+     pointDetail.setCoordinateIndex(idx); \
+-    this->shapeVertex(&vertex);
++    FCWEB_SHAPE_VERTEX(&vertex);
+ 
+ void SoBrepFaceSet::generatePrimitives(SoAction* action)
+ {
+@@ -1247,7 +1306,142 @@ void SoBrepFaceSet::generatePrimitives(S
+         }
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: per-face culling for ray picks. Coin tests one bounding box per shape
++    // (SoShape::rayPick) and then feeds every triangle of every face below through
++    // shapeVertex()/intersect(); a preselection pick over a large assembly spent 120-330 ms
++    // per mouse move in exactly that (2026-09-15, 900a_GA3DtechProject). A face whose
++    // bounding box misses the pick cone has no triangle that can hit it, so its triangles are
++    // still walked (the index bookkeeping below must stay exact) but not handed to Coin. Same
++    // picked points, fewer triangles. The boxes are cached per node until coordIndex/partIndex
++    // or the coordinate node change.
++    SoRayPickAction* pickAction = action->isOfType(SoRayPickAction::getClassTypeId())
++        ? static_cast<SoRayPickAction*>(action)
++        : nullptr;
++    const int32_t* pibegin = this->partIndex.getValues(0);
++    bool skipPart = false;
++    if (pickAction) {
++        VBO* p = PRIVATE(this).get();
++        const SbUniqueId nid = this->getNodeId();
++        const SbUniqueId cid = coords->getNodeId();
++        if (p->pickBoxesNode != nid || p->pickBoxesCoord != cid
++            || p->pickBoxes.size() != static_cast<size_t>(num_partindices)) {
++            p->pickBoxes.assign(num_partindices, SbBox3f());
++            const int32_t* ip = cindices;
++            const int32_t* iend = cindices + numindices;
++            const int32_t* pp = pibegin;
++            int ppi = pp < piendptr ? *pp++ : -1;
++            while (ppi == 0) {
++                ppi = pp < piendptr ? *pp++ : -1;
++            }
++            int tri = 0;
++            while (ip < iend && ppi > 0) {
++                SbBox3f& bb = p->pickBoxes[static_cast<int>(pp - pibegin) - 1];
++                while (ip < iend && *ip >= 0) {
++                    bb.extendBy(coords->get3(*ip));
++                    ++ip;
++                }
++                if (ip < iend) {
++                    ++ip;
++                }
++                if (++tri == ppi) {
++                    ppi = pp < piendptr ? *pp++ : -1;
++                    while (ppi == 0) {
++                        ppi = pp < piendptr ? *pp++ : -1;
++                    }
++                    tri = 0;
++                }
++            }
++            p->pickBoxesNode = nid;
++            p->pickBoxesCoord = cid;
++        }
++    }
++    auto cullPart = [&]() {
++        skipPart = false;
++        if (!pickAction || pi < 0) {
++            return;
++        }
++        int partno = static_cast<int>(piptr - pibegin) - 1;
++        if (partno >= 0 && partno < static_cast<int>(PRIVATE(this)->pickBoxes.size())) {
++            const SbBox3f& bb = PRIVATE(this)->pickBoxes[partno];
++            skipPart = bb.isEmpty() || !pickAction->intersect(bb, TRUE);
++        }
++    };
++    cullPart();
++#endif
++
+     while (viptr + 2 < viendptr) {
++#if defined(__EMSCRIPTEN__)
++        // FCWEB: a culled face whose triangles are laid out the way ViewProviderPartExt writes
++        // them (v1 v2 v3 -1, pi times) is jumped over, with every index pointer and counter
++        // advanced exactly as the walk below would have advanced it (v1 site + DO_VERTEX x2 +
++        // the per-triangle tail). Walking it was still 40 ms a pick on the a2plus assembly
++        // after the culling (2026-09-15). Anything not in that layout takes the walk.
++        if (skipPart && trinr == 0 && pi > 0 && viptr + 4 * pi <= viendptr) {
++            bool plain = true;
++            for (int k = 0; k < pi && plain; ++k) {
++                const int32_t* t = viptr + 4 * k;
++                plain = t[0] >= 0 && t[1] >= 0 && t[2] >= 0 && t[3] < 0;
++            }
++            if (plain) {
++                viptr += 4 * pi;
++                if (mbind == PER_PART) {
++                    matnr++;
++                }
++                else if (mbind == PER_PART_INDEXED) {
++                    mindices++;
++                }
++                else if (mbind == PER_VERTEX) {
++                    matnr += 3 * pi;
++                }
++                else if (mbind == PER_FACE) {
++                    matnr += pi;
++                }
++                else if (mbind == PER_VERTEX_INDEXED) {
++                    mindices += 4 * pi;
++                }
++                else if (mbind == PER_FACE_INDEXED) {
++                    mindices += pi;
++                }
++                if (nbind == PER_VERTEX) {
++                    normnr += 3 * pi;
++                }
++                else if (nbind == PER_FACE) {
++                    normnr += pi;
++                }
++                else if (nbind == PER_VERTEX_INDEXED) {
++                    nindices += 4 * pi;
++                }
++                else if (nbind == PER_FACE_INDEXED) {
++                    nindices += pi;
++                }
++                if ((tb.isFunction() && tb.needIndices()) || (!tb.isFunction() && tbind != NONE)) {
++                    if (tindices) {
++                        tindices += 3 * pi;
++                    }
++                    else {
++                        texidx += 3 * pi;
++                    }
++                }
++                if (tindices) {
++                    tindices += pi;
++                }
++                faceDetail.setFaceIndex(faceDetail.getFaceIndex() + pi);
++                pi = piptr < piendptr ? *piptr++ : -1;
++                while (pi == 0) {
++                    pi = piptr < piendptr ? *piptr++ : -1;
++                    if (mbind == PER_PART) {
++                        matnr++;
++                    }
++                    else if (mbind == PER_PART_INDEXED) {
++                        mindices++;
++                    }
++                }
++                cullPart();
++                continue;
++            }
++        }
++#endif
+         v1 = *viptr++;
+         v2 = *viptr++;
+         v3 = *viptr++;
+@@ -1322,7 +1516,7 @@ void SoBrepFaceSet::generatePrimitives(S
+         }
+         pointDetail.setCoordinateIndex(v1);
+         vertex.setPoint(coords->get3(v1));
+-        this->shapeVertex(&vertex);
++        FCWEB_SHAPE_VERTEX(&vertex);
+ 
+         DO_VERTEX(v2);
+         DO_VERTEX(v3);
+@@ -1364,6 +1558,9 @@ void SoBrepFaceSet::generatePrimitives(S
+                 }
+             }
+             trinr = 0;
++#if defined(__EMSCRIPTEN__)
++            cullPart();
++#endif
+         }
+     }
+     if (mode != POLYGON) {
+@@ -1380,6 +1577,7 @@ void SoBrepFaceSet::generatePrimitives(S
+ }
+ 
+ #undef DO_VERTEX
++#undef FCWEB_SHAPE_VERTEX
+ 
+ void SoBrepFaceSet::renderHighlight(SoGLRenderAction* action, SelContextPtr ctx)
+ {
+@@ -2005,6 +2203,22 @@ void SoBrepFaceSet::renderShape(
      SbBool texture
  )
  {
@@ -4897,12 +5366,12 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 +    // shows pure background — the fixed-function-emulation shader doesn't pick up
 +    // the interleaved VBO attributes/matrices). The immediate-mode glBegin/glVertex
 +    // path renders correctly (nav cube proves it), so force it.
-+    hasVBO = false;
++    if (!::getenv("FCWEB_VBO_FACES")) { hasVBO = false; }
 +#endif
      // Can we use vertex buffer objects?
      if (hasVBO) {
          int nbinding = nbind;
-@@ -2067,6 +2122,24 @@ void SoBrepFaceSet::renderShape(
+@@ -2067,6 +2281,24 @@ void SoBrepFaceSet::renderShape(
          }
      }
  
@@ -4930,14 +5399,18 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProviderExt.cpp
 --- a/src/Mod/Part/Gui/ViewProviderExt.cpp
 +++ b/src/Mod/Part/Gui/ViewProviderExt.cpp
-@@ -1097,7 +1097,14 @@ void ViewProviderPartExt::setupCoinGeome
+@@ -1097,7 +1097,18 @@ void ViewProviderPartExt::setupCoinGeome
      meshParams.Deflection = deflection;
      meshParams.Relative = Standard_False;
      meshParams.Angle = AngDeflectionRads;
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: parallel OCCT meshing deadlocks/aborts on the browser main thread (pthread pool
-+    // exhaustion), leaving the visual mesh empty -- the 3D view then has nothing to draw.
-+    // Mesh single-threaded.
++    // wasm: serial. Measured 2026-09-15 on the 42 MB a2plus assembly (scratchpad/yield-probe.py,
++    // same engine, ?occthreads=N): InParallel with the bounded 6-thread OSD_ThreadPool from
++    // AppPart.cpp opened it in 31.4 s, with 3 threads 21.7 s, serial 21.6 s -- and the
++    // longest frozen stretch (one part's mesh) did not shrink either. The per-face tasks are
++    // small and the main thread's wait for the pool is a futex spin on this platform, so the
++    // parallel path only adds synchronisation. The pool still serves the algorithms that
++    // benefit (booleans, checks); the visual mesh does not.
 +    meshParams.InParallel = Standard_False;
 +#else
      meshParams.InParallel = Standard_True;
@@ -5834,3 +6307,564 @@ diff -ruNp a/src/Mod/TechDraw/Gui/CommandExtensionDims.cpp b/src/Mod/TechDraw/Gu
          std::string sAlpha = std::to_string((int)alpha);
          std::string formatSpec = dim->FormatSpec.getStrValue();
          formatSpec = formatSpec + " x" + sAlpha + "°";
+diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
+--- a/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
++++ b/src/Mod/Part/Gui/SoBrepEdgeSet.cpp
+@@ -38,6 +38,9 @@
+ #include <Inventor/SoPrimitiveVertex.h>
+ #include <Inventor/actions/SoGetBoundingBoxAction.h>
+ #include <Inventor/actions/SoGLRenderAction.h>
++#include <Inventor/actions/SoRayPickAction.h>
++#include <Inventor/details/SoPointDetail.h>
++#include <Inventor/SbViewVolume.h>
+ #include <Inventor/bundles/SoMaterialBundle.h>
+ #include <Inventor/details/SoLineDetail.h>
+ #include <Inventor/elements/SoCoordinateElement.h>
+@@ -57,6 +60,118 @@
+ 
+ #include <Gui/Inventor/So3DAnnotation.h>
+ 
++#if defined(__EMSCRIPTEN__)
++#include <cstdlib>
++#include <vector>
++#include <Inventor/elements/SoLazyElement.h>
++
++// wasm: every edge in the scene is redrawn through immediate mode on EVERY frame --
++// glBegin(GL_LINE_STRIP) and one glVertex3fv per index, all of it crossing the wasm/JS
++// boundary. On the a2plus assembly (42 MB, measured 2026-09-09 on an RTX 4080) that is
++// 96% of the frame: 431 ms/frame with edges against 16 ms for the same scene in
++// DrawStyle Shaded, and 23.99 MB of vertex data uploaded per frame against 0.00 MB for
++// the faces, which already have an array path.
++//
++// So expand the index list into GL_LINES pairs ONCE and keep the result on the node,
++// drawn as a client array with one glDrawArrays -- the shape of
++// SoBrepFaceSet::renderSimpleArray, which is the version of this that already works under
++// LEGACY_GL_EMULATION. It is deliberately NOT a GL buffer object: a buffer name means
++// nothing in a context that did not create it, and Qt gives every 3D view its own context
++// -- that is the bug that made every document after the first show a stale frame.
++//
++// POSITIONS ONLY, no normals. Coin sends line vertices without a normal attribute --
++// measured through GLImmediate.enabledClientAttributes, immediate mode draws 107 lines
++// with 0 normals on draft_test_objects and 183 with 0 on BIMExample. An earlier version
++// here sent them (from the face normal array, indexed by coordinate) and the emulation
++// duly LIT the lines: 83 of those 107 draws gained a normal, and draft's coloured-pixel
++// count fell from 2741 to 1040 while only 0.4% of pixels differed at all. Black edges,
++// which is most of them, hid it completely.
++//
++// The cache is a small fixed table rather than a map, so a document that is closed and
++// reopened cannot grow it without bound; evicting a slot only costs one rebuild.
++namespace
++{
++struct FcEdgeArray
++{
++    const void* node = nullptr;
++    SbUniqueId nodeId = 0;
++    int numIndices = 0;
++    std::vector<GLfloat> verts;   // GL_V3F, two vertices per segment
++};
++
++FcEdgeArray fcEdgeArrays[64];
++int fcEdgeArrayNext = 0;
++
++bool fcwebDrawEdgeArray(const void* node,
++                        SbUniqueId nodeId,
++                        const SbVec3f* pts,
++                        int numPts,
++                        const int32_t* cindices,
++                        int numcindices)
++{
++    if (!pts || !cindices || numPts <= 0 || numcindices < 2) {
++        return false;
++    }
++    FcEdgeArray* slot = nullptr;
++    for (auto& s : fcEdgeArrays) {
++        if (s.node == node) {
++            slot = &s;
++            break;
++        }
++    }
++    if (!slot) {
++        slot = &fcEdgeArrays[fcEdgeArrayNext++ & 63];
++        slot->node = node;
++        slot->nodeId = 0;
++        slot->verts.clear();
++    }
++    // Coin bumps a node's id on any field change, so this catches an edited shape as
++    // well as a recycled address.
++    if (slot->nodeId != nodeId || slot->numIndices != numcindices || slot->verts.empty()) {
++        std::vector<GLfloat> v;
++        v.reserve(static_cast<size_t>(numcindices) * 6);
++        int i = 0;
++        while (i < numcindices) {
++            int32_t prev = -1;
++            while (i < numcindices) {
++                const int32_t idx = cindices[i++];
++                if (idx < 0) {
++                    break;
++                }
++                if (idx >= numPts) {
++                    continue;
++                }
++                if (prev >= 0) {
++                    const int32_t pair[2] = {prev, idx};
++                    for (const int32_t e : pair) {
++                        v.push_back(pts[e][0]);
++                        v.push_back(pts[e][1]);
++                        v.push_back(pts[e][2]);
++                    }
++                }
++                prev = idx;
++            }
++        }
++        if (v.empty()) {
++            return false;
++        }
++        slot->verts.swap(v);
++        slot->nodeId = nodeId;
++        slot->numIndices = numcindices;
++    }
++    const GLsizei count = static_cast<GLsizei>(slot->verts.size() / 3);
++    if (count <= 0) {
++        return false;
++    }
++    glEnableClientState(GL_VERTEX_ARRAY);
++    glInterleavedArrays(GL_V3F, 0, &(slot->verts[0]));
++    glDrawArrays(GL_LINES, 0, count);
++    glDisableClientState(GL_VERTEX_ARRAY);
++    return true;
++}
++}  // namespace
++#endif
++
+ 
+ using namespace PartGui;
+ 
+@@ -334,7 +449,84 @@ void SoBrepEdgeSet::GLRender(SoGLRenderA
+         state->pop();
+     }
+     else {
++#if defined(__EMSCRIPTEN__)
++        // wasm: draw the plain (unhighlighted, unselected) edges from a cached array
++        // instead of one glVertex3fv per index per frame. ?vboedges=0 opts out.
++        bool fcDrewEdges = false;
++        static const bool fcEdgeArrayOn = (::getenv("FCWEB_VBO_EDGES") != nullptr);
++        if (fcEdgeArrayOn) {
++            const SoCoordinateElement* fcCoords = nullptr;
++            const SbVec3f* fcNormals = nullptr;
++            const int32_t* fcCIdx = nullptr;
++            const int32_t* fcNIdx = nullptr;
++            const int32_t* fcTIdx = nullptr;
++            const int32_t* fcMIdx = nullptr;
++            int fcNumCIdx = 0;
++            SbBool fcNormalCacheUsed = false;
++            this->getVertexData(state,
++                                fcCoords,
++                                fcNormals,
++                                fcCIdx,
++                                fcNIdx,
++                                fcTIdx,
++                                fcMIdx,
++                                fcNumCIdx,
++                                false,   // do NOT generate a normal cache: nothing here
++                                fcNormalCacheUsed);   // unlocks it, and renderHighlight
++                                                      // asks the same way
++            // Scoped exactly as Coin's SoIndexedLineSet::GLRender scopes it: push, set
++            // the light model, send the material, draw, pop. SoGLLazyElement::pop
++            // copies the child's GL state back into the parent, so what Coin believes
++            // GL holds stays true across the pop. Without the push the BASE_COLOR
++            // write stayed on the state for every later node: measured 2026-09-11,
++            // nodes drawn after a cached edge set came out unlit (EngineBlock top
++            // 191 grey against 147), BIM's annotations lost their blue, 6-10% of the
++            // pixels of each scene differed from the immediate path.
++            //
++            // A line set with no normals is drawn unlit -- what Coin does two lines
++            // before ITS sendFirst:
++            //     if (sendNormals && normals == NULL)
++            //         SoLazyElement::setLightModel(state, SoLazyElement::BASE_COLOR);
++            // Skipping it is what made the first cached edges come out lit.
++            bool fcPushed = false;
++            if (fcNormals == nullptr) {
++                state->push();
++                fcPushed = true;
++                SoLazyElement::setLightModel(state, SoLazyElement::BASE_COLOR);
++            }
++            SoMaterialBundle fcMb(action);
++            fcMb.sendFirst();
++            // sendFirst() trusts Coin's lazy cache, and that cache is wrong here: it
++            // believes GL still holds the colour it sent LAST frame, while something drawn
++            // after these edges changed the current colour behind its back and the
++            // emulation has no glPushAttrib/glPopAttrib to put it back. Measured
++            // 2026-09-11: a box with LineColor red drew its cached edges with the
++            // constant colour attribute still at the previous frame's (0,0,0,0.5); the
++            // immediate path, which sends per part, drew them red. So send the node's
++            // own colour, exactly as renderShape does for faces. A node whose edges
++            // carry more than one colour keeps the immediate path: one draw cannot
++            // honour a per-edge array.
++            if (SoLazyElement::getInstance(state)->getNumDiffuse() <= 1) {
++                const SbColor& fcLineCol = SoLazyElement::getDiffuse(state, 0);
++                const float fcLineTr = SoLazyElement::getTransparency(state, 0);
++                glColor4f(fcLineCol[0], fcLineCol[1], fcLineCol[2], 1.0F - fcLineTr);
++                fcDrewEdges = fcwebDrawEdgeArray(this,
++                                                 this->getNodeId(),
++                                                 fcCoords ? fcCoords->getArrayPtr3() : nullptr,
++                                                 fcCoords ? fcCoords->getNum() : 0,
++                                                 fcCIdx,
++                                                 fcNumCIdx);
++            }
++            if (fcPushed) {
++                state->pop();
++            }
++        }
++        if (!fcDrewEdges) {
++            inherited::GLRender(action);
++        }
++#else
+         inherited::GLRender(action);
++#endif
+     }
+ 
+     // Workaround for #0000433
+@@ -761,3 +953,107 @@ SoDetail* SoBrepEdgeSet::createLineSegme
+     line_detail->setPartIndex(index);
+     return detail;
+ }
++
++#if defined(__EMSCRIPTEN__)
++// FCWEB: per-edge culling for ray picks. Coin tests this node's bounding box once
++// (SoShape::rayPick) and SoIndexedLineSet::generatePrimitives then hands every segment of
++// every edge to SoRayPickAction::intersect(line) -- closest points plus two matrix
++// multiplies per segment -- which was ~15% of a preselection pick on a large assembly and
++// the whole of it once faces are culled (2026-09-15, 900a_GA3DtechProject). Each edge is one
++// -1-terminated run of coordIndex; an edge whose bounding box misses the pick cone has no
++// segment that can hit, so only the survivors are generated. Same structure as
++// SoShape::rayPick (pick style, object-space ray, shape box, primitives), with the shape box
++// being the union of the cached edge boxes. The picked points and their SoLineDetail line
++// indices are the same as Coin's; the material/normal/texture indices on a picked point are
++// not, and nothing reads those for an edge (getElementPicked uses getLineIndex()).
++// SoIndexedLineSet::generatePrimitives is private, hence the override one level up.
++void SoBrepEdgeSet::rayPick(SoRayPickAction* action)
++{
++    if (this->coordIndex.getNum() < 2 || this->vertexProperty.getValue()) {
++        inherited::rayPick(action);
++        return;
++    }
++    if (!this->shouldRayPick(action)) {
++        return;
++    }
++    this->computeObjectSpaceRay(action);
++
++    SoState* state = action->getState();
++    const SoCoordinateElement* coords = SoCoordinateElement::getInstance(state);
++    const int32_t* cindices = this->coordIndex.getValues(0);
++    const int32_t* const end = cindices + this->coordIndex.getNum();
++
++    const SbUniqueId nid = this->getNodeId();
++    const SbUniqueId cid = coords->getNodeId();
++    if (pickBoxesNode != nid || pickBoxesCoord != cid) {
++        pickBoxes.clear();
++        pickBoxesAll.makeEmpty();
++        for (const int32_t* ip = cindices; ip + 1 < end;) {
++            SbBox3f bb;
++            while (ip < end && *ip >= 0) {
++                bb.extendBy(coords->get3(*ip));
++                ++ip;
++            }
++            if (ip < end) {
++                ++ip;
++            }
++            pickBoxes.push_back(bb);
++            pickBoxesAll.extendBy(bb);
++        }
++        pickBoxesNode = nid;
++        pickBoxesCoord = cid;
++    }
++    // A straight edge's box is a line, and Coin's box test finds the closest point on a box
++    // among its face planes, so the pick cone (radius in pixels) never reaches a degenerate
++    // box that the segment test would have counted as a near miss -- measured 2026-09-15:
++    // 3 of 1008 grid picks lost their edge. Grow every box by the cone's radius at its depth,
++    // read off the object-space pick volume (its width is the pick region's width at the
++    // near plane; a perspective cone widens with depth).
++    const SbViewVolume& vv = action->getViewVolume();
++    const float rNear = 0.5f * std::max(vv.getWidth(), vv.getHeight());
++    const bool persp = vv.getProjectionType() == SbViewVolume::PERSPECTIVE;
++    const float nearDist = std::max(vv.getNearDist(), 1e-6f);
++    auto grown = [&](const SbBox3f& bb) {
++        float m = rNear;
++        if (persp) {
++            const float depth = (bb.getCenter() - vv.getProjectionPoint()).dot(vv.getProjectionDirection());
++            m = rNear * std::max(1.0f, depth / nearDist);
++        }
++        return SbBox3f(bb.getMin() - SbVec3f(m, m, m), bb.getMax() + SbVec3f(m, m, m));
++    };
++    if (pickBoxesAll.isEmpty() || !action->intersect(grown(pickBoxesAll), TRUE)) {
++        return;
++    }
++
++    SoPrimitiveVertex vertex;
++    SoPointDetail pointDetail;
++    SoLineDetail lineDetail;
++    vertex.setDetail(&pointDetail);
++    size_t edge = 0;
++    while (cindices + 1 < end) {
++        const bool skip = edge < pickBoxes.size()
++            && (pickBoxes[edge].isEmpty() || !action->intersect(grown(pickBoxes[edge]), TRUE));
++        if (!skip) {
++            this->beginShape(action, LINE_STRIP, &lineDetail);
++        }
++        int32_t i = 0;
++        bool first = true;
++        while (cindices < end && (i = *cindices++) >= 0) {
++            if (!skip) {
++                pointDetail.setCoordinateIndex(i);
++                vertex.setPoint(coords->get3(i));
++                this->shapeVertex(&vertex);
++                if (!first) {
++                    lineDetail.incPartIndex();
++                }
++            }
++            first = false;
++        }
++        if (!skip) {
++            this->endShape();
++        }
++        lineDetail.incLineIndex();
++        ++edge;
++    }
++}
++#endif
+diff -ruNp a/src/Mod/Surface/Gui/AppSurfaceGui.cpp b/src/Mod/Surface/Gui/AppSurfaceGui.cpp
+--- a/src/Mod/Surface/Gui/AppSurfaceGui.cpp
++++ b/src/Mod/Surface/Gui/AppSurfaceGui.cpp
+@@ -64,6 +64,18 @@
+ }  // namespace SurfaceGui
+ 
+ /* Python entry */
++#if defined(__EMSCRIPTEN__)
++// wasm: the module is linked statically and nothing references the .qrc object, so
++// its static initialiser never runs and every Surface_* icon is missing ("Cannot find
++// icon: Surface_Filling", blank toolbar). Register it the way Part does in
++// loadPartResource(): from a C++-linkage function, since PyMOD_INIT_FUNC is extern "C"
++// and Q_INIT_RESOURCE inside it would declare the init function with C linkage.
++static void fcwebLoadSurfaceResource()
++{
++    Q_INIT_RESOURCE(Surface);
++}
++#endif
++
+ PyMOD_INIT_FUNC(SurfaceGui)
+ {
+     if (!Gui::Application::Instance) {
+@@ -71,6 +83,9 @@
+         PyMOD_Return(nullptr);
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    fcwebLoadSurfaceResource();
++#endif
+     Base::Interpreter().runString("import Surface");
+     Base::Interpreter().runString("import PartGui");
+ 
+diff -ruNp a/src/Mod/Inspection/Gui/AppInspectionGui.cpp b/src/Mod/Inspection/Gui/AppInspectionGui.cpp
+--- a/src/Mod/Inspection/Gui/AppInspectionGui.cpp
++++ b/src/Mod/Inspection/Gui/AppInspectionGui.cpp
+@@ -59,6 +59,16 @@
+ 
+ 
+ /* Python entry */
++#if defined(__EMSCRIPTEN__)
++// wasm: same as Surface -- the static link drops the unreferenced .qrc object and
++// "Cannot find icon: inspect_pipette" follows. Register the resources from a
++// C++-linkage function (see AppSurfaceGui.cpp).
++static void fcwebLoadInspectionResource()
++{
++    Q_INIT_RESOURCE(Inspection);
++}
++#endif
++
+ PyMOD_INIT_FUNC(InspectionGui)
+ {
+     if (!Gui::Application::Instance) {
+@@ -66,6 +76,9 @@
+         PyMOD_Return(nullptr);
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    fcwebLoadInspectionResource();
++#endif
+     // instantiating the commands
+     // clang-format off
+     CreateInspectionCommands();
+diff -ruNp a/src/Gui/SoDatumLabel.cpp b/src/Gui/SoDatumLabel.cpp
+--- a/src/Gui/SoDatumLabel.cpp
++++ b/src/Gui/SoDatumLabel.cpp
+@@ -1562,9 +1562,13 @@
+     // Apply a rotation and translation matrix
+     glTranslatef(textOffset[0], textOffset[1], textOffset[2]);
+     glRotatef(Base::toDegrees<GLfloat>(angle), 0, 0, 1);
+-    glBegin(GL_QUADS);
+-
++    // The colour goes BEFORE glBegin. Emscripten's immediate-mode emulation lays every
++    // vertex out with the attributes seen inside begin/end; a colour set once, before the
++    // first texcoord/vertex pair, made vertex 0 wider than the other three (25 floats at a
++    // stride of 7), the quad count rounded to zero and no constraint value ever drew on
++    // wasm. Same GL either way.
+     glColor3f(1.F, 1.F, 1.F);
++    glBegin(GL_QUADS);
+ 
+     glTexCoord2f(flip ? 0.F : 1.F, 1.F);
+     glVertex2f(-this->imgWidth / 2, this->imgHeight / 2);
+diff -ruNp a/src/App/Document.cpp b/src/App/Document.cpp
+--- a/src/App/Document.cpp
++++ b/src/App/Document.cpp
+@@ -64,6 +64,44 @@
+ #include <Base/UnitsApi.h>
+ 
+ #include "Document.h"
++#if defined(__EMSCRIPTEN__)
++// FCWEB: gl_legacy_stubs.c. Park the load for one turn of the browser event loop (JSPI),
++// at most every 100 ms, so the tab paints and Chrome does not call it hung.
++//
++// Every load runs with the GIL held (Gui::Application::open goes through
++// FreeCAD.openDocument), and Python that runs while the load is parked may release the
++// GIL and suspend in turn (PySide releases it around QDialog::exec; the boot gate's
++// network probe did the same): the resumed load then freed a tuple with no thread
++// state -- fatal PyThreadState_Get, gate run 34913239544. So the park is a proper
++// blocking call: the GIL is released before it and taken back after, and if another
++// activation holds it when the turn ends, the load parks again until it is free.
++// Native events that arrived during the park queued in Qt's suspend-resume control
++// (the park holds its resume slot, gl_legacy_stubs.c); they are delivered here,
++// synchronously, exactly where the desktop's progress bar pumps processEvents() --
++// never on a raw stack in the middle of the restore, which asserted in
++// QWasmSuspendResumeControl::sendPendingEvents (2026-09-15). Input stays out: the
++// wait cursor is up and a click into a half-restored document is a desktop bug too.
++extern "C" int fcweb_yield_due(void);
++extern "C" void fcweb_yield_now(void);
++static void fcweb_yield_point()
++{
++    if (!fcweb_yield_due()) {
++        return;
++    }
++    if (PyGILState_Check()) {
++        PyThreadState* ts = PyEval_SaveThread();
++        try { fcweb_yield_now(); } catch (...) {}
++        for (int spin = 0; PyGILState_Check() && spin < 100000; ++spin) {
++            try { fcweb_yield_now(); } catch (...) {}
++        }
++        PyEval_RestoreThread(ts);
++    }
++    else {
++        try { fcweb_yield_now(); } catch (...) {}
++    }
++    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
++}
++#endif
+ #include "private/DocumentP.h"
+ #include "Application.h"
+ #include "AutoTransaction.h"
+@@ -1546,6 +1584,9 @@ std::vector<DocumentObject*> Document::r
+             try {
+                 FC_TRACE("restoring " << pObj->getFullName());
+                 pObj->Restore(reader);
++#if defined(__EMSCRIPTEN__)
++                fcweb_yield_point();
++#endif
+             }
+             // Try to continue only for certain exception types if not handled
+             // by the feature type. For all other exception types abort the process.
+@@ -2092,6 +2133,9 @@ bool Document::afterRestore(const std::v
+                 d->addRecomputeLog(returnCode);
+             }
+             obj->onDocumentRestored();
++#if defined(__EMSCRIPTEN__)
++            fcweb_yield_point();
++#endif
+             if (touched) {
+                 d->touchedObjs.insert(obj);
+             }
+diff -ruNp a/src/Gui/Document.cpp b/src/Gui/Document.cpp
+--- a/src/Gui/Document.cpp
++++ b/src/Gui/Document.cpp
+@@ -57,6 +57,44 @@
+ 
+ #include "Document.h"
+ #include "DocumentPy.h"
++#if defined(__EMSCRIPTEN__)
++// FCWEB: gl_legacy_stubs.c. Park the load for one turn of the browser event loop (JSPI),
++// at most every 100 ms, so the tab paints and Chrome does not call it hung.
++//
++// Every load runs with the GIL held (Gui::Application::open goes through
++// FreeCAD.openDocument), and Python that runs while the load is parked may release the
++// GIL and suspend in turn (PySide releases it around QDialog::exec; the boot gate's
++// network probe did the same): the resumed load then freed a tuple with no thread
++// state -- fatal PyThreadState_Get, gate run 34913239544. So the park is a proper
++// blocking call: the GIL is released before it and taken back after, and if another
++// activation holds it when the turn ends, the load parks again until it is free.
++// Native events that arrived during the park queued in Qt's suspend-resume control
++// (the park holds its resume slot, gl_legacy_stubs.c); they are delivered here,
++// synchronously, exactly where the desktop's progress bar pumps processEvents() --
++// never on a raw stack in the middle of the restore, which asserted in
++// QWasmSuspendResumeControl::sendPendingEvents (2026-09-15). Input stays out: the
++// wait cursor is up and a click into a half-restored document is a desktop bug too.
++extern "C" int fcweb_yield_due(void);
++extern "C" void fcweb_yield_now(void);
++static void fcweb_yield_point()
++{
++    if (!fcweb_yield_due()) {
++        return;
++    }
++    if (PyGILState_Check()) {
++        PyThreadState* ts = PyEval_SaveThread();
++        try { fcweb_yield_now(); } catch (...) {}
++        for (int spin = 0; PyGILState_Check() && spin < 100000; ++spin) {
++            try { fcweb_yield_now(); } catch (...) {}
++        }
++        PyEval_RestoreThread(ts);
++    }
++    else {
++        try { fcweb_yield_now(); } catch (...) {}
++    }
++    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
++}
++#endif
+ #include "Application.h"
+ #include "Command.h"
+ #include "Control.h"
+@@ -1969,6 +2007,9 @@ void Document::RestoreDocFile(Base::Read
+             // check if this feature has been registered
+             if (pObj) {
+                 pObj->Restore(*localreader);
++#if defined(__EMSCRIPTEN__)
++                fcweb_yield_point();
++#endif
+             }
+ 
+             if (pObj && treeRank >= 0) {
+diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.h b/src/Mod/Part/Gui/SoBrepEdgeSet.h
+--- a/src/Mod/Part/Gui/SoBrepEdgeSet.h
++++ b/src/Mod/Part/Gui/SoBrepEdgeSet.h
+@@ -69,6 +69,10 @@ protected:
+     ) override;
+ 
+     void getBoundingBox(SoGetBoundingBoxAction* action) override;
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: ray picks skip edges whose bounding box misses the pick cone (see the .cpp).
++    void rayPick(SoRayPickAction* action) override;
++#endif
+ 
+ private:
+     struct SelContext;
+@@ -92,6 +96,14 @@ private:
+ 
+     // backreference to viewprovider that owns this node
+     ViewProviderPartExt* viewProvider = nullptr;
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: per-edge bounding boxes for ray picks, keyed on this node's id
++    // (coordIndex) and the coordinate node's id.
++    SbUniqueId pickBoxesNode = 0;
++    SbUniqueId pickBoxesCoord = 0;
++    std::vector<SbBox3f> pickBoxes;
++    SbBox3f pickBoxesAll;
++#endif
+ };
+ 
+ }  // namespace PartGui

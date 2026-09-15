@@ -225,6 +225,21 @@ def _patch_modal_launch():
     orig_load_ui = fci.loadUi
 
     def load_ui(path, *args, **kwargs):
+        # fci binds loadUi ONCE, at its import: FreeCADGui.PySideUic.loadUi if PySideUic
+        # exists then, else None. This overlay imports fci at boot, before FreeCADGuiInit
+        # has installed PySideUic, so the captured original was None -- and the first-run
+        # consent dialog (first_run.ui, shown on a fresh profile) died with
+        # "'NoneType' object is not callable", after which the half-built dialog window's
+        # pointer handlers hit a freed QWindow (user report 2026-09-15). The gate never saw
+        # it: it sets readWarning2022 to skip that dialog. Resolve late, the way the desktop
+        # effectively does by importing the Addon Manager only when it is opened.
+        nonlocal orig_load_ui
+        if orig_load_ui is None:
+            import FreeCADGui
+            uic = getattr(FreeCADGui, "PySideUic", None)
+            orig_load_ui = getattr(uic, "loadUi", None)
+            if orig_load_ui is None:
+                raise RuntimeError("FreeCADGui.PySideUic.loadUi is not available yet")
         widget = orig_load_ui(path, *args, **kwargs)
         try:
             if os.path.basename(str(path)) == "AddonManager.ui":
@@ -271,7 +286,14 @@ def _fix_proxy_host_map():
     if not isinstance(hosts, dict):
         return "proxy host map unavailable"
     hosts["www.freecad.org"] = "docswww"
-    return "www.freecad.org -> docswww"
+    # addons.freecad.org too, and HERE rather than only in the page's startup
+    # warmup. The warmup runs on a timer and the Addon Manager can be opened before
+    # it lands; when that happens the ping goes cross-origin, COEP drops it, and the
+    # modal raised from the network callback takes the page down. This runs as part
+    # of the Addon Manager's own boot, so the host is registered on the one path
+    # that needs it, with no timing to lose.
+    hosts["addons.freecad.org"] = "addons"
+    return "www.freecad.org -> docswww, addons.freecad.org -> addons"
 
 
 def _fix_stats_url():
@@ -360,10 +382,60 @@ def install():
     except Exception as e:
         print("[fcweb] sharing overlay FAILED: %r" % (e,))
 
+    # asyncio: Emscripten has no socketpair, so CPython's selector loop cannot build its
+    # wake-up pipe and asyncio.run() fails. CAM's asset manager (tool library, tool bits)
+    # runs every store call through asyncio.run -- measured 2026-09-12 as "Failed to
+    # initialize CAM assets ... [Errno 138] Not supported" on workbench activation.
+    try:
+        import fcweb_asyncio
+        print("[fcweb] %s" % fcweb_asyncio.install())
+    except Exception as e:
+        print("[fcweb] asyncio shim FAILED: %r" % (e,))
+
     try:
         from PySideWrapper import QtCore
     except ImportError:
         from PySide6 import QtCore
+
+    # Base::Quantity <-> Python for PySide signals and slots. FreeCAD is built with
+    # FREECAD_USE_SHIBOKEN=OFF on wasm, so the registration upstream does in
+    # Gui/PythonWrapper.cpp never runs; without it every Gui::QuantitySpinBox signal
+    # connected from Python (Draft, BIM, FEM, CAM task panels) raises "parameter 0 of
+    # type Base::Quantity cannot be converted" at emit time (measured 2026-09-13).
+    try:
+        import _fcwebqt
+        print("[fcweb] Quantity converter %s" % ("registered" if _fcwebqt.install() else "already registered"))
+    except Exception as e:
+        print("[fcweb] Quantity converter FAILED: %r" % (e,))
+
+    # A real font for Coin's 2D text (the FEM colour bar's numbers, every SoText2). There is
+    # no font file anywhere in the wasm filesystem, so Coin fell back to its built-in 8x12
+    # bitmap font where the desktop (fontconfig) renders DejaVu Sans through FreeType.
+    # matplotlib ships DejaVuSans.ttf in the payload already. Coin resolves "Arial" from
+    # FreeCAD's "Helvetica,Arial,Times New Roman" through $COIN_FONT_PATH/Arial.ttf, and an
+    # unknown name ("defaultFont", "Helvetica") is handed to FT_New_Face as a path relative
+    # to the working directory, so those two get a symlink in / as well. Same GL, same
+    # FreeType, the desktop's glyphs. Measured 2026-09-14.
+    try:
+        import os
+        import matplotlib
+        ttf = os.path.join(matplotlib.get_data_path(), "fonts", "ttf", "DejaVuSans.ttf")
+        if os.path.exists(ttf):
+            fdir = "/tmp/fcweb-fonts"
+            os.makedirs(fdir, exist_ok=True)
+            # Coin does not split FreeCAD's comma list: the whole string is one font name,
+            # unknown to its table, handed to FT_New_Face as a path -- so that path exists.
+            for link in (os.path.join(fdir, "Arial.ttf"), os.path.join(fdir, "arial.ttf"),
+                         "/defaultFont", "/Helvetica", "/Helvetica,Arial,Times New Roman",
+                         "/Arial", "/Sans", "/sans"):
+                if not os.path.lexists(link):
+                    os.symlink(ttf, link)
+            os.environ["COIN_FONT_PATH"] = fdir
+            print("[fcweb] Coin 2D font: DejaVu Sans")
+        else:
+            print("[fcweb] Coin 2D font: DejaVuSans.ttf not found, built-in bitmap font stays")
+    except Exception as e:
+        print("[fcweb] Coin 2D font FAILED: %r" % (e,))
 
     state = {"timer": None, "tries": 0, "done": False}
 

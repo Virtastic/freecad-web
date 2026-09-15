@@ -73,7 +73,7 @@ jobs:
     # Hosted only when asked for by name. The old form defaulted to ubuntu-latest for any
     # value other than 'vps' -- including the EMPTY value a push event supplies -- and the
     # header above is explicit about what hosted minutes cost this org.
-    runs-on: ${{ inputs.runner == 'ubuntu-latest' && 'ubuntu-latest' || fromJSON('["self-hosted","ovh","virtastic"]') }}
+    runs-on: ${{ (inputs.runner || 'builder') == 'hosted' && 'ubuntu-latest' || (inputs.runner || 'builder') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || fromJSON('["self-hosted","builder","virtastic"]') }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

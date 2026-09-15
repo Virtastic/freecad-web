@@ -37,10 +37,11 @@ on:
       runner:
         description: "Where to build"
         type: choice
-        default: vps
+        default: builder
         options:
+          - builder
           - vps
-          - ubuntu-latest
+          - hosted
 
 permissions:
   contents: read
@@ -57,9 +58,12 @@ env:
 
 jobs:
   build:
-    runs-on: ${{ inputs.runner == 'ubuntu-latest' && 'ubuntu-latest' || fromJSON('["self-hosted","ovh","virtastic"]') }}
+    runs-on: ${{ (inputs.runner || 'builder') == 'hosted' && 'ubuntu-latest' || (inputs.runner || 'builder') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || fromJSON('["self-hosted","builder","virtastic"]') }}
     timeout-minutes: 180
     steps:
+      # $HOME differs per box (ubuntu on the VPS, jenkins on the builder); env: cannot expand it.
+      - name: Module store path
+        run: echo "MODULE_STORE=$HOME/.cache/fcweb-modules" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Preflight -- is this machine able to build at all?
@@ -183,7 +187,7 @@ jobs:
       # Self-hosted only: keep the module on the box, outside the workspace, for the release
       # step (tools/publish-release.sh reuses gmsh.js/gmsh.wasm staged next to the engine).
       - name: Keep the module on the runner
-        if: ${{ inputs.runner != 'ubuntu-latest' }}
+        if: ${{ inputs.runner != 'hosted' }}
         run: |
           mkdir -p "$MODULE_STORE"
           cp play-gui/gmsh.js play-gui/gmsh.wasm "$MODULE_STORE/"

@@ -75,10 +75,13 @@ def parse(path):
                     _, j = leb_u(d, j)
                     if fl & 1:
                         _, j = leb_u(d, j)
-                    if fl & 4:
-                        j += 1
+                    # flags&4 (memory64) changes nothing in the encoding: min and max are LEBs
+                    # either way. Skipping a byte here desynced every import after 'memory'.
                 elif kind == 3:
                     j += 2
+                elif kind == 4:   # tag (wasm exceptions): attribute byte, then a type index
+                    j += 1
+                    _, j = leb_u(d, j)
         elif sec == 3:
             cnt, j = leb_u(d, j)
             for _ in range(cnt):

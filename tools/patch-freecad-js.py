@@ -117,6 +117,38 @@ PATCHES = [
         'if(GL.stringCache[name_])return BigInt(GL.stringCache[name_]);',
     ),
     (
+        'glShaderSource length array is GLint, not pointer-sized',
+        # emscripten reads the `const GLint *length` argument of glShaderSource with the
+        # POINTER stride and the POINTER width -- src/lib/libwebgl.js, GL.getSource:
+        #     var len = length ? {{{ makeGetValue('length', 'i*' + POINTER_SIZE, '*') }}}
+        # At wasm32 that is a 4-byte read with a 4-byte stride, which is exactly what an
+        # array of GLint is, so it has always been right by accident. At wasm64 it becomes
+        # an 8-byte read with an 8-byte stride over 4-byte elements: chunk 0 gets
+        # len[0] | len[1] << 32, and the later chunks read past the end of the array.
+        #
+        # Qt is the caller that notices. QOpenGLShader::compileSourceCode (qtbase 6.11.2,
+        # qopenglshaderprogram.cpp:659) hands the version directive, a #line directive and
+        # the shader body over as three chunks with a QVarLengthArray<GLint> of lengths:
+        #     glShaderSource(id, sourceChunks.size(), sourceChunks.data(),
+        #                    sourceChunkLengths.data());
+        # so every shader Qt builds arrives truncated:
+        #     QOpenGLShader::compile(Fragment): ERROR: -1:-1: "" : Missing main()
+        #     Fragment shader for blitShaderProg (MainFragmentShader &
+        #     ImageSrcFragmentShader) failed to compile
+        # and Qt dumps a "problematic source" that is the preamble, then #line 1, then
+        # nothing. With no blit and no simple program the widget layer never reaches the
+        # window: menus, docks and toolbars go black the moment a 3D view forces an
+        # OpenGL surface, while the 3D view itself keeps drawing, because Coin is
+        # fixed-function and compiles no shaders at all. That split is why every gate
+        # stayed green -- they photograph the viewport, which is the half that works.
+        #
+        # The marker is the 4-byte stride, so a wasm32 glue, which already reads it that
+        # way, reports "already applied" instead of a missing site.
+        'var len=length?Number(HEAPU64[length+i*8>>3]):undefined;',
+        'var len=length?HEAPU32[length+i*4>>2]:undefined;',
+        'length+i*4',
+    ),
+    (
         # Shared sessions (see infra/session/): when the page joins a session it materializes
         # an EPHEMERAL home before main() and must stop pre-gui.js from mounting the visitor's
         # own IDBFS home over it. pre-gui.js is --pre-js, baked in at link time, so until the
@@ -161,13 +193,154 @@ PATCHES = [
         'if(func&&Asyncify.isAsyncExport(func)){wasmTableMirror[funcPtr]=func='
         'Asyncify.makeAsyncFunction(func)}}if(!func){return function(){return 0}}return func}',
     ),
+    # A TEXTURE FROM ANOTHER CONTEXT IS NOT BOUND -- SKIP THE CALL RATHER THAN RAISE.
+    #
+    # Qt gives every 3D view its own WebGL context, and Qt's RHI compositor then binds
+    # each QOpenGLWidget's texture from the WINDOW's context: every one of those binds is
+    # a WebGL INVALID_OPERATION ('object does not belong to this context'), 17-71 per
+    # document opened, attributed by stack on 2026-09-10 to QRhiGles2::bindCombinedSampler
+    # and nothing else. That compose never presents anyway -- the page composites the
+    # window itself -- so the bind failing changes nothing except the console. The page
+    # already stamps every texture with the context that created it (__fcGl, the same
+    # tag its compositor keys on), so a bind from a different context can simply return:
+    # the previous binding stays, exactly as the refused call would have left it. The tag
+    # is set in GL.genObject too, because a texture that is only ever a framebuffer
+    # attachment never passes through an upload and would otherwise carry none.
+    (
+        'bindTexture: skip a texture from another context instead of raising',
+        'var _emscripten_glBindTexture=(target,texture)=>{GLctx.bindTexture(target,GL.textures[texture])};',
+        'var _emscripten_glBindTexture=(target,texture)=>{var __t=GL.textures[texture];'
+        'if(__t&&__t.__fcGl&&__t.__fcGl!==GLctx){GL.__fcXBind=(GL.__fcXBind|0)+1;GLctx.__fcNoTex=true;return}'
+        'GLctx.__fcNoTex=false;GLctx.bindTexture(target,__t)};',
+    ),
+    (
+        'genObject: stamp every GL object with the context that created it',
+        'genObject:(n,buffers,createFunction,objectTable)=>{for(var i=0;i<n;i++){var buffer=GLctx[createFunction]();var id=buffer&&GL.getNewId(objectTable);if(buffer){buffer.name=id;objectTable[id]=buffer}',
+        'genObject:(n,buffers,createFunction,objectTable)=>{for(var i=0;i<n;i++){var buffer=GLctx[createFunction]();var id=buffer&&GL.getNewId(objectTable);if(buffer){buffer.name=id;buffer.__fcGl=GLctx;objectTable[id]=buffer}',
+    ),
+    # MIGRATION: build-20260911's link (commit 4b9de04) baked a useProgram guard that a later
+    # measurement disproved (it never fired: GL.__fcXProg stayed 0 across every census). It
+    # is inert but it is also a lie in the shipped glue; take it back out of any asset that
+    # carries it. (The program tag stays: the context sweep in deleteContext uses it.)
+    (
+        'useProgram: remove the disproved cross-context guard',
+        'var _emscripten_glUseProgram=program=>{program=GL.programs[program];'
+        'if(program&&program.__fcGl&&program.__fcGl!==GLctx){GL.__fcXProg=(GL.__fcXProg|0)+1;GLctx.currentProgram=null;return}'
+        'GLctx.useProgram(program);GLctx.currentProgram=program};',
+        'var _emscripten_glUseProgram=program=>{program=GL.programs[program];GLctx.useProgram(program);GLctx.currentProgram=program};',
+    ),
+    (
+        'createProgram: stamp the program with the context that created it',
+        'var program=GLctx.createProgram();program.name=id;program.maxUniformLength=',
+        'var program=GLctx.createProgram();program.name=id;program.__fcGl=GLctx;program.maxUniformLength=',
+    ),
+    (
+        'createShader: stamp the shader with the context that created it',
+        'GL.shaders[id]=GLctx.createShader(shaderType);return id}',
+        'GL.shaders[id]=GLctx.createShader(shaderType);if(GL.shaders[id])GL.shaders[id].__fcGl=GLctx;return id}',
+    ),
+    # texParameter after a bind this glue refused: there is no texture on the target, so
+    # the call would raise 'no texture bound to target'. Skip it while the last bind on
+    # this context was a refused one; the next real bind clears the flag.
+    (
+        'texParameteri: no-op after a refused bind',
+        'var _emscripten_glTexParameteri=(x0,x1,x2)=>GLctx.texParameteri(x0,x1,x2);',
+        'var _emscripten_glTexParameteri=(x0,x1,x2)=>{if(GLctx.__fcNoTex)return;GLctx.texParameteri(x0,x1,x2)};',
+    ),
+    (
+        'texParameterf: no-op after a refused bind',
+        'var _emscripten_glTexParameterf=(x0,x1,x2)=>GLctx.texParameterf(x0,x1,x2);',
+        'var _emscripten_glTexParameterf=(x0,x1,x2)=>{if(GLctx.__fcNoTex)return;GLctx.texParameterf(x0,x1,x2)};',
+    ),
+    # glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE) IS DROPPED ON THE FLOOR.
+    #
+    # emscripten's hook_texEnvf handles only GL_RGB_SCALE / GL_ALPHA_SCALE; every other pname
+    # hits `default:0`. GL allows the f variant for any enum-valued pname, and NaviCube.cpp
+    # uses it: glTexEnvi(..., GL_REPLACE) then glTexEnvf(..., GL_MODULATE) -- so the cube's
+    # label textures rendered in REPLACE, i.e. raw white glyphs instead of glyphs tinted with
+    # the emphasis colour: near-invisible on a light face (measured 2026-09-11: interior 245
+    # on a 247 face, and the mip filter made no difference). Route every pname that is not a
+    # scale through hook_texEnvi, which knows all of them.
+    (
+        'hook_texEnvf: forward enum pnames to hook_texEnvi',
+        'hook_texEnvf(target,pname,param){if(target!=GL_TEXTURE_ENV)return;var env=getCurTexUnit().env;switch(pname){case GL_RGB_SCALE:',
+        'hook_texEnvf(target,pname,param){if(target!=GL_TEXTURE_ENV)return;'
+        'if(pname!==GL_RGB_SCALE&&pname!==GL_ALPHA_SCALE){return GLImmediate.TexEnvJIT.hook_texEnvi(target,pname,param)}'
+        'var env=getCurTexUnit().env;switch(pname){case GL_RGB_SCALE:',
+    ),
+    # QT 6.11 QUEUES EVERY DOM EVENT FOR ITS OWN EVENT LOOP TO DRAIN ON RESUME. That loop is
+    # callback-driven here (main() has returned), so a queued pointerdown sat in
+    # Module.qtSuspendResumeControl.pendingEvents (43 -> 51 entries, measured 2026-09-11)
+    # and the browser turned the drag into HTML5 drag-and-drop: preventDefault only counts
+    # while the DOM event is being dispatched. Deliver inline. The paint chain this leaves
+    # starved (posted UpdateLater -> wake-up timer -> requestAnimationFrame) is driven from
+    # the page instead: freecad-gui.html asks Qt to process posted events once per
+    # animation frame while input is live (68 scene frames per 4 s drag, from 2-6).
+    (
+        'Qt 6.11: deliver DOM events inline instead of queueing them',
+        'else{if(control.asyncifyEnabled){}else{Module.qtSendPendingEvents()}}};control.eventHandlers[index]=handler',
+        'else{Module.qtSendPendingEvents()}};control.eventHandlers[index]=handler',
+    ),
+    # MIGRATION for an asset patched with the previous (wrong) mapping -- see the entry
+    # below. Anchors on the old replacement text and rewrites it; on a fresh link the
+    # primary entry produces the corrected text directly and this one reads as applied.
+    (
+        'glGet legacy fixed-function queries (migrate 2834/2850)',
+        'if(name_===2834){ret=1029}else if(name_===2850){ret=6914}else if(name_===3377){ret=8}',
+        'if(name_===2834){name_=33901}else if(name_===2850){name_=33902}else if(name_===2880){ret=6914}'
+        'else if(name_===3377){ret=8}',
+    ),
     (
         'glGet legacy fixed-function queries',
         'ret=name_==33307?3:0;break}if(ret===undefined){var result=GLctx.getParameter(name_);',
-        'ret=name_==33307?3:0;break}if(ret===undefined){if(name_===2834){ret=1029}'
-        'else if(name_===2850){ret=6914}else if(name_===3377){ret=8}'
-        'else if(name_===3121){ret=0}}if(ret===undefined){'
+        'ret=name_==33307?3:0;break}if(ret===undefined){if(name_===2834){name_=33901}'
+        'else if(name_===2850){name_=33902}else if(name_===2880){ret=6914}'
+        'else if(name_===3377){ret=8}else if(name_===3121){ret=0}}if(ret===undefined){'
         'var result=GLctx.getParameter(name_);',
+        # 4th field: the RGBA_MODE entry below rewrites the 3121 answer inside this output
+        'else if(name_===3377){ret=8}else if(name_===3121){ret=',
+    ),
+    (
+        # GL_RGBA_MODE (0x0C31) answered 0 above -- and Coin reads it once per GL context in
+        # SoGLLazyElement::initGL: on 0 it decides the context is COLOUR-INDEX mode, and from
+        # then on every per-index diffuse send (sendDiffuseByIndex) goes to glIndexi, a no-op
+        # stub here, instead of glColor4ub. Measured 2026-09-13 on the FEM result mesh: 434
+        # per-vertex colours in the scene, zero glColor calls in the render, a grey beam and a
+        # black colour bar. The same mechanism is why the SoBrepFaceSet immediate path and the
+        # cached edge path each needed an explicit glColor4f of the node's diffuse. A WebGL
+        # context is always RGBA.
+        'glGetBooleanv: GL_RGBA_MODE is true',
+        'else if(name_===3121){ret=0}}if(ret===undefined){',
+        'else if(name_===3121){ret=1}}if(ret===undefined){',
+    ),
+    (
+        # gl_legacy_stubs.c's glRasterPos3f captures the raster colour with this query, so
+        # glBitmap text (Coin's built-in font) comes out in the colour the caller set. The
+        # emulation answers only the matrices here; WebGL itself has no such parameter.
+        'glGetFloatv: GL_CURRENT_COLOR',
+        '_glGetFloatv=_emscripten_glGetFloatv=(pname,params)=>{params=Number(params);if(pname==2982){',
+        '_glGetFloatv=_emscripten_glGetFloatv=(pname,params)=>{params=Number(params);'
+        'if(pname==2816){(growMemViews(),HEAPF32).set(GLImmediate.clientColor,params/4)}else if(pname==2982){',
+    ),
+    (
+        # gl_legacy_stubs.c's raster ops (glBitmap/glDrawPixels) enable GL_TEXTURE_2D around
+        # their quad -- the emulation's fixed-function shader only samples a unit that has
+        # been glEnable()d -- and put it back afterwards, which needs the answer WebGL cannot
+        # give (GL_TEXTURE_2D is not a WebGL capability). Unit 0, which is the one Coin's
+        # text draws on.
+        'glIsEnabled: GL_TEXTURE_2D from the fixed-function state',
+        '_glIsEnabled=_emscripten_glIsEnabled=cap=>{if(cap==2912){',
+        '_glIsEnabled=_emscripten_glIsEnabled=cap=>{if(cap==3553){return GLImmediate.TexEnvJIT.getTexUnitType(0)==3553?1:0}else if(cap==2912){',
+    ),
+    (
+        # A new temp vertex buffer (one per size class per ring slot, 64 slots, created lazily
+        # over the first hundreds of frames) restored the previous binding through a
+        # synchronous getParameter(ARRAY_BUFFER_BINDING): 37 a frame on EngineBlock while the
+        # rings fill (measured 2026-09-14), each a GPU-process round trip. The page's bindBuffer
+        # wrapper already shadows that binding on the context (_fcAB); use it when it is there.
+        'getTempVertexBuffer: the previous binding from the shadow, not a round trip',
+        'var prevVBO=GLctx.getParameter(34964);',
+        'var prevVBO=(GLctx._fcAB!==undefined)?GLctx._fcAB:GLctx.getParameter(34964);',
     ),
     (
         'GL emulation default lighting',
@@ -207,17 +380,65 @@ PATCHES = [
         'GLImmediate.flush lighting + program binding',
         'flush(numProvidedIndexes,startIndex=0,ptr=0){var renderer=GLImmediate.getRenderer();var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;if(!numVertices)return;var emulatedElementArrayBuffer=false;',
         'flush(numProvidedIndexes,startIndex=0,ptr=0){try{if(typeof GLEmulation!=="undefined"&&GLImmediate.enabledClientAttributes){var _hasN=!!GLImmediate.enabledClientAttributes[GLImmediate.NORMAL!=null?GLImmediate.NORMAL:1];if(GLEmulation.lightingEnabled!==_hasN){GLEmulation.lightingEnabled=_hasN;GLImmediate.currentRenderer=null;}if(_hasN&&GLEmulation.lightEnabled&&!GLEmulation.lightEnabled[0]){GLEmulation.lightEnabled[0]=true;GLEmulation.lightModelTwoSide=1;GLImmediate.currentRenderer=null;}}}catch(_e){}var renderer=GLImmediate.getRenderer();if(renderer&&renderer.program){GLctx.useProgram(renderer.program)}var numVertices=4*GLImmediate.vertexCounter/GLImmediate.stride;if(!numVertices)return;if(numVertices!==(numVertices|0))return;var emulatedElementArrayBuffer=false;',
+        # 4th field: the entry below rewrites the program bind inside this replacement.
+        'flush(numProvidedIndexes,startIndex=0,ptr=0){try{if(typeof GLEmulation!=="undefined"&&GLImmediate.enabledClientAttributes){',
+    ),
+    # THE FORCED BIND MUST KEEP THE EMULATION'S OWN TRACKING HONEST.
+    #
+    # Qt 6.11 resolves a QOpenGLWidget's multisampled framebuffer with an RHI pass ON THE
+    # WIDGET'S OWN CONTEXT -- the one Coin draws in -- and leaves its shader program bound;
+    # the emulation records it as GL.currProgram. Coin's next fixed-function flush hits the
+    # bind above, which puts the renderer program on the driver but left GL.currProgram
+    # alone. The emulation's glUseProgram wrapper skips any request equal to GL.currProgram,
+    # so Qt's next glUseProgram of the same program was swallowed and every uniform it set
+    # landed on the renderer program: 'location is not from the associated program', 96-805
+    # per session. Measured 2026-09-11 with a per-context event ring inside the glue:
+    # em-use:62, fc-force-bind, em-use:65, fc-force-bind ... with the renderer program on the
+    # driver at every failing uniform. Once the renderer program is bound the app program
+    # is not current in any sense the emulation cares about: say so, and its own prepare /
+    # cleanup and the next real glUseProgram all do the right thing.
+    (
+        'GLImmediate.flush: a forced renderer bind clears GL.currProgram',
+        'if(renderer&&renderer.program){GLctx.useProgram(renderer.program)}',
+        'if(renderer&&renderer.program){GLctx.useProgram(renderer.program);if(GL.currProgram){GL.currProgram=0;GLImmediate.currentRenderer=null}GLImmediate.fixedFunctionProgram=renderer.program}',
     ),
     (
         'glBegin: map QUAD_STRIP and POLYGON',
         'var _glBegin=mode=>{GLImmediate.enabledClientAttributes_preBegin=',
         'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;'
         'GLImmediate.enabledClientAttributes_preBegin=',
+        'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;',   # 4th field: the stateful-attribute reset follows
     ),
     (
         'glColor drives material colour',
         'GLImmediate.clientColor[3]=a}};var _glColor3f=',
         'GLImmediate.clientColor[3]=a}if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;GLEmulation.materialDiffuse[1]=g;GLEmulation.materialDiffuse[2]=b;GLEmulation.materialDiffuse[3]=a;GLEmulation.materialAmbient[0]=r;GLEmulation.materialAmbient[1]=g;GLEmulation.materialAmbient[2]=b;GLEmulation.materialAmbient[3]=a}};var _glColor3f=',
+        # 4th field: the material-version bump below inserts into this replacement
+        'if(GLEmulation&&GLEmulation.materialDiffuse){',
+    ),
+    (
+        'immediate renderer binds the app ARRAY_BUFFER before setting attributes',
+        # prepare() computes which buffer the client attributes live in, and when the
+        # application has one bound it takes that buffer -- but then never binds it:
+        #
+        #   if (!GLctx.currentArrayBufferBinding) { arrayBuffer = GL.getTempVertexBuffer(end) }
+        #   else                                  { arrayBuffer = GLctx.currentArrayBufferBinding }
+        #   if (!GLctx.currentArrayBufferBinding) { ...bindBuffer(ARRAY_BUFFER, arrayBuffer)... }
+        #
+        # The bind only happens on the client-array branch, so the VBO branch is trusting
+        # that the REAL binding still equals the shadow variable. In this build it does not
+        # have to: the immediate path binds its own temp vertex buffer, and 'glEnd clears a
+        # stale ARRAY_BUFFER binding' below unbinds behind it. vertexAttribPointer then
+        # attaches the offsets to whatever buffer happens to be current, which is how
+        # SoBrepFaceSet's VBO path "executes but rasterizes NOTHING" -- the comment its C++
+        # carries, and the reason every Part solid is forced onto immediate mode instead.
+        #
+        # Costs one bindBuffer per draw on a path that is currently unreachable, and makes
+        # the VBO branch state its own precondition instead of inheriting it.
+        'else{arrayBuffer=GLctx.currentArrayBufferBinding}',
+        'else{arrayBuffer=GLctx.currentArrayBufferBinding;'
+        'GLctx.bindBuffer(GLctx.ARRAY_BUFFER,GL.buffers[arrayBuffer]||null);'
+        'GLImmediate.lastArrayBuffer=arrayBuffer;}',
     ),
     (
         'glEnd clears a stale ARRAY_BUFFER binding',
@@ -298,21 +519,25 @@ GROWABLE_IMMEDIATE = [
         'GLImmediate.tempData=GLImmediate.vertexData=g;'
         'GLImmediate.vertexDataU8=new Uint8Array(g.buffer);'
         'GLImmediate.__grew=(GLImmediate.__grew||0)+1};',
+        'GLImmediate.__grew=(GLImmediate.__grew||0)+1}',   # 4th field: the attribute-state entry splits the `};`
     ),
     (
         'growable immediate: glVertex2f',
         'var _glVertex2f=(x,y)=>{GLImmediate.vertexData',
         'var _glVertex2f=(x,y)=>{GLImmediate.__grow();GLImmediate.vertexData',
+        'var _glVertex2f=(x,y)=>{GLImmediate.__grow();',   # 4th field: the stateful-attribute rewrite replaces the body
     ),
     (
         'growable immediate: glVertex3f',
         'var _glVertex3f=(x,y,z)=>{GLImmediate.vertexData',
         'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();GLImmediate.vertexData',
+        'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();',
     ),
     (
         'growable immediate: glVertex4f',
         'var _glVertex4f=(x,y,z,w)=>{GLImmediate.vertexData',
         'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();GLImmediate.vertexData',
+        'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();',
     ),
     (
         # glNormal3f's writer is created by the 'glNormal3f outside begin/end' patch
@@ -321,11 +546,13 @@ GROWABLE_IMMEDIATE = [
         'growable immediate: glNormal3f',
         'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
         'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;',
+        'GLEmulation.__curNormal=[x,y,z];return}',   # 4th field: the stateful-attribute rewrite replaces the body
     ),
     (
         'growable immediate: glTexCoord2i',
         'var _glTexCoord2i=(u,v)=>{GLImmediate.vertexData',
         'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();GLImmediate.vertexData',
+        'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();',
     ),
     (
         # glColor4f writes PACKED BYTES through vertexDataU8, a view on the same buffer,
@@ -334,6 +561,8 @@ GROWABLE_IMMEDIATE = [
         'growable immediate: glColor4f',
         'if(GLImmediate.mode>=0){var start=GLImmediate.vertexCounter<<2;GLImmediate.vertexDataU8[start+0]=r*255;',
         'if(GLImmediate.mode>=0){GLImmediate.__grow();var start=GLImmediate.vertexCounter<<2;GLImmediate.vertexDataU8[start+0]=r*255;',
+        # 4th field: the attribute-state entry replaces this branch with a record of the colour
+        'if(GLImmediate.mode>=0){GLImmediate.__',
     ),
     (
         # The GPU-side ring only has slots for sizes up to MAX_TEMP_BUFFER_SIZE. Give an
@@ -426,8 +655,8 @@ POLYGON_MODE = [
         'else{GLctx.drawArrays(GLImmediate.mode,startIndex,numVertices)}}',
         # 4th field: the index-type patch below rewrites the drawElements call inside this
         # replacement, so `new` no longer appears whole once both are in. Detect on the
-        # mode test instead, which nothing else touches.
-        'if(!(GLEmulation.__polyMode===6913||GLEmulation.__polyMode===6912)'
+        # tail of the mode test, which nothing else touches (the draw-time polygon-mode
+        # entry rewrites its head).
         '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){',
     ),
 ]
@@ -455,7 +684,113 @@ POLYGON_MODE += [
     (
         'glPolygonMode does not forward POINT to WEBGL_polygon_mode',
         'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode)GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
-        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(GLctx.webglPolygonMode&&face===1032&&(pmode===6913||pmode===6914))GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
+        # A fresh link goes straight to the lazy-extension form (the entry below migrates
+        # assets that carry the intermediate one).
+        # A fresh link goes straight to the FINAL form: the wish is recorded, the extension
+        # is applied only where a draw already enabled it, and the draw-time half
+        # (_fcPolyApply, see POLYGON_MODE_AT_DRAW) rides along. The chain of entries below
+        # this one migrates assets that carry the intermediate forms.
+        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};'
+        'var _fcPolyApply=(mode)=>{try{if(mode>=4&&mode<=6&&GLEmulation.__polyMode===6913&&GLctx.webglPolygonMode===undefined){'
+        'GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")||null;'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(1032,6913)}}}catch(e){}};',
+        # 4th field: the lazy-extension entry below rewrites this condition.
+        'var _glPolygonMode=(face,pmode)=>{GLEmulation.__polyMode=pmode;try{if(',
+    ),
+]
+
+# MIGRATION: an asset patched with the previous POINT form (every link up to and including
+# build-20260910) carries neither the anchor above nor its replacement. Rewrite that form in
+# place so the deploy-time re-run and a rescued release both come out identical to a fresh
+# link -- the tool fails closed on NOT FOUND, so without this it would write nothing.
+POLYGON_MODE += [
+    (
+        'glPolygonMode: migrate the previous forwarding condition',
+        '&&face===1032&&(pmode===6913||pmode===6914))GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}catch(e){}};',
+        '&&face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}catch(e){}};',
+        '(pmode!==6914||GLctx.__fcPolyUsed)){',
+    ),
+    # THE EXTENSION IS ENABLED ONLY WHEN WIREFRAME IS ACTUALLY ASKED FOR.
+    #
+    # emscripten enables every supported extension at context creation, and Chrome prints
+    # 'this extension has very low support on mobile devices ... WEBGL_polygon_mode' once
+    # per context for it -- two at boot and one per document opened, the only console
+    # warning left after the 2026-09-11 census. Take it out of the eager set and fetch it
+    # on the first LINE/POINT request; a user who never leaves FILL never sees the note.
+    (
+        'glPolygonMode: enable WEBGL_polygon_mode lazily',
+        'try{if(GLctx.webglPolygonMode&&face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}catch(e){}};',
+        'try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
+        'if(GLctx.webglPolygonMode===undefined){GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")}'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};',
+        # 4th field: the draw-time entry below takes the getExtension out of this text.
+        'try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){',
+    ),
+    (
+        'context init: WEBGL_polygon_mode is not enabled eagerly',
+        'webgl_enable_EXT_clip_control(GLctx);webgl_enable_WEBGL_polygon_mode(GLctx);webgl_enable_ANGLE_instanced_arrays(GLctx);',
+        'webgl_enable_EXT_clip_control(GLctx);webgl_enable_ANGLE_instanced_arrays(GLctx);',
+    ),
+    (
+        'supported-extension list: WEBGL_polygon_mode is not enabled by the generic loop',
+        '"WEBGL_multi_draw","WEBGL_polygon_mode"];return ctx.getSupportedExtensions()',
+        '"WEBGL_multi_draw"];return ctx.getSupportedExtensions()',
+    ),
+]
+
+# THE EMULATION'S PROGRAM TRACKING IS GLOBAL; THE APP HAS MANY CONTEXTS.
+#
+# LEGACY_GL_EMULATION wraps glUseProgram as `if (GL.currProgram != program) {...real call}`
+# and binds its own fixed-function renderer program natively, tracked by
+# GLImmediate.fixedFunctionProgram -- both plain globals, written from whichever context
+# happens to be current. Qt-wasm gives the window one context and every 3D view its own,
+# so a fixed-function flush on a view context leaves the globals describing THAT context,
+# and the next glUseProgram Qt's RHI issues on the window is compared against a value that
+# was never true there. Measured 2026-09-11 from inside the glue with a per-context event
+# ring: emscripten requested program 81, 78, 81, 78 ... on the window context while the
+# driver had a renderer program bound before every one of them -- 224-805 'location is
+# not from the associated program' per session, the last of the console noise. Save and
+# restore both per context in the same makeContextCurrent hook that already carries the
+# lighting state across; a context seen for the first time starts at 0, which is true.
+POLYGON_MODE += [
+    (
+        'makeContextCurrent: GL.currProgram and fixedFunctionProgram are per context',
+        'prev.__fcEmu=snap()}catch(e){}var r=m2.apply(GL,arguments);',
+        'prev.__fcEmu=snap()}catch(e){}'
+        'try{if(prev){prev.__fcCurProg=GL.currProgram;prev.__fcFFP=GLImmediate.fixedFunctionProgram}}catch(e){}'
+        'var r=m2.apply(GL,arguments);'
+        'try{var c2=GL.currentContext;if(c2&&c2!==prev){GL.currProgram=c2.__fcCurProg||0;GLImmediate.fixedFunctionProgram=c2.__fcFFP||0;GLImmediate.currentRenderer=null}}catch(e){}',
+    ),
+]
+
+# A DRAW UNDER THE APP'S OWN SHADER MUST NOT BE ROUTED THROUGH THE FIXED-FUNCTION PATH BY
+# CLIENT-ARRAY STATE IT NEVER TOUCHED.
+#
+# emscripten sends glDrawArrays/glDrawElements through GLImmediate whenever any client array
+# is enabled -- state that is global here and that Coin (and upstream NaviCube, fixed in
+# freecad.patch) leaves enabled. Qt's RHI then draws its sample-resolve quad with its own
+# program bound and generic attributes in a VAO, and the emulation rebuilt it as a fixed-
+# function draw: renderer program bound over Qt's, Qt's uniforms failing from then on.
+# The tell is that the enabled client arrays predate the glUseProgram: remember how many
+# were enabled when a program was bound, clear that memory on the next glEnable/
+# DisableClientState (fresh fixed-function intent), and while it stands, draw directly.
+POLYGON_MODE += [
+    (
+        'glUseProgram: remember the client arrays enabled before an app program bind',
+        'if(GL.currProgram!=program){GLImmediate.currentRenderer=null;GL.currProgram=program;GLImmediate.fixedFunctionProgram=0;orig_glUseProgram(program)}',
+        'if(GL.currProgram!=program){GLImmediate.currentRenderer=null;GL.currProgram=program;GLImmediate.fixedFunctionProgram=0;'
+        'GLImmediate.__fcStaleECA=program?GLImmediate.totalEnabledClientAttributes:0;orig_glUseProgram(program)}',
+    ),
+    (
+        'glEnableClientState: fresh fixed-function intent',
+        'var _glEnableClientState=_emscripten_glEnableClientState;',
+        'var _glEnableClientState=_emscripten_glEnableClientState=(function(f){return cap=>{GLImmediate.__fcStaleECA=0;return f(cap)}})(_emscripten_glEnableClientState);',
+    ),
+    (
+        'glDisableClientState: fresh fixed-function intent',
+        'var _glDisableClientState=_emscripten_glDisableClientState;',
+        'var _glDisableClientState=_emscripten_glDisableClientState=(function(f){return cap=>{GLImmediate.__fcStaleECA=0;return f(cap)}})(_emscripten_glDisableClientState);',
     ),
 ]
 
@@ -563,7 +898,7 @@ COUNTING_PATCHES = [
 ]
 
 
-def apply(text, _passes=3, counting=True):
+def apply(text, _passes=8, counting=True):
     """Return (patched_text, [status per patch]). Idempotent.
 
     Applied repeatedly to a fixpoint: some sites only appear once an earlier patch has
@@ -572,7 +907,7 @@ def apply(text, _passes=3, counting=True):
     """
     for _ in range(_passes - 1):
         text, st = _apply_once(text)
-        if all(s != 'applied' for _, s in st):
+        if not any(s.startswith('applied') for _, s in st):
             break
     text, st = _apply_once(text)
 
@@ -604,6 +939,28 @@ def apply(text, _passes=3, counting=True):
     return text, st
 
 
+# TRIANGLE strips and fans are NOT batched here, and two attempts to add them FAILED.
+#
+# Expanding them into independent triangles the way lines are expanded is arithmetically
+# straightforward and measurably faster -- ArchDetail went 2437 -> 1064 draws/frame and
+# 700 -> 565 ms -- but it turns SOLID FACES INTO WIREFRAME on the immediate path: 57-87%
+# of pixels differ from the same document rendered without it. ?vbofaces=1 hides that
+# entirely, because the VBO face path does not go through immediate mode, and that is how
+# it shipped once (3480556, reverted in 73b7693) -- every check in the repo was running
+# with faces on by default at the time.
+#
+# The second attempt guessed at the vertex LAYOUT: __mrgCmp compares matrices and material
+# but never the attribute set, while __flushMerged draws the whole batch with the LAST
+# snapshot's -- harmless for lines, which all carry the same attributes, wrong for
+# triangles, where some primitives have normals and some do not. Refusing to merge across
+# a stride or attribute-set change did NOT fix it, so that is not the mechanism either.
+#
+# Whoever tries again: run the ?vbofaces=0 A/B FIRST (scratchpad/faces-ab.py) and find out
+# WHY the faces vanish before changing anything -- both attempts reasoned from a plausible
+# mechanism instead, and both were wrong. Worth knowing too that these files are no longer
+# call-bound: what remains is ~25-60 ms fixed plus ~50-85 ms of per-pixel rasterisation at
+# 1280x720, and fewer draw calls touches neither.
+#
 # ---- immediate-mode line batching -------------------------------------------------
 # Coin draws every EDGE as its own glBegin(GL_LINE_STRIP)/glEnd. On BIMExample that is
 # 80,030 of 86,122 draws -- 93 percent -- each carrying a full bufferSubData + attribute
@@ -626,18 +983,79 @@ def apply(text, _passes=3, counting=True):
 # more than two vertices is split back out, and a deferred block tears down exactly like
 # an undeferred one -- each of those was a real bug found by pixel diff.
 OLD_END_MERGE = 'var _glEnd=()=>{GLImmediate.prepareClientAttributes(GLImmediate.rendererComponents[GLImmediate.VERTEX],true);GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}GLImmediate.flush();GLImmediate.disableBeginEndClientAttributes();GLImmediate.mode=-1;GLImmediate.enabledClientAttributes=GLImmediate.enabledClientAttributes_preBegin;GLImmediate.clientAttributes=GLImmediate.clientAttributes_preBegin;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true}'
-NEW_END_MERGE = 'GLImmediate.__mrgN=0;GLImmediate.__mrgPend=false;GLImmediate.__mrgPrevVC=0;GLImmediate.__mrgSnap=null;GLImmediate.__mrgOn=!/[?&]nomerge=1/.test(location.search);globalThis.__GLI=GLImmediate;GLImmediate.__mrgPrev=new Float64Array(128);GLImmediate.__mrgHave=false;GLImmediate.__mrgCmp=function(commit){var E=(typeof GLEmulation!=="undefined")?GLEmulation:null;var a=GLImmediate.__mrgPrev,n=0,same=GLImmediate.__mrgHave,v,i,j;function put(x){x=+x||0;if(a[n]!==x){same=false;if(commit)a[n]=x}n++}put(GLImmediate.matrixVersion[0]);put(GLImmediate.matrixVersion[1]);for(i=0;i<2;i++){v=GLImmediate.matrix[i];if(v)for(j=0;j<16;j++)put(v[j])}if(E){put(E.lightingEnabled?1:0);put(E.lightModelTwoSide);var ks=["materialAmbient","materialDiffuse","materialEmission","materialSpecular","materialShininess","lightModelAmbient"];for(i=0;i<ks.length;i++){v=E[ks[i]];if(v)for(j=0;j<v.length;j++)put(v[j])}if(E.lightEnabled)for(i=0;i<E.lightEnabled.length;i++)put(E.lightEnabled[i]?1:0)}if(commit)GLImmediate.__mrgHave=true;return same};GLImmediate.__mf=function(){if(GLImmediate.__mrgPend)GLImmediate.__flushMerged()};GLImmediate.__flushMerged=()=>{if(!GLImmediate.__mrgPend)return;var S=GLImmediate.__mrgSnap;GLImmediate.__mrgPend=false;GLImmediate.__mrgN=0;GLImmediate.__mrgSnap=null;GLImmediate.__mrgHave=false;var kCA=GLImmediate.clientAttributes,kECA=GLImmediate.enabledClientAttributes,kRC=GLImmediate.rendererComponents,kMode=GLImmediate.mode,kStride=GLImmediate.stride;GLImmediate.clientAttributes=S.ca;GLImmediate.enabledClientAttributes=S.eca;GLImmediate.rendererComponents=S.rc;GLImmediate.stride=S.stride;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);GLImmediate.mode=1;GLImmediate.flush();GLImmediate.disableBeginEndClientAttributes();GLImmediate.clientAttributes=kCA;GLImmediate.enabledClientAttributes=kECA;GLImmediate.rendererComponents=kRC;GLImmediate.stride=kStride;GLImmediate.mode=kMode;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;GLImmediate.vertexCounter=0;GLImmediate.__mrgPrevVC=0};var _glEnd=()=>{GLImmediate.prepareClientAttributes(GLImmediate.rendererComponents[GLImmediate.VERTEX],true);GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}if(GLImmediate.__mrgOn&&GLImmediate.mode===3&&GLImmediate.stride&&!(typeof GLEmulation!=="undefined"&&GLEmulation.lightingEnabled)&&(GLImmediate.vertexCounter-GLImmediate.__mrgPrevVC)/(GLImmediate.stride>>2)===2){GLImmediate.__mrgPend=true;GLImmediate.__mrgN++;GLImmediate.__mrgSnap={ca:GLImmediate.clientAttributes,eca:GLImmediate.enabledClientAttributes,rc:GLImmediate.rendererComponents,stride:GLImmediate.stride};GLImmediate.__mrgCmp(true);GLImmediate.disableBeginEndClientAttributes();GLImmediate.mode=-1;GLImmediate.enabledClientAttributes=GLImmediate.enabledClientAttributes_preBegin;GLImmediate.clientAttributes=GLImmediate.clientAttributes_preBegin;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;return;}if(GLImmediate.__mrgPend){var __m=GLImmediate.mode,__vc=GLImmediate.vertexCounter,__base=GLImmediate.__mrgPrevVC;GLImmediate.vertexCounter=__base;GLImmediate.__flushMerged();if(__vc>__base){GLImmediate.vertexData.copyWithin(0,__base,__vc);}GLImmediate.vertexCounter=__vc-__base;GLImmediate.mode=__m;GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);}GLImmediate.flush();GLImmediate.disableBeginEndClientAttributes();GLImmediate.mode=-1;GLImmediate.enabledClientAttributes=GLImmediate.enabledClientAttributes_preBegin;GLImmediate.clientAttributes=GLImmediate.clientAttributes_preBegin;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true}'
+NEW_END_MERGE = 'GLImmediate.__mrgN=0;GLImmediate.__mrgPend=false;GLImmediate.__mrgPrevVC=0;GLImmediate.__mrgSnap=null;GLImmediate.__mrgOn=!/[?&]nomerge=1/.test(location.search);globalThis.__GLI=GLImmediate;GLImmediate.__mrgPrev=new Float64Array(128);GLImmediate.__mrgHave=false;GLImmediate.__mrgPrep=function(){var S=GLImmediate.stride>>2;if(!S)return false;var base=GLImmediate.__mrgPrevVC,n=(GLImmediate.vertexCounter-base)/S;if(GLImmediate.mode===0)return n>=1&&n===(n|0);if(n<2||n!==(n|0))return false;if(GLImmediate.mode===1)return (n&1)===0;if(GLImmediate.mode!==3)return false;if(n===2)return true;var need=base+2*(n-1)*S,vc=GLImmediate.vertexCounter;GLImmediate.vertexCounter=need;GLImmediate.__grow();GLImmediate.vertexCounter=vc;var v=GLImmediate.vertexData;if(!v||v.length<need)return false;for(var i=n-2;i>=0;i--){var s=base+i*S,d0=base+2*i*S,d1=d0+S,k;for(k=S-1;k>=0;k--)v[d1+k]=v[s+S+k];for(k=S-1;k>=0;k--)v[d0+k]=v[s+k];}GLImmediate.vertexCounter=need;return true;};GLImmediate.__mrgCmp=function(commit){var E=(typeof GLEmulation!=="undefined")?GLEmulation:null;var a=GLImmediate.__mrgPrev,n=0,same=GLImmediate.__mrgHave,v,i,j;function put(x){x=+x||0;if(a[n]!==x){same=false;if(commit)a[n]=x}n++}put(GLImmediate.matrixVersion[0]);put(GLImmediate.matrixVersion[1]);put(GLImmediate.mode===0?0:1);var cc=GLImmediate.clientColor;if(cc){put(cc[0]);put(cc[1]);put(cc[2]);put(cc[3])}for(i=0;i<2;i++){v=GLImmediate.matrix[i];if(v)for(j=0;j<16;j++)put(v[j])}put(GLctx._fcLW||1);if(E){put(E.lightingEnabled?1:0);put(E.lightModelTwoSide);put(E.pointSize);var ks=["materialAmbient","materialDiffuse","materialEmission","materialSpecular","materialShininess","lightModelAmbient"];for(i=0;i<ks.length;i++){v=E[ks[i]];if(v)for(j=0;j<v.length;j++)put(v[j])}if(E.lightEnabled)for(i=0;i<E.lightEnabled.length;i++)put(E.lightEnabled[i]?1:0)}if(commit)GLImmediate.__mrgHave=true;return same};GLImmediate.__mf=function(){if(GLImmediate.__mrgPend)GLImmediate.__flushMerged()};GLImmediate.__flushMerged=()=>{if(!GLImmediate.__mrgPend)return;var S=GLImmediate.__mrgSnap;GLImmediate.__mrgPend=false;GLImmediate.__mrgN=0;GLImmediate.__mrgSnap=null;GLImmediate.__mrgHave=false;var kCA=GLImmediate.clientAttributes,kECA=GLImmediate.enabledClientAttributes,kRC=GLImmediate.rendererComponents,kMode=GLImmediate.mode,kStride=GLImmediate.stride;GLImmediate.clientAttributes=S.ca;GLImmediate.enabledClientAttributes=S.eca;GLImmediate.rendererComponents=S.rc;GLImmediate.stride=S.stride;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);GLImmediate.mode=S.mode;var kE=(typeof GLEmulation!=="undefined")?GLEmulation:null,km0=GLImmediate.matrix[0],km1=GLImmediate.matrix[1],kv0=GLImmediate.matrixVersion[0]|0,kv1=GLImmediate.matrixVersion[1]|0,kps=kE?kE.pointSize:0,klw=GLctx._fcLW;GLImmediate.matrix[0]=S.m0;GLImmediate.matrix[1]=S.m1;GLImmediate.matrixVersion[0]=kv0+1|0;GLImmediate.matrixVersion[1]=kv1+1|0;if(kE)kE.pointSize=S.ps;if(S.lw!==undefined&&S.lw!==klw)GLctx.lineWidth(S.lw);var kcc=GLImmediate.clientColor;if(S.cc)GLImmediate.clientColor=S.cc;GLImmediate.flush();if(S.cc)GLImmediate.clientColor=kcc;GLImmediate.matrix[0]=km0;GLImmediate.matrix[1]=km1;GLImmediate.matrixVersion[0]=kv0+2|0;GLImmediate.matrixVersion[1]=kv1+2|0;GLImmediate.matricesModified=true;if(kE)kE.pointSize=kps;if(S.lw!==undefined&&S.lw!==klw&&klw!==undefined)GLctx.lineWidth(klw);GLImmediate.disableBeginEndClientAttributes();GLImmediate.clientAttributes=kCA;GLImmediate.enabledClientAttributes=kECA;GLImmediate.rendererComponents=kRC;GLImmediate.stride=kStride;GLImmediate.mode=kMode;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;GLImmediate.vertexCounter=0;GLImmediate.__mrgPrevVC=0};var _glEnd=()=>{GLImmediate.prepareClientAttributes(GLImmediate.rendererComponents[GLImmediate.VERTEX],true);GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);if(GLctx.currentArrayBufferBinding){GLctx.bindBuffer(GLctx.ARRAY_BUFFER,null);GLctx.currentArrayBufferBinding=null;}if(GLImmediate.__mrgOn&&(GLImmediate.mode===3||GLImmediate.mode===1||GLImmediate.mode===0)&&GLImmediate.stride&&!(typeof GLEmulation!=="undefined"&&GLEmulation.lightingEnabled)&&GLImmediate.__mrgPrep()){GLImmediate.__mrgPend=true;GLImmediate.__mrgN++;GLImmediate.__mrgSnap={ca:GLImmediate.clientAttributes,eca:GLImmediate.enabledClientAttributes,rc:GLImmediate.rendererComponents,stride:GLImmediate.stride,mode:GLImmediate.mode===0?0:1,m0:new Float32Array(GLImmediate.matrix[0]),m1:new Float32Array(GLImmediate.matrix[1]),ps:(typeof GLEmulation!=="undefined")?GLEmulation.pointSize:1,lw:GLctx._fcLW,cc:GLImmediate.clientColor?new Float32Array(GLImmediate.clientColor):null};GLImmediate.__mrgCmp(true);GLImmediate.disableBeginEndClientAttributes();GLImmediate.mode=-1;GLImmediate.enabledClientAttributes=GLImmediate.enabledClientAttributes_preBegin;GLImmediate.clientAttributes=GLImmediate.clientAttributes_preBegin;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true;return;}if(GLImmediate.__mrgPend){var __m=GLImmediate.mode,__vc=GLImmediate.vertexCounter,__base=GLImmediate.__mrgPrevVC;GLImmediate.vertexCounter=__base;GLImmediate.__flushMerged();if(__vc>__base){GLImmediate.vertexData.copyWithin(0,__base,__vc);}GLImmediate.vertexCounter=__vc-__base;GLImmediate.mode=__m;GLImmediate.firstVertex=0;GLImmediate.lastVertex=GLImmediate.vertexCounter/(GLImmediate.stride>>2);}GLImmediate.flush();GLImmediate.disableBeginEndClientAttributes();GLImmediate.mode=-1;GLImmediate.enabledClientAttributes=GLImmediate.enabledClientAttributes_preBegin;GLImmediate.clientAttributes=GLImmediate.clientAttributes_preBegin;GLImmediate.currentRenderer=null;GLImmediate.modifiedClientAttributes=true}'
 OLD_VC_MERGE = 'GLImmediate.mode=mode;GLImmediate.vertexCounter=0;'
-NEW_VC_MERGE = 'GLImmediate.mode=mode;if(GLImmediate.__mrgPend&&mode===3&&GLImmediate.__mrgSnap&&GLImmediate.__mrgCmp(false)){GLImmediate.__mrgPrevVC=GLImmediate.vertexCounter;}else{GLImmediate.__mf();GLImmediate.vertexCounter=0;GLImmediate.__mrgPrevVC=0;}'
+NEW_VC_MERGE = 'GLImmediate.mode=mode;if(GLImmediate.__mrgPend&&(mode===3||mode===1||mode===0)&&GLImmediate.__mrgSnap&&GLImmediate.__mrgCmp(false)){GLImmediate.__mrgPrevVC=GLImmediate.vertexCounter;}else{GLImmediate.__mf();GLImmediate.vertexCounter=0;GLImmediate.__mrgPrevVC=0;}'
 DRAINS_MERGE = [('var _glDrawArrays=(mode,first,count)=>{if(GLImmediate.totalEnabledClientAttribu', 'var _glDrawArrays=(mode,first,count)=>{GLImmediate.__mf();if(GLImmediate.totalEnabledClientAttribu'), ('var _glDrawElements=(mode,count,type,indices,start,end)=>{if(GLImmediate.totalEnabledClientAttribu', 'var _glDrawElements=(mode,count,type,indices,start,end)=>{GLImmediate.__mf();if(GLImmediate.totalEnabledClientAttribu'), ('var _glEnableClientState=cap=>{var attrib=GLEmulation.getAttributeFromC', 'var _glEnableClientState=cap=>{GLImmediate.__mf();var attrib=GLEmulation.getAttributeFromC'), ('var _glDisableClientState=cap=>{var attrib=GLEmulation.getAttributeFromC', 'var _glDisableClientState=cap=>{GLImmediate.__mf();var attrib=GLEmulation.getAttributeFromC')]
 
 MERGE_PATCHES = [
-    ('immediate-mode line batching: glEnd defers', OLD_END_MERGE, NEW_END_MERGE),
-    ('immediate-mode line batching: glBegin continues', OLD_VC_MERGE, NEW_VC_MERGE),
+    # 4th field: the strip cap below inserts into __mrgPrep, so `new` stops appearing whole.
+    ('immediate-mode line batching: glEnd defers', OLD_END_MERGE, NEW_END_MERGE, 'GLImmediate.__mrgPrep=function(){'),
+    # 4th field: the marker is the part common to the shipped (lines-only) and current
+    # (points too, 2026-09-14) forms; the migration entry below moves a shipped asset on.
+    ('immediate-mode line batching: glBegin continues', OLD_VC_MERGE, NEW_VC_MERGE,
+     'GLImmediate.mode=mode;if(GLImmediate.__mrgPend&&(mode===3||mode===1'),
+    ('immediate-mode line batching: glBegin continues for GL_POINTS too',
+     NEW_VC_MERGE.replace('||mode===0', ''), NEW_VC_MERGE),
+    # Only SHORT strips are worth converting. A LINE_STRIP of n vertices becomes 2(n-1)
+    # LINES vertices through an O(n) in-place expansion, every frame; Draft wires and
+    # circles run to hundreds of vertices and the object under the cursor is re-sent through
+    # this path by the preselection highlight on every frame of a drag. Measured 2026-09-12
+    # on draft_test_objects: 40 fps with ?nomerge=1, 15-17 with the uncapped merge, while
+    # ArchDetail (thousands of 2-vertex segments) goes 10 -> 22 fps WITH the merge. Long
+    # strips stay one LINE_STRIP draw each, which is also the pixel-exact form.
+    ('immediate-mode line batching: strips longer than 16 vertices are not converted',
+     'if(n===2)return true;var need=base+2*(n-1)*S',
+     'if(n===2)return true;if(n>16)return false;var need=base+2*(n-1)*S'),
 ]
+# 4th field: the stale-client-array entries below rewrite the fast-path condition that
+# follows the drain, so `n` stops appearing whole on the fixpoint's later passes; detect
+# the drain on its own prefix, up to and including the `if(` it drains before.
 MERGE_PATCHES += [('line batching drain: ' + o.split('=')[0].replace('var _gl', 'gl'),
-                   o, n) for o, n in DRAINS_MERGE]
+                   o, n, (n.split('if(')[0] + 'if(') if 'if(' in n else n) for o, n in DRAINS_MERGE]
 PATCHES += MERGE_PATCHES
+
+# After the drains: they anchor on the untouched fast-path condition these rewrite.
+STALE_CLIENT_ARRAYS = [
+    (
+        'glDrawArrays: stale client arrays under an app program draw directly',
+        'if(GLImmediate.totalEnabledClientAttributes==0&&mode<=6){GLctx.drawArrays(mode,first,count);return}',
+        'if((GLImmediate.totalEnabledClientAttributes==0||(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6){GLctx.drawArrays(mode,first,count);return}',
+        # 4th field: the draw-time polygon-mode entry inserts a call inside this branch.
+        '(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6){',
+    ),
+    (
+        'glDrawElements: stale client arrays under an app program draw directly',
+        'if(GLImmediate.totalEnabledClientAttributes==0&&mode<=6&&GLctx.currentElementArrayBufferBinding){GLctx.drawElements(mode,count,type,indices);return}',
+        'if((GLImmediate.totalEnabledClientAttributes==0||(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6&&GLctx.currentElementArrayBufferBinding){GLctx.drawElements(mode,count,type,indices);return}',
+        '(GL.currProgram&&GLImmediate.__fcStaleECA))&&mode<=6&&GLctx.currentElementArrayBufferBinding){',
+    ),
+]
+PATCHES += STALE_CLIENT_ARRAYS
+
+# A DESTROYED CONTEXT MUST BE LET GO OF BY THE PAGE TOO.
+#
+# Qt destroys a 3D view's WebGL context when its document closes (measured 2026-09-11:
+# one deleteContext per close), but the browser only reclaims a context once nothing
+# references it, and the page's present pass keeps framebuffer/texture registries that
+# hold the context object. Twenty open/close cycles left twenty live contexts; Chrome
+# caps a page at 16 and evicts the oldest, which is the visible view. Tell the page, and
+# forget this glue's own handles to the context's objects: Qt drops the context without
+# deleting Coin's textures, framebuffers and programs, and a live WebGL object keeps its
+# context alive; the immediate-mode renderer cache holds programs too, so it is rebuilt.
+PATCHES += [
+    (
+        'deleteContext: tell the page which context is going away',
+        'deleteContext:contextHandle=>{if(GL.currentContext===GL.contexts[contextHandle]){GL.currentContext=null}',
+        'deleteContext:contextHandle=>{try{var __dc=GL.contexts[contextHandle],__g=__dc&&__dc.GLctx;if(__g){'
+        'if(typeof window!=="undefined"&&window.__fcContextDeleted)window.__fcContextDeleted(__g);'
+        'var __T=[GL.textures,GL.framebuffers,GL.renderbuffers,GL.buffers,GL.programs,GL.shaders];'
+        'for(var __ti=0;__ti<__T.length;__ti++){var __t=__T[__ti];for(var __i=0;__i<__t.length;__i++){if(__t[__i]&&__t[__i].__fcGl===__g)__t[__i]=null}}'
+        'if(typeof GLImmediate!=="undefined"&&GLImmediate.MapTreeLib){GLImmediate.rendererCache=GLImmediate.MapTreeLib.create();GLImmediate.currentRenderer=null;GLImmediate.lastRenderer=null;GLImmediate.fixedFunctionProgram=0}'
+        '}}catch(e){}'
+        'if(GL.currentContext===GL.contexts[contextHandle]){GL.currentContext=null}',
+    ),
+]
 
 
 # ---- glDrawElements index type: a 32-bit-indexed mesh drew as half a mesh ------------
@@ -701,6 +1119,679 @@ INDEX_TYPE = [
 ]
 PATCHES += INDEX_TYPE
 
+# ---- GL_COLOR_MATERIAL, for the VBO face path only ---------------------------------
+#
+# The emulation's vertex shader writes `v_color = a_color` and then, whenever lighting is
+# on, THROWS IT AWAY:
+#
+#     v_color.xyz  = u_materialEmission.xyz;
+#     v_color.xyz += u_lightModelAmbient.xyz * u_materialAmbient.xyz;
+#     diffuse      = diffuseI * u_lightDiffuse0.xyz * u_materialDiffuse.xyz;
+#
+# There is no GL_COLOR_MATERIAL in it at all. Immediate mode survives that because Coin
+# calls glColor3f per face and this table's 'glColor drives material colour' feeds it into
+# materialDiffuse. SoBrepFaceSet's VBO path supplies colours as an interleaved ARRAY and
+# never calls glColor, so every face shades with whatever material was last set -- measured
+# as the whole assembly rendering SOLID BLACK with a correct silhouette under ?vbofaces=1.
+#
+# Applies wherever the COLOR client attribute is live, which is what real GL_COLOR_MATERIAL
+# keys on. Begin/end draws enable it too and come out unchanged: 'glColor drives material
+# colour' already keeps materialDiffuse equal to the glColor that a_color carries, so the
+# uniform and the attribute hold the same value there.
+PATCHES += [
+    (
+        'GL_COLOR_MATERIAL: shade a vertex-colour array by its own colour',
+        'vsLightingPass+="  v_color.w = u_materialDiffuse.w;";'
+        'vsLightingPass+="  v_color.xyz = u_materialEmission.xyz;";'
+        'vsLightingPass+="  v_color.xyz += u_lightModelAmbient.xyz * u_materialAmbient.xyz;";',
+        # COLOR is client attribute 2 (VERTEX:0, NORMAL:1, COLOR:2).
+        # NOT gated on GLctx.currentArrayBufferBinding. With a VAO the buffer is recorded
+        # per ATTRIBUTE and the global bind point is null by draw time, so that test never
+        # fired for the very path it was written for: the faces kept shading from the
+        # material uniform, which is how the model came out in FreeCAD's preselection
+        # orange (255,90,0) while its buffers held the right colours all along.
+        #
+        # The client attribute alone is the correct condition, and it needs no extra cache
+        # key: enabledAttributesKey already carries one bit per live attribute. Begin/end
+        # draws enable COLOR too and are unaffected in result -- 'glColor drives material
+        # colour' keeps materialDiffuse equal to the same glColor a_color carries.
+        'var __fcCM=!!GLImmediate.enabledClientAttributes[2];'
+        # DIFFUSE only, not AMBIENT_AND_DIFFUSE. Driving the ambient terms from a_color
+        # as well double-counts the colour and CLIPS: the amber object came out
+        # (255,90,0), its red channel saturated, against a declared (255,170,0) --
+        # measured as cos 0.9692 to the declared hue where every other colour in the
+        # frame sat at 1.0000. The ambient uniform is left alone.
+        'var __fcD=__fcCM?"a_color":"u_materialDiffuse";'
+        'vsLightingPass+="  v_color.w = "+__fcD+".w;";'
+        'vsLightingPass+="  v_color.xyz = u_materialEmission.xyz;";'
+        'vsLightingPass+="  v_color.xyz += u_lightModelAmbient.xyz * u_materialAmbient.xyz;";',
+    ),
+    (
+        'GL_COLOR_MATERIAL: diffuse term',
+        'vsLightingPass+="    vec3 diffuse = diffuseI * u_lightDiffuse"+lightId+".xyz * u_materialDiffuse.xyz;";',
+        'vsLightingPass+="    vec3 diffuse = diffuseI * u_lightDiffuse"+lightId+".xyz * "+__fcD+".xyz;";',
+    ),
+]
+
+# ---- per-vertex entry points: one heap-view check, no range-checked BigInt ---------------
+#
+# The immediate-mode paths (SoBrepFaceSet::renderShape for highlights, Coin's vertex cache
+# renderImmediate, SoBrepEdgeSet) call glVertex3fv/glNormal3fv once per vertex. Profiled
+# on a 4 s drag of EngineBlock (2026-09-11): growMemViews 10.7% and bigintToI53Checked
+# 5.3% of the whole main thread, nearly all under these four functions -- the generated
+# form checks the heap view THREE times per call and range-checks the pointer as a BigInt.
+# One check, Number(), a local view: same reads, a third of the overhead.
+PATCHES += [
+    (
+        'glVertex3fv: one heap-view check',
+        '_emscripten_glVertex3fv(p){p=bigintToI53Checked(p);return _glVertex3f((growMemViews(),HEAPF32)[p/4],(growMemViews(),HEAPF32)[(p+4)/4],(growMemViews(),HEAPF32)[(p+8)/4])}',
+        '_emscripten_glVertex3fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;return _glVertex3f(h[i],h[i+1],h[i+2])}',
+    ),
+    (
+        'glNormal3fv: one heap-view check',
+        '_emscripten_glNormal3fv(p){p=bigintToI53Checked(p);_glNormal3f((growMemViews(),HEAPF32)[p/4],(growMemViews(),HEAPF32)[(p+4)/4],(growMemViews(),HEAPF32)[(p+8)/4])}',
+        '_emscripten_glNormal3fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;_glNormal3f(h[i],h[i+1],h[i+2])}',
+    ),
+    (
+        'glColor3fv: one heap-view check',
+        '_emscripten_glColor3fv(p){p=bigintToI53Checked(p);return _glColor3f((growMemViews(),HEAPF32)[p/4],(growMemViews(),HEAPF32)[(p+4)/4],(growMemViews(),HEAPF32)[(p+8)/4])}',
+        '_emscripten_glColor3fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;return _glColor3f(h[i],h[i+1],h[i+2])}',
+    ),
+    (
+        'glColor4fv: one heap-view check',
+        '_emscripten_glColor4fv(p){p=bigintToI53Checked(p);return _glColor4f((growMemViews(),HEAPF32)[p/4],(growMemViews(),HEAPF32)[(p+4)/4],(growMemViews(),HEAPF32)[(p+8)/4],(growMemViews(),HEAPF32)[(p+12)/4])}',
+        '_emscripten_glColor4fv(p){growMemViews();var h=HEAPF32,i=Number(p)/4;return _glColor4f(h[i],h[i+1],h[i+2],h[i+3])}',
+    ),
+]
+
+# ---- polygon mode: ask for the extension only when a TRIANGLE is drawn in LINE mode ------
+#
+# Measured 2026-09-12 (scratchpad/gpu-linemode-draws.py) on EngineBlock, draft_test_objects,
+# BIMExample and the a2plus assembly: every draw issued while GL_LINE polygon mode was set
+# was drawArrays(GL_LINES) from a client array -- Coin's SoDrawStyle LINES sits over the
+# EDGE separators, and lines are lines whatever the polygon mode. Not one triangle. So the
+# extension request that glPolygonMode made, and Chrome's 'very low support on mobile
+# devices' console line with it, bought nothing on any of them.
+#
+# glPolygonMode now only records the wish (and applies it where the extension is already
+# on); the request moves to the draw: the first TRIANGLES/STRIP/FAN draw issued while LINE
+# is wanted enables the extension and applies the mode. A scene that never fills a polygon
+# in wireframe never asks, and the console stays clean.
+POLYGON_MODE_AT_DRAW = [
+    (
+        'glPolygonMode: record the wish, apply only where the extension is already on',
+        # Anchored from the function's first statement: the selftest fixture also carries
+        # the lazy entry's bare fragment, and this must match the whole function only once.
+        'GLEmulation.__polyMode=pmode;try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
+        'if(GLctx.webglPolygonMode===undefined){GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")}'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};',
+        'GLEmulation.__polyMode=pmode;try{if(face===1032&&(pmode===6913||pmode===6914)&&(pmode!==6914||GLctx.__fcPolyUsed)){'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(face,pmode)}}}catch(e){}};'
+        # The draw-time half. Returns undefined so it can sit in a condition.
+        'var _fcPolyApply=(mode)=>{try{if(mode>=4&&mode<=6&&GLEmulation.__polyMode===6913&&GLctx.webglPolygonMode===undefined){'
+        'GLctx.webglPolygonMode=GLctx.getExtension("WEBGL_polygon_mode")||null;'
+        'if(GLctx.webglPolygonMode){GLctx.__fcPolyUsed=true;GLctx.webglPolygonMode.polygonModeWEBGL(1032,6913)}}}catch(e){}};',
+        'var _fcPolyApply=(mode)=>{',
+    ),
+    # Inside the fast paths, not at the function heads: the line-batching drain entries
+    # detect themselves on everything up to each function's first `if(`. The slow paths go
+    # through flush(), which has its own call below.
+    (
+        'glDrawArrays: apply a pending LINE polygon mode before a triangle draw',
+        '){GLctx.drawArrays(mode,first,count);return}',
+        '){_fcPolyApply(mode);GLctx.drawArrays(mode,first,count);return}',
+    ),
+    (
+        'glDrawElements: apply a pending LINE polygon mode before a triangle draw',
+        '){GLctx.drawElements(mode,count,type,indices);return}',
+        '){_fcPolyApply(mode);GLctx.drawElements(mode,count,type,indices);return}',
+    ),
+    (
+        'flush: apply a pending LINE polygon mode before a begin/end triangle draw',
+        'if(!(GLEmulation.__polyMode===6913||GLEmulation.__polyMode===6912)'
+        '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){',
+        'if(_fcPolyApply(GLImmediate.mode)||!(GLEmulation.__polyMode===6913||GLEmulation.__polyMode===6912)'
+        '||GLctx.webglPolygonMode||GLImmediate.mode<4||GLImmediate.mode>6){',
+    ),
+]
+PATCHES += POLYGON_MODE_AT_DRAW
+
+# ---- cached edges on by default --------------------------------------------------------
+#
+# pre-gui.js is --pre-js, baked into FreeCAD.js at link time, so an engine linked before
+# 2026-09-11 still carries the opt-in form. The C++ side (SoBrepEdgeSet, the node sends
+# its own line colour and scopes its light model) shipped in the same commit, so this is
+# only right on an engine that carries it -- which is every link from d3a05f3 on. Same
+# escape hatch as the source: ?vboedges=0.
+PATCHES += [
+    (
+        'cached edges: on by default, ?vboedges=0 opts out',
+        'if(qs.get("vboedges")==="1"){ENV.FCWEB_VBO_EDGES="1"}',
+        'if(qs.get("vboedges")!=="0"){ENV.FCWEB_VBO_EDGES="1"}',
+    ),
+]
+
+# ---- glTexImage2D: legacy component-count internal formats ------------------------------
+#
+# Desktop GL accepts 1..4 as the internal format (number of components); WebGL does not,
+# and emscripten's emulation passes the value through. SoDatumLabel -- every Sketcher
+# constraint value -- uploads its text with internalFormat 4: INVALID_VALUE on the
+# upload, INVALID_OPERATION on the sub-image, and the label draws with no texture, so a
+# sketch in edit mode showed dimension arrows with no numbers (measured 2026-09-13).
+# Map the four counts to LUMINANCE / LUMINANCE_ALPHA / RGB / RGBA, which WebGL2 accepts
+# as unsized internal formats with the matching format.
+PATCHES += [
+    (
+        'glTexImage2D: internal format 1..4 means components',
+        # anchored through the first statement so the search text does not survive whole
+        'function _emscripten_glTexImage2D(target,level,internalFormat,width,height,border,format,type,pixels){pixels=bigintToI53Checked(pixels);',
+        'function _emscripten_glTexImage2D(target,level,internalFormat,width,height,border,format,type,pixels){if(internalFormat>=1&&internalFormat<=4)internalFormat=[0,6409,6410,6407,6408][internalFormat];pixels=bigintToI53Checked(pixels);',
+    ),
+]
+
+# ---- JSPI: every promising call gets its own shadow stack ---------------------------------
+#
+# The wasm stack is switched by the engine under JSPI; the C shadow stack in linear memory
+# is not. Emscripten leaves __stack_pointer wherever the suspending computation left it,
+# which is safe only while everything that runs during the suspension returns before it
+# resumes (last in, first out). Qt's main loop breaks that order all day: main() sits
+# suspended in qtSuspendJs between events and RESUMES on every timer and DOM event, its
+# wait() returns, and the dispatcher's next calls push frames from main's own level --
+# straight over the frames of any fcweb_run_python that suspended below it (the gmsh and
+# ccx bridges, HTML dialogs). Measured 2026-09-13: Qt resumed 15 times inside one gmsh
+# call; the Python call came back to a smashed entry frame and died with "Fatal Python
+# error: _PyEval_EvalFrameDefault: Executing a cache" after its result had been written,
+# which is the boot gate's post-fem freeze (run 34775938426) and a local trap on every
+# FEM solve.
+#
+# So each promising export (fcweb_run_python, fcweb_dispatch_event) runs on a private
+# malloc'd stack the size of the main one, pooled and reused. When a call suspends, the
+# shared pointer is handed back to the level its caller had; when it resumes, its own
+# pointer is put back first. main() keeps the real stack. A computation's frames can
+# then never be overwritten by another's, whatever order they resume in.
+_JSPI_STACKS = (
+    'Asyncify.__stk={main:0,regions:[],free:[],size:0,'
+    'init(){var S=Asyncify.__stk;if(!S.size){S.size=_emscripten_stack_get_base()-_emscripten_stack_get_end();S.main=stackSave()}},'
+    'inMain(v){return v<=_emscripten_stack_get_base()&&v>=_emscripten_stack_get_end()},'
+    'of(v){var R=Asyncify.__stk.regions;for(var i=0;i<R.length;i++){var r=R[i];if(r.live&&v>r.base&&v<=r.top)return r}return null},'
+    'acquire(){var S=Asyncify.__stk;S.init();var r=S.free.pop();'
+    'if(!r){var b=_malloc(S.size);if(!b)throw new Error("fcweb: no memory for a call stack");'
+    'r={base:b,top:Math.floor((b+S.size)/16)*16,live:false,gen:0};S.regions.push(r)}r.live=true;r.gen++;return r},'
+    'release(r){r.live=false;Asyncify.__stk.free.push(r)},'
+    'safe(v,reg,gen){var S=Asyncify.__stk;if(S.inMain(v))return v;if(reg&&reg.live&&reg.gen===gen)return v;return S.main}};'
+    'Module.__fcStk=Asyncify.__stk;'   # so a probe can read how many stacks a session needed
+)
+PATCHES += [
+    (
+        'JSPI stacks: a suspending call hands the pointer back, a resuming one takes its own',
+        'handleAsync:async startAsync=>{runtimeKeepalivePush();try{return await startAsync()}finally{runtimeKeepalivePop()}}',
+        'handleAsync:async startAsync=>{runtimeKeepalivePush();var S=Asyncify.__stk;S.init();var sp=stackSave(),reg=S.of(sp);if(!reg)S.main=sp;'
+        'try{var pr=startAsync();if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
+        'finally{stackRestore(sp);runtimeKeepalivePop()}}',
+        # 4th field: the JSPI-live entries below insert into this body.
+        'if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}',
+    ),
+    (
+        'JSPI stacks: promising exports run on a private stack, and the pool they come from',
+        'makeAsyncFunction(original){return WebAssembly.promising(original)}};',
+        'makeAsyncFunction(original,name){var p=WebAssembly.promising(original);if(name==="main"||name==="__main_argc_argv")return p;'
+        'return function(){var S=Asyncify.__stk;S.init();var outer=stackSave(),oreg=S.of(outer),ogen=oreg?oreg.gen:0;if(S.inMain(outer))S.main=outer;'
+        'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;'
+        'try{r=p.apply(null,arguments)}catch(e){stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}'
+        'stackRestore(S.safe(outer,oreg,ogen));'
+        'var done=function(){if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};'
+        'if(r&&typeof r.then==="function")r.then(done,done);else done();return r}}};' + _JSPI_STACKS,
+        # 4th field: the JSPI-live entries below insert into this body.
+        'Asyncify.__stk={main:0,regions:[],free:[],size:0,',
+    ),
+    (
+        'JSPI stacks: the export name reaches the wrapper',
+        'original=Asyncify.makeAsyncFunction(original)}',
+        'original=Asyncify.makeAsyncFunction(original,x)}',
+    ),
+]
+
+# ---- JSPI live: is the code running right now on a promising stack? ----------------------
+#
+# gl_legacy_stubs.c's fcweb_maybe_yield() parks a long computation (document open,
+# recompute) for one turn of the browser event loop so the tab stays alive -- legal only
+# while a promising activation is executing; from a raw callback into wasm the suspend
+# traps. Nothing in JSPI says which is the case, so count it: +1 when a promising export
+# (or main) is entered, -1 when it suspends, +1 when it resumes, -1 when it completes.
+# Exactly one promising activation executes at a time, so the count is 0 or 1. It may
+# only ever err LOW: a false 'yes' is an illegal suspend with the shadow stack pointer
+# already handed back -- a corrupted stack -- while a false 'no' is a skipped yield.
+# Hence main counts in and never out (its promise was seen resolving mid-session while
+# Qt's loop kept suspending and resuming, measured 2026-09-15, which then refused every
+# yield), and decrements clamp at 0.
+PATCHES += [
+    (
+        'JSPI live: entering a promising export',
+        'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;'
+        'try{r=p.apply(null,arguments)}catch(e){stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+        'var reg=S.acquire();reg.outer=outer;reg.outerReg=oreg;reg.outerGen=ogen;stackRestore(reg.top);var r;Asyncify.__live=(Asyncify.__live|0)+1;'
+        'try{r=p.apply(null,arguments)}catch(e){if(Asyncify.__live>0)Asyncify.__live--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+        # 4th field: the python-bridge entries below insert into the catch and into done.
+        'var r;Asyncify.__live=(Asyncify.__live|0)+1;try{r=p.apply(null,arguments)}',
+    ),
+    (
+        'JSPI live: a promising export completes',
+        'var done=function(){if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
+        'var done=function(){if(Asyncify.__live>0)Asyncify.__live--;if(S.of(stackSave())===reg)stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
+        'var done=function(){if(Asyncify.__live>0)Asyncify.__live--;',
+    ),
+    (
+        'JSPI live: main counts too',
+        'if(name==="main"||name==="__main_argc_argv")return p;',
+        'if(name==="main"||name==="__main_argc_argv")return function(){Module.__fcLive=function(){return Asyncify.__live|0};Asyncify.__live=(Asyncify.__live|0)+1;return p.apply(null,arguments)};',
+    ),
+    (
+        'JSPI live: a suspend leaves, a resume comes back',
+        'try{var pr=startAsync();if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
+        'finally{stackRestore(sp);runtimeKeepalivePop()}}',
+        'var __dec=false;try{var pr=startAsync();if(Asyncify.__live>0)Asyncify.__live--;__dec=true;if(reg)stackRestore(S.safe(reg.outer,reg.outerReg,reg.outerGen));return await pr}'
+        'finally{if(__dec)Asyncify.__live++;stackRestore(sp);runtimeKeepalivePop()}}',
+    ),
+]
+
+# ---- one Python bridge activation at a time -----------------------------------------------
+#
+# CPython's GIL and thread state are per OS THREAD. Two fcweb_run_python activations
+# interleaved on the one browser thread -- one parked in a yield (document load), a
+# dialog or a solver bridge, the other running -- cannot both be right about who holds
+# the GIL: the parked one either releases it (and the other, suspended inside Python with
+# the lock, resumes to a NULL thread state) or keeps it (and the other's release strands
+# the first). Both were measured as 'Fatal Python error: PyThreadState_Get' in the boot
+# gate (runs 34913239544 and 34976825287: an autosave restore parked in a yield while the
+# gate's FEM probe started and suspended in the mesher bridge). Qt-event Python is safe --
+# a parked load holds Qt's resume slot and delivers those events itself, synchronously --
+# so what remains is this: a second bridge call waits until the first has completed.
+PATCHES += [
+    (
+        'python bridge: a call made while one is in flight waits for it',
+        'return function(){var S=Asyncify.__stk;S.init();var outer=stackSave(),oreg=S.of(outer),ogen=oreg?oreg.gen:0;',
+        'return function(){var A=Asyncify;if(name==="fcweb_run_python"){if((A.__pyActive|0)>0){var qa=arguments,qs=this;'
+        'return new Promise(function(res,rej){(A.__pyQueue=A.__pyQueue||[]).push(function(){try{res(Module["_fcweb_run_python"].apply(qs,qa))}catch(e){rej(e)}})})}'
+        'A.__pyActive=(A.__pyActive|0)+1}'
+        'var S=Asyncify.__stk;S.init();var outer=stackSave(),oreg=S.of(outer),ogen=oreg?oreg.gen:0;',
+    ),
+    (
+        'python bridge: completion lets the next waiting call in',
+        'stackRestore(S.safe(outer,oreg,ogen));S.release(reg)};',
+        'stackRestore(S.safe(outer,oreg,ogen));S.release(reg);'
+        'if(name==="fcweb_run_python"){A.__pyActive--;var q=A.__pyQueue;if(q&&q.length&&A.__pyActive<=0){A.__pyActive=0;setTimeout(q.shift(),0)}}};',
+    ),
+    (
+        'python bridge: a call that threw synchronously is not in flight',
+        'catch(e){if(Asyncify.__live>0)Asyncify.__live--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+        'catch(e){if(Asyncify.__live>0)Asyncify.__live--;if(name==="fcweb_run_python")A.__pyActive--;stackRestore(S.safe(outer,oreg,ogen));S.release(reg);throw e}',
+    ),
+]
+
+# ---- display lists: Coin's render caches, recorded at the import table ---------------------
+#
+# The desktop is fast on big static scenes because Coin compiles each separator into a GL
+# display list and replays it; glGenLists has returned 0 here since the first link, so Coin
+# re-traversed every node every frame (BIMExample: 63% of a drag frame in SoGLRenderAction,
+# desktop 75 fps vs 15-40, measured 2026-09-14). The C stubs now talk to this object
+# (gl_legacy_stubs.c -> EM_JS -> __fcDL): glGenLists hands out ids, glNewList starts a
+# recording, every GL import called while recording is appended as (function, args) and --
+# Coin compiles with GL_COMPILE_AND_EXECUTE -- executed as well, glEndList stores the list,
+# glCallList replays it.
+#
+# Two things make a replay faithful. Pointer arguments to immediate-mode vector calls
+# (glVertex3fv etc.) and to the fv setters point at memory Coin reuses, so they are
+# dereferenced at record time (the *fv becomes the scalar call; the setters get a private
+# copy). Client vertex arrays -- the cached edge path, SoAsciiText's triangles, meshes -- are
+# snapshotted at the draw that consumes them, into private wasm memory the recorded pointer
+# calls are rewritten to; VBO draws are recorded as-is (offsets). Object creation, uploads
+# and queries (Gen/Delete/Get/Is/TexImage/BufferData...) are executed and never recorded,
+# as the GL spec has it. On until ?dlists=0.
+_DLISTS = (
+    'var __fcDL={on:!/[?&]dlists=0/.test(typeof location!=="undefined"?location.search:""),lists:new Map(),next:1,rec:null,orig:null,'
+    'stats:{lists:0,ops:0,replays:0,bytes:0,wrongCtx:0},replaying:0,'
+    'SKIP:/^(?:emscripten_)?gl(?:Gen|Delete|Get|Is|ReadPixels|Flush|Finish|Create|Shader|Compile|Link|Attach|Detach|BufferData|BufferSubData|TexImage|TexSubImage|CompressedTex|CopyTex|Map|Unmap|Fence|Check|Validate|Release|Sampler|Query|ClientWait|Uniform|Program|Blit|Framebuffer|Renderbuffer|Invalidate|WaitSync|Debug|Label|Object|String|Hint|PixelStore|ReadBuffer|DrawBuffer|Vertex(?:Attrib|Array)|Bind(?:Framebuffer|Renderbuffer|VertexArray|Sampler|Transform)|Enable(?:VertexAttrib|i)|Disable(?:VertexAttrib|i))/,'
+    'V:{glVertex2fv:["glVertex2f",2],glVertex3fv:["glVertex3f",3],glVertex4fv:["glVertex4f",4],glNormal3fv:["glNormal3f",3],glColor3fv:["glColor3f",3],glColor4fv:["glColor4f",4],glTexCoord2fv:["glTexCoord2f",2],glTexCoord3fv:["glTexCoord3f",3],glTexCoord4fv:["glTexCoord4f",4]},'
+    'P:{glMaterialfv:[2,16],glLightfv:[2,16],glLightModelfv:[1,16],glFogfv:[1,16],glTexGenfv:[2,16],glTexEnvfv:[2,16],glTexParameterfv:[2,16],glLoadMatrixf:[0,64],glMultMatrixf:[0,64],glLoadMatrixd:[0,128],glMultMatrixd:[0,128],glClipPlane:[1,32],glPointParameterfv:[1,16]},'
+    'base(k){return k.replace(/^emscripten_/,"")},'
+    'gen(n){if(!__fcDL.on)return 0;var id=__fcDL.next;__fcDL.next+=n;return id},'
+    'begin(id,mode){if(!__fcDL.on)return;if(__fcDL.rec)__fcDL.end();__fcDL.del(id,1);var G=GLImmediate,cl={en:[],p:[]};for(var i=0;i<4;i++){cl.en[i]=!!(G.enabledClientAttributes&&G.enabledClientAttributes[i]);var ca=G.clientAttributes&&G.clientAttributes[i];cl.p[i]=ca?{size:ca.size,type:ca.type,stride:ca.stride,pointer:ca.pointer}:null}__fcDL.rec={id:id,exec:mode!==4864,ops:[],mem:[],ctx:null,cl:cl,vbo:GLctx.currentArrayBufferBinding,ebo:GLctx.currentElementArrayBufferBinding}},'
+    'end(){var R=__fcDL.rec;if(!R)return;__fcDL.rec=null;if(!R.ctx)R.ctx=GL.currentContext;__fcDL.lists.set(R.id,R);__fcDL.stats.lists++;__fcDL.stats.ops+=R.ops.length/2},'
+    'call(id){var R=__fcDL.rec;if(R){R.ops.push(__fcDL.callOp,[id]);if(!R.exec)return}var L=__fcDL.lists.get(id);if(!L)return;if(L.ctx!==GL.currentContext){__fcDL.stats.wrongCtx++;var wk=(L.ctx?L.ctx.handle:0)+">"+(GL.currentContext?GL.currentContext.handle:0);__fcDL.stats.wrong=__fcDL.stats.wrong||{};__fcDL.stats.wrong[wk]=(__fcDL.stats.wrong[wk]||0)+1;return}__fcDL.stats.replays++;var o=L.ops;__fcDL.replaying++;try{for(var i=0;i<o.length;i+=2)o[i].apply(null,o[i+1])}finally{__fcDL.replaying--}},'
+    'callOp(id){__fcDL.call(id)},''pushC(kind,a,b,c,d,e,f,p,bytes){var R=__fcDL.rec;if(!R)return;if(!R.ctx)R.ctx=GL.currentContext;var np=p;if(bytes>0&&p){np=__fcDL.keep(R,p,bytes)||p}R.ops.push(__fcDL.cop,[kind,a,b,c,d,e,f,np])},''cop(kind,a,b,c,d,e,f,p){if(typeof _fcweb_dl_exec=="function")_fcweb_dl_exec(kind,a,b,c,d,e,f,p)},'
+    'del(id,n){for(var i=0;i<n;i++){var L=__fcDL.lists.get(id+i);if(L){for(var j=0;j<L.mem.length;j++)_free(L.mem[j]);__fcDL.lists.delete(id+i)}}},'
+    'keep(R,src,bytes){var p=_malloc(bytes);if(!p)return 0;(growMemViews(),HEAPU8).copyWithin(p,src,src+bytes);R.mem.push(p);__fcDL.stats.bytes+=bytes;return p},'
+    'snapArrays(R,first,count,idxType,idxPtr){var cl=R.cl,ops=[];var vcount=first+count;'
+    'if(idxType){var n=count,isz=idxType===5125?4:idxType===5123?2:1,mx=0;var A=isz===4?(growMemViews(),HEAPU32):isz===2?(growMemViews(),HEAPU16):(growMemViews(),HEAPU8);var b=idxPtr/isz;for(var i=0;i<n;i++){var v=A[b+i];if(v>mx)mx=v}vcount=mx+1;var np=__fcDL.keep(R,idxPtr,n*isz);if(!np)return null;ops.idx=np}'
+    'var names=[["glVertexPointer",0],["glNormalPointer",1],["glColorPointer",2],["glTexCoordPointer",3]],act=[],lo=Infinity,hi=0;'
+    'for(var k=0;k<names.length;k++){var ai=names[k][1];if(!cl.en[ai])continue;var ca=cl.p[ai];if(!ca||!ca.pointer)continue;var ts=GL.byteSizeByType[ca.type-GL.byteSizeByTypeRoot]||4,es=ca.size*ts,st=ca.stride||es,bytes=(vcount-1)*st+es;act.push([names[k][0],ai,ca,bytes]);if(ca.pointer<lo)lo=ca.pointer;if(ca.pointer+bytes>hi)hi=ca.pointer+bytes}'
+    'if(!act.length)return ops;'
+    '/* one copy of the whole span: interleaved arrays (position at +12, normal at +0, stride 24) must keep their relative layout, or the emulation restrides them from a far-apart pair into an offset the size of a pointer */'
+    'var base=0;if(hi-lo<=(64<<20)){base=__fcDL.keep(R,lo,hi-lo);if(!base)return null}'
+    'for(var q=0;q<act.length;q++){var nm=act[q][0],ai2=act[q][1],ca2=act[q][2],np2=base?base+(ca2.pointer-lo):__fcDL.keep(R,ca2.pointer,act[q][3]);if(!np2)return null;'
+    'var f=__fcDL.orig[nm];if(!f)continue;var args=ai2===1?[ca2.type,ca2.stride,BigInt(np2)]:[ca2.size,ca2.type,ca2.stride,BigInt(np2)];ops.push(f,args)}return ops},'
+    'wrap(imports){if(imports.__fcDLWrapped)return;imports.__fcDLWrapped=true;__fcDL.orig={};var keys=Object.keys(imports);'
+    'for(var i=0;i<keys.length;i++){var k=keys[i];if(!/^(?:emscripten_)?gl[A-Z]/.test(k)||typeof imports[k]!=="function")continue;__fcDL.orig[__fcDL.base(k)]=__fcDL.orig[__fcDL.base(k)]||imports[k]}'
+    'for(var i2=0;i2<keys.length;i2++){var k2=keys[i2];if(!/^(?:emscripten_)?gl[A-Z]/.test(k2)||typeof imports[k2]!=="function")continue;if(__fcDL.SKIP.test(k2))continue;imports[k2]=__fcDL.mk(__fcDL.base(k2),imports[k2])}},'
+    'mk(name,f){var V=__fcDL.V[name],P=__fcDL.P[name],D=/^glDraw(Arrays|Elements|RangeElements)$/.test(name)?name:null,CL={glVertexPointer:0,glNormalPointer:1,glColorPointer:2,glTexCoordPointer:3}[name],CS=/^gl(Enable|Disable)ClientState$/.test(name)?name:null,BB=name==="glBindBuffer";'
+    'return function(){var R=__fcDL.rec;if(!R)return f.apply(null,arguments);if(!R.ctx)R.ctx=GL.currentContext;else if(R.ctx!==GL.currentContext)return f.apply(null,arguments);var a=Array.prototype.slice.call(arguments);if(CL!==undefined){R.cl.p[CL]=CL===1?{size:3,type:a[0],stride:a[1],pointer:Number(a[2])}:{size:a[0],type:a[1],stride:a[2],pointer:Number(a[3])}}else if(CS){var ci={32884:0,32885:1,32886:2,32888:3}[a[0]];if(ci!==undefined)R.cl.en[ci]=(CS==="glEnableClientState")}else if(BB){if(a[0]===34962)R.vbo=a[1];else if(a[0]===34963)R.ebo=a[1]}'
+    'if(V){var sf=__fcDL.orig[V[0]],p=Number(a[0])>>2,F=(growMemViews(),HEAPF32),va=[];for(var i=0;i<V[1];i++)va.push(F[p+i]);R.ops.push(sf,va)}'
+    'else if(P){var np=__fcDL.keep(R,Number(a[P[0]]),P[1]);if(np){var na=a.slice();na[P[0]]=BigInt(np);R.ops.push(f,na)}}'
+    'else if(D&&!R.vbo){var first=0,count,it=0,ip=0,ii=-1;'
+    'if(D==="glDrawArrays"){first=a[1];count=a[2]}else if(D==="glDrawElements"){count=a[1];it=a[2];ii=3}else{count=a[3];it=a[4];ii=5}'
+    'if(ii>=0&&R.ebo){it=0}else if(ii>=0){ip=Number(a[ii])}'
+    'var so=__fcDL.snapArrays(R,first,count,it,ip);'
+    'if(so){for(var j=0;j<so.length;j++)R.ops.push(so[j]);var da=a.slice();if(so.idx)da[ii]=BigInt(so.idx);R.ops.push(f,da)}else{R.ops.push(f,a)}}'
+    'else R.ops.push(f,a);'
+    'if(R.exec||CL!==undefined||CS||BB)return f.apply(null,arguments)}}};'
+    'if(typeof Module!=="undefined"){Module.__fcDL=__fcDL;Module.__fcPThread=function(){return typeof PThread!=="undefined"?PThread:null}}'
+)
+PATCHES += [
+    (
+        'display lists: the recorder',
+        'var wasmImports;function assignWasmImports(){',
+        _DLISTS + 'var wasmImports; function assignWasmImports(){',   # the space keeps `new` from containing `old`
+        'var __fcDL={',
+    ),
+    (
+        'display lists: every GL import can be recorded',
+        'function getWasmImports(){assignWasmImports();',
+        'function getWasmImports(){ assignWasmImports();__fcDL.wrap(wasmImports);',
+    ),
+    # Client state is never compiled into a display list -- GL executes glBindBuffer, the
+    # gl*Pointer calls and gl{Enable,Disable}ClientState immediately even under GL_COMPILE
+    # (the draw dereferences them at compile time). The first recorder only recorded them,
+    # so a node that QUERIES between them saw the real, unbound state: MeshGui's
+    # SoFCMeshObjectShape asks glGetBufferParameteriv(GL_BUFFER_SIZE) after binding its VBO,
+    # got 0 through the un-executed bind, and compiled glDrawElements(count=0) -- every STL
+    # mesh invisible with lists on, visible for one frame whenever the cache was rebuilt
+    # (measured 2026-09-15, scratchpad/mesh-ab.py, 372k facets: 21-op list, count 0). They
+    # are executed AND recorded now (the replay still needs them bound). This entry migrates
+    # an asset patched with the earlier form; a fresh link gets it from _DLISTS directly.
+    (
+        'display lists: client-state calls execute under GL_COMPILE too',
+        'if(R.exec)return f.apply(null,arguments)}}};',
+        'if(R.exec||CL!==undefined||CS||BB)return f.apply(null,arguments)}}};',
+        'if(R.exec||CL!==undefined||CS||BB)return f.apply(null,arguments)}}};',
+    ),
+]
+
+# ---- immediate mode: attributes are STATE, every vertex carries the layout --------------
+#
+# GL semantics: glNormal/glColor/glTexCoord set current values and glVertex emits a vertex
+# carrying all of them. Emscripten's emulation appends each call to the vertex stream as
+# it comes and derives the per-vertex layout from the first vertex, so any code that sets
+# a normal once per two vertices (Coin's cylinder and cone sides: a glNormal per quad-strip
+# column), or a colour once before the first vertex (SoDatumLabel), shifts every later
+# vertex by the missing bytes. Measured 2026-09-13: FEM constraint arrows (SoCone,
+# SoCylinder, SoCube via SoMultipleCopy) drew as slabs tens of metres long; the datum
+# label's textured quad (25 floats at a stride of 7) never drew at all.
+#
+# The setters now record state (__aN, __aC, __aT) and the layout order in which each
+# attribute was first set before the first vertex (__aOrder); glVertex writes the layout
+# attributes in that order, then the position. An attribute that first appears AFTER the
+# first vertex cannot join a layout already laid out and is dropped, which is a wrong
+# colour, not a corrupt buffer. glBegin resets the order and seeds the colour from the
+# current client colour and the normal from the last glNormal outside begin/end.
+_ATTR_STATE = (
+    'GLImmediate.__aN=new Float32Array([0,0,1]);GLImmediate.__aC=new Float32Array([1,1,1,1]);'
+    'GLImmediate.__aT=new Float32Array(2);GLImmediate.__aMask=0;GLImmediate.__aOrder=[];GLImmediate.__aLayout=[];GLImmediate.__aFirst=true;'
+    'GLImmediate.__aSet=function(bit,id){var G=GLImmediate;if(!(G.__aMask&bit)){G.__aMask|=bit;if(G.__aFirst)G.__aOrder.push(id)}};'
+    'GLImmediate.__aEmit=function(x,y,z,w){var G=GLImmediate,d=G.vertexData;'
+    'if(G.__aFirst){var rc=G.rendererComponents,ca=G.clientAttributes,o=[];for(var i=1;i<4;i++)if(rc[i])o.push(i);'
+    'if(o.length>1)o.sort(function(p,q){return ca[p].pointer-ca[q].pointer});G.__aLayout=o.length?o:G.__aOrder.slice();G.__aFirst=false}'
+    'var order=G.__aLayout;for(var k=0;k<order.length;k++){var id=order[k];'
+    'if(id===1){d[G.vertexCounter++]=G.__aN[0];d[G.vertexCounter++]=G.__aN[1];d[G.vertexCounter++]=G.__aN[2];G.addRendererComponent(1,3,GLctx.FLOAT)}'
+    'else if(id===2){var s=G.vertexCounter<<2,u=G.vertexDataU8;u[s]=G.__aC[0]*255;u[s+1]=G.__aC[1]*255;u[s+2]=G.__aC[2]*255;u[s+3]=G.__aC[3]*255;G.vertexCounter++;G.addRendererComponent(2,4,GLctx.UNSIGNED_BYTE)}'
+    'else{d[G.vertexCounter++]=G.__aT[0];d[G.vertexCounter++]=G.__aT[1];G.addRendererComponent(3,2,GLctx.FLOAT)}}'
+    'd[G.vertexCounter++]=x;d[G.vertexCounter++]=y;d[G.vertexCounter++]=z;d[G.vertexCounter++]=w;G.addRendererComponent(0,4,GLctx.FLOAT)};'
+)
+PATCHES += [
+    (
+        'immediate attributes: state and emitter',
+        # the `};` is split by a newline so the search text does not survive whole
+        'GLImmediate.__grew=(GLImmediate.__grew||0)+1};',
+        'GLImmediate.__grew=(GLImmediate.__grew||0)+1}' + chr(10) + ';' + _ATTR_STATE,
+        'GLImmediate.__aEmit=function(x,y,z,w){',
+    ),
+    (
+        'immediate attributes: glBegin resets the layout',
+        'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;GLImmediate.enabledClientAttributes_preBegin=',
+        'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;'
+        'GLImmediate.__aFirst=true;GLImmediate.__aOrder=[];GLImmediate.__aMask=0;GLImmediate.__aC.set(GLImmediate.clientColor);'
+        'if(GLEmulation.__curNormal)GLImmediate.__aN.set(GLEmulation.__curNormal);'
+        'GLImmediate.enabledClientAttributes_preBegin=',
+    ),
+    (
+        'immediate attributes: glNormal3f records',
+        'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;GLImmediate.vertexData[GLImmediate.vertexCounter++]=y;GLImmediate.vertexData[GLImmediate.vertexCounter++]=z;GLImmediate.addRendererComponent(GLImmediate.NORMAL,3,GLctx.FLOAT)};',
+        'GLEmulation.__curNormal=[x,y,z];return}GLImmediate.__aN[0]=x;GLImmediate.__aN[1]=y;GLImmediate.__aN[2]=z;GLImmediate.__aSet(2,1)};',
+    ),
+    (
+        'immediate attributes: glColor4f records',
+        'if(GLImmediate.mode>=0){GLImmediate.__grow();var start=GLImmediate.vertexCounter<<2;GLImmediate.vertexDataU8[start+0]=r*255;GLImmediate.vertexDataU8[start+1]=g*255;GLImmediate.vertexDataU8[start+2]=b*255;GLImmediate.vertexDataU8[start+3]=a*255;GLImmediate.vertexCounter++;GLImmediate.addRendererComponent(GLImmediate.COLOR,4,GLctx.UNSIGNED_BYTE)}else{',
+        'if(GLImmediate.mode>=0){GLImmediate.__aC[0]=r;GLImmediate.__aC[1]=g;GLImmediate.__aC[2]=b;GLImmediate.__aC[3]=a;GLImmediate.__aSet(4,2)}else{',
+    ),
+    (
+        'immediate attributes: glTexCoord2i records',
+        'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=u;GLImmediate.vertexData[GLImmediate.vertexCounter++]=v;GLImmediate.addRendererComponent(GLImmediate.TEXTURE0,2,GLctx.FLOAT)};',
+        'var _glTexCoord2i=(u,v)=>{GLImmediate.__grow();GLImmediate.__aT[0]=u;GLImmediate.__aT[1]=v;if(GLImmediate.mode>=0)GLImmediate.__aSet(8,3)};',
+    ),
+    (
+        'immediate attributes: glVertex2f emits',
+        'var _glVertex2f=(x,y)=>{GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;GLImmediate.vertexData[GLImmediate.vertexCounter++]=y;GLImmediate.vertexData[GLImmediate.vertexCounter++]=0;GLImmediate.vertexData[GLImmediate.vertexCounter++]=1;GLImmediate.addRendererComponent(GLImmediate.VERTEX,4,GLctx.FLOAT)};',
+        'var _glVertex2f=(x,y)=>{GLImmediate.__grow();GLImmediate.__aEmit(x,y,0,1)};',
+    ),
+    (
+        'immediate attributes: glVertex3f emits',
+        'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;GLImmediate.vertexData[GLImmediate.vertexCounter++]=y;GLImmediate.vertexData[GLImmediate.vertexCounter++]=z;GLImmediate.vertexData[GLImmediate.vertexCounter++]=1;GLImmediate.addRendererComponent(GLImmediate.VERTEX,4,GLctx.FLOAT)};',
+        'var _glVertex3f=(x,y,z)=>{GLImmediate.__grow();GLImmediate.__aEmit(x,y,z,1)};',
+    ),
+    (
+        'immediate attributes: glVertex4f emits',
+        'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();GLImmediate.vertexData[GLImmediate.vertexCounter++]=x;GLImmediate.vertexData[GLImmediate.vertexCounter++]=y;GLImmediate.vertexData[GLImmediate.vertexCounter++]=z;GLImmediate.vertexData[GLImmediate.vertexCounter++]=w;GLImmediate.addRendererComponent(GLImmediate.VERTEX,4,GLctx.FLOAT)};',
+        'var _glVertex4f=(x,y,z,w)=>{GLImmediate.__grow();GLImmediate.__aEmit(x,y,z,w)};',
+    ),
+]
+
+# ---- lighting uniforms: upload on change, not on every draw -----------------------------
+#
+# Renderer.prepare re-sent the light model ambient, five material uniforms and four per
+# light for all eight lights on EVERY lit draw -- ~37 uniform calls a draw, ~90,000 a
+# frame on ArchDetail (2,500 draws), while the values change a handful of times per frame
+# (Coin's headlight once, the material per object). Profiled 2026-09-12 on a 4 s drag:
+# uniform4fv 3.5 percent self plus its share of "(program)" and wasm-to-js, per-draw
+# overhead being what the whole frame is made of once the geometry is cached.
+#
+# Two version counters on GLEmulation, bumped at every write site of those arrays
+# (glMaterialfv, glLightfv, glLightModelfv, glColor4f's COLOR_MATERIAL branch, and the
+# per-context restore), compared per renderer in prepare. Uniforms live per program, so
+# a renderer that missed a change re-uploads on its next draw. `|0` because the counters
+# start undefined and `undefined !== undefined` would skip the very first upload.
+PATCHES += [
+    (
+        'lighting uniforms: upload when the material or lights changed',
+        'if(this.hasLighting){if(this.lightModelAmbientLocation)GLctx.uniform4fv(this.lightModelAmbientLocation,GLEmulation.lightModelAmbient);if(this.materialAmbientLocation)GLctx.uniform4fv(this.materialAmbientLocation,GLEmulation.materialAmbient);if(this.materialDiffuseLocation)GLctx.uniform4fv(this.materialDiffuseLocation,GLEmulation.materialDiffuse);if(this.materialSpecularLocation)GLctx.uniform4fv(this.materialSpecularLocation,GLEmulation.materialSpecular);if(this.materialShininessLocation)GLctx.uniform1f(this.materialShininessLocation,GLEmulation.materialShininess[0]);if(this.materialEmissionLocation)GLctx.uniform4fv(this.materialEmissionLocation,GLEmulation.materialEmission);for(var lightId=0;lightId<GLEmulation.MAX_LIGHTS;lightId++){if(this.lightAmbientLocation[lightId])GLctx.uniform4fv(this.lightAmbientLocation[lightId],GLEmulation.lightAmbient[lightId]);if(this.lightDiffuseLocation[lightId])GLctx.uniform4fv(this.lightDiffuseLocation[lightId],GLEmulation.lightDiffuse[lightId]);if(this.lightSpecularLocation[lightId])GLctx.uniform4fv(this.lightSpecularLocation[lightId],GLEmulation.lightSpecular[lightId]);if(this.lightPositionLocation[lightId])GLctx.uniform4fv(this.lightPositionLocation[lightId],GLEmulation.lightPosition[lightId])}}',
+        'if(this.hasLighting){if(this.__fcLV!==(GLEmulation.__fcLV|0)){this.__fcLV=GLEmulation.__fcLV|0;if(this.lightModelAmbientLocation)GLctx.uniform4fv(this.lightModelAmbientLocation,GLEmulation.lightModelAmbient);for(var lightId=0;lightId<GLEmulation.MAX_LIGHTS;lightId++){if(this.lightAmbientLocation[lightId])GLctx.uniform4fv(this.lightAmbientLocation[lightId],GLEmulation.lightAmbient[lightId]);if(this.lightDiffuseLocation[lightId])GLctx.uniform4fv(this.lightDiffuseLocation[lightId],GLEmulation.lightDiffuse[lightId]);if(this.lightSpecularLocation[lightId])GLctx.uniform4fv(this.lightSpecularLocation[lightId],GLEmulation.lightSpecular[lightId]);if(this.lightPositionLocation[lightId])GLctx.uniform4fv(this.lightPositionLocation[lightId],GLEmulation.lightPosition[lightId])}}if(this.__fcMV!==(GLEmulation.__fcMV|0)){this.__fcMV=GLEmulation.__fcMV|0;if(this.materialAmbientLocation)GLctx.uniform4fv(this.materialAmbientLocation,GLEmulation.materialAmbient);if(this.materialDiffuseLocation)GLctx.uniform4fv(this.materialDiffuseLocation,GLEmulation.materialDiffuse);if(this.materialSpecularLocation)GLctx.uniform4fv(this.materialSpecularLocation,GLEmulation.materialSpecular);if(this.materialShininessLocation)GLctx.uniform1f(this.materialShininessLocation,GLEmulation.materialShininess[0]);if(this.materialEmissionLocation)GLctx.uniform4fv(this.materialEmissionLocation,GLEmulation.materialEmission);}}',
+        'this.__fcMV!==(GLEmulation.__fcMV|0)',
+    ),
+    (
+        'glMaterialfv bumps the material version',
+        # the bump goes BETWEEN the two halves so the search text does not survive whole
+        'function _emscripten_glMaterialfv(face,pname,param){param=bigintToI53Checked(param);',
+        'function _emscripten_glMaterialfv(face,pname,param){GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;param=bigintToI53Checked(param);',
+    ),
+    (
+        # Only when the colour actually changes: with GL_RGBA_MODE answered truthfully Coin
+        # sends the diffuse before every shape (SoMaterialBundle::sendFirst), mostly the
+        # same value, and an unconditional bump re-uploaded all 37 lighting uniforms per
+        # draw again (EngineBlock drag 36 -> 26 fps, measured 2026-09-13).
+        'glColor4f (COLOR_MATERIAL) bumps the material version',
+        'if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;',
+        'if(GLEmulation&&GLEmulation.materialDiffuse){var __md=GLEmulation.materialDiffuse;'
+        'if(__md[0]!==r||__md[1]!==g||__md[2]!==b||__md[3]!==a)GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;'
+        'GLEmulation.materialDiffuse[0]=r;',
+        '__fcMV|0)+1;GLEmulation.materialDiffuse[0]=r;',   # 4th field: a tree patched by the unconditional version counts as done
+    ),
+    (
+        'glLightfv bumps the light version',
+        'function _emscripten_glLightfv(light,pname,param){param=bigintToI53Checked(param);',
+        'function _emscripten_glLightfv(light,pname,param){GLEmulation.__fcLV=(GLEmulation.__fcLV|0)+1;param=bigintToI53Checked(param);',
+    ),
+    (
+        'glLightModelfv bumps the light version',
+        'function _emscripten_glLightModelfv(pname,param){param=bigintToI53Checked(param);',
+        'function _emscripten_glLightModelfv(pname,param){GLEmulation.__fcLV=(GLEmulation.__fcLV|0)+1;param=bigintToI53Checked(param);',
+    ),
+    (
+        'per-context restore bumps both versions',
+        'function rest(s){GLEmulation.lightModelTwoSide=s.lm2;',
+        'function rest(s){GLEmulation.__fcLV=(GLEmulation.__fcLV|0)+1;GLEmulation.__fcMV=(GLEmulation.__fcMV|0)+1;GLEmulation.lightModelTwoSide=s.lm2;',
+    ),
+]
+
+# ---- prepareClientAttributes: restride with the heap views hoisted -----------------------
+#
+# When a draw's client arrays do not share one stride (Coin's vertex-array paths for text,
+# spheres and strips hand the emulation separate position and normal arrays), the emulation
+# copies every element into a restrided temp buffer -- and the generated loop checks the
+# heap view TWICE PER 4 BYTES through growMemViews(), whose test reads the
+# WebAssembly.Memory buffer getter each time. Profiled on a 4 s drag of ArchDetail
+# (2026-09-12): growMemViews 27% + that getter 11% + the loop itself 10% of the main
+# thread, 2,800 draws a frame, 8 fps. One check per draw, the views in locals.
+PATCHES += [
+    (
+        'prepareClientAttributes: hoist the heap views out of the restride loops',
+        'for(var j=0;j<count;j++){for(var k=0;k<attr.sizeBytes;k+=4){var val=(growMemViews(),HEAP32)[(attr.pointer+(j*srcStride+k))/4];(growMemViews(),HEAP32)[(start+attr.offset+(bytes*j+k))/4]=val}}}'
+        'else{for(var j=0;j<count;j++){for(var k=0;k<attr.sizeBytes;k++){(growMemViews(),HEAP8)[start+attr.offset+bytes*j+k]=(growMemViews(),HEAP8)[attr.pointer+j*srcStride+k]}}}',
+        'growMemViews();var H32=HEAP32,H8=HEAP8,sp=attr.pointer,dp=start+attr.offset,sb=attr.sizeBytes;'
+        'for(var j=0;j<count;j++){var si=(sp+j*srcStride)/4,di=(dp+bytes*j)/4;for(var k=0;k<sb;k+=4){H32[di++]=H32[si++]}}}'
+        'else{growMemViews();var H8b=HEAP8,sp2=attr.pointer,dp2=start+attr.offset,sb2=attr.sizeBytes;'
+        'for(var j=0;j<count;j++){var si2=sp2+j*srcStride,di2=dp2+bytes*j;for(var k=0;k<sb2;k++){H8b[di2++]=H8b[si2++]}}}',
+    ),
+]
+
+# ---- GL_LIGHT_MODEL_TWO_SIDE ---------------------------------------------------------
+#
+# The emulation tracks GLEmulation.lightModelTwoSide (it is even in the renderer cache
+# key) and then never reads it: the vertex shader lights every face with its own normal,
+# so a face seen from behind comes out in ambient only -- dark. FreeCAD lights "Two side"
+# by default, so on the desktop a back-facing face is as bright as a front-facing one.
+#
+# Measured 2026-09-11 on EngineBlock: the Draft BSpline/Circle faces lying ON the block's
+# top (same 0.8 grey, same plane, normal pointing down) z-fight with the top face exactly
+# as they do on the desktop, but here the loser is DARK, so the fight reads as a dark
+# speckled top that swims with the camera. With both faces lit the same the fight is
+# invisible, which is what the desktop shows.
+#
+# When two-sided lighting is on: light the vertex a second time with the flipped normal
+# into a v_colorBack varying, and let the fragment shader pick by gl_FrontFacing. The
+# vertex shader keeps computing into a local v_color so the passes above stay untouched.
+PATCHES += [
+    (
+        'two-sided lighting: light the back face too',
+        'vsLightingPass+="  v_color = clamp(v_color, 0.0, 1.0);"}',
+        'vsLightingPass+="  v_color = clamp(v_color, 0.0, 1.0);";'
+        'if(GLEmulation.lightModelTwoSide){__fcTS=true;vsLightingDefs+="varying vec4 v_colorBack;";'
+        'vsLightingPass+=vsLightingPass.split("v_color").join("v_colorBack").split("ecNormal").join("ecNormalB")'
+        '.replace("ecNormalB = normalize(","ecNormalB = -normalize(")}}',
+    ),
+    (
+        'two-sided lighting: vertex shader writes v_colorF',
+        '"varying vec4 v_color;",texUnitAttribList',
+        # "v_color;" split so the original search text does not survive in the output
+        '__fcTS?"varying vec4 v_colorF;":"varying vec4 "+"v_color;",texUnitAttribList',
+    ),
+    (
+        'two-sided lighting: v_color is a local in the vertex shader',
+        '"void main()","{","  vec4 ecPosition = u_modelView * a_position;"',
+        '"void main()","{",__fcTS?"  vec4 v_color;":null,"  vec4 ecPosition = u_modelView * a_position;"',
+    ),
+    (
+        'two-sided lighting: copy the front colour out',
+        'vsLightingPass,"}",""]',
+        'vsLightingPass,__fcTS?"  v_colorF = v_color;":null,"}",""]',
+    ),
+    (
+        'two-sided lighting: fragment shader picks by gl_FrontFacing',
+        '"varying vec4 v_color;",fogHeaderIfNeeded,fsClipPlaneDefs,fsAlphaTestDefs,"void main()","{",fsClipPlanePass,',
+        '__fcTS?"varying vec4 v_colorF;varying vec4 v_colorBack;":"varying vec4 v_color;",fogHeaderIfNeeded,fsClipPlaneDefs,fsAlphaTestDefs,'
+        '"void main()","{",__fcTS?"  vec4 v_color = gl_FrontFacing ? v_colorF : v_colorBack;":null,fsClipPlanePass,',
+    ),
+    # Nothing in this build ever turns the flag on: the wasm does not import glLightModeli
+    # (Coin's SoGLLazyElement sends two-sided lighting through it), so the emulation's
+    # default is what every lit draw gets -- the immediate-mode flush and the VBO face path
+    # alike. FreeCAD's default Lighting is "Two side"; make that the default here too. A
+    # glLightModelf(GL_LIGHT_MODEL_TWO_SIDE, 0) still switches it off if one ever arrives.
+    (
+        'two-sided lighting: on by default, as FreeCAD lights',
+        'lightModelLocalViewer:false,lightModelTwoSide:false,',
+        'lightModelLocalViewer:false,lightModelTwoSide:true,',
+    ),
+    (
+        'two-sided lighting: __fcTS declared before the lighting pass',
+        'var vsLightingDefs="";var vsLightingPass="";if(GLEmulation.lightingEnabled){',
+        'var vsLightingDefs="";var vsLightingPass="";var __fcTS=false;if(GLEmulation.lightingEnabled){',
+    ),
+]
+
+
+# ---- lazy fixed-function cleanup: unbind at the next foreign draw, not after every one ----
+#
+# Every immediate-mode flush ended with Renderer.cleanup(): disable its 2-4 attribute arrays,
+# useProgram(null), bindBuffer(null) -- and the next flush, usually the same renderer, put
+# all of it back. BIMExample's drag frame was 13,672 WebGL calls for 657 draws (measured
+# 2026-09-14, lists on): useProgram 1.8 per draw, disableVertexAttribArray 2.6, bindBuffer
+# 2.4 -- a third of the frame's calls undoing and redoing state nothing had looked at.
+# The page shadow cannot drop them: each is a real transition.
+#
+# Now cleanup only remembers the renderer (and its context); the undo runs when someone
+# else could observe the state: a different renderer's prepare (attributes only -- flush()
+# has already bound the new program), an app program bind (Qt's RHI, Coin shaders), a raw
+# draw through the fast path, a VAO bind, a context switch, and never for a context that is
+# gone. ?lazyclean=0 restores the eager cleanup for A/Bs.
+PATCHES += [
+    (
+        'lazy cleanup: Renderer.cleanup remembers instead of undoing',
+        'this.cleanup=function(){GLctx.disableVertexAttribArray(this.positionLocation);',
+        'this.cleanup=function(){if(!GLImmediate.__fcLzOn)return this.__fcClean(false);GLImmediate.__fcLz=this;GLImmediate.__fcLzGl=GLctx;GLImmediate.matricesModified=true};'
+        'this.__fcClean=function(skipProg){GLctx.disableVertexAttribArray(this.positionLocation);',
+    ),
+    (
+        'lazy cleanup: the program is left alone when the caller is binding one',
+        'if(this.hasNormal){GLctx.disableVertexAttribArray(this.normalLocation)}if(!GL.currProgram){GLctx.useProgram(null);GLImmediate.fixedFunctionProgram=0}',
+        'if(this.hasNormal){GLctx.disableVertexAttribArray(this.normalLocation)}if(!skipProg&&!GL.currProgram){GLctx.useProgram(null);GLImmediate.fixedFunctionProgram=0}',
+    ),
+    (
+        'lazy cleanup: another renderer undoes the previous one first',
+        'this.prepare=function(){var arrayBuffer;',
+        'this.prepare=function(){if(GLImmediate.__fcLz){if(GLImmediate.__fcLz!==this)GLImmediate.__fcLzFlush(true);else GLImmediate.__fcLz=null}var arrayBuffer;',
+    ),
+    # The flush lives with _fcPolyApply, which every raw fast-path draw already calls right
+    # before GLctx.draw*; flush() calls it after prepare(), when nothing is pending. The
+    # context-switch wrapper flushes with the program kept: the per-context program
+    # snapshot taken by the outer hook must stay true.
+    (
+        'lazy cleanup: the flush, the context switch, and the raw draws',
+        'var _fcPolyApply=(mode)=>{try{if(mode>=4',
+        'GLImmediate.__fcLz=null;GLImmediate.__fcLzGl=null;GLImmediate.__fcLzOn=!/[?&]lazyclean=0/.test(location.search);'
+        'GLImmediate.__fcLzFlush=function(skipProg){var r=GLImmediate.__fcLz;if(!r)return;GLImmediate.__fcLz=null;var g=GLImmediate.__fcLzGl;'
+        'if(g&&g!==GLctx){var c=GLctx;GLctx=g;try{r.__fcClean(skipProg)}finally{GLctx=c}}else r.__fcClean(skipProg)};'
+        '(function(){var m3=GL.makeContextCurrent;GL.makeContextCurrent=function(){try{if(GLImmediate.__fcLz)GLImmediate.__fcLzFlush(true)}catch(e){}return m3.apply(GL,arguments)}})();'
+        'var _fcPolyApply=(mode)=>{if(GLImmediate.__fcLz)GLImmediate.__fcLzFlush(false);try{if(mode>=4',
+    ),
+    (
+        'lazy cleanup: a VAO bind sees clean state',
+        'var emulGlBindVertexArray=vao=>{GLEmulation.currentVao=null;',
+        'var emulGlBindVertexArray=vao=>{if(GLImmediate.__fcLz)GLImmediate.__fcLzFlush(false);GLEmulation.currentVao=null;',
+    ),
+    (
+        'lazy cleanup: an app program bind sees clean attributes',
+        '_glUseProgram=_emscripten_glUseProgram=program=>{if(GL.currProgram!=program){GLImmediate.currentRenderer=null;',
+        '_glUseProgram=_emscripten_glUseProgram=program=>{if(GLImmediate.__fcLz&&GL.currProgram!=program)GLImmediate.__fcLzFlush(true);if(GL.currProgram!=program){GLImmediate.currentRenderer=null;',
+    ),
+]
+
 
 # Invariants a correctly patched file must satisfy, checked AFTER everything runs.
 #
@@ -731,6 +1822,12 @@ def check_postconditions(text):
         n = text.count(a)
         if n:
             bad.append((a, 'Coin calls this; an abort here kills the whole program', n))
+    n = text.count('HEAPU64)[(length+i*8)/8]') + text.count('HEAPU64[length+i*8>>3]')
+    if n:
+        bad.append(('glShaderSource length array read 64 bits at a time',
+                    'Qt hands its shaders over in chunks with a GLint[] of lengths; read '
+                    'this way they arrive truncated and the widget layer goes black as '
+                    'soon as a 3D view exists', n))
     if '__flushMerged' not in text:
         bad.append(('immediate-mode line batching', 'absent -- the heavy-scene draw-call reduction is not in this build', 1))
     # Every vertex writer must reserve headroom before it stores. A missing guard is not
@@ -743,9 +1840,21 @@ def check_postconditions(text):
                     'survived its own replacement and was re-inserted per pass)' % ngrow,
                     ngrow))
     else:
+        # SIX vertex writers, plus ONE in __mrgPrep.
+        #
+        # The line batcher expands a strip into pairs in place, which needs headroom
+        # reserved exactly like a vertex writer does -- so it calls __grow() too, and
+        # that is a legitimate seventh guard rather than a stray one. This invariant
+        # failed the first link that ever contained it (34279403314): 'expected 6,
+        # found 7', on a build whose patches had all applied correctly.
+        # Since the attribute-state rewrite (2026-09-13) glNormal3f and glColor4f only
+        # RECORD inside begin/end -- the emitter in glVertex writes their bytes -- so the
+        # writers that reserve headroom are glVertex2f/3f/4f, glTexCoord2i and __mrgPrep.
         n = text.count('GLImmediate.__grow()')
-        if n != 6:
-            bad.append(('growable immediate guards', 'expected 6 vertex-writer guards, found %d' % n, n))
+        if n != 5:
+            bad.append(('growable immediate guards',
+                        'expected 5 -- glVertex2f/3f/4f, glTexCoord2i and __mrgPrep -- found %d' % n,
+                        n))
     if 'tempVertexBuffers1[idx]=[null]' not in text:
         bad.append(('oversize temp vertex buffer ring', 'absent -- an oversize batch dereferences undefined', 1))
     if text.count('__polyMode') < 2:
@@ -921,7 +2030,7 @@ def _to_wasm64(lit):
 #
 # 1-4 are one mechanical derivation, checked by the selftest against strings copied from
 # that glue. 5 is a table of fixups by patch name, and one full override.
-_EMSDK6_HEAP_IDX = re.compile(r'HEAP(F32|F64|U8|U16|U32|8|16|32)\[([^\[\]]*?)(?:>>([123]))?\]')
+_EMSDK6_HEAP_IDX = re.compile(r'HEAP(F32|F64|U8|U16|U32|U64|8|16|32)\[([^\[\]]*?)(?:>>([123]))?\]')
 
 
 def _emsdk6_heap(m):
