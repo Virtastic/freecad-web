@@ -5058,7 +5058,29 @@ diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
 diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
-@@ -493,6 +493,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -37,6 +37,7 @@
+ #include <Inventor/SoPrimitiveVertex.h>
+ #include <Inventor/actions/SoGetBoundingBoxAction.h>
+ #include <Inventor/actions/SoGLRenderAction.h>
++#include <Inventor/actions/SoRayPickAction.h>
+ #include <Inventor/bundles/SoMaterialBundle.h>
+ #include <Inventor/bundles/SoTextureCoordinateBundle.h>
+ #include <Inventor/elements/SoLazyElement.h>
+@@ -101,6 +102,13 @@ public:
+     static SbBool vboAvailable;
+     uint32_t indice_array;
+     std::map<uint32_t, Buffer> vbomap;
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: per-face bounding boxes for ray picks, see generatePrimitives(). Keyed on this
++    // node's id (coordIndex/partIndex) and the coordinate node's id.
++    SbUniqueId pickBoxesNode = 0;
++    SbUniqueId pickBoxesCoord = 0;
++    std::vector<SbBox3f> pickBoxes;
++#endif
+ 
+     VBO()
+     {
+@@ -493,6 +501,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
              &mb,
              mindices,
              &tb,
@@ -5075,7 +5097,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
              tindices,
              nbind,
              mbind,
-@@ -508,6 +518,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -508,6 +526,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
  }
  
  //****************************************************************************
@@ -5095,7 +5117,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  // renderSimpleArray: normal and coord from vertex_array;
  // no texture, color, highlight or selection but highet possible speed;
  // all vertices written in one go!
-@@ -716,15 +739,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -716,15 +747,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
          }
      }
  
@@ -5128,7 +5150,133 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          Binding mbind = this->findMaterialBinding(state);
          Binding nbind = this->findNormalBinding(state);
  
-@@ -2005,6 +2044,22 @@ void SoBrepFaceSet::renderShape(
+@@ -1080,6 +1127,18 @@ void SoBrepFaceSet::getBoundingBox(SoGet
+ }
+ 
+ // this macro actually makes the code below more readable  :-)
++#if defined(__EMSCRIPTEN__)
++// FCWEB: a triangle of a face whose bounding box misses the pick cone is walked but not
++// handed to Coin (skipPart, generatePrimitives()). Whole triangles only, so the TRIANGLES
++// primitive stream stays aligned.
++#define FCWEB_SHAPE_VERTEX(v) \
++    if (!(skipPart && mode == TRIANGLES)) { \
++        this->shapeVertex(v); \
++    }
++#else
++#define FCWEB_SHAPE_VERTEX(v) this->shapeVertex(v)
++#endif
++
+ #define DO_VERTEX(idx) \
+     if (mbind == PER_VERTEX) { \
+         pointDetail.setMaterialIndex(matnr); \
+@@ -1110,7 +1169,7 @@ void SoBrepFaceSet::getBoundingBox(SoGet
+     } \
+     vertex.setPoint(coords->get3(idx)); \
+     pointDetail.setCoordinateIndex(idx); \
+-    this->shapeVertex(&vertex);
++    FCWEB_SHAPE_VERTEX(&vertex);
+ 
+ void SoBrepFaceSet::generatePrimitives(SoAction* action)
+ {
+@@ -1247,6 +1306,70 @@ void SoBrepFaceSet::generatePrimitives(S
+         }
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: per-face culling for ray picks. Coin tests one bounding box per shape
++    // (SoShape::rayPick) and then feeds every triangle of every face below through
++    // shapeVertex()/intersect(); a preselection pick over a large assembly spent 120-330 ms
++    // per mouse move in exactly that (2026-09-15, 900a_GA3DtechProject). A face whose
++    // bounding box misses the pick cone has no triangle that can hit it, so its triangles are
++    // still walked (the index bookkeeping below must stay exact) but not handed to Coin. Same
++    // picked points, fewer triangles. The boxes are cached per node until coordIndex/partIndex
++    // or the coordinate node change.
++    SoRayPickAction* pickAction = action->isOfType(SoRayPickAction::getClassTypeId())
++        ? static_cast<SoRayPickAction*>(action)
++        : nullptr;
++    const int32_t* pibegin = this->partIndex.getValues(0);
++    bool skipPart = false;
++    if (pickAction) {
++        VBO* p = PRIVATE(this).get();
++        const SbUniqueId nid = this->getNodeId();
++        const SbUniqueId cid = coords->getNodeId();
++        if (p->pickBoxesNode != nid || p->pickBoxesCoord != cid
++            || p->pickBoxes.size() != static_cast<size_t>(num_partindices)) {
++            p->pickBoxes.assign(num_partindices, SbBox3f());
++            const int32_t* ip = cindices;
++            const int32_t* iend = cindices + numindices;
++            const int32_t* pp = pibegin;
++            int ppi = pp < piendptr ? *pp++ : -1;
++            while (ppi == 0) {
++                ppi = pp < piendptr ? *pp++ : -1;
++            }
++            int tri = 0;
++            while (ip < iend && ppi > 0) {
++                SbBox3f& bb = p->pickBoxes[static_cast<int>(pp - pibegin) - 1];
++                while (ip < iend && *ip >= 0) {
++                    bb.extendBy(coords->get3(*ip));
++                    ++ip;
++                }
++                if (ip < iend) {
++                    ++ip;
++                }
++                if (++tri == ppi) {
++                    ppi = pp < piendptr ? *pp++ : -1;
++                    while (ppi == 0) {
++                        ppi = pp < piendptr ? *pp++ : -1;
++                    }
++                    tri = 0;
++                }
++            }
++            p->pickBoxesNode = nid;
++            p->pickBoxesCoord = cid;
++        }
++    }
++    auto cullPart = [&]() {
++        skipPart = false;
++        if (!pickAction || pi < 0) {
++            return;
++        }
++        int partno = static_cast<int>(piptr - pibegin) - 1;
++        if (partno >= 0 && partno < static_cast<int>(PRIVATE(this)->pickBoxes.size())) {
++            const SbBox3f& bb = PRIVATE(this)->pickBoxes[partno];
++            skipPart = bb.isEmpty() || !pickAction->intersect(bb, TRUE);
++        }
++    };
++    cullPart();
++#endif
++
+     while (viptr + 2 < viendptr) {
+         v1 = *viptr++;
+         v2 = *viptr++;
+@@ -1322,7 +1445,7 @@ void SoBrepFaceSet::generatePrimitives(S
+         }
+         pointDetail.setCoordinateIndex(v1);
+         vertex.setPoint(coords->get3(v1));
+-        this->shapeVertex(&vertex);
++        FCWEB_SHAPE_VERTEX(&vertex);
+ 
+         DO_VERTEX(v2);
+         DO_VERTEX(v3);
+@@ -1364,6 +1487,9 @@ void SoBrepFaceSet::generatePrimitives(S
+                 }
+             }
+             trinr = 0;
++#if defined(__EMSCRIPTEN__)
++            cullPart();
++#endif
+         }
+     }
+     if (mode != POLYGON) {
+@@ -1380,6 +1506,7 @@ void SoBrepFaceSet::generatePrimitives(S
+ }
+ 
+ #undef DO_VERTEX
++#undef FCWEB_SHAPE_VERTEX
+ 
+ void SoBrepFaceSet::renderHighlight(SoGLRenderAction* action, SelContextPtr ctx)
+ {
+@@ -2005,6 +2132,22 @@ void SoBrepFaceSet::renderShape(
      SbBool texture
  )
  {
@@ -5151,7 +5299,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
      // Can we use vertex buffer objects?
      if (hasVBO) {
          int nbinding = nbind;
-@@ -2067,6 +2122,24 @@ void SoBrepFaceSet::renderShape(
+@@ -2067,6 +2210,24 @@ void SoBrepFaceSet::renderShape(
          }
      }
  
