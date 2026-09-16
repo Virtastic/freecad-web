@@ -1046,10 +1046,20 @@ def tick():
             if d is not None:
                 try:
                     if int(getattr(d, 'UndoCount', 0) or 0) > 0:
-                        before = _obs.changed
-                        d.undo()
-                        d.recompute()
-                        _obs.changed = before      # our own undo is not an edit
+                        # The guard comes OFF for the duration. Our own undo fires the
+                        # observer exactly like an edit does, so leaving it on marked the
+                        # session dirty again, which undid again, for ever: the interpreter
+                        # never came back and the whole tab stopped answering (measured --
+                        # the control gate sat 2700 s with no progress).
+                        before, guard = _obs.changed, _obs.guard
+                        _obs.guard = False
+                        try:
+                            d.undo()
+                            d.recompute()
+                        finally:
+                            _obs.guard = guard
+                            _obs.changed = before
+                            _obs.tripped = False
                         _revert_undone = True
                         _log('read-only: undid an edit made without control')
                 except Exception as e:
