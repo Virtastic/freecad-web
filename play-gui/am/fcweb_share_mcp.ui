@@ -67,17 +67,39 @@
         </item>
        </layout>
       </item>
-      <item row="3" column="0" colspan="2">
+      <!-- Both clients refuse a name that already exists, so each command REMOVES first:
+           the common case is not a first install, it is a regenerated link to update. -->
+      <item row="3" column="0"><widget class="QLabel" name="lCli"><property name="text"><string>Add to your CLI</string></property></widget></item>
+      <item row="3" column="1">
+       <layout class="QHBoxLayout" name="hCli">
+        <item>
+         <widget class="QPushButton" name="btnCliClaude">
+          <property name="text"><string>Copy Claude Code command</string></property>
+          <property name="toolTip"><string>Copies two lines: claude mcp remove freecad, then claude mcp add --transport http freecad THE-LINK. Paste both into a terminal.</string></property>
+          <property name="enabled"><bool>false</bool></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnCliCodex">
+          <property name="text"><string>Copy Codex command</string></property>
+          <property name="toolTip"><string>Copies two lines: codex mcp remove freecad, then codex mcp add freecad --url THE-LINK. Paste both into a terminal.</string></property>
+          <property name="enabled"><bool>false</bool></property>
+         </widget>
+        </item>
+        <item><spacer name="hsCli"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+       </layout>
+      </item>
+      <item row="4" column="0" colspan="2">
        <widget class="QLabel" name="lMcpHow">
         <property name="textFormat"><enum>Qt::PlainText</enum></property>
         <property name="wordWrap"><bool>true</bool></property>
-        <property name="text"><string>Paste the link into your AI client — that is the whole setup. Claude Code: claude mcp add --transport http freecad THE-LINK. Claude Desktop: Settings → Connectors → add a custom connector.</string></property>
+        <property name="text"><string>Paste the link into your AI client. That is the whole setup. For Claude Code or Codex, use the copy buttons above and paste both lines into a terminal. Claude Desktop: Settings, Connectors, add a custom connector.</string></property>
        </widget>
       </item>
-      <item row="4" column="0" colspan="2">
+      <item row="5" column="0" colspan="2">
        <widget class="QLabel" name="lMcpNote">
         <property name="wordWrap"><bool>true</bool></property>
-        <property name="text"><string>The assistant works inside this browser tab: it sees what you see, and can edit whenever you hold control. This tab must stay open for it to act. Anyone with the link can do the same — treat it like a password.</string></property>
+        <property name="text"><string>The assistant works inside this browser tab: it sees what you see, and can edit whenever you hold control. This tab must stay open for it to act. Anyone with the link can do the same, so treat it like a password.</string></property>
         <property name="styleSheet"><string>color: gray;</string></property>
        </widget>
       </item>

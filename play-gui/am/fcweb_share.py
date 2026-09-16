@@ -632,13 +632,13 @@ def _paint(f):
     f.leLink.setText(link)
     f.btnCopyLink.setEnabled(bool(link))
     if not sharing:
-        f.lEditor.setText('\u2014')
+        f.lEditor.setText('-')
     elif c.get('holder'):
         f.lEditor.setText('You')
     elif c.get('holderName'):
         f.lEditor.setText('%s is editing' % c['holderName'])
     else:
-        f.lEditor.setText('Nobody \u2014 the next request is granted at once')
+        f.lEditor.setText('Nobody. The next request is granted at once')
     hp = c.get('has_pw') or {}
     for which, lab, btn in (('viewer', f.lVpwState, f.btnClearVpw), ('editor', f.lEpwState, f.btnClearEpw)):
         if _touched.get('clear_' + which):
@@ -659,20 +659,25 @@ def _paint_mcp(f):
     sharing = bool(c.get('session')) and not c.get('ended')
     url = p.GetString('AgentUrl', '') or (c.get('agentUrl') or '')
     arming = p.GetBool('AgentArm', False)
-    if not sharing:
-        st = 'Off \u2014 start a session on the General page first; the assistant attaches to one.'
+    if not sharing and (on or arming):
+        st = 'Starting a session for the assistant\u2026'
+    elif not sharing:
+        st = 'Off. Starting the assistant will start a session for it to attach to.'
     elif on and url:
-        st = 'On \u2014 paste the link into your AI client. This tab must stay open.'
+        st = 'On. Paste the link into your AI client. This tab must stay open.'
     elif arming:
         st = 'Starting the endpoint\u2026'
     else:
         st = 'Off'
     on = bool(on and (url or arming))
     f.lMcpStatus.setText(st)
-    f.btnMcpStart.setEnabled(sharing and not on)
+    # Not gated on `sharing`: the button starts a session itself when there is none.
+    f.btnMcpStart.setEnabled(not on and not c.get('unavailable'))
     f.btnMcpStop.setEnabled(bool(on))
     f.leAgentUrl.setText(url)
     f.btnCopyMcp.setEnabled(bool(url))
+    _try(lambda: f.btnCliClaude.setEnabled(bool(url)))
+    _try(lambda: f.btnCliCodex.setEnabled(bool(url)))
     f.btnRegen.setEnabled(bool(url))
 
 
@@ -797,6 +802,8 @@ class FcwebMcpPage(object):
         f.btnMcpStop.clicked.connect(self._disable)
         f.btnMcpRefresh.clicked.connect(self._repaint)
         f.btnCopyMcp.clicked.connect(lambda: _req('copy:mcp'))
+        f.btnCliClaude.clicked.connect(lambda: _req('copy:cli-claude'))
+        f.btnCliCodex.clicked.connect(lambda: _req('copy:cli-codex'))
         f.btnRegen.clicked.connect(self._regen)
 
     def loadSettings(self):
@@ -812,8 +819,16 @@ class FcwebMcpPage(object):
         p = _p()
         p.SetBool('AllowAgent', True)
         p.SetBool('AgentArm', True)      # this press, not a remembered preference
+        # The assistant works inside a session, so pressing its own button starts one
+        # if there is none. Requiring the General page first meant the only button on
+        # this page was greyed out with no way, from here, to ungrey it.
+        c = _ctl()
+        starting = not (c.get('session') and not c.get('ended'))
+        if starting:
+            p.SetBool('Enabled', True)
         App.saveParameter()
-        _try(lambda: self.form.lMcpStatus.setText('Starting the endpoint\u2026'))
+        _try(lambda: self.form.lMcpStatus.setText(
+            'Starting a session for the assistant\u2026' if starting else 'Starting the endpoint\u2026'))
         _later(self._repaint, 2.5)
 
     def _disable(self):
@@ -867,7 +882,7 @@ def _control_line(c):
     elif c.get('holderName'):
         line = '%s is editing.' % c['holderName']
     else:
-        line = 'Nobody is editing \u2014 the next request is granted at once.'
+        line = 'Nobody is editing. The next request is granted at once.'
     if c.get('pendingName'):
         line += '  %s is asking for control.' % c['pendingName']
     return line

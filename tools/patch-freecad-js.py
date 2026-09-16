@@ -98,6 +98,18 @@ import pathlib
 
 PATCHES = [
     (
+        'IDBFS persist failure reports its reason, not [object Object]',
+        # The pre-js handler concatenated the error:
+        #     err('[pre-gui] IDBFS persist failed: ' + e)
+        # and an Error/DOMException under + is '[object Object]', so the one log line that
+        # says the user's work did not reach IndexedDB named no cause: a quota failure and
+        # a transaction abort read identically and neither could be acted on. pre-gui.js
+        # carries the same fix for the next relink, after which this is an idempotent
+        # no-op like the rest of the table.
+        'err("[pre-gui] IDBFS persist failed: "+e)',
+        'err("[pre-gui] IDBFS persist failed: "+((e&&e.name||"Error")+": "+(e&&e.message||e)))',
+    ),
+    (
         'glGetString returns its cached pointer as a BigInt',
         # LEGACY_GL_EMULATION replaces glGetString AFTER emscripten wrapped the real one
         # for wasm64. The wrapped original computes a Number, caches THAT, and converts

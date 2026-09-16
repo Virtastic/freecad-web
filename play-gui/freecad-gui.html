@@ -2012,7 +2012,9 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       else if (req === 'diag') showDiag();
       else if (req === 'stop') stopSharing();
       else if (req.indexOf('kick:') === 0) kick(req.slice(5));
-      else if (req === 'copy:link' && S.id) copy(shareLink(), null, 'Link copied'); else if (req === 'copy:mcp' && S.agentUrl) copy(S.agentUrl, null, 'MCP link copied'); }
+      else if (req === 'copy:link' && S.id) copy(shareLink(), null, 'Link copied'); else if (req === 'copy:mcp' && S.agentUrl) copy(S.agentUrl, null, 'MCP link copied');
+      else if (req === 'copy:cli-claude' && S.agentUrl) copy('claude mcp remove freecad' + String.fromCharCode(10) + 'claude mcp add --transport http freecad ' + S.agentUrl, null, 'Claude Code command copied (two lines)');
+      else if (req === 'copy:cli-codex' && S.agentUrl) copy('codex mcp remove freecad' + String.fromCharCode(10) + 'codex mcp add freecad --url ' + S.agentUrl, null, 'Codex command copied (two lines)'); }
     if (S.id && S.holder) {
       await publishIfStaged(st);
       if (S.role === 'admin') await publishEnv();

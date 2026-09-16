@@ -289,10 +289,15 @@ def scenario_empty(ctx, url, args, fail):
     if not s1.load():
         fail('owner never reached Ready (%s)' % s1.phase())
         return None
-    _enable_sharing(s1)
-    st = _wait_state(s1, lambda x: x.get('id'), 40)
+    # Start from the ASSISTANT's own button, with nothing shared and nothing open. It
+    # has to start a session itself: requiring the General page first left the MCP page
+    # showing one greyed button and no way, from that page, to ungrey it.
+    s1.run_python('import fcweb_share as _fs\n_pg = _fs.FcwebMcpPage()\n_pg._enable()')
+    st = _wait_state(s1, lambda x: x.get('id'), 60)
     if not st:
-        fail('sharing never started with no document open (ring: %s)' % _ring(s1)[-5:])
+        fail('the assistant button did not start a session (ring: %s)' % _ring(s1)[-5:])
+    else:
+        print('==> the assistant button started a session on its own')
         return s1
     sid = st['id']
     # nothing to publish, and the owner is TOLD rather than left with a link to an empty app
