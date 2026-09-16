@@ -29,6 +29,7 @@ import sys
 
 import anyio
 from mcp.server.fastmcp import FastMCP, Image
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import TextContent
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -72,8 +73,17 @@ Object names AND labels are accepted wherever an object is named. Standard views
 front, top, right, rear, bottom, left, isometric, axonometric.
 """
 
+# DNS-rebinding protection OFF, deliberately. The SDK turns it on whenever it binds
+# localhost and then only accepts Host: localhost:<port> -- but this server always sits
+# behind our own nginx, which forwards the site's own Host ("localhost", "fc.example.com"),
+# and every one of those is refused with 421 Invalid Host header. The check also buys
+# nothing here: the capability is the unguessable token in the path, a browser cannot
+# reach /mcp/ cross-origin under COOP/COEP anyway, and the operator chooses the origin.
+# Measured 2026-09-15 against the real container: with it on, "claude mcp add" fails to
+# connect and the gates cannot see it, because they talk to 127.0.0.1 directly.
 mcp = FastMCP('freecad-web', instructions=INSTRUCTIONS, stateless_http=True, json_response=True,
-              streamable_http_path='/')
+              streamable_http_path='/',
+              transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
 
 # --------------------------------------------------------------------------- relay glue
