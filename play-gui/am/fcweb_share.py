@@ -140,13 +140,44 @@ def _doc():
     return App.listDocuments().get(_pin) if _pin else None
 
 
+def _safe_name(x):
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', str(x)).strip('_') or 'document'
+
+
+def _mine(d):
+    """A document of this user's own: not FreeCAD's start page, not a mirror of someone
+    else's session, not the copy we detached when control was taken."""
+    if d is None:
+        return False
+    if (getattr(d, 'FileName', '') or '').startswith('/freecad/'):
+        return False
+    if (d.Name or '').startswith('_fcweb_v'):
+        return False
+    return True
+
+
+def _my_docs():
+    """Every document the audience should see, the active one first."""
+    act = App.ActiveDocument
+    out = [d for d in App.listDocuments().values() if _mine(d)]
+    out.sort(key=lambda d: (act is None or d.Name != act.Name, d.Name))
+    return out
+
+
 def publish(force=False):
-    """Stage the pinned document for the page to upload. True when a new file was staged.
-    saveCopy, never save(): the document's own FileName and dirty flag are untouched, so
-    sharing never makes an unsaved document look saved nor redirects Ctrl+S."""
+    """Stage EVERY open document of this user's, as one zip, for the page to upload.
+
+    The audience watches the whole desk rather than one file: opening a second model
+    mid-session otherwise left everyone staring at the first with no way to say so.
+    saveCopy, never save(), so sharing still cannot make an unsaved document look saved
+    nor redirect Ctrl+S. The zip is STORED because FCStd files are already compressed
+    archives, and because the page's reader handles stored entries without inflating.
+    """
     global _last_pub_change
-    d = _doc()
-    if d is None or _obs is None:
+    if _obs is None:
+        return False
+    docs = _my_docs()
+    if not docs:
         return False
     if not force:
         if _obs.changed <= _last_pub_change:
@@ -157,14 +188,37 @@ def publish(force=False):
     g = App.ParamGet('User parameter:BaseApp/Preferences/Document')
     lvl = g.GetInt('CompressionLevel', 3)
     g.SetInt('CompressionLevel', 0)          # same trade the autosaver makes: 3.5x less stall
+    staged = []
     try:
-        d.saveCopy(os.path.join(STAGE, 'doc.FCStd'))
+        for d in docs:
+            fn = _safe_name(d.Label or d.Name) + '.FCStd'
+            p = os.path.join(STAGE, fn)
+            try:
+                d.saveCopy(p)
+                staged.append((fn, p))
+            except Exception as e:
+                _log('could not stage %s: %r' % (d.Name, e))
     finally:
         g.SetInt('CompressionLevel', lvl)
+    if not staged:
+        return False
+    import zipfile
+    with zipfile.ZipFile(os.path.join(STAGE, 'doc.FCStd'), 'w', zipfile.ZIP_STORED) as z:
+        for fn, p in staged:
+            z.write(p, fn)
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
     _last_pub_change = _obs.changed if _obs.changed else time.time()
+    act = App.ActiveDocument
     open(os.path.join(STAGE, 'doc.pending'), 'w').write(json.dumps(
-        {'name': (d.Label or d.Name) + '.FCStd', 't': time.time()}))
+        {'name': staged[0][0] if len(staged) == 1 else 'session.FCStd', 'bundle': True,
+         'docs': [fn for fn, _ in staged],
+         'active': _safe_name(act.Label or act.Name) + '.FCStd' if _mine(act) else '',
+         't': time.time()}))
     return True
+
 
 
 # --------------------------------------------------------------------------- environment
@@ -264,44 +318,105 @@ def _prov():
 
 
 # --------------------------------------------------------------------------- read-only
+# What a watcher may still do: look. Everything else is greyed out while the document is
+# not theirs to change -- undoing an edit after the fact tells someone they were not
+# allowed only once they have already done it, which is a worse way to learn.
+_LOOK_PREFIXES = ('Std_View', 'Std_Axo', 'Std_Zoom', 'Std_Fit', 'Std_Ortho', 'Std_Perspective',
+                  'Std_Sel', 'Std_Tree', 'Std_Measure', 'Std_Windows', 'Std_Workbench',
+                  'Std_Print', 'Std_Export', 'Std_Help', 'Std_About', 'Std_WhatsThis',
+                  'Std_DlgPreferences', 'Std_UserInterface', 'Std_ToggleNavigation',
+                  'Std_Drawing', 'Std_Freeze', 'Std_Quit', 'Std_Window', 'Fcweb_')
+_LOOK_EXACT = set(['Std_Refresh', 'Std_SelectAll', 'Std_BoxSelection', 'Std_BoxElementSelection',
+                   'Std_ViewFitSelection', 'Std_SceneInspector', 'Std_DependencyGraph',
+                   'Std_ProjectInfo', 'Std_ProjectUtil', 'Std_TextDocument'])
+_greyed = []
+
+
+def _grey_commands(on):
+    """Disable, or restore, every action that would change the document.
+
+    An allow-list rather than a deny-list: there are 459 commands, and one missed from a
+    deny-list is a hole a watcher can edit through. Greying is also what tells someone
+    BEFORE they click that this is not theirs to edit."""
+    global _greyed
+    Gui = _gui()
+    if Gui is None:
+        return
+    try:
+        from PySide6 import QtGui
+        mw = Gui.getMainWindow()
+        if mw is None:
+            return
+        if not on:
+            for a in _greyed:
+                try:
+                    a.setEnabled(True)
+                except RuntimeError:
+                    pass
+            _greyed = []
+            return
+        fresh = []
+        for a in mw.findChildren(QtGui.QAction):
+            try:
+                name = a.objectName()
+                if not name or not a.isEnabled():
+                    continue
+                if name in _LOOK_EXACT or name.startswith(_LOOK_PREFIXES):
+                    continue
+                a.setEnabled(False)
+                fresh.append(a)
+            except RuntimeError:
+                continue
+        _greyed = _greyed + fresh
+        if fresh:
+            _log('read-only: %d editing commands greyed out' % len(fresh))
+    except Exception as e:
+        _log('could not grey the editing commands: %r' % (e,))
+
+
 def set_readonly(on):
-    """Lock or unlock the pinned document. Statuses are SNAPSHOTTED per property before
-    locking and restored exactly on unlock: Shape and every computed output are read-only
-    by design and must stay that way."""
-    d = _doc()
-    if d is None or _obs is None:
+    """Lock or unlock every document we are mirroring, and grey out the editing commands.
+
+    Statuses are snapshotted per property before locking and restored exactly on unlock:
+    Shape and every computed output are read-only by design and must stay that way."""
+    if _obs is None:
         return 0
-    saved = _ro.setdefault(d.Name, {})
     n = 0
     changed_before = _obs.changed      # status flips fire the observer; they are not edits
-    for o in d.Objects:
-        props = saved.setdefault(o.Name, {})
-        for prop in o.PropertiesList:
-            try:
-                if on:
-                    if prop not in props:
-                        props[prop] = list(o.getPropertyStatus(prop))
-                    o.setPropertyStatus(prop, 'ReadOnly')
-                    n += 1
-                elif prop in props:
-                    if 'ReadOnly' not in props[prop]:
-                        o.setPropertyStatus(prop, '-ReadOnly')
-                    n += 1
-            except Exception:
-                pass
-    if not on:
-        _ro.pop(d.Name, None)
+    for d in list(App.listDocuments().values()):
+        if not ((d.Name or '').startswith('_fcweb_v') or d.Name == _pin):
+            continue                   # only the documents we mirror for someone else
+        saved = _ro.setdefault(d.Name, {})
+        for o in d.Objects:
+            props = saved.setdefault(o.Name, {})
+            for prop in o.PropertiesList:
+                try:
+                    if on:
+                        if prop not in props:
+                            props[prop] = list(o.getPropertyStatus(prop))
+                        o.setPropertyStatus(prop, 'ReadOnly')
+                        n += 1
+                    elif prop in props:
+                        if 'ReadOnly' not in props[prop]:
+                            o.setPropertyStatus(prop, '-ReadOnly')
+                        n += 1
+                except Exception:
+                    pass
+        if not on:
+            _ro.pop(d.Name, None)
+        try:
+            base = d.Label.replace(' (read-only)', '')
+            d.Label = base + (' (read-only)' if on else '')
+        except Exception:
+            pass
     _obs.changed = changed_before
     _obs.guard = bool(on)
     _obs.tripped = False
-    try:
-        base = d.Label.replace(' (read-only)', '')
-        d.Label = base + (' (read-only)' if on else '')
-    except Exception:
-        pass
+    _grey_commands(on)
     _log('read-only: %d properties %s, guard observer %s' % (
         n, 'locked, statuses snapshotted' if on else 'restored', 'on' if on else 'off'))
     return n
+
 
 
 # --------------------------------------------------------------------------- menu + prefs

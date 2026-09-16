@@ -224,6 +224,23 @@ def _people(s):
         out.append({'id': cid, 'name': c['name'], 'role': c['role'],
                     'holder': cid == s['holder'], 'asking': cid == s['pending'],
                     'idle': int(t - c['seen'])})
+    # One row per person, not per page load. Every reload mints a new client id, so
+    # someone who refreshed a few times filled the list with copies of their own name
+    # until each aged out. Keep the freshest, and let it carry the holder mark.
+    best = {}
+    for x in out:
+        k = (x['name'] or '').strip().lower()
+        cur = best.get(k)
+        if cur is None:
+            best[k] = x
+        elif x['idle'] < cur['idle']:
+            x['holder'] = x['holder'] or cur['holder']
+            x['asking'] = x['asking'] or cur['asking']
+            best[k] = x
+        else:
+            cur['holder'] = cur['holder'] or x['holder']
+            cur['asking'] = cur['asking'] or x['asking']
+    out = list(best.values())
     out.sort(key=lambda x: (not x['holder'], x['name'].lower()))
     return out
 

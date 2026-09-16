@@ -1493,29 +1493,55 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       var r = await fetch('/share/' + S.id, { headers: hdrs(), cache: 'no-store' });
       if (!r.ok) throw Object.assign(new Error('document HTTP ' + r.status), { code: 'http_' + r.status });
       var bytes = new Uint8Array(await r.arrayBuffer());
-      var name = safeName(meta.n || S.doc), path = '/home/web_user/.fcweb-v' + meta.v + '-' + name;
+      // A publish is a ZIP of every document the sharer has open -- the audience watches
+      // the whole desk, not one file. (A single .FCStd still works: anything without the
+      // zip magic is treated as one document, which is what older sessions published.)
+      var files = [], isZip = bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b;
       try { fs().mkdirTree('/home/web_user'); } catch (e) {}
-      fs().writeFile(path, bytes);
-      try { fs().writeFile('/home/web_user/' + name, bytes); } catch (e) {}   // the copy Download hands out
+      var dir = '/home/web_user/.fcweb-v' + meta.v;
+      try { fs().mkdirTree(dir); } catch (e) {}
+      if (isZip) {
+        await unzip(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), function (nm, data) {
+          if (!/\.FCStd$/i.test(nm)) return;
+          var p = dir + '/' + safeName(nm);
+          fs().writeFile(p, data);
+          files.push({ path: p, name: safeName(nm) });
+        });
+      }
+      if (!files.length) {
+        var one = safeName(meta.n || S.doc);
+        var p1 = dir + '/' + one;
+        fs().writeFile(p1, bytes);
+        files.push({ path: p1, name: one });
+      }
+      // the copy Download hands out is the active document, or the only one
+      try { fs().writeFile('/home/web_user/' + files[0].name, fs().readFile(files[0].path)); } catch (e) {}
       var marker = '/tmp/_fcshare_applied_' + meta.v;
       unlink(marker);
       var ran = py([
         'import FreeCAD as _App, FreeCADGui as _Gui, sys as _s, fcweb_share as _fs',
-        '_cam = ' + JSON.stringify(meta.cam || ''),
-        '_old = getattr(_App, "_fcweb_shared_doc", None)',
-        'if _old and _old in _App.listDocuments():',
-        '    try: _App.closeDocument(_old)',
-        '    except Exception as _e: _s.__stderr__.write("[fcweb] share: close %s failed: %r\\n" % (_old, _e))',
-        '_d = _App.openDocument(' + JSON.stringify(path) + ')',
-        '_App._fcweb_shared_doc = _d.Name',
-        '_d.Label = ' + JSON.stringify(name.replace(/\.FCStd$/i, '')),
-        '_fs.pin(_d.Name)',
+        '_want = ' + JSON.stringify(files.map(function (f) { return [f.path, f.name.replace(/\.FCStd$/i, '')]; })) + '',
+        '_active = ' + JSON.stringify((meta.active || '').replace(/\.FCStd$/i, '')) + '',
+        '_old = list(getattr(_App, "_fcweb_shared_docs", []) or [])',
+        'for _n in _old:',
+        '    if _n in _App.listDocuments():',
+        '        try: _App.closeDocument(_n)',
+        '        except Exception as _e: _s.__stderr__.write("[fcweb] share: close %s failed: %r\\n" % (_n, _e))',
+        '_names = []',
+        'for _p, _lab in _want:',
+        '    try:',
+        '        _d = _App.openDocument(_p)',
+        '        _d.Label = _lab',
+        '        _names.append(_d.Name)',
+        '        if _active and _lab == _active:',
+        '            _App.setActiveDocument(_d.Name)',
+        '    except Exception as _e:',
+        '        _s.__stderr__.write("[fcweb] share: open %s failed: %r\\n" % (_p, _e))',
+        '_App._fcweb_shared_docs = _names',
+        'if _names: _fs.pin(_names[0])',
         '_fs.set_readonly(' + (S.holder ? 'False' : 'True') + ')',
-        'if _cam:',
-        '    try: _Gui.ActiveDocument.ActiveView.setCamera(_cam)',
-        '    except Exception: pass',
-        '_s.__stderr__.write("[fcweb] share applied v' + meta.v + '\\n"); _s.__stderr__.flush()',
-        'open(' + JSON.stringify(marker) + ', "w").write("%s, %d objects" % (_d.Name, len(_d.Objects)))'
+        '_s.__stderr__.write("[fcweb] share applied v' + meta.v + ' (%d document(s))\\n" % len(_names)); _s.__stderr__.flush()',
+        'open(' + JSON.stringify(marker) + ', "w").write("%d document(s): %s" % (len(_names), ", ".join(_names)))'
       ].join('\n'));
       var opened = ran && await pyConfirm(marker, 20000);
       if (!opened) {
