@@ -5058,15 +5058,17 @@ diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
 diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
-@@ -37,6 +37,7 @@
+@@ -37,6 +37,9 @@
  #include <Inventor/SoPrimitiveVertex.h>
  #include <Inventor/actions/SoGetBoundingBoxAction.h>
  #include <Inventor/actions/SoGLRenderAction.h>
 +#include <Inventor/actions/SoRayPickAction.h>
++#include <Inventor/SbLine.h>
++#include <cmath>
  #include <Inventor/bundles/SoMaterialBundle.h>
  #include <Inventor/bundles/SoTextureCoordinateBundle.h>
  #include <Inventor/elements/SoLazyElement.h>
-@@ -101,6 +102,13 @@ public:
+@@ -101,6 +104,13 @@ public:
      static SbBool vboAvailable;
      uint32_t indice_array;
      std::map<uint32_t, Buffer> vbomap;
@@ -5080,7 +5082,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
      VBO()
      {
-@@ -493,6 +501,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -493,6 +503,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
              &mb,
              mindices,
              &tb,
@@ -5097,7 +5099,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
              tindices,
              nbind,
              mbind,
-@@ -508,6 +526,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -508,6 +528,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
  }
  
  //****************************************************************************
@@ -5117,7 +5119,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  // renderSimpleArray: normal and coord from vertex_array;
  // no texture, color, highlight or selection but highet possible speed;
  // all vertices written in one go!
-@@ -716,15 +747,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -716,15 +749,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
          }
      }
  
@@ -5150,7 +5152,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          Binding mbind = this->findMaterialBinding(state);
          Binding nbind = this->findNormalBinding(state);
  
-@@ -1080,6 +1127,18 @@ void SoBrepFaceSet::getBoundingBox(SoGet
+@@ -1080,6 +1129,18 @@ void SoBrepFaceSet::getBoundingBox(SoGet
  }
  
  // this macro actually makes the code below more readable  :-)
@@ -5169,7 +5171,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  #define DO_VERTEX(idx) \
      if (mbind == PER_VERTEX) { \
          pointDetail.setMaterialIndex(matnr); \
-@@ -1110,7 +1169,7 @@ void SoBrepFaceSet::getBoundingBox(SoGet
+@@ -1110,7 +1171,7 @@ void SoBrepFaceSet::getBoundingBox(SoGet
      } \
      vertex.setPoint(coords->get3(idx)); \
      pointDetail.setCoordinateIndex(idx); \
@@ -5178,7 +5180,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
  void SoBrepFaceSet::generatePrimitives(SoAction* action)
  {
-@@ -1247,7 +1306,142 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1247,7 +1308,178 @@ void SoBrepFaceSet::generatePrimitives(S
          }
      }
  
@@ -5232,6 +5234,42 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 +            p->pickBoxesCoord = cid;
 +        }
 +    }
++    // Ray-vs-box slab test in object space. Coin's SoRayPickAction::intersect(box) walks six
++    // planes in double precision plus the cone check; it was 15 ms of a 40 ms pick on the
++    // a2plus assembly once the triangles were culled (2026-09-15). Triangles have no pick
++    // radius, so a face whose box the RAY misses contributes nothing whatever the cone says
++    // -- the plain slab test decides the same set, a hair more generously (the epsilon).
++    // Near/far clipping is left to Coin's per-triangle isBetweenPlanes(), as before.
++    const SbLine& fcwebRay = pickAction->getLine();
++    auto rayHitsBox = [&](const SbBox3f& bb) {
++        const SbVec3f& o = fcwebRay.getPosition();
++        const SbVec3f& d = fcwebRay.getDirection();
++        const SbVec3f& lo = bb.getMin();
++        const SbVec3f& hi = bb.getMax();
++        float sx, sy, sz;
++        bb.getSize(sx, sy, sz);
++        const float e = 1e-4f * std::max(sx, std::max(sy, sz)) + 1e-6f;
++        float tmin = -std::numeric_limits<float>::max(), tmax = std::numeric_limits<float>::max();
++        for (int k = 0; k < 3; ++k) {
++            if (std::fabs(d[k]) < 1e-12f) {
++                if (o[k] < lo[k] - e || o[k] > hi[k] + e) {
++                    return false;
++                }
++                continue;
++            }
++            const float inv = 1.0f / d[k];
++            float t1 = (lo[k] - e - o[k]) * inv, t2 = (hi[k] + e - o[k]) * inv;
++            if (t1 > t2) {
++                std::swap(t1, t2);
++            }
++            tmin = std::max(tmin, t1);
++            tmax = std::min(tmax, t2);
++            if (tmin > tmax) {
++                return false;
++            }
++        }
++        return true;
++    };
 +    auto cullPart = [&]() {
 +        skipPart = false;
 +        if (!pickAction || pi < 0) {
@@ -5240,7 +5278,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 +        int partno = static_cast<int>(piptr - pibegin) - 1;
 +        if (partno >= 0 && partno < static_cast<int>(PRIVATE(this)->pickBoxes.size())) {
 +            const SbBox3f& bb = PRIVATE(this)->pickBoxes[partno];
-+            skipPart = bb.isEmpty() || !pickAction->intersect(bb, TRUE);
++            skipPart = bb.isEmpty() || !rayHitsBox(bb);
 +        }
 +    };
 +    cullPart();
@@ -5321,7 +5359,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          v1 = *viptr++;
          v2 = *viptr++;
          v3 = *viptr++;
-@@ -1322,7 +1516,7 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1322,7 +1554,7 @@ void SoBrepFaceSet::generatePrimitives(S
          }
          pointDetail.setCoordinateIndex(v1);
          vertex.setPoint(coords->get3(v1));
@@ -5330,7 +5368,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
          DO_VERTEX(v2);
          DO_VERTEX(v3);
-@@ -1364,6 +1558,9 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1364,6 +1596,9 @@ void SoBrepFaceSet::generatePrimitives(S
                  }
              }
              trinr = 0;
@@ -5340,7 +5378,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          }
      }
      if (mode != POLYGON) {
-@@ -1380,6 +1577,7 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1380,6 +1615,7 @@ void SoBrepFaceSet::generatePrimitives(S
  }
  
  #undef DO_VERTEX
@@ -5348,7 +5386,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
  void SoBrepFaceSet::renderHighlight(SoGLRenderAction* action, SelContextPtr ctx)
  {
-@@ -2005,6 +2203,22 @@ void SoBrepFaceSet::renderShape(
+@@ -2005,6 +2241,22 @@ void SoBrepFaceSet::renderShape(
      SbBool texture
  )
  {
@@ -5371,7 +5409,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
      // Can we use vertex buffer objects?
      if (hasVBO) {
          int nbinding = nbind;
-@@ -2067,6 +2281,24 @@ void SoBrepFaceSet::renderShape(
+@@ -2067,6 +2319,24 @@ void SoBrepFaceSet::renderShape(
          }
      }
  

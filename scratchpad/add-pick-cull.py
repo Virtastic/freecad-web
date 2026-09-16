@@ -96,6 +96,42 @@ COMMENT = b'''#if defined(__EMSCRIPTEN__)
             p->pickBoxesCoord = cid;
         }
     }
+    // Ray-vs-box slab test in object space. Coin's SoRayPickAction::intersect(box) walks six
+    // planes in double precision plus the cone check; it was 15 ms of a 40 ms pick on the
+    // a2plus assembly once the triangles were culled (2026-09-15). Triangles have no pick
+    // radius, so a face whose box the RAY misses contributes nothing whatever the cone says
+    // -- the plain slab test decides the same set, a hair more generously (the epsilon).
+    // Near/far clipping is left to Coin's per-triangle isBetweenPlanes(), as before.
+    const SbLine& fcwebRay = pickAction->getLine();
+    auto rayHitsBox = [&](const SbBox3f& bb) {
+        const SbVec3f& o = fcwebRay.getPosition();
+        const SbVec3f& d = fcwebRay.getDirection();
+        const SbVec3f& lo = bb.getMin();
+        const SbVec3f& hi = bb.getMax();
+        float sx, sy, sz;
+        bb.getSize(sx, sy, sz);
+        const float e = 1e-4f * std::max(sx, std::max(sy, sz)) + 1e-6f;
+        float tmin = -std::numeric_limits<float>::max(), tmax = std::numeric_limits<float>::max();
+        for (int k = 0; k < 3; ++k) {
+            if (std::fabs(d[k]) < 1e-12f) {
+                if (o[k] < lo[k] - e || o[k] > hi[k] + e) {
+                    return false;
+                }
+                continue;
+            }
+            const float inv = 1.0f / d[k];
+            float t1 = (lo[k] - e - o[k]) * inv, t2 = (hi[k] + e - o[k]) * inv;
+            if (t1 > t2) {
+                std::swap(t1, t2);
+            }
+            tmin = std::max(tmin, t1);
+            tmax = std::min(tmax, t2);
+            if (tmin > tmax) {
+                return false;
+            }
+        }
+        return true;
+    };
     auto cullPart = [&]() {
         skipPart = false;
         if (!pickAction || pi < 0) {
@@ -104,7 +140,7 @@ COMMENT = b'''#if defined(__EMSCRIPTEN__)
         int partno = static_cast<int>(piptr - pibegin) - 1;
         if (partno >= 0 && partno < static_cast<int>(PRIVATE(this)->pickBoxes.size())) {
             const SbBox3f& bb = PRIVATE(this)->pickBoxes[partno];
-            skipPart = bb.isEmpty() || !pickAction->intersect(bb, TRUE);
+            skipPart = bb.isEmpty() || !rayHitsBox(bb);
         }
     };
     cullPart();
@@ -209,7 +245,7 @@ SKIP = b'''#if defined(__EMSCRIPTEN__)
 
 EDITS = [
     (b'#include <Inventor/actions/SoGLRenderAction.h>\n',
-     b'#include <Inventor/actions/SoGLRenderAction.h>\n#include <Inventor/actions/SoRayPickAction.h>\n', 1),
+     b'#include <Inventor/actions/SoGLRenderAction.h>\n#include <Inventor/actions/SoRayPickAction.h>\n#include <Inventor/SbLine.h>\n#include <cmath>\n', 1),
     (b'    std::map<uint32_t, Buffer> vbomap;\n', b'    std::map<uint32_t, Buffer> vbomap;\n' + FIELDS, 1),
     (b'#define DO_VERTEX(idx) \\\n', EMIT + b'#define DO_VERTEX(idx) \\\n', 1),
     (b'    pointDetail.setCoordinateIndex(idx); \\\n    this->shapeVertex(&vertex);\n',
