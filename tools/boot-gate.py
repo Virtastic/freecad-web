@@ -3621,7 +3621,7 @@ SCENARIOS = (
     ('env',           _gs.scenario_env,       False,
      'carries units and macros to a visitor with the owner offline, touching nothing the visitor owns'),
     ('edges',         _gse.scenario_edges,    False,
-     'survives a dead link, gates on the viewer password, collapses the bar, redacts diagnostics, ends cleanly'),
+     'survives a dead link, gates on the viewer password, keeps the floating bar gone, redacts diagnostics, ends cleanly'),
 )
 
 # Nothing below may name a scenario this table does not.

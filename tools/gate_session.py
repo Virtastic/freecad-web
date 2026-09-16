@@ -243,14 +243,16 @@ def scenario_share(ctx, url, args, fail):
         print('==> [live-edit] viewer console about share: %r' % [c[:200] for c in s2.lines() if 'share' in c and ('applied' in c or 'close' in c or 'fail' in c)][-8:])
     else:
         print('==> live edit reached the viewer: volume 12000.0')
-    # camera follows without a reopen
-    s1.run_python("import FreeCADGui as G\nG.ActiveDocument.ActiveView.viewTop()")
+    # The camera deliberately does NOT travel: being pulled to someone else's viewpoint
+    # mid-inspection is worse than useful. What must still hold is that moving it costs
+    # the viewer nothing -- no reopen, no disturbance of the view they chose.
     before = _state(s2).get('applied')
-    st = _wait_state(s2, lambda x: x.get('cam') and 'GATE' not in x['cam'], 20)
+    s1.run_python("import FreeCADGui as G\nG.ActiveDocument.ActiveView.viewTop()")
     time.sleep(8)
     if _state(s2).get('applied') != before:
         fail('a camera-only change caused a document reopen on the viewer')
-    print('==> camera followed (%s), no reopen' % ('yes' if st else 'not observed'))
+    else:
+        print('==> the owner moved the camera: no reopen, the viewer keeps their own view')
     # stale banner after the owner goes silent
     s1.page.close()
     st = _wait_state(s2, lambda x: x.get('silent'), 90)
