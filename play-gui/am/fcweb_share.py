@@ -1017,7 +1017,10 @@ def tick():
         # A page-initiated set_readonly() can be dropped while the interpreter is busy; a
         # state the interpreter re-derives itself cannot stay wrong for more than one tick.
         if _pin and _obs is not None and (enabled or c.get('session')):
-            want = not bool(c.get('holder'))
+            # ...and when the session ENDS, everything comes back. The documents stay as
+            # the watcher's own copy, so leaving them locked with every editing command
+            # greyed would hand someone a frozen FreeCAD once the sharer stopped.
+            want = not bool(c.get('holder')) and not c.get('ended')
             if _obs.guard != want:
                 set_readonly(want)
         if _tick_n % 2 == 0:
