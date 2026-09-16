@@ -171,6 +171,36 @@ EMSCRIPTEN_KEEPALIVE void fcweb_yield_now(void) {
 EMSCRIPTEN_KEEPALIVE void fcweb_maybe_yield(void) {
     if (fcweb_yield_due()) fcweb_yield_now();
 }
+/* Park until a worker thread sets *flag (a 32-bit atomic) and wakes it with
+ * emscripten_futex_wake -- the main thread's half of "do the heavy call on a std::thread
+ * while the tab stays alive" (PropertyTopoShape.cpp, ViewProviderExt.cpp). Atomics.waitAsync
+ * resolves on the notify with no polling: a loop of fcweb_yield_now() parks would either
+ * spin (a MessageChannel turn is microseconds -- measured 2.2 million turns in one open,
+ * 2026-09-16) or pay Chrome's 4 ms nested-timer clamp per turn. Holds Qt's resume slot like
+ * the yield does, so events queue rather than run C++ meanwhile; an event that takes the
+ * slot only resolves the promise early and the C loop waits again. Without waitAsync
+ * (no SharedArrayBuffer, an old browser) it polls at the timer clamp. The address travels
+ * as a double: JSPI exports get raw i64 pointers on wasm64 and this is not one. */
+EM_ASYNC_JS(void, fcweb_wait_flag_js, (double addr), {
+    await new Promise(function (r) {
+        var c = (typeof Module !== "undefined") ? Module.qtSuspendResumeControl : null, mine = null;
+        if (c && !c.resume) { mine = function () { if (c.resume === mine) c.resume = null; r(); }; c.resume = mine; }
+        var done = function () { if (mine && c.resume === mine) c.resume = null; r(); };
+        try {
+            if (typeof growMemViews === "function") growMemViews();
+            if (typeof Atomics !== "undefined" && Atomics.waitAsync && typeof SharedArrayBuffer !== "undefined" && HEAP32.buffer instanceof SharedArrayBuffer) {
+                var w = Atomics.waitAsync(HEAP32, addr / 4, 0, 2000);
+                if (w.async) { w.value.then(done, done); } else { done(); }
+                return;
+            }
+        } catch (e) {}
+        setTimeout(done, 1);
+    });
+});
+EMSCRIPTEN_KEEPALIVE void fcweb_wait_flag(volatile int* flag) {
+    if (!fcweb_yield_ok()) return;   /* not a promising stack: the caller must not have spawned the worker */
+    while (!*flag) fcweb_wait_flag_js((double)(uintptr_t)flag);
+}
 
 EM_JS(unsigned int, fcweb_dl_gen, (int range), { return (typeof __fcDL !== "undefined") ? __fcDL.gen(range) : 0; });
 EM_JS(void, fcweb_dl_begin, (unsigned int list, unsigned int mode), { if (typeof __fcDL !== "undefined") __fcDL.begin(list, mode); });

@@ -5055,6 +5055,70 @@ diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
      // This is highly experimental and we should keep an eye on it
      // if we have mysterious crashes
      // The argument must be 'Standard_False' to avoid FPE caused by
+diff -ruNp a/src/Mod/Part/App/PropertyTopoShape.cpp b/src/Mod/Part/App/PropertyTopoShape.cpp
+--- a/src/Mod/Part/App/PropertyTopoShape.cpp
++++ b/src/Mod/Part/App/PropertyTopoShape.cpp
+@@ -28,6 +28,15 @@
+ #include <BRepBndLib.hxx>
+ #include <BRepBuilderAPI_Copy.hxx>
+ #include <BRepTools.hxx>
++#if defined(__EMSCRIPTEN__)
++#include <atomic>
++#include <exception>
++#include <thread>
++#include <emscripten/threading.h>
++// FCWEB: gl_legacy_stubs.c -- park one browser turn on a promising stack (see loadFromStream).
++extern "C" int fcweb_yield_ok(void);
++extern "C" void fcweb_wait_flag(volatile int* flag);
++#endif
+ #include <BRepTools_ShapeSet.hxx>
+ #include <OSD_OpenFile.hxx>
+ #include <Standard_Failure.hxx>
+@@ -691,7 +700,44 @@ void PropertyPartShape::loadFromStream(B
+         reader.exceptions(std::istream::failbit | std::istream::badbit);
+         BRep_Builder builder;
+         TopoDS_Shape shape;
++#if defined(__EMSCRIPTEN__)
++        // FCWEB: the BRep text parse runs on a worker thread while the main thread parks one
++        // until the worker wakes it (gl_legacy_stubs.c fcweb_wait_flag). The park holds Qt's
++        // resume slot, so events queue instead of running C++ on the main thread meanwhile,
++        // and the page keeps painting. Only the worker touches the reader's zip stream until
++        // the join. The GIL is released for the wait as Document.cpp's yield point does.
++        // Legal only on a promising stack (a load through the Python bridge). The largest
++        // part of the a2plus assembly froze the tab 3.4 s here (gpu-open-profile.py,
++        // 2026-09-16); small shapes cost a thread spawn and one turn.
++        if (fcweb_yield_ok()) {
++            std::atomic<int> fcwebDone {0};
++            std::exception_ptr fcwebErr;
++            std::thread fcwebParser([&]() {
++                try {
++                    BRepTools::Read(shape, reader, builder);
++                }
++                catch (...) {
++                    fcwebErr = std::current_exception();
++                }
++                fcwebDone = 1;
++                emscripten_futex_wake(&fcwebDone, 1);
++            });
++            PyThreadState* fcwebTs = PyGILState_Check() ? PyEval_SaveThread() : nullptr;
++            fcweb_wait_flag(reinterpret_cast<volatile int*>(&fcwebDone));
++            if (fcwebTs) {
++                PyEval_RestoreThread(fcwebTs);
++            }
++            fcwebParser.join();
++            if (fcwebErr) {
++                std::rethrow_exception(fcwebErr);
++            }
++        }
++        else {
++            BRepTools::Read(shape, reader, builder);
++        }
++#else
+         BRepTools::Read(shape, reader, builder);
++#endif
+         setValue(shape);
+     }
+     catch (const std::exception&) {
 diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
@@ -5437,7 +5501,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProviderExt.cpp
 --- a/src/Mod/Part/Gui/ViewProviderExt.cpp
 +++ b/src/Mod/Part/Gui/ViewProviderExt.cpp
-@@ -29,6 +29,14 @@
+@@ -29,6 +29,15 @@
  #include <BRepBuilderAPI_MakeVertex.hxx>
  #include <BRepExtrema_DistShapeShape.hxx>
  #include <BRepMesh_IncrementalMesh.hxx>
@@ -5445,14 +5509,15 @@ diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProvide
 +#include <atomic>
 +#include <exception>
 +#include <thread>
++#include <emscripten/threading.h>
 +// FCWEB: gl_legacy_stubs.c -- park one browser turn on a promising stack (see setupCoinGeometry).
 +extern "C" int fcweb_yield_ok(void);
-+extern "C" void fcweb_yield_now(void);
++extern "C" void fcweb_wait_flag(volatile int* flag);
 +#endif
  #include <gp_Trsf.hxx>
  #include <Precision.hxx>
  #include <Poly_Array1OfTriangle.hxx>
-@@ -1097,7 +1105,18 @@ void ViewProviderPartExt::setupCoinGeome
+@@ -1097,7 +1106,18 @@ void ViewProviderPartExt::setupCoinGeome
      meshParams.Deflection = deflection;
      meshParams.Relative = Standard_False;
      meshParams.Angle = AngDeflectionRads;
@@ -5471,13 +5536,13 @@ diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProvide
      meshParams.AllowQualityDecrease = Standard_True;
  
      // Clear triangulation and PCurves from geometry which can slow down the process
-@@ -1107,7 +1126,54 @@ void ViewProviderPartExt::setupCoinGeome
+@@ -1107,7 +1127,49 @@ void ViewProviderPartExt::setupCoinGeome
      BRepTools::Clean(shape, Standard_True);
  #endif
  
 +#if defined(__EMSCRIPTEN__)
 +    // FCWEB: a large shape is meshed on a worker thread while the main thread parks one
-+    // browser turn at a time (gl_legacy_stubs.c fcweb_yield_now). The park holds Qt's
++    // until the worker wakes it (gl_legacy_stubs.c fcweb_wait_flag). The park holds Qt's
 +    // resume slot, so DOM events and timers QUEUE instead of running C++ against the shape
 +    // being meshed, the page compositor keeps painting, and Chrome never calls the tab
 +    // hung. The GIL is released for the wait like Document.cpp's yield point does (other
@@ -5490,7 +5555,7 @@ diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProvide
 +        ++fcwebFaces;
 +    }
 +    if (fcwebFaces >= 64 && fcweb_yield_ok()) {
-+        std::atomic<bool> fcwebDone {false};
++        std::atomic<int> fcwebDone {0};
 +        std::exception_ptr fcwebErr;
 +        std::thread fcwebMesher([&]() {
 +            try {
@@ -5499,16 +5564,11 @@ diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProvide
 +            catch (...) {
 +                fcwebErr = std::current_exception();
 +            }
-+            fcwebDone = true;
++            fcwebDone = 1;
++            emscripten_futex_wake(&fcwebDone, 1);
 +        });
 +        PyThreadState* fcwebTs = PyGILState_Check() ? PyEval_SaveThread() : nullptr;
-+        while (!fcwebDone) {
-+            try {
-+                fcweb_yield_now();
-+            }
-+            catch (...) {
-+            }
-+        }
++        fcweb_wait_flag(reinterpret_cast<volatile int*>(&fcwebDone));
 +        if (fcwebTs) {
 +            PyEval_RestoreThread(fcwebTs);
 +        }

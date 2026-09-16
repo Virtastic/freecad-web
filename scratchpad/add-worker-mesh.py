@@ -18,9 +18,10 @@ INCLUDES_NEW = b'''#include <BRepMesh_IncrementalMesh.hxx>
 #include <atomic>
 #include <exception>
 #include <thread>
+#include <emscripten/threading.h>
 // FCWEB: gl_legacy_stubs.c -- park one browser turn on a promising stack (see setupCoinGeometry).
 extern "C" int fcweb_yield_ok(void);
-extern "C" void fcweb_yield_now(void);
+extern "C" void fcweb_wait_flag(volatile int* flag);
 #endif
 '''
 
@@ -42,7 +43,7 @@ PAR_NEW = b'''#if defined(__EMSCRIPTEN__)
 MESH_OLD = b'    BRepMesh_IncrementalMesh(shape, meshParams);\n'
 MESH_NEW = b'''#if defined(__EMSCRIPTEN__)
     // FCWEB: a large shape is meshed on a worker thread while the main thread parks one
-    // browser turn at a time (gl_legacy_stubs.c fcweb_yield_now). The park holds Qt's
+    // until the worker wakes it (gl_legacy_stubs.c fcweb_wait_flag). The park holds Qt's
     // resume slot, so DOM events and timers QUEUE instead of running C++ against the shape
     // being meshed, the page compositor keeps painting, and Chrome never calls the tab
     // hung. The GIL is released for the wait like Document.cpp's yield point does (other
@@ -55,7 +56,7 @@ MESH_NEW = b'''#if defined(__EMSCRIPTEN__)
         ++fcwebFaces;
     }
     if (fcwebFaces >= 64 && fcweb_yield_ok()) {
-        std::atomic<bool> fcwebDone {false};
+        std::atomic<int> fcwebDone {0};
         std::exception_ptr fcwebErr;
         std::thread fcwebMesher([&]() {
             try {
@@ -64,16 +65,11 @@ MESH_NEW = b'''#if defined(__EMSCRIPTEN__)
             catch (...) {
                 fcwebErr = std::current_exception();
             }
-            fcwebDone = true;
+            fcwebDone = 1;
+            emscripten_futex_wake(&fcwebDone, 1);
         });
         PyThreadState* fcwebTs = PyGILState_Check() ? PyEval_SaveThread() : nullptr;
-        while (!fcwebDone) {
-            try {
-                fcweb_yield_now();
-            }
-            catch (...) {
-            }
-        }
+        fcweb_wait_flag(reinterpret_cast<volatile int*>(&fcwebDone));
         if (fcwebTs) {
             PyEval_RestoreThread(fcwebTs);
         }
