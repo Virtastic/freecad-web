@@ -346,6 +346,15 @@ def _try(fn):
         _log('Sharing page widget touch failed: %r' % (e,))
 
 
+def _later(fn, secs):
+    """Run fn once, secs from now, on Qt's own call stack."""
+    try:
+        from PySide6 import QtCore
+        QtCore.QTimer.singleShot(int(secs * 1000), lambda: _try(fn))
+    except Exception as e:
+        _log('could not schedule a repaint: %r' % (e,))
+
+
 def _req(verb):
     """Ask the browser half to do something it alone can (control, the clipboard). The
     page reads and unlinks REQ every 500 ms."""
@@ -482,9 +491,23 @@ def _paint(f):
 
 
 def _paint_mcp(f):
-    """The MCP page, same contract as _paint: painted when the page opens."""
+    """The MCP page. Painted when it opens, and after each button."""
     p = _p()
-    url = p.GetString('AgentUrl', '') or (_ctl().get('agentUrl') or '')
+    c = _ctl()
+    on = p.GetBool('AllowAgent', False)
+    sharing = bool(c.get('session')) and not c.get('ended')
+    url = p.GetString('AgentUrl', '') or (c.get('agentUrl') or '')
+    if not sharing:
+        st = 'Off \u2014 start a session on the General page first; the assistant attaches to one.'
+    elif on and url:
+        st = 'On \u2014 paste the link into your AI client. This tab must stay open.'
+    elif on:
+        st = 'Starting the endpoint\u2026'
+    else:
+        st = 'Off'
+    f.lMcpStatus.setText(st)
+    f.btnMcpStart.setEnabled(sharing and not on)
+    f.btnMcpStop.setEnabled(bool(on))
     f.leAgentUrl.setText(url)
     f.btnCopyMcp.setEnabled(bool(url))
     f.btnRegen.setEnabled(bool(url))
@@ -503,6 +526,7 @@ class FcwebSharingPage(object):
         self.form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share.ui')
         f = self.form
         f.btnStart.clicked.connect(self._start)
+        f.btnRefresh.clicked.connect(self._repaint)
         f.btnStop.clicked.connect(self._stop)
         f.btnCopyLink.clicked.connect(lambda: _req('copy:link'))
         f.btnClearVpw.clicked.connect(lambda: self._clear('viewer'))
@@ -559,14 +583,8 @@ class FcwebSharingPage(object):
         _touched.clear()
         App.saveParameter()
 
-    def _close(self):
-        """Close the Preferences dialog. Sharing is live from here on, and everything the
-        person needs next -- the link, who is watching, Stop -- is on the session bar and
-        in the toast, which update in real time. Keeping a stale dialog open would not."""
-        try:
-            self.form.window().close()
-        except Exception as e:
-            _log('could not close Preferences: %r' % (e,))
+    def _repaint(self):
+        _try(lambda: _paint(self.form))
 
     def _start(self):
         # The work first, then the cosmetics. Touching a widget can raise here (shiboken
@@ -577,11 +595,15 @@ class FcwebSharingPage(object):
         App.saveParameter()
         _try(lambda: self.form.lStatus.setText('Starting\u2026'))
         _try(lambda: self.form.btnStart.setEnabled(False))
-        self._close()
+        # The dialog stays open. It cannot repaint on a timer -- FreeCAD rebuilds a Python
+        # page's widgets and shiboken then reports the ones we hold as deleted (measured) --
+        # so it repaints after each action, and on Refresh.
+        _later(self._repaint, 2.5)
 
     def _stop(self):
         _p().SetBool('Enabled', False)
         App.saveParameter()
+        _later(self._repaint, 2.0)
         self.form.lStatus.setText('Not shared')
         self.form.btnStop.setEnabled(False)
         self.form.btnStart.setEnabled(True)
@@ -598,53 +620,49 @@ class FcwebSharingPage(object):
 
 
 class FcwebMcpPage(object):
-    """Edit > Preferences > Sharing > MCP. One capability link: tick the box, copy the link,
-    paste it into an AI client. Ticking it starts sharing if it is not already on, because
-    the assistant attaches to a session -- there is nothing to attach to otherwise."""
+    """Edit > Preferences > Sharing > MCP.
+
+    Enabling the assistant is its own button, deliberately: letting people watch a document
+    and letting an AI drive it are different decisions, and neither should happen as a side
+    effect of the other. It attaches to a live session, so the button waits for one."""
 
     def __init__(self):
         import FreeCADGui as Gui
         self.form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share_mcp.ui')
         f = self.form
+        f.btnMcpStart.clicked.connect(self._enable)
+        f.btnMcpStop.clicked.connect(self._disable)
+        f.btnMcpRefresh.clicked.connect(self._repaint)
         f.btnCopyMcp.clicked.connect(lambda: _req('copy:mcp'))
         f.btnRegen.clicked.connect(self._regen)
-        f.cbAgent.toggled.connect(self._agent)
 
     def loadSettings(self):
-        f = self.form
-        f.cbAgent.blockSignals(True)
-        f.cbAgent.setChecked(_p().GetBool('AllowAgent', False))
-        f.cbAgent.blockSignals(False)
-        try:
-            _paint_mcp(f)
-        except Exception as e:
-            _log('MCP page paint failed: %r' % (e,))
+        self._repaint()
 
     def saveSettings(self):
-        _p().SetBool('AllowAgent', self.form.cbAgent.isChecked())
-        App.saveParameter()
+        pass          # the buttons already wrote everything, when they were pressed
 
-    def _close(self):
-        _try(lambda: self.form.window().close())
+    def _repaint(self):
+        _try(lambda: _paint_mcp(self.form))
 
-    def _agent(self, on):
-        p = _p()
-        p.SetBool('AllowAgent', bool(on))
-        if on and not p.GetBool('Enabled', False):
-            p.SetBool('Enabled', True)      # the assistant needs a session to attach to
+    def _enable(self):
+        _p().SetBool('AllowAgent', True)
         App.saveParameter()
-        if on:
-            # the link is minted by the browser half a moment from now and arrives in a
-            # toast with a Copy button; reopening this page shows it in the field
-            self._close()
+        _try(lambda: self.form.lMcpStatus.setText('Starting the endpoint\u2026'))
+        _later(self._repaint, 2.5)
+
+    def _disable(self):
+        _p().SetBool('AllowAgent', False)
+        App.saveParameter()
+        _try(lambda: self.form.leAgentUrl.setText(''))
+        _later(self._repaint, 1.5)
 
     def _regen(self):
         _p().SetBool('RegenerateAgent', True)
         App.saveParameter()
         _try(lambda: self.form.leAgentUrl.setText(''))
-        _try(lambda: self.form.btnCopyMcp.setEnabled(False))
-        _try(lambda: self.form.btnRegen.setEnabled(False))
-        self._close()
+        _try(lambda: self.form.lMcpStatus.setText('Making a new link\u2026'))
+        _later(self._repaint, 2.5)
 
 
 def install():

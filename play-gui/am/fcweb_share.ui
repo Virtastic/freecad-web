@@ -39,6 +39,12 @@
          </widget>
         </item>
         <item>
+         <widget class="QPushButton" name="btnRefresh">
+          <property name="text"><string>Refresh</string></property>
+          <property name="toolTip"><string>Read the session state again. This page shows a snapshot; the toasts tell you when things change.</string></property>
+         </widget>
+        </item>
+        <item>
          <spacer name="hsStart"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer>
         </item>
        </layout>
