@@ -7097,3 +7097,66 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepEdgeSet.h b/src/Mod/Part/Gui/SoBrepEdgeSet.h
  };
  
  }  // namespace PartGui
+diff -ruNp a/src/Mod/Assembly/Gui/AppAssemblyGui.cpp b/src/Mod/Assembly/Gui/AppAssemblyGui.cpp
+--- a/src/Mod/Assembly/Gui/AppAssemblyGui.cpp
++++ b/src/Mod/Assembly/Gui/AppAssemblyGui.cpp
+@@ -41,8 +41,25 @@ extern PyObject* initModule();
+ }
+ 
+ /* Python entry */
++#if defined(__EMSCRIPTEN__)
++// wasm: the module is linked statically and nothing references the .qrc object, so
++// the linker never pulls it out of the archive. The resource is not merely left
++// unregistered -- its names are absent from the binary entirely, and every icon it
++// holds is missing ("Cannot find icon: Assembly_ActivateAssembly"). Register it the way Part
++// does in loadPartResource(): from a C++-linkage function, since PyMOD_INIT_FUNC is
++// extern "C" and Q_INIT_RESOURCE inside it would declare the init function with C
++// linkage. Same fix as AppSurfaceGui.cpp and AppInspectionGui.cpp.
++static void fcwebLoadAssemblyResource()
++{
++    Q_INIT_RESOURCE(Assembly);
++}
++#endif
++
+ PyMOD_INIT_FUNC(AssemblyGui)
+ {
++#if defined(__EMSCRIPTEN__)
++    fcwebLoadAssemblyResource();
++#endif
+     // load dependent module
+     try {
+         Base::Interpreter().runString("import SpreadsheetGui");
+diff -ruNp a/src/Mod/Measure/Gui/AppMeasureGui.cpp b/src/Mod/Measure/Gui/AppMeasureGui.cpp
+--- a/src/Mod/Measure/Gui/AppMeasureGui.cpp
++++ b/src/Mod/Measure/Gui/AppMeasureGui.cpp
+@@ -66,6 +66,20 @@ PyObject* initModule()
+ }  // namespace MeasureGui
+ 
+ /* Python entry */
++#if defined(__EMSCRIPTEN__)
++// wasm: the module is linked statically and nothing references the .qrc object, so
++// the linker never pulls it out of the archive. The resource is not merely left
++// unregistered -- its names are absent from the binary entirely, and every icon it
++// holds is missing ("Cannot find icon: preferences-measure"). Register it the way Part
++// does in loadPartResource(): from a C++-linkage function, since PyMOD_INIT_FUNC is
++// extern "C" and Q_INIT_RESOURCE inside it would declare the init function with C
++// linkage. Same fix as AppSurfaceGui.cpp and AppInspectionGui.cpp.
++static void fcwebLoadMeasureResource()
++{
++    Q_INIT_RESOURCE(Measure);
++}
++#endif
++
+ PyMOD_INIT_FUNC(MeasureGui)
+ {
+     if (!Gui::Application::Instance) {
+@@ -73,6 +87,9 @@ PyMOD_INIT_FUNC(MeasureGui)
+         PyMOD_Return(nullptr);
+     }
+ 
++#if defined(__EMSCRIPTEN__)
++    fcwebLoadMeasureResource();
++#endif
+     // load dependent module
+     try {
+         Base::Interpreter().loadModule("Measure");
