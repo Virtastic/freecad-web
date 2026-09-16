@@ -137,6 +137,9 @@ document.addEventListener('DOMContentLoaded', function () {
  #load .ld-detail{margin-top:13px; min-height:16px; font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;
    color:var(--faint)}
  #load .ld-lede{margin:22px 0 0; font-size:13.5px; line-height:1.55; color:var(--muted)}
+ /* [hidden] must win: an id rule with display:flex outranks the UA stylesheet, and the
+    join form then shows on a NORMAL load, asking a name and a password for no session. */
+ #load [hidden]{display:none !important}
  #ld-join{margin:18px auto 0; max-width:420px; text-align:left; display:flex; flex-direction:column; gap:10px}
  #ld-join label{display:flex; align-items:center; gap:10px; font-size:13px; color:var(--ink)}
  #ld-join label span{flex:0 0 130px; color:var(--muted)}
