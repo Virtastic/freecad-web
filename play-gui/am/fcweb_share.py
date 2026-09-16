@@ -346,6 +346,18 @@ def _try(fn):
         _log('Sharing page widget touch failed: %r' % (e,))
 
 
+def _guard(fn):
+    """Wrap a button handler. Qt swallows an exception raised inside one, so a failing
+    button would do nothing and say nothing; this reports it instead."""
+    def run(*a, **k):
+        try:
+            return fn(*a, **k)
+        except Exception as e:
+            import traceback
+            _log('session button failed: %r%s' % (e, traceback.format_exc()[-300:]))
+    return run
+
+
 def _later(fn, secs):
     """Run fn once, secs from now, on Qt's own call stack."""
     try:

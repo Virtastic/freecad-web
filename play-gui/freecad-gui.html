@@ -186,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function () {
     <!-- Joining a shared session asks for a name, sometimes a password, and consent for
          add-ons. It belongs here, in the page's own type, rather than in a browser
          prompt(): this runs before FreeCAD exists, so nothing here can crash the app. -->
-    <form id="ld-join" hidden autocomplete="off">
+    <form id="ld-join" hidden autocomplete="off" onsubmit="return false">
       <label id="ld-name-row"><span>Your name</span><input id="ld-name" maxlength="32" placeholder="Guest"></label>
       <label id="ld-pw-row" hidden><span>Session password</span><input id="ld-pw" type="password"></label>
       <div id="ld-addons" hidden></div>
@@ -1241,6 +1241,13 @@ window.fcwebNotify = function (text, kind, actions, opts) {
   // consent for add-ons -- is asked HERE, in the page's own type, rather than in a browser
   // prompt(): this runs before the engine exists, so nothing here can take the app down,
   // and a shared link should not greet someone with a system dialog.
+  // A <form> with no action submits to the current URL, which navigates to "/?" and
+  // reloads the application. askJoin attaches its own handler while it is asking; this
+  // one is permanent, so a stray Enter can never take the page down.
+  try {
+    var _joinForm = document.getElementById('ld-join');
+    if (_joinForm) _joinForm.addEventListener('submit', function (e) { e.preventDefault(); });
+  } catch (e) {}
   function askJoin(opts) {
     var form = document.getElementById('ld-join');
     if (!form) return Promise.resolve(null);      // no form in this build: caller falls back
