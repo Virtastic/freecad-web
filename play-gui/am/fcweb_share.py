@@ -51,7 +51,8 @@ _env_hash = None
 _ro = {}          # doc name -> obj name -> prop name -> original status list
 _actions = {}     # our QActions on the Edit menu
 _tick_n = 0
-_revert_t = 0.0      # advanced whenever a non-holder's edit is noticed; the page re-applies
+_revert_t = 0.0      # advanced whenever a non-holder's edit is noticed
+_revert_undone = False   # ...and whether we undid it here, so the page need not re-apply
 _was_holder = None
 
 
@@ -548,7 +549,6 @@ class FcwebSharingPage(object):
     # ---- FreeCAD's contract
     def loadSettings(self):
         p = _p()
-        _try(_panel_tick)
         f = self.form
         _touched.clear()
         f.leName.setText(p.GetString('DisplayName', ''))
@@ -685,9 +685,6 @@ class FcwebMcpPage(object):
 # live one on purpose -- a Python preference page's widgets are rebuilt by FreeCAD and
 # every reference we hold goes stale a moment later (measured), so that copy repaints when
 # it opens, after each action, and on Refresh.
-_panel = None
-
-
 def _people_rows(c):
     """(label, client id) for everyone in the session, the holder first."""
     rows = []
@@ -804,51 +801,6 @@ def _wire_session(f, after=None):
         f.btnSessRefresh.clicked.connect(_guard(after))
 
 
-def _ensure_panel():
-    """The Session panel: FreeCAD's own furniture, ours to keep current.
-
-    It exists only while a session does, and hides itself again afterwards."""
-    global _panel
-    Gui = _gui()
-    if Gui is None:
-        return None
-    if _panel is not None:
-        return _panel
-    from PySide6 import QtCore, QtWidgets
-    mw = Gui.getMainWindow()
-    if mw is None:
-        return None
-    form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share_session.ui')
-    dock = QtWidgets.QDockWidget('Session', mw)
-    dock.setObjectName('FcwebSessionPanel')
-    dock.setWidget(form)
-    mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
-    _wire_session(form)
-    _panel = (dock, form)
-    _log('session panel installed')
-    return _panel
-
-
-def _panel_tick():
-    """From tick(): show the panel while a session is live, and keep it current."""
-    global _panel
-    c = _ctl()
-    live = bool(c.get('session'))
-    if not live and _panel is None:
-        return
-    pair = _ensure_panel()
-    if pair is None:
-        return
-    dock, form = pair
-    try:
-        if dock.isVisible() != live:
-            dock.setVisible(live)
-        if live:
-            _paint_session(form)
-    except RuntimeError:
-        _panel = None          # the main window took it with it
-
-
 class FcwebSessionPage(object):
     """Edit > Preferences > Sharing > Session: the same view and the same actions as the
     Session panel, for people who look in Preferences. Repaints when it opens, after each
@@ -941,10 +893,28 @@ def tick():
             staged = publish()
             if c.get('role') == 'admin' and (_env_hash is None or _tick_n % 20 == 0):
                 snapshot_env()          # right away on first enable, then every ~30 s
-        global _revert_t, _was_holder
+        global _revert_t, _revert_undone, _was_holder
         if _obs is not None and _obs.tripped and not c.get('holder'):
             _obs.tripped = False
             _revert_t = time.time()
+            # Undo it here, at a safe point, rather than having the page re-open the
+            # document: reopening tears down the 3D view, and doing that while Qt is
+            # delivering the very click that caused the edit crashed the tab
+            # (QWasmScreen::element, memory access out of bounds). FreeCAD's own undo
+            # puts a deleted object back without touching the view at all.
+            _revert_undone = False
+            d = _doc()
+            if d is not None:
+                try:
+                    if int(getattr(d, 'UndoCount', 0) or 0) > 0:
+                        before = _obs.changed
+                        d.undo()
+                        d.recompute()
+                        _obs.changed = before      # our own undo is not an edit
+                        _revert_undone = True
+                        _log('read-only: undid an edit made without control')
+                except Exception as e:
+                    _log('undo after a read-only edit failed: %r' % (e,))
         # Losing control with unpublished work: keep it as a separate document, here, where
         # it cannot be dropped by a busy interpreter. The page only tells the person.
         holder_now = bool(c.get('holder'))
@@ -966,6 +936,7 @@ def tick():
             'expires': p.GetInt('Expires', 0), 'session': p.GetString('SessionId', ''),
             'key': p.GetString('WriteKey', ''), 'agent_url': p.GetString('AgentUrl', ''),
             'pw_pending': os.path.exists(PWFILE), 'staged': staged, 'revert_t': _revert_t,
+            'revert_undone': _revert_undone,
             'cam': _camera(), 'docs': sorted(App.listDocuments().keys()),
             'active': App.ActiveDocument.Name if App.ActiveDocument else None,
             'obs_changed': _obs.changed if _obs else None, 'last_pub': _last_pub_change,

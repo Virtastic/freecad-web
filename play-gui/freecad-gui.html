@@ -1277,6 +1277,7 @@ window.fcwebNotify = function (text, kind, actions, opts) {
     var m = SID_RE.exec(location.search || '');
     if (!m) return null;
     S.id = m[1];
+    window.__fcSessionJoining = true;      // the loader waits for the document, not just Ready
     try { var meta = document.createElement('meta'); meta.name = 'robots'; meta.content = 'noindex'; document.head.appendChild(meta); } catch (e) {}
     var ss = null; try { ss = window.sessionStorage; } catch (e) {}
     var name = (ss && ss.getItem('fcweb.name')) || '', pw = (ss && ss.getItem('fcweb.pw.' + S.id)) || '',
@@ -1482,7 +1483,15 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       S.applied = meta.v; S.doc = meta.n || S.doc;
       log('apply', 'applied v' + meta.v + ' (' + bytes.length + ' bytes; ' + opened + ')');
     } catch (e) { fail('apply', e, 'apply_fail'); }
-    finally { applying = false; S.opening = 0; try { renderBar(); } catch (e2) {} }
+    finally {
+      applying = false; S.opening = 0;
+      if (window.__fcSessionJoining && S.applied > 0) {
+        window.__fcSessionJoining = false;
+        try { __setBoot('Ready'); __hideBoot(); } catch (e2) {}
+        if (S.pendingWelcome) { toast(S.pendingWelcome, 'info'); S.pendingWelcome = ''; }
+      }
+      try { renderBar(); } catch (e2) {}
+    }
   }
   function applyCamera(cam) {
     if (!cam || cam === S.cam || !ready()) return;
@@ -1550,6 +1559,9 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       if (e.code === 'removed') {   // the owner took us out of the session
         S.ended = true; sendCtl(); toast(e.message || 'You were removed from this session.', 'warn');
         log('poll', 'removed by the owner', true); return;
+      }
+      if (window.__fcSessionJoining) {   // never leave someone stuck behind the loader
+        window.__fcSessionJoining = false; try { __setBoot('Ready'); __hideBoot(); } catch (e2) {}
       }
       if (e.status === 404) { S.ended = true; if (e.code === 'evicted') beacon('evicted', S.role); sendCtl(); toast('This shared session has ended. ' + (e.message || ''), 'warn'); log('poll', 'ended: ' + e.code, true); return; }
       if (e.status === 401 && S.mode === 'normal') { S.id = null; return; }
@@ -1883,6 +1895,11 @@ window.fcwebNotify = function (text, kind, actions, opts) {
     }
     if (st.revert_t && st.revert_t !== S.revertSeen && !S.holder && S.id) {
       S.revertSeen = st.revert_t;
+      // The interpreter undoes the change in place where it can. Re-opening the whole
+      // document is the fallback, and it is violent: it tears down the 3D view, which
+      // crashed Qt when the change came from a click (QWasmScreen::element, out of
+      // bounds) -- so only do it when the undo did not happen.
+      if (!st.revert_undone) { S.applied = 0; }
       log('control', 'read-only edit reverted', true);
       toast('This session is read-only for you; your change was undone.', 'warn', [{ label: 'Request control', onClick: function () { requestControl(false); } }]);
       S.applied = 0;
@@ -1922,7 +1939,10 @@ window.fcwebNotify = function (text, kind, actions, opts) {
     if (p.declined) msg += '. Add-ons were skipped, so add-on features are missing; the geometry is still here';
     else if (p.failed && p.failed.length) msg += '. ' + p.failed.length + ' add-on(s) failed to install: ' + p.failed.join(', ');
     if (p.skipped && p.skipped.length) msg += '. ' + p.skipped.length + ' add-on(s) could not travel (no repository URL): ' + p.skipped.map(function (x) { return x.name; }).join(', ');
-    toast(msg + '.', p.declined || (p.failed && p.failed.length) ? 'warn' : 'info');
+    // Held until the document is open: a welcome for a session whose model is not on
+    // screen yet is a toast over a loading screen, which is where this used to land.
+    S.pendingWelcome = msg + '.';
+    if (!window.__fcSessionJoining) { toast(S.pendingWelcome, p.declined || (p.failed && p.failed.length) ? 'warn' : 'info'); S.pendingWelcome = ''; }
     log('env', 'addons: ' + p.addons + ' required, ' + p.installed + ' unpacked before boot' + (p.failed && p.failed.length ? ', ' + p.failed.length + ' failed' : ''));
     renderBar();
     poll();
@@ -2581,7 +2601,12 @@ window.fcRunPy = fcRunPy;
            // so this flag is the real readiness signal.
            window.__fcAppReady = true;
            // App is up: reveal the full-window FreeCAD UI and drop the loader.
-           __setBoot('Ready'); __hideBoot();
+           // In session mode the loader STAYS: FreeCAD being ready is not the same as
+           // the shared document being open, and dropping it here showed the visitor an
+           // empty Start page (and a toast about a session) for several seconds before
+           // their model appeared. applyVersion lifts it when the document is really up.
+           if (window.__fcSessionJoining) { __setBoot('Opening the shared document\u2026'); }
+           else { __setBoot('Ready'); __hideBoot(); }
            // Time to Ready, and whether the engine came from cache. Together these
            // say whether the caching work actually helps real visitors, which no
            // amount of local measurement can.
