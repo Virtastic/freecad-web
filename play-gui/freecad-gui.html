@@ -1757,7 +1757,6 @@ window.fcwebNotify = function (text, kind, actions, opts) {
     try { await api('DELETE', '/share/' + S.id); } catch (e) { fail('share', e); }
     setParam('Enabled', false); setParam('ShareLink', ''); setParam('AgentUrl', ''); setParam('SessionId', ''); setParam('WriteKey', '');
     S.id = null; S.holder = false; S.agentUrl = ''; S.tab = null; sendCtl();
-    if (bar) { bar.remove(); bar = null; }
     log('share', 'stopped sharing');
     toast('Stopped sharing. The link no longer works.', 'info');
   }
