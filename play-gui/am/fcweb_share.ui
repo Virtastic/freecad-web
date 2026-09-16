@@ -74,7 +74,7 @@
        </layout>
       </item>
       <item row="4" column="0"><widget class="QLabel" name="lEditorL"><property name="text"><string>Editing now</string></property></widget></item>
-      <item row="4" column="1"><widget class="QLabel" name="lEditor"><property name="text"><string>—</string></property></widget></item>
+      <item row="4" column="1"><widget class="QLabel" name="lEditor"><property name="text"><string>-</string></property></widget></item>
       <item row="5" column="0" colspan="2">
        <widget class="QCheckBox" name="cbEnv">
         <property name="text"><string>Include my settings, add-ons and macros (so it opens exactly as it does here)</string></property>

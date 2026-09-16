@@ -339,7 +339,10 @@ Module['preRun'].push(function () {
           FS.syncfs(false, function (e) {
             syncing = false;
             dirty = false;
-            if (e && typeof err === 'function') err('[pre-gui] IDBFS persist failed: ' + e);
+            // An Error/DOMException stringifies to [object Object] under +, which is what
+            // this reported for every failure: no name, no message, nothing to act on.
+            if (e && typeof err === 'function')
+              err('[pre-gui] IDBFS persist failed: ' + (e.name || 'Error') + ': ' + (e.message || e));
             if (cb) cb(e);
           });
         };
