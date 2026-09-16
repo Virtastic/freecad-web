@@ -298,6 +298,14 @@ def scenario_empty(ctx, url, args, fail):
         fail('the assistant button did not start a session (ring: %s)' % _ring(s1)[-5:])
     else:
         print('==> the assistant button started a session on its own')
+    # ...and quietly. Holding your own session from the moment it starts is not an
+    # event worth a toast, and that one came back twice: once as 'you started a shared
+    # session', once through this button, which starts a session for you.
+    shown = s1.page.evaluate('Array.from(document.querySelectorAll("#fcweb-toasts")).map(n => n.textContent).join(" | ")')
+    if 'have control' in (shown or ''):
+        fail('starting your own session announced that you hold it: %r' % shown[:200])
+    else:
+        print('==> no control toast for your own session')
         return s1
     sid = st['id']
     # nothing to publish, and the owner is TOLD rather than left with a link to an empty app
@@ -346,6 +354,10 @@ def scenario_control(ctx, url, args, fail):
     time.sleep(8)
     v = _volumes(s2, fail)
     if any(abs(x['length'] - 99) < 1e-6 for x in v.values()):
+        print('==> [diag] viewer ring: %r' % _ring(s2)[-12:])
+        _cons = [c for c in s2.lines() if 'apply:' in c or 'read-only' in c or 'share applied' in c]
+        print('==> [diag] viewer console: %r' % _cons[-14:])
+        print('==> [diag] viewer state: %r' % _state(s2))
         fail('a read-only viewer changed the shared document and it stuck: %r' % v)
     else:
         print('==> read-only edit did not stick (guard reverted to the session version)')
@@ -617,8 +629,11 @@ def scenario_mcp(ctx, url, args, fail):
             print(('==> timeline viewer: %s' % '; '.join('+%dms %s' % (t, m) for t, m in vw[:8])).encode('ascii', 'replace').decode())
         except Exception as e:
             print('==> timeline unavailable: %s' % e)
-        if dt > 4.0:
-            fail('an assistant edit took %.1fs to reach a viewer; the cadence budgets ~2s' % dt)
+        # settle 0.6 + interpreter tick 1.5 + viewer poll 3.0 + the apply itself: the
+        # design's own worst case is over 5 s, so a 4 s budget sat under the floor and
+        # failed on a clean machine. Typical, measured alone: 2.6-3.7 s.
+        if dt > 6.5:
+            fail('an assistant edit took %.1fs to reach a viewer; the cadence allows about 5s' % dt)
     st = _wait_state(s2, lambda x: 'stretched the box' in (x.get('note') or ''), 15)
     if not st:
         fail('the assistant\'s note never reached the viewer\'s activity line')
@@ -627,6 +642,11 @@ def scenario_mcp(ctx, url, args, fail):
         fail('viewer volume after the assistant edit: %r' % {k: x['volume'] for k, x in v.items()})
     # The assistant can move its OWN view; watchers keep theirs. What must hold is that
     # it costs them nothing -- no reopen, no disturbance.
+    # Let the viewer finish catching up FIRST. Snapshotting `applied` while a publish
+    # from the previous step was still in flight read as a disturbance the camera never
+    # caused.
+    _srv = _state(s1).get('v')
+    _wait_state(s2, lambda x: x.get('applied') == _srv, 20)
     applied_before = _state(s2).get('applied')
     r = tool('fc_view_set', {'standard': 'front', 'note': 'looking from the front'})
     time.sleep(6)
