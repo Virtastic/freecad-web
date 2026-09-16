@@ -485,7 +485,9 @@ actionable; "3D view is janky" is not.
   (`docker compose --profile share up -d`). Without it, Edit → Share Session… says so and
   nothing else changes; a `?s=` link on such a site opens FreeCAD normally with one toast.
   Sharing is turn-taking, not concurrent editing: one person edits, everyone else watches
-  live (following the editor's camera) and can take control. The AI over MCP acts inside a
+  live and can take control. Watchers see EVERY document the editor has open, as their own
+  tabs, read-only, with the editing commands greyed out; they keep their own camera. The
+  live view and the actions live in Edit > Preferences > Sharing > Session. The AI over MCP acts inside a
   live browser tab and inherits its rights; with no tab open, every tool says `no_tab`.
 
 - Shared sessions were verified against the **wasm32** engine that v1.0.0 and play-gui

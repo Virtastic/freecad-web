@@ -49,16 +49,15 @@ them. Passwords and the MCP token are stored only as hashes.
 ## Sharing a document
 
 **Edit → Share Session…** opens Preferences on **Sharing → General**. Press **Start
-sharing**. Sharing begins immediately — you do not need to press OK — and the dialog
-closes, because from that moment the live picture belongs on screen rather than in a
-settings page. A toast gives you **Copy link**, and a bar appears at the top:
+sharing**. Sharing begins immediately — you do not need to press OK — and the page then
+shows *Sharing …* with the link and a **Copy** button beside it.
 
-> You are editing · 2 watching — Download .FCStd · Copy link · Release · Diagnostics
-
-The bar is the live surface: who is editing, how many others are here, the last thing that
-changed, and whether contact was lost. The **✕** collapses it to a slim tab at the top
-edge; click the tab to bring it back. Reopening the Sharing page shows the link, who is
-editing, and which passwords are set.
+**Preferences → Sharing** has three pages: **General** (start and stop, your name, the
+link, passwords, expiry), **Session** (who is here, who is editing, and the actions --
+Request, Take, Release, Grant, Deny, Remove from session, Copy link, Download, Diagnostics,
+Stop sharing) and **MCP** (the AI link). The Session page is the live surface: who is
+editing, how many others are here, and whether contact was lost. **Refresh** reads the
+state again; it also repaints itself whenever you press one of its buttons.
 
 **What travels:** the document, your full `user.cfg` (units, decimals, theme, navigation,
 toolbars), your macros, and your add-ons. A visitor gets your working environment, not a
@@ -79,8 +78,11 @@ published bundle, and that stripping is asserted, not merely intended.
 
 Anyone in a session may **ask** for control — the person holding it gets Grant / Deny.
 The editor password is what lets someone take it without asking, or claim it when nobody
-is holding it. Viewers are genuinely read-only: an edit they make is reverted, with a
-toast offering *Request control*.
+is holding it.
+
+Watchers are genuinely read-only, and they can see that before they try: the editing
+commands are **greyed out** while someone else holds control, and every mirrored document
+is locked property by property. Anything that slips through is undone in place.
 
 Set a password by typing it and pressing OK; the field shows `set ✓` afterwards and never
 shows the password again. **Clear** removes one. Only the field you touched is sent, so
@@ -114,14 +116,15 @@ Everything lands in a **temporary home that disappears when you close the tab**.
 documents and settings are never touched, and the session cannot see them.
 
 A first visit downloads the ~88 MB engine; returning visits start in seconds. **Download
-.FCStd** in the bar keeps a copy.
+.FCStd** on the Session page keeps a copy.
 
 ---
 
 ## Letting an AI assistant in
 
-**Edit → Share Session… → MCP**, tick *Allow an AI assistant*. A link is minted; copy it
-from that page (or from the toast) and give it to your AI client:
+**Edit → Share Session… → MCP**, press **Enable assistant** (it needs a session, so start
+one on the General page first). A link is minted; **Copy** it from that page and give it
+to your AI client:
 
 ```bash
 claude mcp add --transport http freecad <the link>
@@ -143,8 +146,7 @@ image, so it can look at its own work.
 
 It is a visible participant: it must hold control to change anything, every change is
 published as it lands, and each one carries a one-line note that everyone watching reads
-("added a 3 mm fillet to the top edges"). When it moves the camera, everyone's view
-follows.
+("added a 3 mm fillet to the top edges").
 
 Ask it for the `freecad-quickstart` prompt for worked examples, including a print-ready
 STL export.
@@ -170,8 +172,8 @@ endpoint answers `404` rather than `401`, and the token is stored hashed.
 
 ## When something goes wrong
 
-Every failure names its next step, in the app and over MCP alike. **Diagnostics** in the
-bar shows the last 200 session events with timestamps and request ids, and **Copy for bug
+Every failure names its next step, in the app and over MCP alike. **Diagnostics** on the
+Session page shows the last 200 session events with timestamps and request ids, and **Copy for bug
 report** redacts the token and passwords first.
 
 | What you see | What it means |
@@ -188,7 +190,12 @@ report** redacts the token and passwords first.
 
 - **Not concurrent editing.** One person holds control at a time; turn-taking makes
   conflicting edits impossible rather than merging them.
-- **Not screen sharing.** Watchers see the model and the controller's viewpoint, not
+- **Not screen sharing.** Watchers see the documents and every change to them, but keep
+  their own viewpoint -- being pulled to someone else's camera mid-inspection is worse
+  than useful. Selections, dialogs and a sketch in progress do not travel either.
+- **Not one file.** Every document you have open is mirrored, so the tabs along the
+  bottom of a watcher's window are your tabs, and a file you open mid-session appears
+  for them too. An edit in any of them reaches the audience in a few seconds.
   selections, dialogs or a sketch in progress.
 - **No version history.** A link shows the current state.
 - **No accounts.** Names are self-declared, and the activity log says so.
