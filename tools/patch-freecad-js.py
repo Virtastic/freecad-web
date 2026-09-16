@@ -106,8 +106,11 @@ PATCHES = [
         # a transaction abort read identically and neither could be acted on. pre-gui.js
         # carries the same fix for the next relink, after which this is an idempotent
         # no-op like the rest of the table.
+        # The replacement must be BYTE-IDENTICAL to what the minifier emits from
+        # pre-gui.js, or a link built from the fixed pre-js matches neither arm and
+        # the post-link --check fails the build. That is measured, not theoretical.
         'err("[pre-gui] IDBFS persist failed: "+e)',
-        'err("[pre-gui] IDBFS persist failed: "+((e&&e.name||"Error")+": "+(e&&e.message||e)))',
+        'err("[pre-gui] IDBFS persist failed: "+(e.name||"Error")+": "+(e.message||e))',
     ),
     (
         'glGetString returns its cached pointer as a BigInt',
