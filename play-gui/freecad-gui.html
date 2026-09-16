@@ -697,7 +697,10 @@ window.fcwebConfirm = function(title, text, buttonsPipe){
 // clicking "mesh this" just saw nothing happen (gmsh's QProcess path fails
 // silently when the binary is absent). Anything the user should know about
 // goes through here instead.
-window.fcwebNotify = function (text, kind, actions) {
+// opts.input = {type} adds a field above the buttons: Enter runs the first action, and
+// every action's onClick receives (button, value). It is how the app asks for a secret
+// without a browser prompt(), which cannot be styled and stops the world.
+window.fcwebNotify = function (text, kind, actions, opts) {
   try {
     var host = document.getElementById('fcweb-toasts');
     if (!host) {
@@ -723,6 +726,19 @@ window.fcwebNotify = function (text, kind, actions) {
     var kill = function () { try { t.remove(); } catch (e) {} };
     x.addEventListener('click', kill);
     t.appendChild(x); t.appendChild(msg);
+    var field = null;
+    if (opts && opts.input) {
+      field = document.createElement('input');
+      field.type = opts.input.type || 'text';
+      if (opts.input.placeholder) field.placeholder = opts.input.placeholder;
+      field.style.cssText = 'margin-top:9px;width:100%;box-sizing:border-box;background:rgba(0,0,0,.28);' +
+        'border:1px solid rgba(255,255,255,.28);color:#e8e8e8;border-radius:6px;padding:6px 8px;font:13px inherit';
+      field.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && actions && actions.length) { e.preventDefault(); try { actions[0].onClick(null, field.value); } catch (x) {} kill(); }
+      });
+      t.appendChild(field);
+      setTimeout(function () { try { field.focus(); } catch (e) {} }, 30);
+    }
     if (actions && actions.length) {
       var row = document.createElement('div');
       row.style.cssText = 'margin-top:9px;display:flex;gap:8px;flex-wrap:wrap';
@@ -731,7 +747,7 @@ window.fcwebNotify = function (text, kind, actions) {
         btn.textContent = a.label;
         btn.style.cssText = 'background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);' +
           'color:#e8e8e8;border-radius:6px;padding:5px 10px;font:12px inherit;cursor:pointer';
-        btn.addEventListener('click', function () { try { a.onClick(btn); } catch (e) {} });
+        btn.addEventListener('click', function () { try { a.onClick(btn, field ? field.value : undefined); } catch (e) {} });
         row.appendChild(btn);
       });
       t.appendChild(row);
@@ -1128,7 +1144,7 @@ window.fcwebNotify = function (text, kind, actions) {
     try { append('[share:' + sub + '] ' + msg, err ? 'err' : undefined); } catch (e) {}
   }
   function beacon(e, k) { try { window.fcwebEvent && window.fcwebEvent(e, k); } catch (x) {} }
-  function toast(t, k, a) { try { window.fcwebNotify && window.fcwebNotify(t, k, a); } catch (e) {} }
+  function toast(t, k, a, o) { try { window.fcwebNotify && window.fcwebNotify(t, k, a, o); } catch (e) {} }
   function boot(msg) { try { __setBoot(msg); } catch (e) {} }
   function hdrs(extra) {
     var h = {};
@@ -1217,6 +1233,35 @@ window.fcwebNotify = function (text, kind, actions) {
     });
   }
 
+  // ---- the join form, in the loading screen ----------------------------------------
+  // Everything a visitor must answer before FreeCAD starts -- their name, a password, and
+  // consent for add-ons -- is asked HERE, in the page's own type, rather than in a browser
+  // prompt(): this runs before the engine exists, so nothing here can take the app down,
+  // and a shared link should not greet someone with a system dialog.
+  function askJoin(opts) {
+    var form = document.getElementById('ld-join');
+    if (!form) return Promise.resolve(null);      // no form in this build: caller falls back
+    var nameRow = document.getElementById('ld-name-row'), pwRow = document.getElementById('ld-pw-row'),
+        addons = document.getElementById('ld-addons'), err = document.getElementById('ld-join-err'),
+        go = document.getElementById('ld-go'), alt = document.getElementById('ld-alt'),
+        nameIn = document.getElementById('ld-name'), pwIn = document.getElementById('ld-pw');
+    nameRow.hidden = !opts.name; pwRow.hidden = !opts.password;
+    addons.hidden = !opts.addons; if (opts.addons) addons.textContent = opts.addons;
+    err.hidden = !opts.error; if (opts.error) err.textContent = opts.error;
+    go.textContent = opts.go || 'Join';
+    alt.hidden = !opts.alt; if (opts.alt) alt.textContent = opts.alt;
+    form.hidden = false;
+    try { (opts.password ? pwIn : nameIn).focus(); } catch (e) {}
+    return new Promise(function (resolve) {
+      function done(alted) {
+        form.onsubmit = null; alt.onclick = null; form.hidden = true;
+        resolve({ name: (nameIn.value || '').trim(), password: pwIn.value || '', alt: !!alted });
+      }
+      form.onsubmit = function (e) { e.preventDefault(); done(false); };
+      alt.onclick = function () { done(true); };
+    });
+  }
+
   // ---- pre-boot: session mode -----------------------------------------------------
   window.__fcSessionPreboot = async function () {
     var m = SID_RE.exec(location.search || '');
@@ -1228,13 +1273,20 @@ window.fcwebNotify = function (text, kind, actions) {
         epw = (ss && ss.getItem('fcweb.epw.' + S.id)) || '';
     boot('Joining shared session…');
     var join = null;
+    var askErr = '';
     for (var attempt = 0; attempt < 4 && !join; attempt++) {
-      if (!name) { name = window.prompt('Your name (shown to others in this session):', 'Guest') || 'Guest'; ss && ss.setItem('fcweb.name', name); }
+      if (!name) {
+        var a1 = await askJoin({ name: true, go: 'Join' });
+        name = (a1 && a1.name) || 'Guest';
+        ss && ss.setItem('fcweb.name', name);
+      }
       try {
         join = (await api('POST', '/share/' + S.id + '/join', JSON.stringify({ name: name, viewer_pw: pw, editor_pw: epw }), { 'Content-Type': 'application/json' })).json;
       } catch (e) {
         if (e.code === 'password_required' && attempt < 3) {
-          pw = window.prompt('This shared session needs a password:', '') || '';
+          var a2 = await askJoin({ name: !name, password: true, go: 'Open session', error: askErr });
+          pw = (a2 && a2.password) || '';
+          askErr = 'That password was not accepted. Try again.';
           if (!pw) { beacon('session_join_fail', 'password_required'); throw e; }
           ss && ss.setItem('fcweb.pw.' + S.id, pw);
           continue;
@@ -1263,9 +1315,13 @@ window.fcwebNotify = function (text, kind, actions) {
     var installed = 0, failed = [], declined = false;
     if (addons.length) {
       var names = addons.map(function (a) { return a.name || a.repo; }).join(', ');
-      // A native confirm, pre-FreeCAD: nothing here can crash. Add-ons are CODE from GitHub,
-      // so a shared link never installs them without this click.
-      if (window.confirm('This session uses ' + addons.length + ' add-on(s): ' + names + '.\n\nInstall them into a temporary workspace that disappears when you close this tab? (They are code fetched from GitHub.)\n\nOK = open with them.   Cancel = open without them; the geometry is still visible, only add-on features are missing.')) {
+      // Add-ons are CODE fetched from GitHub, so a shared link never installs them without
+      // this click -- and the two outcomes are named, rather than left as OK and Cancel.
+      var consent = await askJoin({
+        addons: 'This session uses ' + addons.length + ' add-on' + (addons.length > 1 ? 's' : '') + ': ' + names +
+          '. They are code from GitHub, and they go into a temporary workspace that disappears when you close this tab.',
+        go: 'Continue with add-ons', alt: 'Open without them' });
+      if (!consent || !consent.alt) {
         for (var i = 0; i < addons.length; i++) {
           var a = addons[i];
           try { boot('Fetching add-on ' + (a.name || a.repo) + '…'); var nf = await fetchAddonZip(a, files, modDir); installed++; log('env', 'addon ' + a.repo + '@' + (a.ref || 'HEAD') + ': ' + nf + ' files -> ' + modDir); }
@@ -1525,7 +1581,11 @@ window.fcwebNotify = function (text, kind, actions) {
   }
   // Re-join with the editor password to obtain an edit token, keeping our name and seat.
   async function becomeEditor(prompt) {
-    var epw = window.prompt(prompt, '');
+    var epw = await new Promise(function (resolve) {
+      toast(prompt, 'info', [{ label: 'Take control', onClick: function (b, v) { resolve(v || ''); } },
+                             { label: 'Cancel', onClick: function () { resolve(''); } }],
+                     { input: { type: 'password', placeholder: 'Editor password' } });
+    });
     if (!epw) { return false; }
     try {
       var vpw = '';

@@ -135,25 +135,33 @@ def _enable_sharing(s, name='Alice', extra=''):
                  % (GROUP, name, extra))
 
 
-def _dialogs(page, name='Bob', vpw='', epw=''):
-    def on_dialog(d):
-        m = (d.message or '').lower()
-        if 'editor password' in m:
-            d.accept(epw)
-        elif 'password' in m:
-            d.accept(vpw)
-        elif 'your name' in m:
-            d.accept(name)
-        else:
-            d.accept()
-    page.on('dialog', on_dialog)
+def _join_form(page, name='Bob', vpw='', epw=''):
+    """Fill the page's own join form -- real typing and real clicks, the way a person does.
+
+    The page asks for a name, a password and add-on consent inside the loading screen now,
+    not through window.prompt/confirm, so the gate drives the DOM instead of Playwright's
+    dialog handler. Installed as a page hook: it fires whenever the form appears."""
+    page.add_init_script("""(() => {
+      const fill = () => {
+        const f = document.getElementById('ld-join');
+        if (!f || f.hidden) return;
+        const n = document.getElementById('ld-name'), p = document.getElementById('ld-pw');
+        const pwRow = document.getElementById('ld-pw-row');
+        if (n && !n.value) n.value = %s;
+        if (p && pwRow && !pwRow.hidden && !p.value) p.value = %s;
+        const go = document.getElementById('ld-go');
+        if (go) go.click();
+      };
+      new MutationObserver(fill).observe(document.documentElement, {attributes: true, subtree: true, attributeFilter: ['hidden']});
+      setInterval(fill, 300);
+    })();""" % (json.dumps(name), json.dumps(vpw)))
 
 
 def _viewer(ctx, url, sid, args, name='Bob', vpw='', epw=''):
     S = _Session()
     ctx2 = ctx.browser.new_context()
     s2 = S(ctx2, url + ('&' if '?' in url else '?') + 's=' + sid, args.timeout)
-    _dialogs(s2.page, name, vpw, epw)
+    _join_form(s2.page, name, vpw, epw)
     return s2
 
 
@@ -318,8 +326,10 @@ def scenario_control(ctx, url, args, fail):
     if s3.load():
         _wait(s3, 'share applied v', 90, 'console')
         s3.page.evaluate('window.__fcNoPrompt = true')
-        s3.page.evaluate('window.prompt = function () { return null; }')   # decline the password
         s3.page.evaluate('window.fcwebShareRequest(true)')
+        time.sleep(1.5)
+        # the toast asks for the editor password; this viewer does not have it
+        s3.page.evaluate('Array.from(document.querySelectorAll("#fcweb-toasts button")).filter(b => b.textContent === "Cancel").forEach(b => b.click())')
         time.sleep(6)
         if _state(s3).get('holder'):
             fail('a viewer took control without the editor password')
@@ -331,8 +341,13 @@ def scenario_control(ctx, url, args, fail):
     # 3. force: Bob edits, owner forces immediately; Bob's unpublished edit must survive
     # Step 2b handed control back to the owner, so Bob must hold it again before an
     # unpublished edit of his is his to lose. He learns the editor password and takes it.
-    s2.page.evaluate("window.prompt = function () { return 'e1'; }")
     s2.page.evaluate('window.fcwebShareRequest(true)')
+    time.sleep(1.5)
+    # type the editor password into the toast's field and press its button, as a person would
+    if not s2.page.evaluate('!!document.querySelector("#fcweb-toasts input[type=password]")'):
+        fail('Take control did not ask for the editor password in a toast')
+    s2.page.fill('#fcweb-toasts input[type=password]', 'e1')
+    s2.page.evaluate('Array.from(document.querySelectorAll("#fcweb-toasts button")).filter(b => b.textContent === "Take control").forEach(b => b.click())')
     if not _wait_state(s2, lambda x: x.get('holder'), 30):
         fail('Bob could not take control back with the editor password')
     time.sleep(3)                     # let the unlock reconcile in the interpreter tick
@@ -646,7 +661,7 @@ def scenario_env(ctx, url, args, fail):
     s1.page.close()
     time.sleep(2)
     s2 = S(ctx2, url + ('&' if '?' in url else '?') + 's=' + sid, args.timeout)
-    _dialogs(s2.page)
+    _join_form(s2.page)
     if not s2.load():
         fail('visitor never reached Ready in session mode (%s)' % s2.phase())
         return None

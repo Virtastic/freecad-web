@@ -12,7 +12,7 @@ def scenario_edges(ctx, url, args, fail):
     S = gs._Session()
     # 1. a link to a session that does not exist: FreeCAD boots normally, one honest toast
     dead = S(ctx, url + ('&' if '?' in url else '?') + 's=' + 'd' * 32, args.timeout)
-    gs._dialogs(dead.page)
+    gs._join_form(dead.page)
     if not dead.load():
         fail('a dead link stopped FreeCAD from booting (%s)' % dead.phase())
     else:
