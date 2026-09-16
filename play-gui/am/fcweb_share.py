@@ -95,8 +95,14 @@ class _Observer(object):
         self.tripped = False
 
     def _touch(self, doc):
+        # ANY document the session mirrors, not just the pinned one. Watching only the
+        # pinned document meant an edit in another tab never marked the session dirty,
+        # so it was never published and the audience never saw it -- measured: a change
+        # in a background document had still not arrived a minute later.
         try:
-            if _pin and doc is not None and doc.Name == _pin:
+            if doc is None:
+                return
+            if _mine(doc) or (_pin and doc.Name == _pin):
                 self.changed = time.time()
                 if self.guard:
                     self.tripped = True
@@ -383,9 +389,15 @@ def set_readonly(on):
         return 0
     n = 0
     changed_before = _obs.changed      # status flips fire the observer; they are not edits
+    # Every document of the mirror, not just the pinned one. The page records the set it
+    # opened as App._fcweb_shared_docs; those keep their own names (Bracket, Housing),
+    # so matching on a name prefix locked the first and left the rest editable.
+    mirrored = set(getattr(App, '_fcweb_shared_docs', None) or [])
+    if _pin:
+        mirrored.add(_pin)
     for d in list(App.listDocuments().values()):
-        if not ((d.Name or '').startswith('_fcweb_v') or d.Name == _pin):
-            continue                   # only the documents we mirror for someone else
+        if d.Name not in mirrored and not (d.Name or '').startswith('_fcweb_v'):
+            continue                   # not part of what we are mirroring
         saved = _ro.setdefault(d.Name, {})
         for o in d.Objects:
             props = saved.setdefault(o.Name, {})
