@@ -137,6 +137,20 @@ document.addEventListener('DOMContentLoaded', function () {
  #load .ld-detail{margin-top:13px; min-height:16px; font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;
    color:var(--faint)}
  #load .ld-lede{margin:22px 0 0; font-size:13.5px; line-height:1.55; color:var(--muted)}
+ #ld-join{margin:18px auto 0; max-width:420px; text-align:left; display:flex; flex-direction:column; gap:10px}
+ #ld-join label{display:flex; align-items:center; gap:10px; font-size:13px; color:var(--ink)}
+ #ld-join label span{flex:0 0 130px; color:var(--muted)}
+ #ld-join input{flex:1; background:var(--panel-2); border:1px solid var(--line); color:var(--ink);
+   border-radius:6px; padding:7px 9px; font:13px inherit}
+ #ld-join input:focus{outline:none; border-color:var(--bronze-hi)}
+ #ld-addons{font-size:12.5px; line-height:1.5; color:var(--muted); background:var(--panel-2);
+   border:1px solid var(--line); border-radius:6px; padding:10px 12px}
+ #ld-join-err{font-size:12.5px; color:#e08b7a}
+ #load .ld-btns{display:flex; gap:10px; justify-content:flex-end}
+ #load .ld-btns button{background:var(--panel-2); border:1px solid var(--line); color:var(--ink);
+   border-radius:6px; padding:7px 14px; font:13px inherit; cursor:pointer}
+ #load .ld-btns button#ld-go{border-color:var(--bronze-hi); color:var(--bronze-hi)}
+ #load .ld-btns button:hover{border-color:var(--bronze-hi)}
  #load .ld-credit{margin-top:26px; font-size:11px; letter-spacing:.08em; color:var(--faint)}
  #load .ld-credit a{color:var(--bronze-hi); text-decoration:none; border-bottom:1px solid var(--line)}
  #load .ld-credit a:hover{color:var(--gold)}
@@ -166,6 +180,16 @@ document.addEventListener('DOMContentLoaded', function () {
     <div class="ld-status" id="ld-status">Preparing the workbench&hellip;</div>
     <div class="ld-bar"><div class="ld-fill" id="ld-fill"></div></div>
     <div class="ld-detail" id="ld-detail">first load downloads about 115 MB</div>
+    <!-- Joining a shared session asks for a name, sometimes a password, and consent for
+         add-ons. It belongs here, in the page's own type, rather than in a browser
+         prompt(): this runs before FreeCAD exists, so nothing here can crash the app. -->
+    <form id="ld-join" hidden autocomplete="off">
+      <label id="ld-name-row"><span>Your name</span><input id="ld-name" maxlength="32" placeholder="Guest"></label>
+      <label id="ld-pw-row" hidden><span>Session password</span><input id="ld-pw" type="password"></label>
+      <div id="ld-addons" hidden></div>
+      <div id="ld-join-err" hidden></div>
+      <div class="ld-btns"><button type="submit" id="ld-go">Join</button><button type="button" id="ld-alt" hidden></button></div>
+    </form>
     <!-- Says what this page IS, in prose. Two audiences need it and neither was served before:
          a visitor staring at a 115 MB download with no explanation, and a crawler, for which
          this boot panel is the ENTIRE readable page — the app itself is a canvas. -->
@@ -1309,11 +1333,13 @@ window.fcwebNotify = function (text, kind, actions) {
     if (!S.id || (S.mode === 'normal' && !S.st)) return;
     ensureBar();
     var bg = '#243043', bd = '#3c5578', text;
+    var others = Math.max(0, (S.watching || 1) - 1);   // the count includes you
     if (S.ended) { text = 'This session has ended'; bg = '#4a3a1c'; bd = '#8a6d2f'; }
-    else if (!S.contact) { text = 'Lost contact with the session — retrying. Your view may be out of date.'; bg = '#4a3a1c'; bd = '#8a6d2f'; }
-    else if (S.holder) text = 'You are editing' + (S.actingAs === 'agent' ? ' (your assistant is working)' : '') + ' · ' + S.watching + ' in session';
-    else if (S.holderName && !S.silent) text = (S.actingAs === 'agent' ? S.holderName + "'s assistant" : S.holderName) + ' is editing · live · ' + S.watching + ' in session';
-    else text = 'Shared by ' + (S.owner || 'someone') + (S.t ? ' · last updated ' + ago(S.t) : '') + (S.watching > 1 ? ' · ' + S.watching + ' in session' : '');
+    else if (S.opening) text = 'Opening ' + (S.doc || 'the document') + ' v' + S.opening + '…';
+    else if (!S.contact) { text = 'Lost contact (' + (S.lastErr || 'network') + ') — retrying. Your view may be out of date.'; bg = '#4a3a1c'; bd = '#8a6d2f'; }
+    else if (S.holder) text = 'You are editing' + (S.actingAs === 'agent' ? ' (your assistant is working)' : '') + (others ? ' · ' + others + ' watching' : ' · nobody else here yet');
+    else if (S.holderName && !S.silent) text = (S.actingAs === 'agent' ? S.holderName + "'s assistant" : S.holderName) + ' is editing · live' + (others ? ' · ' + others + ' watching' : '');
+    else text = 'Shared by ' + (S.owner || 'someone') + (S.t ? ' · last updated ' + ago(S.t) : '') + (others ? ' · ' + others + ' watching' : '');
     bar.style.background = bg; bar.style.borderColor = bd;
     if (barHidden) {
       // a slim tab hugging the top edge: still shows the one word that matters, and the
@@ -1334,10 +1360,13 @@ window.fcwebNotify = function (text, kind, actions) {
     barBtns.appendChild(btn('Download .FCStd', downloadCopy));
     if (S.mode === 'normal' && S.id) barBtns.appendChild(btn('Copy link', function (b) { copy(shareLink(), b); }));
     if (!S.holder && !S.ended && S.contact) {
+      // Anyone may ASK. Only someone who already holds an edit token (they gave the
+      // editor password) or the owner may TAKE -- offering 'Take control' to a viewer
+      // who can only ever be refused is a button that exists to disappoint.
       barBtns.appendChild(btn('Request control', function () { requestControl(false); }));
-      barBtns.appendChild(btn('Take control', function () { requestControl(true); }));
+      if (S.edit || S.role === 'admin') barBtns.appendChild(btn('Take control', function () { requestControl(true); }));
     }
-    if (S.holder && S.mode === 'session') barBtns.appendChild(btn('Release', releaseControl));
+    if (S.holder) barBtns.appendChild(btn('Release', releaseControl));   // the owner can hand over too
     barBtns.appendChild(btn('Diagnostics', showDiag));
   }
   function copy(text, b, toastText) {
@@ -1427,6 +1456,7 @@ window.fcwebNotify = function (text, kind, actions) {
   async function applyVersion(meta) {
     if (applying || !ready()) return;
     applying = true;
+    S.opening = meta.v; renderBar();      // the first open waits on the interpreter; say so
     try {
       var r = await fetch('/share/' + S.id, { headers: hdrs(), cache: 'no-store' });
       if (!r.ok) throw Object.assign(new Error('document HTTP ' + r.status), { code: 'http_' + r.status });
@@ -1463,7 +1493,7 @@ window.fcwebNotify = function (text, kind, actions) {
       S.applied = meta.v; S.doc = meta.n || S.doc;
       log('apply', 'applied v' + meta.v + ' (' + bytes.length + ' bytes; ' + opened + ')');
     } catch (e) { fail('apply', e, 'apply_fail'); }
-    finally { applying = false; }
+    finally { applying = false; S.opening = 0; try { renderBar(); } catch (e2) {} }
   }
   function applyCamera(cam) {
     if (!cam || cam === S.cam || !ready()) return;
@@ -1845,7 +1875,9 @@ window.fcwebNotify = function (text, kind, actions) {
     }
     if (st.revert_t && st.revert_t !== S.revertSeen && !S.holder && S.id) {
       S.revertSeen = st.revert_t;
-      log('control', 'read-only edit reverted', true); toast('This session is read-only for you — use Edit → Request Control to make changes.', 'warn'); S.applied = 0;
+      log('control', 'read-only edit reverted', true);
+      toast('This session is read-only for you; your change was undone.', 'warn', [{ label: 'Request control', onClick: function () { requestControl(false); } }]);
+      S.applied = 0;
     }
     var req = readText(REQ);
     if (req) { unlink(REQ); if (req === 'request') requestControl(false); else if (req === 'force') requestControl(true); else if (req === 'release') releaseControl();
@@ -5133,7 +5165,7 @@ window.fcRunPy = fcRunPy;
   // These are plain files under play-gui/am/ COPYed into the image, so changing one is an
   // image rebuild (seconds) rather than a relink (~2 h).
   var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_install.py', 'fcweb_am_boot.py',
-                    'fcweb_share.py', 'fcweb_share.ui',    // shared sessions: the FreeCAD-side half + its preferences page
+                    'fcweb_share.py', 'fcweb_share.ui', 'fcweb_share_mcp.ui',   // shared sessions: the FreeCAD-side half + its two preference pages
                     'fcweb_asyncio.py'];                    // asyncio without socketpair (CAM's asset manager runs on asyncio.run)
   var amOverlayDone = false;
   async function installAmOverlay(){

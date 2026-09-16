@@ -479,7 +479,12 @@ def _paint(f):
             btn.setEnabled(bool(hp.get(which)))
     exp = int(c.get('expires') or p.GetInt('Expires', 0) or 0)
     f.lExpires.setText(('expires ' + time.strftime('%Y-%m-%d', time.localtime(exp))) if exp else 'never')
-    url = p.GetString('AgentUrl', '') or c.get('agentUrl') or ''
+
+
+def _paint_mcp(f):
+    """The MCP page, same contract as _paint: painted when the page opens."""
+    p = _p()
+    url = p.GetString('AgentUrl', '') or (_ctl().get('agentUrl') or '')
     f.leAgentUrl.setText(url)
     f.btnCopyMcp.setEnabled(bool(url))
     f.btnRegen.setEnabled(bool(url))
@@ -500,12 +505,9 @@ class FcwebSharingPage(object):
         f.btnStart.clicked.connect(self._start)
         f.btnStop.clicked.connect(self._stop)
         f.btnCopyLink.clicked.connect(lambda: _req('copy:link'))
-        f.btnCopyMcp.clicked.connect(lambda: _req('copy:mcp'))
-        f.btnRegen.clicked.connect(self._regen)
         f.btnClearVpw.clicked.connect(lambda: self._clear('viewer'))
         f.btnClearEpw.clicked.connect(lambda: self._clear('editor'))
         f.cbExpiry.currentIndexChanged.connect(lambda i: _touched.__setitem__('expiry', i))
-        f.cbAgent.toggled.connect(self._agent)
 
     # ---- FreeCAD's contract
     def loadSettings(self):
@@ -514,9 +516,6 @@ class FcwebSharingPage(object):
         _touched.clear()
         f.leName.setText(p.GetString('DisplayName', ''))
         f.cbEnv.setChecked(p.GetBool('IncludeEnv', True))
-        f.cbAgent.blockSignals(True)
-        f.cbAgent.setChecked(p.GetBool('AllowAgent', False))
-        f.cbAgent.blockSignals(False)
         f.cbExpiry.blockSignals(True)
         f.cbExpiry.setCurrentIndex(max(0, min(3, p.GetInt('ExpiryChoice', 0))))
         f.cbExpiry.blockSignals(False)
@@ -538,7 +537,6 @@ class FcwebSharingPage(object):
         f = self.form
         p.SetString('DisplayName', f.leName.text().strip())
         p.SetBool('IncludeEnv', f.cbEnv.isChecked())
-        p.SetBool('AllowAgent', f.cbAgent.isChecked())
         if 'expiry' in _touched:
             choice = int(_touched['expiry'])
             days = [0, 7, 30, 90][choice] if 0 <= choice < 4 else 0
@@ -590,29 +588,63 @@ class FcwebSharingPage(object):
         self.form.leLink.setText('')
         self.form.btnCopyLink.setEnabled(False)
 
-    def _agent(self, on):
-        p = _p()
-        p.SetBool('AllowAgent', bool(on))
-        App.saveParameter()
-        if on and not p.GetBool('Enabled', False):
-            self._start()          # the assistant needs a session to attach to
-        elif on:
-            self._close()          # the MCP link arrives in a toast with a Copy button
-
-    def _regen(self):
-        _p().SetBool('RegenerateAgent', True)
-        App.saveParameter()
-        self.form.leAgentUrl.setText('')
-        self.form.btnCopyMcp.setEnabled(False)
-        self.form.btnRegen.setEnabled(False)
-        self._close()
-
     def _clear(self, which):
         _touched['clear_' + which] = True
         le, lab = ((self.form.leViewerPw, self.form.lVpwState) if which == 'viewer'
                    else (self.form.leEditorPw, self.form.lEpwState))
         le.clear()
         lab.setText('will be cleared')
+
+
+
+class FcwebMcpPage(object):
+    """Edit > Preferences > Sharing > MCP. One capability link: tick the box, copy the link,
+    paste it into an AI client. Ticking it starts sharing if it is not already on, because
+    the assistant attaches to a session -- there is nothing to attach to otherwise."""
+
+    def __init__(self):
+        import FreeCADGui as Gui
+        self.form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share_mcp.ui')
+        f = self.form
+        f.btnCopyMcp.clicked.connect(lambda: _req('copy:mcp'))
+        f.btnRegen.clicked.connect(self._regen)
+        f.cbAgent.toggled.connect(self._agent)
+
+    def loadSettings(self):
+        f = self.form
+        f.cbAgent.blockSignals(True)
+        f.cbAgent.setChecked(_p().GetBool('AllowAgent', False))
+        f.cbAgent.blockSignals(False)
+        try:
+            _paint_mcp(f)
+        except Exception as e:
+            _log('MCP page paint failed: %r' % (e,))
+
+    def saveSettings(self):
+        _p().SetBool('AllowAgent', self.form.cbAgent.isChecked())
+        App.saveParameter()
+
+    def _close(self):
+        _try(lambda: self.form.window().close())
+
+    def _agent(self, on):
+        p = _p()
+        p.SetBool('AllowAgent', bool(on))
+        if on and not p.GetBool('Enabled', False):
+            p.SetBool('Enabled', True)      # the assistant needs a session to attach to
+        App.saveParameter()
+        if on:
+            # the link is minted by the browser half a moment from now and arrives in a
+            # toast with a Copy button; reopening this page shows it in the field
+            self._close()
+
+    def _regen(self):
+        _p().SetBool('RegenerateAgent', True)
+        App.saveParameter()
+        _try(lambda: self.form.leAgentUrl.setText(''))
+        _try(lambda: self.form.btnCopyMcp.setEnabled(False))
+        _try(lambda: self.form.btnRegen.setEnabled(False))
+        self._close()
 
 
 def install():
@@ -632,7 +664,8 @@ def install():
         _log('addIcon failed: %r' % (e,))
     try:
         Gui.addPreferencePage(FcwebSharingPage, 'Sharing')
-        _log('sharing preference page registered')
+        Gui.addPreferencePage(FcwebMcpPage, 'Sharing')
+        _log('sharing preference pages registered: General, MCP')
     except Exception as e:
         _log('sharing page FAILED: %r' % (e,))
     for name, cmd in COMMANDS:

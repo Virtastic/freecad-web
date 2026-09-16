@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Copyright (c) Virtastic -->
+<!-- The "MCP" page of the Sharing group: the one link that lets an AI assistant see and
+     control this session. Plain Qt widgets; the code behind it is fcweb_share.FcwebMcpPage. -->
+<ui version="4.0">
+ <class>FcwebMcp</class>
+ <widget class="QWidget" name="FcwebMcp">
+  <property name="windowTitle"><string>MCP</string></property>
+  <layout class="QVBoxLayout" name="outer">
+   <item>
+    <widget class="QGroupBox" name="gbMcp">
+     <property name="title"><string>AI assistant</string></property>
+     <layout class="QFormLayout" name="fMcp">
+      <item row="0" column="0" colspan="2">
+       <widget class="QCheckBox" name="cbAgent">
+        <property name="text"><string>Allow an AI assistant to see and control this session</string></property>
+       </widget>
+      </item>
+      <item row="1" column="0"><widget class="QLabel" name="lUrl"><property name="text"><string>MCP link</string></property></widget></item>
+      <item row="1" column="1">
+       <layout class="QHBoxLayout" name="hMcp">
+        <item>
+         <widget class="QLineEdit" name="leAgentUrl">
+          <property name="readOnly"><bool>true</bool></property>
+          <property name="placeholderText"><string>Appears here a moment after you tick the box</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnCopyMcp">
+          <property name="text"><string>Copy</string></property>
+          <property name="enabled"><bool>false</bool></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnRegen">
+          <property name="text"><string>Regenerate</string></property>
+          <property name="toolTip"><string>Make a new link. The old one answers 404 at once; remove and re-add it in your AI client.</string></property>
+          <property name="enabled"><bool>false</bool></property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QLabel" name="lMcpHow">
+        <property name="textFormat"><enum>Qt::PlainText</enum></property>
+        <property name="wordWrap"><bool>true</bool></property>
+        <property name="text"><string>Paste the link into your AI client — that is the whole setup. Claude Code: claude mcp add --transport http freecad THE-LINK. Claude Desktop: Settings → Connectors → add a custom connector.</string></property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QLabel" name="lMcpNote">
+        <property name="wordWrap"><bool>true</bool></property>
+        <property name="text"><string>The assistant works inside this browser tab: it sees what you see, and can edit whenever you hold control. This tab must stay open for it to act. Anyone with the link can do the same — treat it like a password.</string></property>
+        <property name="styleSheet"><string>color: gray;</string></property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="vsMcp"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer>
+   </item>
+  </layout>
+ </widget>
+</ui>
