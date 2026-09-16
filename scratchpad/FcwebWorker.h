@@ -10,7 +10,8 @@
 // BRepMesh_IncrementalMesh -- froze the a2plus assembly's open for 3-5 s each
 // (scratchpad/yield-probe.py, gpu-open-profile.py, 2026-09-15/16). Here the call runs on a
 // std::thread and the main thread parks in fcweb_wait_flag() (gl_legacy_stubs.c:
-// Atomics.waitAsync on the done flag, woken by emscripten_futex_wake, holding Qt's resume
+// Atomics.waitAsync on the done flag, woken by a JS Atomics.notify from the worker -- wasm's
+// own notify does not reach it (gl_legacy_stubs.c) -- holding Qt's resume
 // slot so events queue instead of running C++ meanwhile). The GIL is released for the
 // wait, as Document.cpp's yield point does. ONE thread for the page's lifetime, created on
 // first use: a thread per object, joined on the main thread, cost ~50 ms each (BIMExample
@@ -29,6 +30,7 @@
 
 extern "C" int fcweb_yield_ok(void);
 extern "C" void fcweb_wait_flag(volatile int* flag);
+extern "C" void fcweb_notify_flag(volatile int* flag);
 
 namespace Base
 {
@@ -96,6 +98,7 @@ private:
             }
             done = 1;
             emscripten_futex_wake(&done, 1);
+            fcweb_notify_flag(reinterpret_cast<volatile int*>(&done));   // the wake waitAsync actually hears
         }
     }
 };

@@ -189,7 +189,7 @@ EM_ASYNC_JS(void, fcweb_wait_flag_js, (double addr), {
         try {
             if (typeof growMemViews === "function") growMemViews();
             if (typeof Atomics !== "undefined" && Atomics.waitAsync && typeof SharedArrayBuffer !== "undefined" && HEAP32.buffer instanceof SharedArrayBuffer) {
-                var w = Atomics.waitAsync(HEAP32, addr / 4, 0, 2000);
+                var w = Atomics.waitAsync(HEAP32, addr / 4, 0, 250);
                 if (w.async) { w.value.then(done, done); } else { done(); }
                 return;
             }
@@ -200,6 +200,18 @@ EM_ASYNC_JS(void, fcweb_wait_flag_js, (double addr), {
 EMSCRIPTEN_KEEPALIVE void fcweb_wait_flag(volatile int* flag) {
     if (!fcweb_yield_ok()) return;   /* not a promising stack: the caller must not have spawned the worker */
     while (!*flag) fcweb_wait_flag_js((double)(uintptr_t)flag);
+}
+/* The worker's half. wasm's memory.atomic.notify (what emscripten_futex_wake compiles to)
+ * did NOT wake a JS Atomics.waitAsync waiter on the main thread in Chrome 141: measured
+ * 2026-09-16, 21 of 2084 waits sat out the full timeout and the rest were woken by Qt
+ * timers that happened to take the resume slot -- +20 s on a BIMExample open. A JS
+ * Atomics.notify from the worker's own JS context does wake it (with a 20 ms poll cap the
+ * open was back to 8.9 s). The 250 ms timeout above is the belt to this brace. */
+EM_JS(void, fcweb_notify_flag_js, (double addr), {
+    try { if (typeof growMemViews === "function") growMemViews(); Atomics.notify(HEAP32, addr / 4); } catch (e) {}
+});
+EMSCRIPTEN_KEEPALIVE void fcweb_notify_flag(volatile int* flag) {
+    fcweb_notify_flag_js((double)(uintptr_t)flag);
 }
 
 EM_JS(unsigned int, fcweb_dl_gen, (int range), { return (typeof __fcDL !== "undefined") ? __fcDL.gen(range) : 0; });
