@@ -559,6 +559,33 @@ activity timer are what fire. Do not try to keep main parked by stacking resume 
 without re-reading the shadow-stack notes: that experiment asserted inside
 `QWasmSuspendResumeControl::sendPendingEvents` (reentrancy across a suspended handler).
 
+## Long loads: yield per object, park the two calls that cannot yield
+
+A document open is one synchronous run of wasm. Three layers keep the tab alive and the
+frozen stretch short (measured on the 42 MB a2plus assembly, `scratchpad/yield-probe.py`):
+
+1. **Yield per restored object** (`freecad.patch`, App/Document.cpp and Gui/Document.cpp
+   `fcweb_yield_point()`): at most every 100 ms the load releases the GIL, parks one browser
+   turn (`fcweb_yield_js`, which holds Qt's resume slot so native events queue), takes the
+   GIL back and drains the queue with `processEvents(ExcludeUserInputEvents)`. Legal only on
+   a promising stack (`fcweb_yield_ok`: Asyncify.__live > 0).
+2. **The two calls nothing can yield inside run on ONE persistent worker thread**
+   (`src/Base/FcwebWorker.h`, new file in the patch): `BRepTools::Read` of a big part
+   (3.4 s frozen) and its `BRepMesh_IncrementalMesh` (4-5 s frozen). The caller posts a
+   std::function, releases the GIL and parks in `fcweb_wait_flag()` -- `Atomics.waitAsync`
+   on the done flag, woken by `emscripten_futex_wake`, still holding the resume slot -- so no
+   C++ touches the shape from the main thread meanwhile and the compositor keeps painting.
+   One thread for the page's lifetime: a thread per object joined on the main thread cost
+   ~50 ms each (BIMExample 7.4 -> 26.1 s). A loop of `fcweb_yield_now()` parks is NOT a
+   substitute: a MessageChannel turn spins (2.2 M turns in one open) and a setTimeout turn
+   pays Chrome's 4 ms nested-timer clamp.
+3. **The visual mesh stays serial on wasm** (`InParallel = false` in setupCoinGeometry):
+   parallel on the bounded 6-thread pool opened a2plus in 31.4 s against 21.6 s serial, and
+   the frozen stretch did not shrink. The pool still serves booleans and checks.
+
+Longest frozen stretch on the a2plus open: 4.9 s (2026-09-15 morning) -> 342 ms (2026-09-16),
+with 1500+ frames painted during the load instead of ~90.
+
 ## Getting work out: two save paths, and only one is scriptable
 
 `File > Save` and `File > Export` clicked for real both deliver a file
