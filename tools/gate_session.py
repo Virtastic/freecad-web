@@ -568,14 +568,17 @@ def scenario_mcp(ctx, url, args, fail):
     v = _volumes(s2, fail)
     if not any(abs(x['volume'] - 18000.0) < 1e-6 for x in v.values()):
         fail('viewer volume after the assistant edit: %r' % {k: x['volume'] for k, x in v.items()})
-    cam_before = _state(s2).get('cam')
+    # The assistant can move its OWN view; watchers keep theirs. What must hold is that
+    # it costs them nothing -- no reopen, no disturbance.
+    applied_before = _state(s2).get('applied')
     r = tool('fc_view_set', {'standard': 'front', 'note': 'looking from the front'})
+    time.sleep(6)
     if not r.get('ok'):
         fail('fc_view_set -> %r' % r)
-    elif not _wait_state(s2, lambda x: x.get('cam') and x.get('cam') != cam_before, 20):
-        fail('the assistant moved the camera but the viewer did not follow')
+    elif _state(s2).get('applied') != applied_before:
+        fail('the assistant moving its view disturbed the viewer')
     else:
-        print('==> fc_view_set moved the viewer\'s camera')
+        print('==> fc_view_set: the assistant looks where it likes, the viewer is undisturbed')
     r = tool('fc_export', {'format': 'stl', 'objects': ['Box'], 'name': 'gate-box', 'linear_deflection': 0.05}, 60)
     if not r.get('ok') or not r.get('bytes') or not r.get('sha256') or r.get('name') != 'gate-box.stl':
         fail('fc_export stl -> %r' % {k: r.get(k) for k in ('ok', 'code', 'hint', 'name', 'bytes', 'sha256', 'error')})

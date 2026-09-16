@@ -71,6 +71,8 @@ Work like this:
 Worked examples: read the prompt `freecad-quickstart`.
 Object names AND labels are accepted wherever an object is named. Standard views:
 front, top, right, rear, bottom, left, isometric, axonometric.
+The people watching keep their own camera: describe what you changed in `note`
+rather than relying on them seeing the same view.
 """
 
 # DNS-rebinding protection OFF, deliberately. The SDK turns it on whenever it binds
@@ -371,13 +373,15 @@ async def fc_view_set(standard: str = '', camera: str = '', note: str = '') -> d
 
 @mcp.tool()
 async def fc_fit_all() -> dict:
-    """Fit the whole model in view. Watchers' cameras follow. Returns the camera string."""
+    """Fit the whole model in view. Returns the camera string. Watchers keep their own
+    viewpoint -- say what you are looking at in the `note` instead."""
     return await _call('fit_all')
 
 
 @mcp.tool()
 async def fc_fit_selection() -> dict:
-    """Fit the selection in view. Watchers' cameras follow. Returns the camera string."""
+    """Fit the selection in view. Returns the camera string. Watchers keep their own
+    viewpoint -- say what you are looking at in the `note` instead."""
     return await _call('fit_selection')
 
 
