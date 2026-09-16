@@ -536,6 +536,7 @@ class FcwebSharingPage(object):
     # ---- FreeCAD's contract
     def loadSettings(self):
         p = _p()
+        _try(_panel_tick)
         f = self.form
         _touched.clear()
         f.leName.setText(p.GetString('DisplayName', ''))
@@ -665,6 +666,197 @@ class FcwebMcpPage(object):
         _later(self._repaint, 2.5)
 
 
+# ---------------------------------------------------------------- the session, on screen
+# Who is here and what you can do about it, in two places that share one painter: a
+# Session PANEL (View > Panels), which we own and can therefore keep up to date from
+# tick(), and a Session PAGE in Preferences for people who look there. The panel is the
+# live one on purpose -- a Python preference page's widgets are rebuilt by FreeCAD and
+# every reference we hold goes stale a moment later (measured), so that copy repaints when
+# it opens, after each action, and on Refresh.
+_panel = None
+
+
+def _people_rows(c):
+    """(label, client id) for everyone in the session, the holder first."""
+    rows = []
+    for x in (c.get('people') or []):
+        bits = []
+        if x.get('holder'):
+            bits.append('editing')
+        if x.get('asking'):
+            bits.append('asking for control')
+        if x.get('role') == 'admin':
+            bits.append('owner')
+        if int(x.get('idle') or 0) > 20:
+            bits.append('idle %ds' % int(x['idle']))
+        label = x.get('name') or 'Guest'
+        if bits:
+            label += '  (' + ', '.join(bits) + ')'
+        rows.append((label, x.get('id') or ''))
+    return rows
+
+
+def _control_line(c):
+    if not c.get('session') or c.get('ended'):
+        return 'Not in a session.'
+    if c.get('holder'):
+        line = 'You are editing.'
+    elif c.get('holderName'):
+        line = '%s is editing.' % c['holderName']
+    else:
+        line = 'Nobody is editing \u2014 the next request is granted at once.'
+    if c.get('pendingName'):
+        line += '  %s is asking for control.' % c['pendingName']
+    return line
+
+
+def _session_line(c):
+    if c.get('unavailable'):
+        return 'Sharing is not available on this site.'
+    if not c.get('session'):
+        return 'Not shared'
+    if c.get('ended'):
+        return 'This session has ended.'
+    n = len(c.get('people') or [])
+    txt = 'Sharing %s' % (c.get('doc') or 'this document')
+    txt += ' \u00b7 %d here' % n if n else ''
+    if c.get('t'):
+        txt += ' \u00b7 last updated ' + _ago(c['t'])
+    if not c.get('contact', True):
+        txt += ' \u00b7 lost contact (%s), retrying' % (c.get('lastErr') or 'network')
+    return txt
+
+
+def _paint_session(f, selected_id=None):
+    """Both copies of the session view. Reads CTL only; never suspends."""
+    from PySide6 import QtCore
+    c = _ctl()
+    live = bool(c.get('session')) and not c.get('ended')
+    f.lSessStatus.setText(_session_line(c))
+    f.lControl.setText(_control_line(c))
+    rows = _people_rows(c)
+    lw = f.lwPeople
+    want = [r[0] for r in rows]
+    have = [lw.item(i).text() for i in range(lw.count())]
+    if want != have:
+        keep = lw.currentItem().data(QtCore.Qt.UserRole) if lw.currentItem() else selected_id
+        lw.clear()
+        for label, cid in rows:
+            lw.addItem(label)
+            lw.item(lw.count() - 1).setData(QtCore.Qt.UserRole, cid)
+            if cid and cid == keep:
+                lw.setCurrentRow(lw.count() - 1)
+    holder, admin = bool(c.get('holder')), c.get('role') == 'admin'
+    can_take = bool(c.get('edit')) or admin
+    f.btnRequest.setEnabled(live and not holder)
+    f.btnTake.setEnabled(live and not holder and can_take)
+    f.btnRelease.setEnabled(live and holder)
+    f.btnGrant.setEnabled(live and holder and bool(c.get('pendingName')))
+    f.btnDeny.setEnabled(live and holder and bool(c.get('pendingName')))
+    sel = lw.currentItem()
+    sel_id = sel.data(QtCore.Qt.UserRole) if sel else ''
+    f.btnKick.setEnabled(bool(live and admin and sel_id and sel_id != c.get('client')))
+    f.btnSessCopy.setEnabled(live)
+    f.btnSessDownload.setEnabled(bool(c.get('session')))
+    f.btnSessStop.setEnabled(bool(live and admin))
+
+
+def _wire_session(f, after=None):
+    """Point one copy of the session view at the browser half. `after` repaints it."""
+    from PySide6 import QtCore
+
+    def go(verb):
+        _req(verb)
+        if after is not None:
+            _later(after, 2.0)
+
+    f.btnRequest.clicked.connect(_guard(lambda: go('request')))
+    f.btnTake.clicked.connect(_guard(lambda: go('force')))
+    f.btnRelease.clicked.connect(_guard(lambda: go('release')))
+    f.btnGrant.clicked.connect(_guard(lambda: go('grant')))
+    f.btnDeny.clicked.connect(_guard(lambda: go('deny')))
+    f.btnSessCopy.clicked.connect(_guard(lambda: _req('copy:link')))
+    f.btnSessDownload.clicked.connect(_guard(lambda: _req('download')))
+    f.btnSessDiag.clicked.connect(_guard(lambda: _req('diag')))
+    f.btnSessStop.clicked.connect(_guard(lambda: go('stop')))
+
+    def kick():
+        it = f.lwPeople.currentItem()
+        cid = it.data(QtCore.Qt.UserRole) if it else ''
+        if cid:
+            go('kick:' + cid)
+
+    f.btnKick.clicked.connect(_guard(kick))
+    f.lwPeople.currentRowChanged.connect(lambda _i: _try(lambda: _paint_session(f)))
+    if after is not None:
+        f.btnSessRefresh.clicked.connect(_guard(after))
+
+
+def _ensure_panel():
+    """The Session panel: FreeCAD's own furniture, ours to keep current.
+
+    It exists only while a session does, and hides itself again afterwards."""
+    global _panel
+    Gui = _gui()
+    if Gui is None:
+        return None
+    if _panel is not None:
+        return _panel
+    from PySide6 import QtCore, QtWidgets
+    mw = Gui.getMainWindow()
+    if mw is None:
+        return None
+    form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share_session.ui')
+    dock = QtWidgets.QDockWidget('Session', mw)
+    dock.setObjectName('FcwebSessionPanel')
+    dock.setWidget(form)
+    mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+    _wire_session(form)
+    _panel = (dock, form)
+    _log('session panel installed')
+    return _panel
+
+
+def _panel_tick():
+    """From tick(): show the panel while a session is live, and keep it current."""
+    global _panel
+    c = _ctl()
+    live = bool(c.get('session'))
+    if not live and _panel is None:
+        return
+    pair = _ensure_panel()
+    if pair is None:
+        return
+    dock, form = pair
+    try:
+        if dock.isVisible() != live:
+            dock.setVisible(live)
+        if live:
+            _paint_session(form)
+    except RuntimeError:
+        _panel = None          # the main window took it with it
+
+
+class FcwebSessionPage(object):
+    """Edit > Preferences > Sharing > Session: the same view and the same actions as the
+    Session panel, for people who look in Preferences. Repaints when it opens, after each
+    action, and on Refresh."""
+
+    def __init__(self):
+        import FreeCADGui as Gui
+        self.form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share_session.ui')
+        _wire_session(self.form, after=self._repaint)
+
+    def loadSettings(self):
+        self._repaint()
+
+    def saveSettings(self):
+        pass          # every action here happened when its button was pressed
+
+    def _repaint(self):
+        _try(lambda: _paint_session(self.form))
+
+
 def install():
     """Register the page, the icon and the commands. Idempotent."""
     global _obs
@@ -682,8 +874,9 @@ def install():
         _log('addIcon failed: %r' % (e,))
     try:
         Gui.addPreferencePage(FcwebSharingPage, 'Sharing')
+        Gui.addPreferencePage(FcwebSessionPage, 'Sharing')
         Gui.addPreferencePage(FcwebMcpPage, 'Sharing')
-        _log('sharing preference pages registered: General, MCP')
+        _log('sharing preference pages registered: General, Session, MCP')
     except Exception as e:
         _log('sharing page FAILED: %r' % (e,))
     for name, cmd in COMMANDS:

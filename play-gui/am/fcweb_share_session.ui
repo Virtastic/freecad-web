@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Copyright (c) Virtastic -->
+<!-- The "Session" page of the Sharing group: who is here and what you can do about it.
+     The same actions live in the Session panel (View > Panels), which updates by itself;
+     this page is the settings-dialog copy and repaints when it opens, after each action,
+     and on Refresh. -->
+<ui version="4.0">
+ <class>FcwebSession</class>
+ <widget class="QWidget" name="FcwebSession">
+  <property name="windowTitle"><string>Session</string></property>
+  <layout class="QVBoxLayout" name="outer">
+   <item>
+    <widget class="QGroupBox" name="gbWho">
+     <property name="title"><string>Who is in this session</string></property>
+     <layout class="QVBoxLayout" name="vWho">
+      <item>
+       <widget class="QLabel" name="lSessStatus">
+        <property name="text"><string>Not shared</string></property>
+        <property name="wordWrap"><bool>true</bool></property>
+        <property name="styleSheet"><string>font-weight: bold;</string></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QListWidget" name="lwPeople">
+        <property name="toolTip"><string>Everyone currently in the session. The person holding control is marked.</string></property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="hWhoBtns">
+        <item><widget class="QPushButton" name="btnKick"><property name="text"><string>Remove from session</string></property><property name="enabled"><bool>false</bool></property><property name="toolTip"><string>Remove the selected person. Their link stops working until you share again.</string></property></widget></item>
+        <item><widget class="QPushButton" name="btnSessRefresh"><property name="text"><string>Refresh</string></property></widget></item>
+        <item><spacer name="hsWho"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="gbControl">
+     <property name="title"><string>Control</string></property>
+     <layout class="QVBoxLayout" name="vControl">
+      <item>
+       <widget class="QLabel" name="lControl">
+        <property name="text"><string>Nobody is editing.</string></property>
+        <property name="wordWrap"><bool>true</bool></property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="hControl">
+        <item><widget class="QPushButton" name="btnRequest"><property name="text"><string>Request control</string></property><property name="toolTip"><string>Ask whoever is editing to hand over.</string></property></widget></item>
+        <item><widget class="QPushButton" name="btnTake"><property name="text"><string>Take control</string></property><property name="toolTip"><string>Take it now. Needs the editor password unless this is your own session.</string></property></widget></item>
+        <item><widget class="QPushButton" name="btnRelease"><property name="text"><string>Release</string></property><property name="toolTip"><string>Hand control back so someone else can edit.</string></property></widget></item>
+        <item><spacer name="hsCtl"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="hGrant">
+        <item><widget class="QPushButton" name="btnGrant"><property name="text"><string>Grant the request</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+        <item><widget class="QPushButton" name="btnDeny"><property name="text"><string>Deny</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+        <item><spacer name="hsGrant"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="gbDo">
+     <property name="title"><string>This session</string></property>
+     <layout class="QHBoxLayout" name="hDo">
+      <item><widget class="QPushButton" name="btnSessCopy"><property name="text"><string>Copy link</string></property></widget></item>
+      <item><widget class="QPushButton" name="btnSessDownload"><property name="text"><string>Download .FCStd</string></property></widget></item>
+      <item><widget class="QPushButton" name="btnSessDiag"><property name="text"><string>Diagnostics</string></property></widget></item>
+      <item><widget class="QPushButton" name="btnSessStop"><property name="text"><string>Stop sharing</string></property><property name="toolTip"><string>End the session for everyone.</string></property></widget></item>
+      <item><spacer name="hsDo"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lSessNote">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string>The Session panel (View → Panels → Session) shows the same thing and keeps itself up to date while you work.</string></property>
+     <property name="styleSheet"><string>color: gray;</string></property>
+    </widget>
+   </item>
+   <item><spacer name="vsSess"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+  </layout>
+ </widget>
+</ui>

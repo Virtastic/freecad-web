@@ -1358,90 +1358,12 @@ window.fcwebNotify = function (text, kind, actions, opts) {
   };
 
   // ---- banner + diagnostics -------------------------------------------------------
-  var bar = null, barText = null, barAct = null, barBtns = null, barHide = null;
-  var barHidden = false; try { barHidden = localStorage.getItem('fcweb.sessionbar') === 'hidden'; } catch (e) {}
-  function toggleBar() {
-    barHidden = !barHidden;
-    try { localStorage.setItem('fcweb.sessionbar', barHidden ? 'hidden' : 'shown'); } catch (e) {}
-    renderBar();
-  }
-  function ensureBar() {
-    if (bar) return bar;
-    bar = document.createElement('div'); bar.id = 'fcweb-session-bar';
-    bar.style.cssText = 'position:fixed;left:50%;top:6px;transform:translateX(-50%);z-index:2147483000;display:flex;gap:10px;align-items:center;' +
-      'background:#243043;border:1px solid #3c5578;color:#e8e8e8;border-radius:8px;padding:6px 12px;font:12px -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:min(900px,92vw)';
-    barText = document.createElement('span'); barText.style.whiteSpace = 'nowrap';
-    barAct = document.createElement('span'); barAct.style.cssText = 'opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40vw';
-    barBtns = document.createElement('span'); barBtns.style.cssText = 'display:flex;gap:6px';
-    barHide = document.createElement('button'); barHide.title = 'Hide the session bar (click the tab at the top edge to bring it back)';
-    barHide.style.cssText = 'background:none;border:none;color:#cfcfcf;font-size:15px;line-height:1;cursor:pointer;padding:0 2px';
-    // stopPropagation: collapsing installs a click-to-restore handler on the bar itself, and the
-    // same event would bubble into it and toggle straight back
-    barHide.addEventListener('click', function (e) { e.stopPropagation(); toggleBar(); });
-    bar.appendChild(barText); bar.appendChild(barAct); bar.appendChild(barBtns); bar.appendChild(barHide);
-    document.body.appendChild(bar);
-    return bar;
-  }
-  function btn(label, fn) {
-    var b = document.createElement('button'); b.textContent = label;
-    b.style.cssText = 'background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);color:#e8e8e8;border-radius:6px;padding:3px 8px;font:11px inherit;cursor:pointer';
-    b.addEventListener('click', function () { try { fn(b); } catch (e) { fail('ui', e); } });
-    return b;
-  }
-  function renderBar() {
-    if (!S.id || (S.mode === 'normal' && !S.st)) return;
-    ensureBar();
-    var bg = '#243043', bd = '#3c5578', text;
-    var others = Math.max(0, (S.watching || 1) - 1);   // the count includes you
-    if (S.ended) { text = 'This session has ended'; bg = '#4a3a1c'; bd = '#8a6d2f'; }
-    else if (S.opening) text = 'Opening ' + (S.doc || 'the document') + ' v' + S.opening + '…';
-    else if (!S.contact) { text = 'Lost contact (' + (S.lastErr || 'network') + ') — retrying. Your view may be out of date.'; bg = '#4a3a1c'; bd = '#8a6d2f'; }
-    else if (S.holder) text = 'You are editing' + (S.actingAs === 'agent' ? ' (your assistant is working)' : '') + (others ? ' · ' + others + ' watching' : ' · nobody else here yet');
-    else if (S.holderName && !S.silent) text = (S.actingAs === 'agent' ? S.holderName + "'s assistant" : S.holderName) + ' is editing · live' + (others ? ' · ' + others + ' watching' : '');
-    else text = 'Shared by ' + (S.owner || 'someone') + (S.t ? ' · last updated ' + ago(S.t) : '') + (others ? ' · ' + others + ' watching' : '');
-    bar.style.background = bg; bar.style.borderColor = bd;
-    if (barHidden) {
-      // a slim tab hugging the top edge: still shows the one word that matters, and the
-      // colour still says live / stale / lost. One click brings the bar back.
-      bar.style.top = '0'; bar.style.padding = '1px 10px'; bar.style.borderRadius = '0 0 8px 8px'; bar.style.borderTop = 'none';
-      bar.style.cursor = 'pointer'; bar.title = text + ' — click to show the session bar'; bar.onclick = toggleBar;
-      barText.textContent = S.ended ? 'session ended' : (!S.contact ? 'session: lost contact' : (S.holder ? 'sharing' : 'shared session'));
-      barText.style.fontSize = '11px'; barAct.style.display = 'none'; barBtns.style.display = 'none'; barHide.style.display = 'none';   // inline display beats [hidden]
-      return;
-    }
-    bar.style.top = '6px'; bar.style.padding = '6px 12px'; bar.style.borderRadius = '8px'; bar.style.borderTop = '';
-    bar.style.cursor = ''; bar.title = ''; bar.onclick = null;
-    barText.style.fontSize = ''; barAct.style.display = ''; barBtns.style.display = 'flex'; barHide.style.display = ''; barHide.textContent = '\u2715';
-    barText.textContent = text;
-    barAct.textContent = S.note ? '“' + S.note + '”' : '';
-    barAct.title = S.note || '';
-    while (barBtns.firstChild) barBtns.removeChild(barBtns.firstChild);
-    barBtns.appendChild(btn('Download .FCStd', downloadCopy));
-    if (S.mode === 'normal' && S.id) barBtns.appendChild(btn('Copy link', function (b) { copy(shareLink(), b); }));
-    if (!S.holder && !S.ended && S.contact) {
-      // Anyone may ASK. Only someone who already holds an edit token (they gave the
-      // editor password) or the owner may TAKE -- offering 'Take control' to a viewer
-      // who can only ever be refused is a button that exists to disappoint.
-      barBtns.appendChild(btn('Request control', function () { requestControl(false); }));
-      if (S.edit || S.role === 'admin') barBtns.appendChild(btn('Take control', function () { requestControl(true); }));
-    }
-    if (S.holder) barBtns.appendChild(btn('Release', releaseControl));   // the owner can hand over too
-    barBtns.appendChild(btn('Diagnostics', showDiag));
-  }
-  function copy(text, b, toastText) {
-    var done = function () {
-      if (b) { var was = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = was; }, 1500); }
-      if (toastText) toast(toastText, 'info');
-    };
-    // no native prompt: the toast's text is selectable, so it doubles as the fallback
-    var manual = function () { toast('Copy this link: ' + text, 'info'); };
-    try { navigator.clipboard.writeText(text).then(done, manual); } catch (e) { manual(); }
-  }
-  function dl(name, bytes) {
-    var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' })); a.download = name;
-    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 15000);
-  }
-  function redact(s) { return String(s).replace(/\/mcp\/([0-9a-f]{32})\/[0-9a-f]{32,64}/g, '/mcp/$1/<redacted>').replace(/"(viewer_pw|editor_pw|ViewerPassword|EditorPassword)":"[^"]*"/g, '"$1":"<redacted>"'); }
+  // The session bar used to live here: a floating strip over the 3D view with the same
+  // buttons. It is gone. Everything it showed is in the Session panel (View > Panels),
+  // which is FreeCAD's own furniture, dockable, and out of the way of the model; every
+  // event it announced was already a toast.
+  function renderBar() {}
+
   function showDiag() {
     var host = document.getElementById('fcweb-diag');
     if (host) { host.remove(); return; }
@@ -1479,7 +1401,8 @@ window.fcwebNotify = function (text, kind, actions, opts) {
                              // for the Sharing page's live status line and buttons
                              link: S.id ? shareLink() : '', edit: !!S.edit, holderName: S.holderName || '', watching: S.watching || 0,
                              t: S.t || 0, expires: S.expServer || 0, has_pw: S.hasPw || null, contact: S.contact !== false,
-                             lastErr: S.lastErr || '', ended: !!S.ended, doc: S.doc || '', agentUrl: S.agentUrl || '' });
+                             lastErr: S.lastErr || '', ended: !!S.ended, doc: S.doc || '', agentUrl: S.agentUrl || '',
+                             client: S.client || '', people: S.people || [], pendingName: S.pendingName || '' });
     if (c !== S.ctlSent) { writeText(CTL, c); S.ctlSent = c; }
   }
   var wantParams = {};
@@ -1617,7 +1540,11 @@ window.fcwebNotify = function (text, kind, actions, opts) {
     var j;
     try { j = (await api('GET', '/share/' + S.id + '/v')).json; pollFails = 0; if (!S.contact) { S.contact = true; log('poll', 'contact restored'); } }
     catch (e) {
-      if (e.status === 404) { S.ended = true; if (e.code === 'evicted') beacon('evicted', S.role); renderBar(); sendCtl(); toast('This shared session has ended. ' + (e.message || ''), 'warn'); log('poll', 'ended: ' + e.code, true); return; }
+      if (e.code === 'removed') {   // the owner took us out of the session
+        S.ended = true; sendCtl(); toast(e.message || 'You were removed from this session.', 'warn');
+        log('poll', 'removed by the owner', true); return;
+      }
+      if (e.status === 404) { S.ended = true; if (e.code === 'evicted') beacon('evicted', S.role); sendCtl(); toast('This shared session has ended. ' + (e.message || ''), 'warn'); log('poll', 'ended: ' + e.code, true); return; }
       if (e.status === 401 && S.mode === 'normal') { S.id = null; return; }
       S.lastErr = e.status ? 'HTTP ' + e.status : (e.code || 'network');
       if (++pollFails >= 3 && S.contact) { S.contact = false; renderBar(); sendCtl(); }
@@ -1627,6 +1554,8 @@ window.fcwebNotify = function (text, kind, actions, opts) {
     S.owner = j.owner || S.owner; S.doc = j.n || S.doc; S.envv = j.env_v;
     S.holderName = j.holder ? j.holder.name : null; S.silent = !!(j.holder && j.holder.silent);
     S.expServer = j.expires || 0; if (j.has_pw) S.hasPw = j.has_pw;
+    S.people = j.people || []; S.pendingName = j.pending ? j.pending.name : '';
+    sendCtl();                       // the Session panel draws from this
     var iAmHolder = !!(j.you && j.you.holder);
     // Granted control mints an edit token for us even if we never had the editor
     // password; this is where a plain viewer picks it up.
@@ -1724,6 +1653,15 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       if (e.code === 'network' || e.status === 502) { S.unavailable = true; sendCtl(); }
       toast('Could not start sharing: ' + e.message, 'error');
     }
+  }
+  async function kick(who) {
+    if (!S.id || !S.key || !who) return;
+    try {
+      var r = await api('POST', '/share/' + S.id + '/kick', JSON.stringify({ client: who }), { 'Content-Type': 'application/json' });
+      toast('Removed ' + (r.json.removed || 'them') + ' from the session.', 'info');
+      log('control', 'removed ' + (r.json.removed || who));
+      await poll();
+    } catch (e) { fail('control', e); toast(e.message, 'error'); }
   }
   async function stopSharing() {
     if (!S.id || !S.key) return;
@@ -1943,7 +1881,19 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       S.applied = 0;
     }
     var req = readText(REQ);
-    if (req) { unlink(REQ); if (req === 'request') requestControl(false); else if (req === 'force') requestControl(true); else if (req === 'release') releaseControl();
+    if (req) {
+      unlink(REQ);
+      // Everything the Session panel and the Preferences pages can ask the browser half
+      // to do. They are the only half that can reach the network and the clipboard.
+      if (req === 'request') requestControl(false);
+      else if (req === 'force') requestControl(true);
+      else if (req === 'release') releaseControl();
+      else if (req === 'grant') grant(false);
+      else if (req === 'deny') grant(true);
+      else if (req === 'download') downloadCopy();
+      else if (req === 'diag') showDiag();
+      else if (req === 'stop') stopSharing();
+      else if (req.indexOf('kick:') === 0) kick(req.slice(5));
       else if (req === 'copy:link' && S.id) copy(shareLink(), null, 'Link copied'); else if (req === 'copy:mcp' && S.agentUrl) copy(S.agentUrl, null, 'MCP link copied'); }
     if (S.id && S.holder) {
       await publishIfStaged(st);
@@ -5228,7 +5178,7 @@ window.fcRunPy = fcRunPy;
   // These are plain files under play-gui/am/ COPYed into the image, so changing one is an
   // image rebuild (seconds) rather than a relink (~2 h).
   var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_install.py', 'fcweb_am_boot.py',
-                    'fcweb_share.py', 'fcweb_share.ui', 'fcweb_share_mcp.ui',   // shared sessions: the FreeCAD-side half + its two preference pages
+                    'fcweb_share.py', 'fcweb_share.ui', 'fcweb_share_session.ui', 'fcweb_share_mcp.ui',   // shared sessions: the FreeCAD-side half + its three preference pages
                     'fcweb_asyncio.py'];                    // asyncio without socketpair (CAM's asset manager runs on asyncio.run)
   var amOverlayDone = false;
   async function installAmOverlay(){
