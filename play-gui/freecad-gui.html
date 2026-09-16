@@ -1372,6 +1372,48 @@ window.fcwebNotify = function (text, kind, actions, opts) {
   // event it announced was already a toast.
   function renderBar() {}
 
+  // Helpers the session UI shares. btn and copy lived beside the old session bar and
+  // went with it when that was removed, while the diagnostics panel, the download and
+  // every Copy button still call them -- copy() was being called four times and
+  // defined nowhere, which is why Copy link silently did nothing.
+  function btn(label, fn) {
+    var b = document.createElement('button'); b.textContent = label;
+    b.style.cssText = 'background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);color:#e8e8e8;border-radius:6px;padding:3px 8px;font:11px inherit;cursor:pointer';
+    b.addEventListener('click', function () { try { fn(b); } catch (e) { fail('ui', e); } });
+    return b;
+  }
+  function copy(text, b, toastText) {
+    var done = function () {
+      if (b) { var was = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = was; }, 1500); }
+      if (toastText) toast(toastText, 'info');
+    };
+    // navigator.clipboard.writeText wants transient activation, and the click that asks
+    // for this landed on QT'S canvas -- the page only hears about it when the interpreter
+    // writes a request file up to 500 ms later, by which time the browser may no longer
+    // count it as user-initiated. A hidden textarea and execCommand have no such rule.
+    var viaExec = function () {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        var ok = document.execCommand('copy');
+        ta.remove();
+        if (ok) { done(); return true; }
+      } catch (e) {}
+      return false;
+    };
+    var manual = function () { if (!viaExec()) { toast('Copy this link: ' + text, 'info'); } };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, manual); }
+      else { manual(); }
+    } catch (e) { manual(); }
+  }
+  function dl(name, bytes) {
+    var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' })); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 15000);
+  }
+  function redact(s) { return String(s).replace(/\/mcp\/([0-9a-f]{32})\/[0-9a-f]{32,64}/g, '/mcp/$1/<redacted>').replace(/"(viewer_pw|editor_pw|ViewerPassword|EditorPassword)":"[^"]*"/g, '"$1":"<redacted>"'); }
+
   function showDiag() {
     var host = document.getElementById('fcweb-diag');
     if (host) { host.remove(); return; }
@@ -1596,7 +1638,9 @@ window.fcwebNotify = function (text, kind, actions, opts) {
     if (!j.pending) askedToast = false;
     if (!S.holder) {
       if (j.v > S.applied) await applyVersion(j);
-      else if (j.cam) applyCamera(j.cam);
+      // The camera deliberately does NOT travel. Being yanked to someone else's
+      // viewpoint while you are looking at a detail is worse than useful; the objects
+      // are what has to stay in step.
     }
     if (S.mode === 'normal' && S.holder && j.v > S.lastPublished && S.lastPublished > 0 && !S.divergePrompted && !S.silent) {
       // Someone published while we were away: never silently overwrite either side.
@@ -1659,9 +1703,9 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       sendCtl();
       becomeHolder(!!(j.holder === j.name || !j.holder), 'owner');
       if (!S.holder) requestControl(false);
-      toast('Sharing ' + (st.pinned || 'this document') + '. Anyone with the link sees it, now or later.', 'info', [
-        { label: 'Copy link', onClick: function (b) { copy(shareLink(), b); } },
-        { label: 'Stop', onClick: stopSharing }]);
+      // No toast for starting: the page you pressed Start on shows 'Sharing ...' with
+      // the link and a Copy button right beside it.
+      log('share', 'sharing ' + (st.pinned || 'this document'));
       if (j.recreated_after) {
         beacon('evicted', 'owner');
         toast('Your earlier share of ' + (st.pinned || 'this document') + ' was removed from the server (' + (j.recreated_after === 'quota' ? 'to free space' : 'it expired') + '). It is being shared again from your copy.', 'warn');

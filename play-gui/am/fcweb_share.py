@@ -872,9 +872,19 @@ def tick():
         p = _p()
         c = _ctl()
         enabled = p.GetBool('Enabled', False)
-        if (enabled or c.get('session')) and not _pin:
+        # The session follows the document you are WORKING ON. Pinning the first one and
+        # keeping it meant opening another file left everyone watching the old one with
+        # no way to say so. Only the holder re-pins -- a viewer clicking around their own
+        # copy must not redirect the session -- and never onto FreeCAD's own start page.
+        if enabled or c.get('session'):
             d = App.ActiveDocument
-            if d is not None and not (d.FileName or '').startswith('/freecad/'):
+            mine = d is not None and not (d.FileName or '').startswith('/freecad/')
+            mine = mine and not (d.Name or '').startswith('_fcweb_v')     # a mirror of someone else's
+            if mine and _pin != d.Name and (not _pin or c.get('holder') or not c.get('session')):
+                if _pin:
+                    _log('session follows the active document: %s -> %s' % (_pin, d.Name))
+                    set_readonly(False)          # let go of the one we are leaving
+                    globals()['_last_pub_change'] = 0.0
                 pin(d.Name)
         # Read-only is reconciled HERE, every tick, from what the page says about control.
         # A page-initiated set_readonly() can be dropped while the interpreter is busy; a
