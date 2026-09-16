@@ -3896,7 +3896,6 @@ def main():
                      'work genuinely grew.' % (spent, args.budget, after))
                 return True
             dump = []
-            retried = {}
 
             def run_scenario(name, fn):
                 """Run one scenario, harvest its output, and CLOSE its page.
@@ -3919,39 +3918,17 @@ def main():
                     if crashed[0] > crash_mark and len(failures) > mark:
                         raise RuntimeError('renderer died during %s' % name)
                 except Exception as exc:
-                    # Retried ONCE, and only for a renderer that died without an OOM
-                    # kill -- because the cause is now known rather than guessed.
-                    #
-                    # The build box's kernel log carries 17 of these, the earliest a
-                    # full day before the work that was being blamed for them, and
-                    # EVERY ONE is at the same instruction offset:
-                    #
-                    #   chrome-headless[810541]: segfault at 377e0899d000
-                    #     ip 000060312b605554 error 4
-                    #     in chrome-headless-shell[...,603128e67000+9a6d000]
-                    #
-                    #   ip - mapping base = 0x279E554, identical across 17 crashes,
-                    #   different processes and different ASLR layouts.
-                    #
-                    # A fixed file-relative offset is a deterministic site inside the
-                    # browser binary. Our wasm is JIT-compiled and can never land on a
-                    # stable ELF offset, so this is Chromium faulting on the workload,
-                    # not the build under test. Playwright 1.62.0 is the newest image
-                    # published, so there is no browser to upgrade to.
-                    #
-                    # So it is tolerated once and never hidden: both the death and the
-                    # retry are printed, an OOM kill is never retried, and a second
-                    # death fails the run.
+                    # A renderer death is attributed (OOM kill vs segfault, from the kernel
+                    # log) and FAILS the scenario. Until 2026-09-16 one death per scenario
+                    # was retried, because every one of them was a Chromium segfault at a
+                    # fixed offset in chrome-headless-shell (a conservative stack scan
+                    # reading past a mapping) and Playwright v1.62.0 was the newest image.
+                    # The pin moved to v1.63.0 and tools/check-playwright-current.py exists
+                    # precisely so the tolerance could not outlive its cause: a death now
+                    # is either the new browser still faulting -- then re-read that offset
+                    # and say so here -- or this build's own doing.
                     if crashed[0] > crash_mark:
-                        why = _why_died()
-                        print(why, file=sys.stderr)
-                        if 'OOM-killed' not in why and not retried.get(name):
-                            retried[name] = True
-                            del failures[mark:]
-                            print('!! retrying %s once on a fresh browser. A second '
-                                  'death fails the run.' % name, file=sys.stderr)
-                            recycle()
-                            return run_scenario(name, fn)
+                        print(_why_died(), file=sys.stderr)
                     # A renderer crash raises out of whichever page call was in flight, and
                     # it used to take the whole gate with it: main() unwound and every later
                     # scenario went unrun, so one broken subsystem hid every other signal --

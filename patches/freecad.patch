@@ -611,6 +611,119 @@ diff -ruNp a/src/App/Application.cpp b/src/App/Application.cpp
          // Note: realpath is known to cause a buffer overflow because it
          // expands the given path to an absolute path of unknown length.
          // Even setting PATH_MAX does not necessarily solve the problem
+diff -ruNp a/src/Base/FcwebWorker.h b/src/Base/FcwebWorker.h
+--- a/src/Base/FcwebWorker.h
++++ b/src/Base/FcwebWorker.h
+@@ -0,0 +1,109 @@
++// SPDX-License-Identifier: LGPL-2.1-or-later
++// Copyright (c) Virtastic
++
++#ifndef BASE_FCWEBWORKER_H
++#define BASE_FCWEBWORKER_H
++
++// FCWEB (wasm only): run one heavy call on a persistent worker thread while the main thread
++// parks. A document load is one synchronous run of wasm on the browser's main thread; the
++// two calls nothing can yield inside -- BRepTools::Read of a big part and its
++// BRepMesh_IncrementalMesh -- froze the a2plus assembly's open for 3-5 s each
++// (scratchpad/yield-probe.py, gpu-open-profile.py, 2026-09-15/16). Here the call runs on a
++// std::thread and the main thread parks in fcweb_wait_flag() (gl_legacy_stubs.c:
++// Atomics.waitAsync on the done flag, woken by a JS Atomics.notify from the worker -- wasm's
++// own notify does not reach it (gl_legacy_stubs.c) -- holding Qt's resume
++// slot so events queue instead of running C++ meanwhile). The GIL is released for the
++// wait, as Document.cpp's yield point does. ONE thread for the page's lifetime, created on
++// first use: a thread per object, joined on the main thread, cost ~50 ms each (BIMExample
++// 7.4 -> 26.1 s). Only legal on a promising stack -- usable() -- which a load through the
++// Python bridge or a recompute from real input is; callers keep the inline path otherwise.
++// Include AFTER Python.h (any *Py.h does), like every FreeCAD unit that touches the GIL.
++#if defined(__EMSCRIPTEN__)
++
++#include <atomic>
++#include <condition_variable>
++#include <exception>
++#include <functional>
++#include <mutex>
++#include <thread>
++#include <emscripten/threading.h>
++
++extern "C" int fcweb_yield_ok(void);
++extern "C" void fcweb_wait_flag(volatile int* flag);
++extern "C" void fcweb_notify_flag(volatile int* flag);
++
++namespace Base
++{
++
++class FcwebWorker
++{
++public:
++    static bool usable()
++    {
++        return fcweb_yield_ok() != 0;
++    }
++    // Runs fn on the worker, parks the caller until it returns, rethrows what fn threw.
++    // The caller must own everything fn touches until run() returns.
++    static void run(const std::function<void()>& fn)
++    {
++        static FcwebWorker worker;
++        worker.exec(fn);
++    }
++
++private:
++    std::mutex mutex;
++    std::condition_variable wake;
++    const std::function<void()>* job = nullptr;
++    std::exception_ptr error;
++    std::atomic<int> done {0};
++    std::thread thread;
++
++    void exec(const std::function<void()>& fn)
++    {
++        done = 0;
++        error = nullptr;
++        {
++            std::lock_guard<std::mutex> lock(mutex);
++            job = &fn;
++        }
++        if (!thread.joinable()) {
++            thread = std::thread([this]() { loop(); });
++        }
++        wake.notify_one();
++        PyThreadState* ts = PyGILState_Check() ? PyEval_SaveThread() : nullptr;
++        fcweb_wait_flag(reinterpret_cast<volatile int*>(&done));
++        if (ts) {
++            PyEval_RestoreThread(ts);
++        }
++        if (error) {
++            std::rethrow_exception(error);
++        }
++    }
++
++    void loop()
++    {
++        for (;;) {
++            const std::function<void()>* fn = nullptr;
++            {
++                std::unique_lock<std::mutex> lock(mutex);
++                wake.wait(lock, [this]() { return job != nullptr; });
++                fn = job;
++                job = nullptr;
++            }
++            try {
++                (*fn)();
++            }
++            catch (...) {
++                error = std::current_exception();
++            }
++            done = 1;
++            emscripten_futex_wake(&done, 1);
++            fcweb_notify_flag(reinterpret_cast<volatile int*>(&done));   // the wake waitAsync actually hears
++        }
++    }
++};
++
++}  // namespace Base
++
++#endif  // __EMSCRIPTEN__
++#endif  // BASE_FCWEBWORKER_H
 diff -ruNp a/src/Base/Interpreter.cpp b/src/Base/Interpreter.cpp
 --- a/src/Base/Interpreter.cpp
 +++ b/src/Base/Interpreter.cpp
@@ -5055,18 +5168,58 @@ diff -ruNp a/src/Mod/Part/App/AppPart.cpp b/src/Mod/Part/App/AppPart.cpp
      // This is highly experimental and we should keep an eye on it
      // if we have mysterious crashes
      // The argument must be 'Standard_False' to avoid FPE caused by
+diff -ruNp a/src/Mod/Part/App/PropertyTopoShape.cpp b/src/Mod/Part/App/PropertyTopoShape.cpp
+--- a/src/Mod/Part/App/PropertyTopoShape.cpp
++++ b/src/Mod/Part/App/PropertyTopoShape.cpp
+@@ -49,6 +49,9 @@
+ #include "PartPyCXX.h"
+ #include "PropertyTopoShape.h"
+ #include "TopoShapePy.h"
++#if defined(__EMSCRIPTEN__)
++#include <Base/FcwebWorker.h>
++#endif
+ #include "PartFeature.h"
+ 
+ FC_LOG_LEVEL_INIT("App", true, true)
+@@ -691,7 +694,24 @@ void PropertyPartShape::loadFromStream(B
+         reader.exceptions(std::istream::failbit | std::istream::badbit);
+         BRep_Builder builder;
+         TopoDS_Shape shape;
++#if defined(__EMSCRIPTEN__)
++        // FCWEB: the BRep text parse runs on the load worker (Base/FcwebWorker.h) while the
++        // main thread parks until the worker wakes it. The park holds Qt's
++        // resume slot, so events queue instead of running C++ on the main thread meanwhile,
++        // and the page keeps painting. Only the worker touches the reader's zip stream until
++        // the join. The GIL is released for the wait as Document.cpp's yield point does.
++        // Legal only on a promising stack (a load through the Python bridge). The largest
++        // part of the a2plus assembly froze the tab 3.4 s here (gpu-open-profile.py,
++        // 2026-09-16); small shapes cost one wake.
++        if (Base::FcwebWorker::usable()) {
++            Base::FcwebWorker::run([&]() { BRepTools::Read(shape, reader, builder); });
++        }
++        else {
++            BRepTools::Read(shape, reader, builder);
++        }
++#else
+         BRepTools::Read(shape, reader, builder);
++#endif
+         setValue(shape);
+     }
+     catch (const std::exception&) {
 diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 --- a/src/Mod/Part/Gui/SoBrepFaceSet.cpp
 +++ b/src/Mod/Part/Gui/SoBrepFaceSet.cpp
-@@ -37,6 +37,7 @@
+@@ -37,6 +37,9 @@
  #include <Inventor/SoPrimitiveVertex.h>
  #include <Inventor/actions/SoGetBoundingBoxAction.h>
  #include <Inventor/actions/SoGLRenderAction.h>
 +#include <Inventor/actions/SoRayPickAction.h>
++#include <Inventor/SbLine.h>
++#include <cmath>
  #include <Inventor/bundles/SoMaterialBundle.h>
  #include <Inventor/bundles/SoTextureCoordinateBundle.h>
  #include <Inventor/elements/SoLazyElement.h>
-@@ -101,6 +102,13 @@ public:
+@@ -101,6 +104,13 @@ public:
      static SbBool vboAvailable;
      uint32_t indice_array;
      std::map<uint32_t, Buffer> vbomap;
@@ -5080,7 +5233,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
      VBO()
      {
-@@ -493,6 +501,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -493,6 +503,16 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
              &mb,
              mindices,
              &tb,
@@ -5097,7 +5250,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
              tindices,
              nbind,
              mbind,
-@@ -508,6 +526,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -508,6 +528,19 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
  }
  
  //****************************************************************************
@@ -5117,7 +5270,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  // renderSimpleArray: normal and coord from vertex_array;
  // no texture, color, highlight or selection but highet possible speed;
  // all vertices written in one go!
-@@ -716,15 +747,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -716,15 +749,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
          }
      }
  
@@ -5150,7 +5303,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          Binding mbind = this->findMaterialBinding(state);
          Binding nbind = this->findNormalBinding(state);
  
-@@ -1080,6 +1127,18 @@ void SoBrepFaceSet::getBoundingBox(SoGet
+@@ -1080,6 +1129,18 @@ void SoBrepFaceSet::getBoundingBox(SoGet
  }
  
  // this macro actually makes the code below more readable  :-)
@@ -5169,7 +5322,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  #define DO_VERTEX(idx) \
      if (mbind == PER_VERTEX) { \
          pointDetail.setMaterialIndex(matnr); \
-@@ -1110,7 +1169,7 @@ void SoBrepFaceSet::getBoundingBox(SoGet
+@@ -1110,7 +1171,7 @@ void SoBrepFaceSet::getBoundingBox(SoGet
      } \
      vertex.setPoint(coords->get3(idx)); \
      pointDetail.setCoordinateIndex(idx); \
@@ -5178,7 +5331,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
  void SoBrepFaceSet::generatePrimitives(SoAction* action)
  {
-@@ -1247,7 +1306,142 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1247,7 +1308,178 @@ void SoBrepFaceSet::generatePrimitives(S
          }
      }
  
@@ -5232,6 +5385,42 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 +            p->pickBoxesCoord = cid;
 +        }
 +    }
++    // Ray-vs-box slab test in object space. Coin's SoRayPickAction::intersect(box) walks six
++    // planes in double precision plus the cone check; it was 15 ms of a 40 ms pick on the
++    // a2plus assembly once the triangles were culled (2026-09-15). Triangles have no pick
++    // radius, so a face whose box the RAY misses contributes nothing whatever the cone says
++    // -- the plain slab test decides the same set, a hair more generously (the epsilon).
++    // Near/far clipping is left to Coin's per-triangle isBetweenPlanes(), as before.
++    const SbLine& fcwebRay = pickAction->getLine();
++    auto rayHitsBox = [&](const SbBox3f& bb) {
++        const SbVec3f& o = fcwebRay.getPosition();
++        const SbVec3f& d = fcwebRay.getDirection();
++        const SbVec3f& lo = bb.getMin();
++        const SbVec3f& hi = bb.getMax();
++        float sx, sy, sz;
++        bb.getSize(sx, sy, sz);
++        const float e = 1e-4f * std::max(sx, std::max(sy, sz)) + 1e-6f;
++        float tmin = -std::numeric_limits<float>::max(), tmax = std::numeric_limits<float>::max();
++        for (int k = 0; k < 3; ++k) {
++            if (std::fabs(d[k]) < 1e-12f) {
++                if (o[k] < lo[k] - e || o[k] > hi[k] + e) {
++                    return false;
++                }
++                continue;
++            }
++            const float inv = 1.0f / d[k];
++            float t1 = (lo[k] - e - o[k]) * inv, t2 = (hi[k] + e - o[k]) * inv;
++            if (t1 > t2) {
++                std::swap(t1, t2);
++            }
++            tmin = std::max(tmin, t1);
++            tmax = std::min(tmax, t2);
++            if (tmin > tmax) {
++                return false;
++            }
++        }
++        return true;
++    };
 +    auto cullPart = [&]() {
 +        skipPart = false;
 +        if (!pickAction || pi < 0) {
@@ -5240,7 +5429,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 +        int partno = static_cast<int>(piptr - pibegin) - 1;
 +        if (partno >= 0 && partno < static_cast<int>(PRIVATE(this)->pickBoxes.size())) {
 +            const SbBox3f& bb = PRIVATE(this)->pickBoxes[partno];
-+            skipPart = bb.isEmpty() || !pickAction->intersect(bb, TRUE);
++            skipPart = bb.isEmpty() || !rayHitsBox(bb);
 +        }
 +    };
 +    cullPart();
@@ -5321,7 +5510,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          v1 = *viptr++;
          v2 = *viptr++;
          v3 = *viptr++;
-@@ -1322,7 +1516,7 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1322,7 +1554,7 @@ void SoBrepFaceSet::generatePrimitives(S
          }
          pointDetail.setCoordinateIndex(v1);
          vertex.setPoint(coords->get3(v1));
@@ -5330,7 +5519,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
          DO_VERTEX(v2);
          DO_VERTEX(v3);
-@@ -1364,6 +1558,9 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1364,6 +1596,9 @@ void SoBrepFaceSet::generatePrimitives(S
                  }
              }
              trinr = 0;
@@ -5340,7 +5529,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
          }
      }
      if (mode != POLYGON) {
-@@ -1380,6 +1577,7 @@ void SoBrepFaceSet::generatePrimitives(S
+@@ -1380,6 +1615,7 @@ void SoBrepFaceSet::generatePrimitives(S
  }
  
  #undef DO_VERTEX
@@ -5348,7 +5537,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  
  void SoBrepFaceSet::renderHighlight(SoGLRenderAction* action, SelContextPtr ctx)
  {
-@@ -2005,6 +2203,22 @@ void SoBrepFaceSet::renderShape(
+@@ -2005,6 +2241,22 @@ void SoBrepFaceSet::renderShape(
      SbBool texture
  )
  {
@@ -5371,7 +5560,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
      // Can we use vertex buffer objects?
      if (hasVBO) {
          int nbinding = nbind;
-@@ -2067,6 +2281,24 @@ void SoBrepFaceSet::renderShape(
+@@ -2067,6 +2319,24 @@ void SoBrepFaceSet::renderShape(
          }
      }
  
@@ -5399,7 +5588,17 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
 diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProviderExt.cpp
 --- a/src/Mod/Part/Gui/ViewProviderExt.cpp
 +++ b/src/Mod/Part/Gui/ViewProviderExt.cpp
-@@ -1097,7 +1097,18 @@ void ViewProviderPartExt::setupCoinGeome
+@@ -88,6 +88,9 @@
+ 
+ #include "ViewProviderExt.h"
+ #include "ViewProviderPartExtPy.h"
++#if defined(__EMSCRIPTEN__)
++#include <Base/FcwebWorker.h>
++#endif
+ #include "SoBrepEdgeSet.h"
+ #include "SoBrepFaceSet.h"
+ #include "SoBrepPointSet.h"
+@@ -1097,7 +1100,18 @@ void ViewProviderPartExt::setupCoinGeome
      meshParams.Deflection = deflection;
      meshParams.Relative = Standard_False;
      meshParams.Angle = AngDeflectionRads;
@@ -5418,6 +5617,36 @@ diff -ruNp a/src/Mod/Part/Gui/ViewProviderExt.cpp b/src/Mod/Part/Gui/ViewProvide
      meshParams.AllowQualityDecrease = Standard_True;
  
      // Clear triangulation and PCurves from geometry which can slow down the process
+@@ -1107,7 +1121,29 @@ void ViewProviderPartExt::setupCoinGeome
+     BRepTools::Clean(shape, Standard_True);
+ #endif
+ 
++#if defined(__EMSCRIPTEN__)
++    // FCWEB: a large shape is meshed on the load worker (Base/FcwebWorker.h) while the main
++    // thread parks until the worker wakes it. The park holds Qt's
++    // resume slot, so DOM events and timers QUEUE instead of running C++ against the shape
++    // being meshed, the page compositor keeps painting, and Chrome never calls the tab
++    // hung. The GIL is released for the wait like Document.cpp's yield point does (other
++    // Python activations may need it; the bridge serialises calls behind this one). Only
++    // legal on a promising stack (fcweb_yield_ok: a load, a recompute from real input), and
++    // only worth a thread for shapes with many faces: the largest part of the a2plus
++    // assembly froze the tab ~5 s at this call (yield-probe.py, 2026-09-15).
++    int fcwebFaces = 0;
++    for (TopExp_Explorer xp(shape, TopAbs_FACE); xp.More() && fcwebFaces < 64; xp.Next()) {
++        ++fcwebFaces;
++    }
++    if (fcwebFaces >= 64 && Base::FcwebWorker::usable()) {
++        Base::FcwebWorker::run([&]() { BRepMesh_IncrementalMesh(shape, meshParams); });
++    }
++    else {
++        BRepMesh_IncrementalMesh(shape, meshParams);
++    }
++#else
+     BRepMesh_IncrementalMesh(shape, meshParams);
++#endif
+ 
+     // We must reset the location here because the transformation data
+     // are set in the placement property
 diff -ruNp a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
 --- a/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp
 +++ b/src/Mod/PartDesign/Gui/ViewProviderDatum.cpp

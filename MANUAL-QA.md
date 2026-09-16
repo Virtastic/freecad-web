@@ -464,6 +464,15 @@ actionable; "3D view is janky" is not.
   Switching through all 20 workbenches on a clean boot logs nothing else (2026-09-12,
   after the asyncio shim let CAM's asset manager initialise: 14 tool bits, no errors).
 
+- Lines look jagged: desktop FreeCAD 1.1.3 ships with anti-aliasing off (Preferences >
+  Display > 3D View > Anti-Aliasing = None) and so do we. MSAA 2x-8x is available in the same
+  dialog and costs frame rate; changing the shipped default is a product decision, not a bug.
+- In the Addon Manager some READMEs never load (about 10 of 24 in the gate's sample): those
+  are upstream 404s -- macros whose wiki page no longer exists, repositories whose default
+  branch moved -- and desktop shows the same blanks. The proxy is not the cause; the rest of
+  the catalogue, installs and download stats come through it.
+- Wheel over the transparent part of the Tasks overlay scrolls the panel, not the 3D view.
+  Desktop does the same unless the overlay is put in its transparent (mouse-through) mode.
 - Chrome/Edge 137+ only (other browsers are refused up front, having downloaded nothing)
 - First load downloads ~115 MB. Later loads really are cached now — the engine is held in
   Cache Storage, so a return visit fetches **nothing** and reaches Ready in seconds.

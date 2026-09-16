@@ -3892,6 +3892,34 @@ window.fcRunPy = fcRunPy;
       window.addEventListener('pointermove', function () { if (down) arm(); }, true);
       window.addEventListener('wheel', arm, true);
       window.addEventListener('keydown', arm, true);
+      // QT'S ZERO-DELAY TIMERS GO THROUGH A MESSAGE CHANNEL, NOT setTimeout(0).
+      //
+      // Every processEvents(AllEvents) ends in sendNativeEvents' suspend loop: a QWasmTimer
+      // set to 0 ms and a park until it fires (qeventdispatcher_wasm.cpp). QWasmTimer is
+      // window.setTimeout, and Chrome clamps a setTimeout(0) scheduled from inside a timer
+      // callback to 4 ms once the nesting passes five -- which is the steady state of an
+      // event loop driven by timers. Measured 2026-09-16 on the BIMExample render benchmark
+      // (scratchpad/drag-ms.py, 60 camera rotations + updateGui): 16.6 ms per frame with the
+      // main thread 61% idle -- the idle was this clamp. A MessageChannel task has no clamp.
+      // Only Qt's own handlers (Module.qtSuspendResumeControl.eventHandlers) at 0 ms are
+      // rerouted; every other setTimeout on the page is untouched. Ids are negative so
+      // clearTimeout can tell them apart; QWasmTimer clears before it re-arms.
+      (function () {
+        var oS = window.setTimeout, oC = window.clearTimeout, ch = new MessageChannel(), q = new Map(), nid = 0, seen = 0;
+        ch.port1.onmessage = function (e) { var f = q.get(e.data); if (f) { q.delete(e.data); f(); } };
+        function isQt(fn) {
+          if (fn.__fcQt) return true;
+          var m = window.fcInstance, c = m && m.qtSuspendResumeControl; if (!c) return false;
+          var ks = Object.keys(c.eventHandlers); if (ks.length === seen) return false;
+          seen = ks.length; for (var i = 0; i < ks.length; i++) { var h = c.eventHandlers[ks[i]]; if (typeof h === 'function') h.__fcQt = true; }
+          return !!fn.__fcQt;
+        }
+        window.setTimeout = function (fn, ms) {
+          if ((ms | 0) === 0 && typeof fn === 'function' && isQt(fn)) { var id = --nid; q.set(id, fn); ch.port2.postMessage(id); window.__fcQtFast = (window.__fcQtFast | 0) + 1; return id; }
+          return oS.apply(window, arguments);
+        };
+        window.clearTimeout = function (id) { if (id < 0) { q.delete(id); return; } return oC.apply(window, arguments); };
+      })();
       function tick() {
         try {
           var m = window.fcInstance, c = m && m.qtSuspendResumeControl;

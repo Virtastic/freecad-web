@@ -66,7 +66,12 @@ with sync_playwright() as pw:
         else: page.evaluate("(a) => { const el = (" + DEEP + ")(a); el.dispatchEvent(new WheelEvent('wheel', {bubbles: true, cancelable: true, composed: true, clientX: a[0], clientY: a[1], deltaY: a[2], deltaMode: 0})); }", [cx, cy, dy])
     print('==> wheel target', page.evaluate("(a) => { const el = (" + DEEP + ")(a); return el.tagName + '#' + el.id + '.' + el.className; }", [cx, cy]), 'mode', MODE)
     N = int(sys.argv[5]) if len(sys.argv) > 5 else 6; DT = float(sys.argv[6]) if len(sys.argv) > 6 else 0.15
-    if MODE == 'sweep':
+    if MODE == 'drag':
+        page.mouse.move(cx, cy); page.mouse.down(); n = 0; td = time.time()
+        while time.time() - td < 4.0:
+            n += 1; page.mouse.move(cx + int(120 * ((n % 40) / 20.0 - 1)), cy + int(60 * ((n % 60) / 30.0 - 1))); time.sleep(0.02)
+        page.mouse.up(); time.sleep(1.5); cam('after drag'); print('==> gaps during drag', page.evaluate('window.__gap.gaps.splice(0)'))
+    elif MODE == 'sweep':
         for i in range(20): page.mouse.move(cx - 150 + 15 * i, cy); time.sleep(0.05)
         time.sleep(2); cam('mid'); print('==> gaps during 20 sweep moves', page.evaluate('window.__gap.gaps.splice(0)'))
         for i in range(20): page.mouse.move(cx + 150 - 15 * i, cy + 40); time.sleep(0.05)
