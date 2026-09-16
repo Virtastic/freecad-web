@@ -199,6 +199,7 @@ def _st(i):
             holder_seen=0.0,
             pending=None,    # client id asking
             tabs={},         # tab token -> {seen}
+            kicked={},       # client id -> when, so their tab can be told why
             queue=None,      # {id, code, kind, args}
             inflight=None,
             result=None,
@@ -207,6 +208,24 @@ def _st(i):
             turn=threading.Lock(),   # submit() callers take turns instead of being refused
         )
     return s
+
+
+def _people(s):
+    """Everyone currently in the session: the list the panel shows and acts on.
+
+    The client id travels because the actions need something to name a person BY --
+    display names are self-declared and two people can pick the same one. It is only
+    ever handed to people already in the session."""
+    t = _now()
+    out = []
+    for cid, c in s['clients'].items():
+        if t - c['seen'] > WATCHER_TTL_S:
+            continue
+        out.append({'id': cid, 'name': c['name'], 'role': c['role'],
+                    'holder': cid == s['holder'], 'asking': cid == s['pending'],
+                    'idle': int(t - c['seen'])})
+    out.sort(key=lambda x: (not x['holder'], x['name'].lower()))
+    return out
 
 
 def _watching(s):
@@ -261,6 +280,8 @@ HINTS = {
     'not_editor': 'Only editors can do this. Ask the sender for the editor password.',
     'not_holder': 'Request control from the Edit menu, or fc_control_request() over MCP.',
     'not_admin': 'Only the person who shared this session can do this.',
+    'removed': 'The owner removed you from this session. Ask them for a new link.',
+    'no_client': 'That person is no longer in the session.',
     'too_big': 'The document is over the size limit for this server.',
     'quota': 'The server is out of space; the operator can raise FCWEB_SHARE_MAX_GB.',
     'already_pending': 'Someone else is already asking for control. Try again in a moment.',
@@ -355,6 +376,8 @@ def _route(method, path, fullpath, h, body):
     # ---- who is calling -------------------------------------------------------------
     cid = h.get('x-fcweb-client', '')
     client = s['clients'].get(cid)
+    if client is None and cid and cid in s.get('kicked', {}):
+        return _fail(403, 'removed')
     edit_tok = h.get('x-fcweb-edit', '')
     editor_cid = s['edits'].get(edit_tok)
     if client is None and editor_cid is not None:      # a valid edit token proves membership
@@ -410,7 +433,8 @@ def _route(method, path, fullpath, h, body):
             'note': m['note'] if _now() - m.get('note_t', 0) < 60 else '',   # an activity line, not a label
             'holder': {'name': _name(s, s['holder']), 'silent': stale} if s['holder'] else None,
             'pending': {'name': _name(s, s['pending'])} if s['pending'] else None,
-            'watching': _watching(s), 'expires': m['expires'], 'owner': m.get('owner', ''),
+            'watching': _watching(s), 'people': _people(s),
+            'expires': m['expires'], 'owner': m.get('owner', ''),
             # whether a password is in force, for the owner's Sharing page: the page never
             # sees the passwords themselves after they are set
             'has_pw': {'viewer': bool(m.get('pw_view')), 'editor': bool(m.get('pw_edit'))} if admin else None,
@@ -562,6 +586,32 @@ def _route(method, path, fullpath, h, body):
             m['env_v'] += 1
             _save_meta(i, m)
         return _json(200, {'env_v': m['env_v']})
+
+    if method == 'POST' and sub == '/kick':
+        # The owner's session, the owner's call. Removing the client drops their edit
+        # token with it, so a kicked editor cannot publish on the way out; their tab
+        # discovers it on the next poll and says so.
+        if not admin:
+            return _fail(403, 'not_admin')
+        try:
+            b = json.loads(body or b'{}')
+        except Exception:
+            return _fail(400, 'bad_request')
+        who = str(b.get('client', ''))
+        c = s['clients'].pop(who, None)
+        if c is None:
+            return _fail(404, 'no_client')
+        for tok, owner_cid in list(s['edits'].items()):
+            if owner_cid == who:
+                s['edits'].pop(tok, None)
+        if s['holder'] == who:
+            s['holder'] = None
+        if s['pending'] == who:
+            s['pending'] = None
+        s['kicked'][who] = _now()
+        _activity(m, s, None, 'removed %s from the session' % c['name'])
+        _save_meta(i, m)
+        return _json(200, {'ok': True, 'removed': c['name']})
 
     if method == 'PUT' and sub == '/passwords':
         try:
@@ -746,6 +796,7 @@ def selftest():
     st, j, _, _ = call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)
     assert j['holder']['name'] == 'Alice' and j['you']['holder'] is True
     assert j['has_pw'] is None, 'has_pw must be admin-only'
+    assert [x['name'] for x in j['people']] == ['Alice'] and j['people'][0]['holder'], j['people']
     jo = call('GET', '/share/%s/v' % sid, X_Fcweb_Key=key)[1]
     assert jo['has_pw'] == {'viewer': False, 'editor': False}, jo['has_pw']
 
@@ -789,6 +840,9 @@ def selftest():
     assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)[1]['pending']['name'] == 'Bob'
     assert call('POST', '/share/%s/control/grant' % sid, {}, X_Fcweb_Edit=oedit)[1]['holder'] == 'Bob'
     you = call('GET', '/share/%s/v' % sid, X_Fcweb_Client=bob)[1]['you']
+    ppl = {x['name']: x for x in call('GET', '/share/%s/v' % sid, X_Fcweb_Client=bob)[1]['people']}
+    assert set(ppl) >= {'Alice', 'Bob'} and ppl['Bob']['id'] == bob, ppl
+    assert ppl['Bob']['holder'] and not ppl['Alice']['holder'], ppl      # Bob was just granted control
     assert you['holder'] is True and you['edit'], 'a granted viewer must receive an edit token'
     assert call('PUT', '/share/' + sid, b'BOB', X_Fcweb_Edit=you['edit'])[1]['v'] == 2
     assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=cy)[1]['you']['edit'] != you['edit']
@@ -886,6 +940,16 @@ def selftest():
     assert outs['A']['ok'] and outs['B']['ok'] and sorted(seen) == ['A', 'B'], (outs, seen)
     assert call('DELETE', '/share/%s/agent' % sid, X_Fcweb_Key=key)[0] == 200
     assert call('POST', '/mcp/%s/%s' % (sid, tok2))[0] == 404             # AllowAgent off
+
+    # kick: the owner removes a client; their token dies with them and they are told
+    st, j, _, _ = call('POST', '/share/%s/join' % sid, {'name': 'Mallory', 'viewer_pw': 'v1'})
+    mal = j['client']
+    assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=mal)[0] == 200
+    assert call('POST', '/share/%s/kick' % sid, {'client': mal}, X_Fcweb_Client=mal)[0] == 403   # not the owner
+    assert call('POST', '/share/%s/kick' % sid, {'client': mal}, X_Fcweb_Key=key)[1]['removed'] == 'Mallory'
+    st, j, _, _ = call('GET', '/share/%s/v' % sid, X_Fcweb_Client=mal)
+    assert st == 403 and j['code'] == 'removed' and j['hint'], j
+    assert call('POST', '/share/%s/kick' % sid, {'client': 'nope'}, X_Fcweb_Key=key)[0] == 404
 
     # durability: no expiry -> served 30 simulated days later; expiry -> 404 after it
     clock[0] += 30 * 86400
