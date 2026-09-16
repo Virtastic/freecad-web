@@ -1782,15 +1782,19 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       S.expServer = exp;
       try { await api('PUT', '/share/' + S.id + '/expiry', JSON.stringify({ expires: exp || null }), { 'Content-Type': 'application/json' }); log('share', exp ? 'expires ' + new Date(exp * 1000).toLocaleDateString() : 'no expiry'); } catch (e) { fail('share', e); }
     }
-    if (st.agent && (!st.agent_url || st.regen_agent)) {
+    // Arm ONLY on an explicit press. st.agent is a saved preference: minting from it
+    // meant pressing Start sharing re-opened the MCP endpoint, and announced it, because
+    // the box had been ticked at some point in the past.
+    if (st.agent && (st.agent_arm || st.regen_agent) && (!st.agent_url || st.regen_agent)) {
       try {
         var r = await api('POST', '/share/' + S.id + '/agent');
         var url = r.json.url.startsWith('/') ? location.origin + r.json.url : r.json.url;
-        setParam('AgentUrl', url); S.agentUrl = url; S.tab = null;
+        setParam('AgentUrl', url); setParam('AgentArm', false); S.agentUrl = url; S.tab = null;
         log('mcp', 'MCP endpoint armed: /mcp/' + S.id.slice(0, 8) + '/' + url.slice(-32, -28) + '…');
         toast('AI assistant enabled. Paste the MCP link from Edit → Share Session into your AI client.', 'info', [{ label: 'Copy MCP link', onClick: function (b) { copy(url, b); } }]);
       } catch (e) { fail('mcp', e); toast(e.message, 'error'); }
     } else if (!st.agent && st.agent_url) {
+      // turned off: close the endpoint and forget the link
       try { await api('DELETE', '/share/' + S.id + '/agent'); } catch (e) { fail('mcp', e); }
       setParam('AgentUrl', ''); S.agentUrl = ''; S.tab = null; log('mcp', 'MCP endpoint closed');
     } else if (st.agent && st.agent_url) { S.agentUrl = st.agent_url; }

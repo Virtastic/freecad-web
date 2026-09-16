@@ -645,14 +645,16 @@ def _paint_mcp(f):
     on = p.GetBool('AllowAgent', False)
     sharing = bool(c.get('session')) and not c.get('ended')
     url = p.GetString('AgentUrl', '') or (c.get('agentUrl') or '')
+    arming = p.GetBool('AgentArm', False)
     if not sharing:
         st = 'Off \u2014 start a session on the General page first; the assistant attaches to one.'
     elif on and url:
         st = 'On \u2014 paste the link into your AI client. This tab must stay open.'
-    elif on:
+    elif arming:
         st = 'Starting the endpoint\u2026'
     else:
         st = 'Off'
+    on = bool(on and (url or arming))
     f.lMcpStatus.setText(st)
     f.btnMcpStart.setEnabled(sharing and not on)
     f.btnMcpStop.setEnabled(bool(on))
@@ -794,13 +796,17 @@ class FcwebMcpPage(object):
         _try(lambda: _paint_mcp(self.form))
 
     def _enable(self):
-        _p().SetBool('AllowAgent', True)
+        p = _p()
+        p.SetBool('AllowAgent', True)
+        p.SetBool('AgentArm', True)      # this press, not a remembered preference
         App.saveParameter()
         _try(lambda: self.form.lMcpStatus.setText('Starting the endpoint\u2026'))
         _later(self._repaint, 2.5)
 
     def _disable(self):
-        _p().SetBool('AllowAgent', False)
+        p = _p()
+        p.SetBool('AllowAgent', False)
+        p.SetBool('AgentArm', False)
         App.saveParameter()
         _try(lambda: self.form.leAgentUrl.setText(''))
         _later(self._repaint, 1.5)
@@ -1091,6 +1097,11 @@ def tick():
             'enabled': enabled, 'pinned': _pin, 'name': p.GetString('DisplayName', ''),
             'include_env': p.GetBool('IncludeEnv', True), 'agent': p.GetBool('AllowAgent', False),
             'regen_agent': p.GetBool('RegenerateAgent', False),
+            # A one-shot request, set only by the Enable button. AllowAgent alone is a
+            # SAVED preference, and arming on that meant starting a share re-opened the
+            # endpoint from a box someone ticked days ago, announced by a toast they did
+            # not ask for.
+            'agent_arm': p.GetBool('AgentArm', False),
             'expires': p.GetInt('Expires', 0), 'session': p.GetString('SessionId', ''),
             'key': p.GetString('WriteKey', ''), 'agent_url': p.GetString('AgentUrl', ''),
             'pw_pending': os.path.exists(PWFILE), 'staged': staged, 'revert_t': _revert_t,
