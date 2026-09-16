@@ -381,7 +381,6 @@ COMMANDS = (
     ('Fcweb_ShareSession', _Cmd('Share Session...', 'Share this document as a live, durable link', 'share')),
     ('Fcweb_RequestControl', _Cmd('Request Control', 'Ask the current editor for control of the shared session', 'request')),
     ('Fcweb_TakeControl', _Cmd('Take Control', 'Take control now; the current editor keeps their unpublished work as a separate document', 'force')),
-    ('Fcweb_ReleaseControl', _Cmd('Release Control', 'Hand control of the shared session back', 'release')),
 )
 
 _ICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
@@ -428,7 +427,7 @@ def ensure_menu():
         act.setEnabled(cmd.IsActive())
         edit.addAction(act)
         _actions[name] = act
-    _log('Edit menu: Share Session, Request Control, Release Control installed')
+    _log('Edit menu: Share Session, Request Control, Take Control installed')
     return True
 
 
