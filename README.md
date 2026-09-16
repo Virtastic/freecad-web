@@ -80,6 +80,8 @@ These are real constraints, stated up front rather than discovered:
   order, linking, staging, deploy, and a frank record of every trap that cost real time.
 - **[MANUAL-QA.md](MANUAL-QA.md)** — the 20-minute human pass, scoped to the three things
   automation is structurally blind to.
+- **[SHARING.md](SHARING.md)** — shared sessions and the AI assistant over MCP: sending a
+  link, joining one, passing control, connecting an AI client, and what the operator turns on.
 - **[QUICKSTART.md](QUICKSTART.md)** — running it yourself with Docker: the three
   install paths, troubleshooting, updating, uninstalling.
 - **[infra/README.md](infra/README.md)** — serving and deployment.
