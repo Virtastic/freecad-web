@@ -152,8 +152,10 @@ def _join_form(page, name='Bob', vpw='', epw=''):
         const go = document.getElementById('ld-go');
         if (go) go.click();
       };
-      new MutationObserver(fill).observe(document.documentElement, {attributes: true, subtree: true, attributeFilter: ['hidden']});
-      setInterval(fill, 300);
+      // A plain poll, not a MutationObserver: an init script runs at document-start, where
+      // document.documentElement does not exist yet and observe() throws, taking the rest of
+      // the script with it.
+      setInterval(fill, 250);
     })();""" % (json.dumps(name), json.dumps(vpw)))
 
 
