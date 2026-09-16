@@ -68,7 +68,11 @@ def scenario_edges(ctx, url, args, fail):
 
     # 4. diagnostics: opens, and the bug-report copy contains no secret. The owner has an
     #    MCP URL in play, so the ring has something to redact.
-    s1.run_python("import FreeCAD as A\nA.ParamGet(%r).SetBool('AllowAgent', True)" % gs.GROUP)
+    # AgentArm is what the Enable button sets; AllowAgent alone is a remembered
+    # preference and no longer mints a URL by itself.
+    s1.run_python("import FreeCAD as A\np = A.ParamGet(%r)\n"
+                  "p.SetBool('AllowAgent', True)\n"
+                  "p.SetBool('AgentArm', True)" % gs.GROUP)
     if not gs._wait_state(s1, lambda x: x.get('agentUrl'), 40):
         fail('no MCP URL minted for the diagnostics check')
     # Diagnostics opens from the Session page's button, which asks the browser half

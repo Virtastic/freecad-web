@@ -3614,6 +3614,8 @@ SCENARIOS = (
     # Shared sessions (tools/gate_session.py). Two browser contexts each, so not in "all".
     ('share',         _gs.scenario_share,     False,
      'publishes a shared document that a second browser opens, follows live, and resumes'),
+    ('empty',         _gs.scenario_empty,     False,
+     'publishes a document opened after the share began, and says so when there is none'),
     ('control',       _gs.scenario_control,   False,
      'enforces read-only, hands control over, keeps displaced work, auto-grants a vanished holder'),
     ('mcp',           _gs.scenario_mcp,       False,

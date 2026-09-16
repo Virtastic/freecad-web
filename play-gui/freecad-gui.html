@@ -1971,6 +1971,14 @@ window.fcwebNotify = function (text, kind, actions, opts) {
         if (st.enabled && !S.id) await ownerEnsure(st);
         else if (!st.enabled && S.id && S.key) await stopSharing();
         if (S.id) { S.name = st.name || S.name; await ownerSettings(st); }
+        // Sharing with no document open is the one state that looks like a broken link:
+        // the visitor gets a working FreeCAD with nothing in it. Say so to the person who
+        // can fix it, once, and take it back the moment they open something.
+        if (S.id && st.mine === 0 && !S.emptyWarned) {
+          S.emptyWarned = true;
+          log('share', 'sharing with no document open: nothing to publish');
+          toast('Nothing to share yet. Open or create a document and everyone with your link will see it.', 'warn');
+        } else if (st.mine > 0) { S.emptyWarned = false; }
       }
     }
     if (st.revert_t && st.revert_t !== S.revertSeen && !S.holder && S.id) {

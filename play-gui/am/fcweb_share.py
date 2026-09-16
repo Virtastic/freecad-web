@@ -109,6 +109,18 @@ class _Observer(object):
         except Exception:
             pass
 
+    # Opening or creating a document is itself a change worth publishing: a file opened
+    # and not yet edited fired none of the object slots, so the session stayed clean and
+    # the audience never got the file at all.
+    def slotCreatedDocument(self, doc):
+        self._touch(doc)
+
+    def slotDeletedDocument(self, doc):
+        self._touch(doc)
+
+    def slotFinishRestoreDocument(self, doc):
+        self._touch(doc)
+
     def slotChangedObject(self, obj, prop=None):
         self._touch(getattr(obj, 'Document', None))
 
@@ -1043,7 +1055,11 @@ def tick():
         staged = False
         # A joiner who took control publishes too: their ephemeral home has the sharing group
         # stripped (redaction), so 'Enabled' is false there; the page's CTL says it is a session.
-        if (enabled or c.get('session')) and _pin and c.get('holder'):
+        # NOT gated on _pin: the pin is only 'which document has focus', and a session
+        # whose owner sat on the Start page published NOTHING -- every session on the live
+        # server was at v0 and every visitor saw an empty FreeCAD. publish() decides for
+        # itself, from _my_docs().
+        if (enabled or c.get('session')) and c.get('holder'):
             staged = publish()
             if c.get('role') == 'admin' and (_env_hash is None or _tick_n % 20 == 0):
                 snapshot_env()          # right away on first enable, then every ~30 s
@@ -1107,6 +1123,7 @@ def tick():
             'pw_pending': os.path.exists(PWFILE), 'staged': staged, 'revert_t': _revert_t,
             'revert_undone': _revert_undone,
             'cam': _camera(), 'docs': sorted(App.listDocuments().keys()),
+            'mine': len(_my_docs()),          # 0 => the audience has nothing to open
             'active': App.ActiveDocument.Name if App.ActiveDocument else None,
             'obs_changed': _obs.changed if _obs else None, 'last_pub': _last_pub_change,
             'guard': bool(_obs and _obs.guard), 'tick': _tick_n,

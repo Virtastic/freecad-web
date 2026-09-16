@@ -276,6 +276,55 @@ def scenario_share(ctx, url, args, fail):
     return s2
 
 
+def scenario_empty(ctx, url, args, fail):
+    """Share BEFORE opening anything, then open a document -- the audience must get it.
+
+    This is the shape the live server was found in: four sessions, every one at v0, every
+    visitor looking at an empty FreeCAD with only the Start tab. Publishing was gated on a
+    pinned document, and nothing is pinned while the Start page has focus, so a share begun
+    from a fresh window never published -- not then, and not after a document was opened.
+    """
+    S = _Session()
+    s1 = S(ctx, url, args.timeout)
+    if not s1.load():
+        fail('owner never reached Ready (%s)' % s1.phase())
+        return None
+    _enable_sharing(s1)
+    st = _wait_state(s1, lambda x: x.get('id'), 40)
+    if not st:
+        fail('sharing never started with no document open (ring: %s)' % _ring(s1)[-5:])
+        return s1
+    sid = st['id']
+    # nothing to publish, and the owner is TOLD rather than left with a link to an empty app
+    if not _wait(s1, 'sharing with no document open', 30):
+        fail('the owner was not told the share has nothing in it')
+    else:
+        print('==> sharing with nothing open says so')
+    # now open one, the way the person did
+    s1.run_python(MAKE_DOC_PY)
+    if not _wait(s1, 'GATE_DOC ready', 120, 'console'):
+        fail('the gate document was not created')
+        return s1
+    if not _wait(s1, 'publish: pushed v1', 60):
+        fail('a document opened AFTER sharing began was never published (ring: %s)' % _ring(s1)[-6:])
+        return s1
+    print('==> a document opened after the share began was published')
+    s2 = _viewer(ctx, url, sid, args)
+    if not s2.load():
+        fail('viewer never reached Ready in session mode (%s)' % s2.phase())
+        return s1
+    if not _wait(s2, 'share applied v', 90, 'console'):
+        fail('the viewer never applied a version (ring: %s)' % _ring(s2)[-6:])
+        return s1
+    v = _volumes(s2, fail)
+    if not any(abs(x['volume'] - 6000.0) < 1e-6 for x in v.values()):
+        fail('the viewer sees %r, expected the 6000.0 box' % v)
+    else:
+        print('==> the viewer opened it: the tabs are no longer just "Start"')
+    s2.page.close()
+    return s1
+
+
 def scenario_control(ctx, url, args, fail):
     """Read-only is enforced, handover flips roles, force keeps displaced work, auto-grant."""
     s1, sid = _owner_up(ctx, url, args, fail, extra=_pw_py(editor='e1'))
@@ -401,7 +450,7 @@ def scenario_control(ctx, url, args, fail):
 
 def scenario_mcp(ctx, url, args, fail):
     """The MCP endpoint from the exact URL the page shows: everything, seeing, live edit."""
-    s1, sid = _owner_up(ctx, url, args, fail, extra="p.SetBool('AllowAgent', True)")
+    s1, sid = _owner_up(ctx, url, args, fail, extra="p.SetBool('AllowAgent', True); p.SetBool('AgentArm', True)")
     if not sid:
         return s1
     st = _wait_state(s1, lambda x: x.get('agentUrl'), 40)
