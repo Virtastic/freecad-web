@@ -1,7 +1,7 @@
 """ViewProviderExt.cpp section of patches/freecad.patch, regenerated wholesale (CRLF file):
   1. InParallel = false on wasm (measured slower, see comment), and
-  2. the visual tessellation of a large shape runs on a worker thread while the main thread
-     parks in fcweb_yield_now() -- the tab keeps painting and the input queue stays queued
+  2. the visual tessellation of a large shape runs on the load worker (Base/FcwebWorker.h)
+     while the main thread parks -- the tab keeps painting and the input queue stays queued
      (the park holds Qt's resume slot, gl_legacy_stubs.c), so no C++ runs on the main thread
      against the shape being meshed. The 42 MB a2plus assembly's largest part froze the tab
      for ~5 s per open at that call (yield-probe.py, 2026-09-15)."""
@@ -14,15 +14,6 @@ WORK = os.path.join(ROOT, 'scratchpad', 'vpext-work')
 
 INCLUDES_OLD = b'#include <BRepMesh_IncrementalMesh.hxx>\n'
 INCLUDES_NEW = b'''#include <BRepMesh_IncrementalMesh.hxx>
-#if defined(__EMSCRIPTEN__)
-#include <atomic>
-#include <exception>
-#include <thread>
-#include <emscripten/threading.h>
-// FCWEB: gl_legacy_stubs.c -- park one browser turn on a promising stack (see setupCoinGeometry).
-extern "C" int fcweb_yield_ok(void);
-extern "C" void fcweb_wait_flag(volatile int* flag);
-#endif
 '''
 
 PAR_OLD = b'    meshParams.InParallel = Standard_True;\n'
@@ -42,8 +33,8 @@ PAR_NEW = b'''#if defined(__EMSCRIPTEN__)
 
 MESH_OLD = b'    BRepMesh_IncrementalMesh(shape, meshParams);\n'
 MESH_NEW = b'''#if defined(__EMSCRIPTEN__)
-    // FCWEB: a large shape is meshed on a worker thread while the main thread parks one
-    // until the worker wakes it (gl_legacy_stubs.c fcweb_wait_flag). The park holds Qt's
+    // FCWEB: a large shape is meshed on the load worker (Base/FcwebWorker.h) while the main
+    // thread parks until the worker wakes it. The park holds Qt's
     // resume slot, so DOM events and timers QUEUE instead of running C++ against the shape
     // being meshed, the page compositor keeps painting, and Chrome never calls the tab
     // hung. The GIL is released for the wait like Document.cpp's yield point does (other
@@ -55,28 +46,8 @@ MESH_NEW = b'''#if defined(__EMSCRIPTEN__)
     for (TopExp_Explorer xp(shape, TopAbs_FACE); xp.More() && fcwebFaces < 64; xp.Next()) {
         ++fcwebFaces;
     }
-    if (fcwebFaces >= 64 && fcweb_yield_ok()) {
-        std::atomic<int> fcwebDone {0};
-        std::exception_ptr fcwebErr;
-        std::thread fcwebMesher([&]() {
-            try {
-                BRepMesh_IncrementalMesh(shape, meshParams);
-            }
-            catch (...) {
-                fcwebErr = std::current_exception();
-            }
-            fcwebDone = 1;
-            emscripten_futex_wake(&fcwebDone, 1);
-        });
-        PyThreadState* fcwebTs = PyGILState_Check() ? PyEval_SaveThread() : nullptr;
-        fcweb_wait_flag(reinterpret_cast<volatile int*>(&fcwebDone));
-        if (fcwebTs) {
-            PyEval_RestoreThread(fcwebTs);
-        }
-        fcwebMesher.join();
-        if (fcwebErr) {
-            std::rethrow_exception(fcwebErr);
-        }
+    if (fcwebFaces >= 64 && Base::FcwebWorker::usable()) {
+        Base::FcwebWorker::run([&]() { BRepMesh_IncrementalMesh(shape, meshParams); });
     }
     else {
         BRepMesh_IncrementalMesh(shape, meshParams);
@@ -89,7 +60,9 @@ MESH_NEW = b'''#if defined(__EMSCRIPTEN__)
 src = io.open(os.path.join(ROOT, 'scratchpad', 'tree113', REL), 'rb').read()
 assert b'\r\n' in src
 mod = src
-for old, new in [(INCLUDES_OLD, INCLUDES_NEW), (PAR_OLD, PAR_NEW), (MESH_OLD, MESH_NEW)]:
+INC_OLD = b'#include "ViewProviderPartExtPy.h"\n'
+INC_NEW = INC_OLD + b'#if defined(__EMSCRIPTEN__)\n#include <Base/FcwebWorker.h>\n#endif\n'
+for old, new in [(INC_OLD, INC_NEW), (PAR_OLD, PAR_NEW), (MESH_OLD, MESH_NEW)]:
     old = old.replace(b'\n', b'\r\n'); new = new.replace(b'\n', b'\r\n')
     assert mod.count(old) == 1, old[:40]
     mod = mod.replace(old, new)

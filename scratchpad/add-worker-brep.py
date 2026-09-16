@@ -10,16 +10,10 @@ REL = 'src/Mod/Part/App/PropertyTopoShape.cpp'
 P = os.path.join(ROOT, 'patches', 'freecad.patch')
 WORK = os.path.join(ROOT, 'scratchpad', 'brep-work')
 
-INC_OLD = b'#include <BRepTools.hxx>\n'
-INC_NEW = b'''#include <BRepTools.hxx>
+INC_OLD = b'#include "TopoShapePy.h"\n'
+INC_NEW = b'''#include "TopoShapePy.h"
 #if defined(__EMSCRIPTEN__)
-#include <atomic>
-#include <exception>
-#include <thread>
-#include <emscripten/threading.h>
-// FCWEB: gl_legacy_stubs.c -- park one browser turn on a promising stack (see loadFromStream).
-extern "C" int fcweb_yield_ok(void);
-extern "C" void fcweb_wait_flag(volatile int* flag);
+#include <Base/FcwebWorker.h>
 #endif
 '''
 
@@ -31,36 +25,16 @@ READ_OLD = b'''        BRep_Builder builder;
 READ_NEW = b'''        BRep_Builder builder;
         TopoDS_Shape shape;
 #if defined(__EMSCRIPTEN__)
-        // FCWEB: the BRep text parse runs on a worker thread while the main thread parks one
-        // until the worker wakes it (gl_legacy_stubs.c fcweb_wait_flag). The park holds Qt's
+        // FCWEB: the BRep text parse runs on the load worker (Base/FcwebWorker.h) while the
+        // main thread parks until the worker wakes it. The park holds Qt's
         // resume slot, so events queue instead of running C++ on the main thread meanwhile,
         // and the page keeps painting. Only the worker touches the reader's zip stream until
         // the join. The GIL is released for the wait as Document.cpp's yield point does.
         // Legal only on a promising stack (a load through the Python bridge). The largest
         // part of the a2plus assembly froze the tab 3.4 s here (gpu-open-profile.py,
-        // 2026-09-16); small shapes cost a thread spawn and one turn.
-        if (fcweb_yield_ok()) {
-            std::atomic<int> fcwebDone {0};
-            std::exception_ptr fcwebErr;
-            std::thread fcwebParser([&]() {
-                try {
-                    BRepTools::Read(shape, reader, builder);
-                }
-                catch (...) {
-                    fcwebErr = std::current_exception();
-                }
-                fcwebDone = 1;
-                emscripten_futex_wake(&fcwebDone, 1);
-            });
-            PyThreadState* fcwebTs = PyGILState_Check() ? PyEval_SaveThread() : nullptr;
-            fcweb_wait_flag(reinterpret_cast<volatile int*>(&fcwebDone));
-            if (fcwebTs) {
-                PyEval_RestoreThread(fcwebTs);
-            }
-            fcwebParser.join();
-            if (fcwebErr) {
-                std::rethrow_exception(fcwebErr);
-            }
+        // 2026-09-16); small shapes cost one wake.
+        if (Base::FcwebWorker::usable()) {
+            Base::FcwebWorker::run([&]() { BRepTools::Read(shape, reader, builder); });
         }
         else {
             BRepTools::Read(shape, reader, builder);
