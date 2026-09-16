@@ -336,15 +336,22 @@ _LOOK_EXACT = set(['Std_Refresh', 'Std_SelectAll', 'Std_BoxSelection', 'Std_BoxE
                    'Std_ViewFitSelection', 'Std_SceneInspector', 'Std_DependencyGraph',
                    'Std_ProjectInfo', 'Std_ProjectUtil', 'Std_TextDocument'])
 _greyed = []
+_greyed_on = False
 
 
 def _grey_commands(on):
     """Disable, or restore, every action that would change the document.
 
+    Only on a real transition: this walks the whole widget tree, and set_readonly runs on
+    every applied version as well as every control change, so repeating the walk made the
+    interpreter the slowest thing in the tab.
+
     An allow-list rather than a deny-list: there are 459 commands, and one missed from a
     deny-list is a hole a watcher can edit through. Greying is also what tells someone
     BEFORE they click that this is not theirs to edit."""
-    global _greyed
+    global _greyed, _greyed_on
+    if bool(on) == _greyed_on:
+        return              # already in this state: do not walk the widget tree again
     Gui = _gui()
     if Gui is None:
         return
@@ -360,6 +367,7 @@ def _grey_commands(on):
                 except RuntimeError:
                     pass
             _greyed = []
+            _greyed_on = False
             return
         fresh = []
         for a in mw.findChildren(QtGui.QAction):
@@ -374,6 +382,7 @@ def _grey_commands(on):
             except RuntimeError:
                 continue
         _greyed = _greyed + fresh
+        _greyed_on = True
         if fresh:
             _log('read-only: %d editing commands greyed out' % len(fresh))
     except Exception as e:

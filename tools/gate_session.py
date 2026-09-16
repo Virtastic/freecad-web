@@ -81,7 +81,7 @@ def _dump(s, tag):
 
 def _state(s):
     try:
-        return s.page.evaluate('({id: window.__fcSession.id, holder: window.__fcSession.holder, role: window.__fcSession.role, v: window.__fcSession.v, applied: window.__fcSession.applied, silent: window.__fcSession.silent, ended: window.__fcSession.ended, agentUrl: window.__fcSession.agentUrl, tab: window.__fcSession.tab, holderName: window.__fcSession.holderName, note: window.__fcSession.note, cam: window.__fcSession.cam})')
+        return s.page.evaluate('({id: window.__fcSession.id, holder: window.__fcSession.holder, role: window.__fcSession.role, v: window.__fcSession.v, applied: window.__fcSession.applied, silent: window.__fcSession.silent, ended: window.__fcSession.ended, agentUrl: window.__fcSession.agentUrl, tab: window.__fcSession.tab, holderName: window.__fcSession.holderName, note: window.__fcSession.note, edit: !!window.__fcSession.edit, cam: window.__fcSession.cam})')
     except Exception:
         return {}
 
@@ -298,7 +298,7 @@ def scenario_control(ctx, url, args, fail):
     # 2. a PLAIN VIEWER asks (no editor password) and the owner grants with a real click
     if _state(s2).get('role') != 'viewer':
         fail('the second browser should have joined as a viewer, got %r' % _state(s2).get('role'))
-    s2.page.evaluate('window.fcwebShareRequest(false)')
+    s2.page.evaluate('window.fcwebShareRequest(false); null')
     try:
         s1.page.click('text=Grant', timeout=20000)
     except Exception as e:
@@ -324,15 +324,15 @@ def scenario_control(ctx, url, args, fail):
         print('==> Bob\'s edit reached the owner: volume 15000.0')
     # 2b. a viewer cannot TAKE control: forcing without the editor password is refused,
     #     and the session's holder does not move.
-    s1.page.evaluate('window.fcwebShareRequest(true)')     # owner takes it back to set up
+    s1.page.evaluate('window.fcwebShareRequest(true); null')     # owner takes it back to set up
     _wait_state(s1, lambda x: x.get('holder'), 30)
     s3 = _viewer(ctx, url, sid, args, name='Eve')          # another plain viewer
     if s3.load():
         _wait(s3, 'share applied v', 90, 'console')
         s3.page.evaluate('window.__fcNoPrompt = true')
-        s3.page.evaluate('window.fcwebShareRequest(true)')
+        s3.page.evaluate('window.fcwebShareRequest(true); null')
         time.sleep(1.5)
-        # the toast asks for the editor password; this viewer does not have it
+        # the toast asks for the editor password; Eve declines it
         s3.page.evaluate('Array.from(document.querySelectorAll("#fcweb-toasts button")).filter(b => b.textContent === "Cancel").forEach(b => b.click())')
         time.sleep(6)
         if _state(s3).get('holder'):
@@ -340,24 +340,36 @@ def scenario_control(ctx, url, args, fail):
         elif not _state(s1).get('holder'):
             fail('the owner lost control to a viewer who could not force')
         else:
-            print('==> a viewer cannot take control without the editor password')
+            print('==> a viewer who declines the password does not take control')
+        # ...and with the password typed into that same toast, she does
+        s3.page.evaluate('window.fcwebShareRequest(true); null')
+        time.sleep(2)
+        if not s3.page.evaluate('!!document.querySelector("#fcweb-toasts input[type=password]")'):
+            fail('Take control did not ask a plain viewer for the editor password')
+        else:
+            s3.page.fill('#fcweb-toasts input[type=password]', 'e1')
+            s3.page.evaluate('Array.from(document.querySelectorAll("#fcweb-toasts button")).filter(b => b.textContent === "Take control").forEach(b => b.click())')
+            if not _wait_state(s3, lambda x: x.get('holder'), 30):
+                fail('the editor password typed into the toast did not take control')
+            else:
+                print('==> the editor password, typed into the toast, takes control')
         s3.page.close()
-    # 3. force: Bob edits, owner forces immediately; Bob's unpublished edit must survive
-    # Step 2b handed control back to the owner, so Bob must hold it again before an
-    # unpublished edit of his is his to lose. He learns the editor password and takes it.
-    s2.page.evaluate('window.fcwebShareRequest(true)')
-    time.sleep(1.5)
-    # type the editor password into the toast's field and press its button, as a person would
-    if not s2.page.evaluate('!!document.querySelector("#fcweb-toasts input[type=password]")'):
-        fail('Take control did not ask for the editor password in a toast')
-    s2.page.fill('#fcweb-toasts input[type=password]', 'e1')
-    s2.page.evaluate('Array.from(document.querySelectorAll("#fcweb-toasts button")).filter(b => b.textContent === "Take control").forEach(b => b.click())')
+        s3.page.close()
+    # 3. force: Bob edits, owner forces immediately; Bob's unpublished edit must survive.
+    # Bob was GRANTED control earlier, and a grant mints an edit token, so he takes it
+    # back without being asked for anything -- that is the point of granting.
+    time.sleep(3)
+    if not _state(s2).get('edit'):
+        fail('being granted control did not leave Bob with an edit token')
+    s2.page.evaluate('window.fcwebShareRequest(true); null')
     if not _wait_state(s2, lambda x: x.get('holder'), 30):
-        fail('Bob could not take control back with the editor password')
+        fail('Bob could not take control back with the token his grant minted')
+    else:
+        print('==> a granted viewer keeps the right to take control back')
     time.sleep(3)                     # let the unlock reconcile in the interpreter tick
     s2.run_python("import FreeCAD as A\nfor _d in A.listDocuments().values():\n    _b=_d.getObject('Box')\n    if _b: _b.Length = 26; _d.recompute()")
     time.sleep(0.5)
-    s1.page.evaluate('window.fcwebShareRequest(true)')
+    s1.page.evaluate('window.fcwebShareRequest(true); null')
     st1 = _wait_state(s1, lambda x: x.get('holder'), 30)
     if not st1:
         fail('the owner could not force control back')
@@ -374,11 +386,11 @@ def scenario_control(ctx, url, args, fail):
     else:
         print('==> displaced work kept as "%s" with the edit intact' % kept[0]['label'])
     # 4. a killed holder: Bob takes control then vanishes; the owner gets it after the silence window
-    s2.page.evaluate('window.fcwebShareRequest(true)')
+    s2.page.evaluate('window.fcwebShareRequest(true); null')
     _wait_state(s2, lambda x: x.get('holder'), 30)
     s2.page.close()
     time.sleep(65)
-    s1.page.evaluate('window.fcwebShareRequest(false)')
+    s1.page.evaluate('window.fcwebShareRequest(false); null')
     st1 = _wait_state(s1, lambda x: x.get('holder'), 30)
     if not st1:
         fail('control was not auto-granted after the holder vanished')
@@ -583,7 +595,7 @@ def scenario_mcp(ctx, url, args, fail):
     else:
         print('==> fc_install_addon: consent_required')
     # not holding control -> not_holder with a hint pointing at fc_control_request
-    s1.page.evaluate('window.fcwebShareRelease()')
+    s1.page.evaluate('window.fcwebShareRelease(); null')
     _wait_state(s1, lambda x: not x.get('holder'), 20)
     r = tool('fc_set_property', {'name': 'Box', 'prop': 'Length', 'value': 31})
     if r.get('ok') or r.get('code') != 'not_holder' or 'fc_control_request' not in r.get('hint', ''):

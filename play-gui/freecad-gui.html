@@ -750,7 +750,14 @@ window.fcwebNotify = function (text, kind, actions, opts) {
         btn.textContent = a.label;
         btn.style.cssText = 'background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);' +
           'color:#e8e8e8;border-radius:6px;padding:5px 10px;font:12px inherit;cursor:pointer';
-        btn.addEventListener('click', function () { try { a.onClick(btn, field ? field.value : undefined); } catch (e) {} });
+        btn.addEventListener('click', function () {
+          try { a.onClick(btn, field ? field.value : undefined); } catch (e) {}
+          // A toast that ASKED something is finished once it is answered. Leaving it up
+          // stacked a second prompt on top of the first, and the answer went to whichever
+          // one happened to be first in the DOM -- so the reply reached a promise that had
+          // already been settled, and nothing happened.
+          if (field) kill();
+        });
         row.appendChild(btn);
       });
       t.appendChild(row);
