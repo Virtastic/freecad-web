@@ -22,6 +22,7 @@ fcweb_run_python, where it would look like a hang.
 """
 import json
 import os
+import re
 import sys
 import time
 import hashlib
@@ -46,11 +47,13 @@ _last_state = None
 _obs = None
 _pin = None
 _last_pub_change = 0.0
+_pub_fail_seen = 0.0
 _env_hash = None
 _ro = {}          # doc name -> obj name -> prop name -> original status list
 _actions = {}     # our QActions on the Edit menu
 _tick_n = 0
-_revert_t = 0.0      # advanced whenever a non-holder's edit is noticed; the page re-applies
+_revert_t = 0.0      # advanced whenever a non-holder's edit is noticed
+_revert_undone = False   # ...and whether we undid it here, so the page need not re-apply
 _was_holder = None
 
 
@@ -93,13 +96,31 @@ class _Observer(object):
         self.tripped = False
 
     def _touch(self, doc):
+        # ANY document the session mirrors, not just the pinned one. Watching only the
+        # pinned document meant an edit in another tab never marked the session dirty,
+        # so it was never published and the audience never saw it -- measured: a change
+        # in a background document had still not arrived a minute later.
         try:
-            if _pin and doc is not None and doc.Name == _pin:
+            if doc is None:
+                return
+            if _mine(doc) or (_pin and doc.Name == _pin):
                 self.changed = time.time()
                 if self.guard:
                     self.tripped = True
         except Exception:
             pass
+
+    # Opening or creating a document is itself a change worth publishing: a file opened
+    # and not yet edited fired none of the object slots, so the session stayed clean and
+    # the audience never got the file at all.
+    def slotCreatedDocument(self, doc):
+        self._touch(doc)
+
+    def slotDeletedDocument(self, doc):
+        self._touch(doc)
+
+    def slotFinishRestoreDocument(self, doc):
+        self._touch(doc)
 
     def slotChangedObject(self, obj, prop=None):
         self._touch(getattr(obj, 'Document', None))
@@ -138,13 +159,44 @@ def _doc():
     return App.listDocuments().get(_pin) if _pin else None
 
 
+def _safe_name(x):
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', str(x)).strip('_') or 'document'
+
+
+def _mine(d):
+    """A document of this user's own: not FreeCAD's start page, not a mirror of someone
+    else's session, not the copy we detached when control was taken."""
+    if d is None:
+        return False
+    if (getattr(d, 'FileName', '') or '').startswith('/freecad/'):
+        return False
+    if (d.Name or '').startswith('_fcweb_v'):
+        return False
+    return True
+
+
+def _my_docs():
+    """Every document the audience should see, the active one first."""
+    act = App.ActiveDocument
+    out = [d for d in App.listDocuments().values() if _mine(d)]
+    out.sort(key=lambda d: (act is None or d.Name != act.Name, d.Name))
+    return out
+
+
 def publish(force=False):
-    """Stage the pinned document for the page to upload. True when a new file was staged.
-    saveCopy, never save(): the document's own FileName and dirty flag are untouched, so
-    sharing never makes an unsaved document look saved nor redirects Ctrl+S."""
+    """Stage EVERY open document of this user's, as one zip, for the page to upload.
+
+    The audience watches the whole desk rather than one file: opening a second model
+    mid-session otherwise left everyone staring at the first with no way to say so.
+    saveCopy, never save(), so sharing still cannot make an unsaved document look saved
+    nor redirect Ctrl+S. The zip is STORED because FCStd files are already compressed
+    archives, and because the page's reader handles stored entries without inflating.
+    """
     global _last_pub_change
-    d = _doc()
-    if d is None or _obs is None:
+    if _obs is None:
+        return False
+    docs = _my_docs()
+    if not docs:
         return False
     if not force:
         if _obs.changed <= _last_pub_change:
@@ -155,14 +207,37 @@ def publish(force=False):
     g = App.ParamGet('User parameter:BaseApp/Preferences/Document')
     lvl = g.GetInt('CompressionLevel', 3)
     g.SetInt('CompressionLevel', 0)          # same trade the autosaver makes: 3.5x less stall
+    staged = []
     try:
-        d.saveCopy(os.path.join(STAGE, 'doc.FCStd'))
+        for d in docs:
+            fn = _safe_name(d.Label or d.Name) + '.FCStd'
+            p = os.path.join(STAGE, fn)
+            try:
+                d.saveCopy(p)
+                staged.append((fn, p))
+            except Exception as e:
+                _log('could not stage %s: %r' % (d.Name, e))
     finally:
         g.SetInt('CompressionLevel', lvl)
+    if not staged:
+        return False
+    import zipfile
+    with zipfile.ZipFile(os.path.join(STAGE, 'doc.FCStd'), 'w', zipfile.ZIP_STORED) as z:
+        for fn, p in staged:
+            z.write(p, fn)
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
     _last_pub_change = _obs.changed if _obs.changed else time.time()
+    act = App.ActiveDocument
     open(os.path.join(STAGE, 'doc.pending'), 'w').write(json.dumps(
-        {'name': (d.Label or d.Name) + '.FCStd', 't': time.time()}))
+        {'name': staged[0][0] if len(staged) == 1 else 'session.FCStd', 'bundle': True,
+         'docs': [fn for fn, _ in staged],
+         'active': _safe_name(act.Label or act.Name) + '.FCStd' if _mine(act) else '',
+         't': time.time()}))
     return True
+
 
 
 # --------------------------------------------------------------------------- environment
@@ -262,44 +337,120 @@ def _prov():
 
 
 # --------------------------------------------------------------------------- read-only
+# What a watcher may still do: look. Everything else is greyed out while the document is
+# not theirs to change -- undoing an edit after the fact tells someone they were not
+# allowed only once they have already done it, which is a worse way to learn.
+_LOOK_PREFIXES = ('Std_View', 'Std_Axo', 'Std_Zoom', 'Std_Fit', 'Std_Ortho', 'Std_Perspective',
+                  'Std_Sel', 'Std_Tree', 'Std_Measure', 'Std_Windows', 'Std_Workbench',
+                  'Std_Print', 'Std_Export', 'Std_Help', 'Std_About', 'Std_WhatsThis',
+                  'Std_DlgPreferences', 'Std_UserInterface', 'Std_ToggleNavigation',
+                  'Std_Drawing', 'Std_Freeze', 'Std_Quit', 'Std_Window', 'Fcweb_')
+_LOOK_EXACT = set(['Std_Refresh', 'Std_SelectAll', 'Std_BoxSelection', 'Std_BoxElementSelection',
+                   'Std_ViewFitSelection', 'Std_SceneInspector', 'Std_DependencyGraph',
+                   'Std_ProjectInfo', 'Std_ProjectUtil', 'Std_TextDocument'])
+_greyed = []
+_greyed_on = False
+
+
+def _grey_commands(on):
+    """Disable, or restore, every action that would change the document.
+
+    Only on a real transition: this walks the whole widget tree, and set_readonly runs on
+    every applied version as well as every control change, so repeating the walk made the
+    interpreter the slowest thing in the tab.
+
+    An allow-list rather than a deny-list: there are 459 commands, and one missed from a
+    deny-list is a hole a watcher can edit through. Greying is also what tells someone
+    BEFORE they click that this is not theirs to edit."""
+    global _greyed, _greyed_on
+    if bool(on) == _greyed_on:
+        return              # already in this state: do not walk the widget tree again
+    Gui = _gui()
+    if Gui is None:
+        return
+    try:
+        from PySide6 import QtGui
+        mw = Gui.getMainWindow()
+        if mw is None:
+            return
+        if not on:
+            for a in _greyed:
+                try:
+                    a.setEnabled(True)
+                except RuntimeError:
+                    pass
+            _greyed = []
+            _greyed_on = False
+            return
+        fresh = []
+        for a in mw.findChildren(QtGui.QAction):
+            try:
+                name = a.objectName()
+                if not name or not a.isEnabled():
+                    continue
+                if name in _LOOK_EXACT or name.startswith(_LOOK_PREFIXES):
+                    continue
+                a.setEnabled(False)
+                fresh.append(a)
+            except RuntimeError:
+                continue
+        _greyed = _greyed + fresh
+        _greyed_on = True
+        if fresh:
+            _log('read-only: %d editing commands greyed out' % len(fresh))
+    except Exception as e:
+        _log('could not grey the editing commands: %r' % (e,))
+
+
 def set_readonly(on):
-    """Lock or unlock the pinned document. Statuses are SNAPSHOTTED per property before
-    locking and restored exactly on unlock: Shape and every computed output are read-only
-    by design and must stay that way."""
-    d = _doc()
-    if d is None or _obs is None:
+    """Lock or unlock every document we are mirroring, and grey out the editing commands.
+
+    Statuses are snapshotted per property before locking and restored exactly on unlock:
+    Shape and every computed output are read-only by design and must stay that way."""
+    if _obs is None:
         return 0
-    saved = _ro.setdefault(d.Name, {})
     n = 0
     changed_before = _obs.changed      # status flips fire the observer; they are not edits
-    for o in d.Objects:
-        props = saved.setdefault(o.Name, {})
-        for prop in o.PropertiesList:
-            try:
-                if on:
-                    if prop not in props:
-                        props[prop] = list(o.getPropertyStatus(prop))
-                    o.setPropertyStatus(prop, 'ReadOnly')
-                    n += 1
-                elif prop in props:
-                    if 'ReadOnly' not in props[prop]:
-                        o.setPropertyStatus(prop, '-ReadOnly')
-                    n += 1
-            except Exception:
-                pass
-    if not on:
-        _ro.pop(d.Name, None)
+    # Every document of the mirror, not just the pinned one. The page records the set it
+    # opened as App._fcweb_shared_docs; those keep their own names (Bracket, Housing),
+    # so matching on a name prefix locked the first and left the rest editable.
+    mirrored = set(getattr(App, '_fcweb_shared_docs', None) or [])
+    if _pin:
+        mirrored.add(_pin)
+    for d in list(App.listDocuments().values()):
+        if d.Name not in mirrored and not (d.Name or '').startswith('_fcweb_v'):
+            continue                   # not part of what we are mirroring
+        saved = _ro.setdefault(d.Name, {})
+        for o in d.Objects:
+            props = saved.setdefault(o.Name, {})
+            for prop in o.PropertiesList:
+                try:
+                    if on:
+                        if prop not in props:
+                            props[prop] = list(o.getPropertyStatus(prop))
+                        o.setPropertyStatus(prop, 'ReadOnly')
+                        n += 1
+                    elif prop in props:
+                        if 'ReadOnly' not in props[prop]:
+                            o.setPropertyStatus(prop, '-ReadOnly')
+                        n += 1
+                except Exception:
+                    pass
+        if not on:
+            _ro.pop(d.Name, None)
+        try:
+            base = d.Label.replace(' (read-only)', '')
+            d.Label = base + (' (read-only)' if on else '')
+        except Exception:
+            pass
     _obs.changed = changed_before
     _obs.guard = bool(on)
     _obs.tripped = False
-    try:
-        base = d.Label.replace(' (read-only)', '')
-        d.Label = base + (' (read-only)' if on else '')
-    except Exception:
-        pass
+    _grey_commands(on)
     _log('read-only: %d properties %s, guard observer %s' % (
         n, 'locked, statuses snapshotted' if on else 'restored', 'on' if on else 'off'))
     return n
+
 
 
 # --------------------------------------------------------------------------- menu + prefs
@@ -314,13 +465,17 @@ class _Cmd(object):
         c = _ctl()
         if self.req == 'share':
             return True
-        if not c.get('session'):
+        if not c.get('session') or c.get('ended'):
             return False
         if self.req == 'release':
             return bool(c.get('holder'))
-        # Anyone in the session may ask for control; the holder decides. The editor
-        # password is only needed to TAKE it, which the toast offers separately.
-        return not c.get('holder')
+        if c.get('holder'):
+            return False
+        # Anyone in the session may ASK; the holder decides. TAKING needs an edit token
+        # (the editor password) or the owner's own authority -- the same rule as the bar.
+        if self.req == 'force':
+            return bool(c.get('edit')) or c.get('role') == 'admin'
+        return True
 
     def Activated(self):
         if self.req == 'share':
@@ -330,16 +485,51 @@ class _Cmd(object):
             except Exception as e:
                 _log('showPreferences failed: %r' % (e,))
             return
+        _req(self.req)
+
+
+def _try(fn):
+    """Best effort on a widget this page may no longer be allowed to touch."""
+    try:
+        fn()
+    except Exception as e:
+        _log('Sharing page widget touch failed: %r' % (e,))
+
+
+def _guard(fn):
+    """Wrap a button handler. Qt swallows an exception raised inside one, so a failing
+    button would do nothing and say nothing; this reports it instead."""
+    def run(*a, **k):
         try:
-            open(REQ, 'w').write(self.req)
-        except Exception:
-            pass
+            return fn(*a, **k)
+        except Exception as e:
+            import traceback
+            _log('session button failed: %r%s' % (e, traceback.format_exc()[-300:]))
+    return run
+
+
+def _later(fn, secs):
+    """Run fn once, secs from now, on Qt's own call stack."""
+    try:
+        from PySide6 import QtCore
+        QtCore.QTimer.singleShot(int(secs * 1000), lambda: _try(fn))
+    except Exception as e:
+        _log('could not schedule a repaint: %r' % (e,))
+
+
+def _req(verb):
+    """Ask the browser half to do something it alone can (control, the clipboard). The
+    page reads and unlinks REQ every 500 ms."""
+    try:
+        open(REQ, 'w').write(verb)
+    except Exception:
+        pass
 
 
 COMMANDS = (
     ('Fcweb_ShareSession', _Cmd('Share Session...', 'Share this document as a live, durable link', 'share')),
     ('Fcweb_RequestControl', _Cmd('Request Control', 'Ask the current editor for control of the shared session', 'request')),
-    ('Fcweb_ReleaseControl', _Cmd('Release Control', 'Hand control of the shared session back', 'release')),
+    ('Fcweb_TakeControl', _Cmd('Take Control', 'Take control now; the current editor keeps their unpublished work as a separate document', 'force')),
 )
 
 _ICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
@@ -386,8 +576,403 @@ def ensure_menu():
         act.setEnabled(cmd.IsActive())
         edit.addAction(act)
         _actions[name] = act
-    _log('Edit menu: Share Session, Request Control, Release Control installed')
+    _log('Edit menu: Share Session, Request Control, Take Control installed')
     return True
+
+
+# Pending "clear this password" clicks, module level because exactly one Preferences
+# dialog exists at a time.
+_touched = {}
+
+
+def _ago(t):
+    d = int(time.time() - float(t or 0))
+    if not t or d < 0:
+        return ''
+    if d < 60:
+        return 'just now'
+    if d < 3600:
+        return '%d min ago' % (d // 60)
+    if d < 86400:
+        return '%d h ago' % (d // 3600)
+    return '%d days ago' % (d // 86400)
+
+
+def _paint(f):
+    """Show the session as it stands, on the widgets this page owns.
+
+    Called when the page opens and from its own button handlers -- never from tick(). A
+    Python preference page's widgets can only be touched from Qt's own call stack here:
+    reached from the browser half's timer while the modal dialog is up, shiboken reports
+    "Internal C++ object already deleted" for widgets that are plainly still on screen.
+    So this page shows the state it opened with, its buttons act at once, and everything
+    live -- who is editing, how many are watching, lost contact -- belongs to the session
+    bar and the toasts, which are HTML and always current."""
+    c = _ctl()
+    p = _p()
+    enabled = p.GetBool('Enabled', False)
+    sharing = bool(c.get('session')) and not c.get('ended')
+    if c.get('unavailable'):
+        st = 'Sharing is not available on this site: the session service is not running.'
+    elif sharing:
+        st = 'Sharing %s' % (c.get('doc') or p.GetString('PinnedDocument', '') or 'the active document')
+        st += ' \u00b7 %d watching' % int(c.get('watching') or 0)
+        if c.get('t'):
+            st += ' \u00b7 last updated ' + _ago(c['t'])
+        if not c.get('contact', True):
+            st += ' \u00b7 lost contact (%s), retrying' % (c.get('lastErr') or 'network')
+    elif enabled:
+        st = 'Starting\u2026'
+    else:
+        st = 'Not shared'
+    f.lStatus.setText(st)
+    f.btnStart.setEnabled(not enabled and not c.get('unavailable'))
+    f.btnStop.setEnabled(bool(enabled))
+    link = c.get('link') or ''
+    f.leLink.setText(link)
+    f.btnCopyLink.setEnabled(bool(link))
+    if not sharing:
+        f.lEditor.setText('\u2014')
+    elif c.get('holder'):
+        f.lEditor.setText('You')
+    elif c.get('holderName'):
+        f.lEditor.setText('%s is editing' % c['holderName'])
+    else:
+        f.lEditor.setText('Nobody \u2014 the next request is granted at once')
+    hp = c.get('has_pw') or {}
+    for which, lab, btn in (('viewer', f.lVpwState, f.btnClearVpw), ('editor', f.lEpwState, f.btnClearEpw)):
+        if _touched.get('clear_' + which):
+            lab.setText('will be cleared')
+            btn.setEnabled(False)
+        else:
+            lab.setText('set \u2713' if hp.get(which) else 'not set')
+            btn.setEnabled(bool(hp.get(which)))
+    exp = int(c.get('expires') or p.GetInt('Expires', 0) or 0)
+    f.lExpires.setText(('expires ' + time.strftime('%Y-%m-%d', time.localtime(exp))) if exp else 'never')
+
+
+def _paint_mcp(f):
+    """The MCP page. Painted when it opens, and after each button."""
+    p = _p()
+    c = _ctl()
+    on = p.GetBool('AllowAgent', False)
+    sharing = bool(c.get('session')) and not c.get('ended')
+    url = p.GetString('AgentUrl', '') or (c.get('agentUrl') or '')
+    arming = p.GetBool('AgentArm', False)
+    if not sharing:
+        st = 'Off \u2014 start a session on the General page first; the assistant attaches to one.'
+    elif on and url:
+        st = 'On \u2014 paste the link into your AI client. This tab must stay open.'
+    elif arming:
+        st = 'Starting the endpoint\u2026'
+    else:
+        st = 'Off'
+    on = bool(on and (url or arming))
+    f.lMcpStatus.setText(st)
+    f.btnMcpStart.setEnabled(sharing and not on)
+    f.btnMcpStop.setEnabled(bool(on))
+    f.leAgentUrl.setText(url)
+    f.btnCopyMcp.setEnabled(bool(url))
+    f.btnRegen.setEnabled(bool(url))
+
+
+class FcwebSharingPage(object):
+    """Edit > Preferences > Sharing. FreeCAD instantiates this with no arguments each time
+    the dialog opens, shows `form`, and calls loadSettings()/saveSettings() around it.
+
+    The buttons act at once -- Start, Stop, Copy, Regenerate, the AI toggle -- because a
+    link you cannot get until you press OK is not a feature. Typed fields (name, passwords,
+    expiry, include-environment) apply on OK, or when you press Start."""
+
+    def __init__(self):
+        import FreeCADGui as Gui
+        self.form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share.ui')
+        f = self.form
+        f.btnStart.clicked.connect(self._start)
+        f.btnRefresh.clicked.connect(self._repaint)
+        f.btnStop.clicked.connect(self._stop)
+        f.btnCopyLink.clicked.connect(lambda: _req('copy:link'))
+        f.btnClearVpw.clicked.connect(lambda: self._clear('viewer'))
+        f.btnClearEpw.clicked.connect(lambda: self._clear('editor'))
+        f.cbExpiry.currentIndexChanged.connect(lambda i: _touched.__setitem__('expiry', i))
+
+    # ---- FreeCAD's contract
+    def loadSettings(self):
+        p = _p()
+        f = self.form
+        _touched.clear()
+        f.leName.setText(p.GetString('DisplayName', ''))
+        f.cbEnv.setChecked(p.GetBool('IncludeEnv', True))
+        f.cbExpiry.blockSignals(True)
+        f.cbExpiry.setCurrentIndex(max(0, min(3, p.GetInt('ExpiryChoice', 0))))
+        f.cbExpiry.blockSignals(False)
+        f.leViewerPw.clear()
+        f.leEditorPw.clear()
+        try:
+            _paint(f)
+        except Exception as e:
+            _log('Sharing page paint failed: %r' % (e,))
+
+    def saveSettings(self):
+        self._apply()
+
+    # ---- what the buttons do
+    def _apply(self):
+        """Write the typed fields. Passwords go to PWFILE only when set or cleared; an
+        untouched field sends nothing, so setting one never clears the other."""
+        p = _p()
+        f = self.form
+        p.SetString('DisplayName', f.leName.text().strip())
+        p.SetBool('IncludeEnv', f.cbEnv.isChecked())
+        if 'expiry' in _touched:
+            choice = int(_touched['expiry'])
+            days = [0, 7, 30, 90][choice] if 0 <= choice < 4 else 0
+            # absolute, fixed now: the page re-sends it only when it differs from the
+            # server's, so a reload never restarts the countdown. ponytail: SetInt is 32-bit.
+            p.SetInt('Expires', int(time.time()) + days * 86400 if days else 0)
+            p.SetInt('ExpiryChoice', choice)
+        pw = {}
+        for which, le in (('viewer', f.leViewerPw), ('editor', f.leEditorPw)):
+            if le.text():
+                pw[which] = le.text()
+            elif _touched.get('clear_' + which):
+                pw[which] = ''
+        if pw:
+            fd = os.open(PWFILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.write(fd, json.dumps(pw).encode())
+            os.close(fd)
+            f.leViewerPw.clear()
+            f.leEditorPw.clear()
+        _touched.clear()
+        App.saveParameter()
+
+    def _repaint(self):
+        _try(lambda: _paint(self.form))
+
+    def _start(self):
+        # The work first, then the cosmetics. Touching a widget can raise here (shiboken
+        # invalidates this page's wrappers once the dialog is up), and a failed label
+        # update must never stop the session from starting or the dialog from closing.
+        self._apply()
+        _p().SetBool('Enabled', True)
+        App.saveParameter()
+        _try(lambda: self.form.lStatus.setText('Starting\u2026'))
+        _try(lambda: self.form.btnStart.setEnabled(False))
+        # The dialog stays open. It cannot repaint on a timer -- FreeCAD rebuilds a Python
+        # page's widgets and shiboken then reports the ones we hold as deleted (measured) --
+        # so it repaints after each action, and on Refresh.
+        _later(self._repaint, 2.5)
+
+    def _stop(self):
+        _p().SetBool('Enabled', False)
+        App.saveParameter()
+        _later(self._repaint, 2.0)
+        self.form.lStatus.setText('Not shared')
+        self.form.btnStop.setEnabled(False)
+        self.form.btnStart.setEnabled(True)
+        self.form.leLink.setText('')
+        self.form.btnCopyLink.setEnabled(False)
+
+    def _clear(self, which):
+        _touched['clear_' + which] = True
+        le, lab = ((self.form.leViewerPw, self.form.lVpwState) if which == 'viewer'
+                   else (self.form.leEditorPw, self.form.lEpwState))
+        le.clear()
+        lab.setText('will be cleared')
+
+
+
+class FcwebMcpPage(object):
+    """Edit > Preferences > Sharing > MCP.
+
+    Enabling the assistant is its own button, deliberately: letting people watch a document
+    and letting an AI drive it are different decisions, and neither should happen as a side
+    effect of the other. It attaches to a live session, so the button waits for one."""
+
+    def __init__(self):
+        import FreeCADGui as Gui
+        self.form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share_mcp.ui')
+        f = self.form
+        f.btnMcpStart.clicked.connect(self._enable)
+        f.btnMcpStop.clicked.connect(self._disable)
+        f.btnMcpRefresh.clicked.connect(self._repaint)
+        f.btnCopyMcp.clicked.connect(lambda: _req('copy:mcp'))
+        f.btnRegen.clicked.connect(self._regen)
+
+    def loadSettings(self):
+        self._repaint()
+
+    def saveSettings(self):
+        pass          # the buttons already wrote everything, when they were pressed
+
+    def _repaint(self):
+        _try(lambda: _paint_mcp(self.form))
+
+    def _enable(self):
+        p = _p()
+        p.SetBool('AllowAgent', True)
+        p.SetBool('AgentArm', True)      # this press, not a remembered preference
+        App.saveParameter()
+        _try(lambda: self.form.lMcpStatus.setText('Starting the endpoint\u2026'))
+        _later(self._repaint, 2.5)
+
+    def _disable(self):
+        p = _p()
+        p.SetBool('AllowAgent', False)
+        p.SetBool('AgentArm', False)
+        App.saveParameter()
+        _try(lambda: self.form.leAgentUrl.setText(''))
+        _later(self._repaint, 1.5)
+
+    def _regen(self):
+        _p().SetBool('RegenerateAgent', True)
+        App.saveParameter()
+        _try(lambda: self.form.leAgentUrl.setText(''))
+        _try(lambda: self.form.lMcpStatus.setText('Making a new link\u2026'))
+        _later(self._repaint, 2.5)
+
+
+# ---------------------------------------------------------------- the session, on screen
+# Who is here and what you can do about it, in two places that share one painter: a
+# Session PANEL (View > Panels), which we own and can therefore keep up to date from
+# tick(), and a Session PAGE in Preferences for people who look there. The panel is the
+# live one on purpose -- a Python preference page's widgets are rebuilt by FreeCAD and
+# every reference we hold goes stale a moment later (measured), so that copy repaints when
+# it opens, after each action, and on Refresh.
+def _people_rows(c):
+    """(label, client id) for everyone in the session, the holder first."""
+    rows = []
+    for x in (c.get('people') or []):
+        bits = []
+        if x.get('holder'):
+            bits.append('editing')
+        if x.get('asking'):
+            bits.append('asking for control')
+        if x.get('role') == 'admin':
+            bits.append('owner')
+        if int(x.get('idle') or 0) > 20:
+            bits.append('idle %ds' % int(x['idle']))
+        label = x.get('name') or 'Guest'
+        if bits:
+            label += '  (' + ', '.join(bits) + ')'
+        rows.append((label, x.get('id') or ''))
+    return rows
+
+
+def _control_line(c):
+    if not c.get('session') or c.get('ended'):
+        return 'Not in a session.'
+    if c.get('holder'):
+        line = 'You are editing.'
+    elif c.get('holderName'):
+        line = '%s is editing.' % c['holderName']
+    else:
+        line = 'Nobody is editing \u2014 the next request is granted at once.'
+    if c.get('pendingName'):
+        line += '  %s is asking for control.' % c['pendingName']
+    return line
+
+
+def _session_line(c):
+    if c.get('unavailable'):
+        return 'Sharing is not available on this site.'
+    if not c.get('session'):
+        return 'Not shared'
+    if c.get('ended'):
+        return 'This session has ended.'
+    n = len(c.get('people') or [])
+    txt = 'Sharing %s' % (c.get('doc') or 'this document')
+    txt += ' \u00b7 %d here' % n if n else ''
+    if c.get('t'):
+        txt += ' \u00b7 last updated ' + _ago(c['t'])
+    if not c.get('contact', True):
+        txt += ' \u00b7 lost contact (%s), retrying' % (c.get('lastErr') or 'network')
+    return txt
+
+
+def _paint_session(f, selected_id=None):
+    """Both copies of the session view. Reads CTL only; never suspends."""
+    from PySide6 import QtCore
+    c = _ctl()
+    live = bool(c.get('session')) and not c.get('ended')
+    f.lSessStatus.setText(_session_line(c))
+    f.lControl.setText(_control_line(c))
+    rows = _people_rows(c)
+    lw = f.lwPeople
+    want = [r[0] for r in rows]
+    have = [lw.item(i).text() for i in range(lw.count())]
+    if want != have:
+        keep = lw.currentItem().data(QtCore.Qt.UserRole) if lw.currentItem() else selected_id
+        lw.clear()
+        for label, cid in rows:
+            lw.addItem(label)
+            lw.item(lw.count() - 1).setData(QtCore.Qt.UserRole, cid)
+            if cid and cid == keep:
+                lw.setCurrentRow(lw.count() - 1)
+    holder, admin = bool(c.get('holder')), c.get('role') == 'admin'
+    can_take = bool(c.get('edit')) or admin
+    f.btnRequest.setEnabled(live and not holder)
+    f.btnTake.setEnabled(live and not holder and can_take)
+    f.btnRelease.setEnabled(live and holder)
+    f.btnGrant.setEnabled(live and holder and bool(c.get('pendingName')))
+    f.btnDeny.setEnabled(live and holder and bool(c.get('pendingName')))
+    sel = lw.currentItem()
+    sel_id = sel.data(QtCore.Qt.UserRole) if sel else ''
+    f.btnKick.setEnabled(bool(live and admin and sel_id and sel_id != c.get('client')))
+    f.btnSessCopy.setEnabled(live)
+    f.btnSessDownload.setEnabled(bool(c.get('session')))
+    f.btnSessStop.setEnabled(bool(live and admin))
+
+
+def _wire_session(f, after=None):
+    """Point one copy of the session view at the browser half. `after` repaints it."""
+    from PySide6 import QtCore
+
+    def go(verb):
+        _req(verb)
+        if after is not None:
+            _later(after, 2.0)
+
+    f.btnRequest.clicked.connect(_guard(lambda: go('request')))
+    f.btnTake.clicked.connect(_guard(lambda: go('force')))
+    f.btnRelease.clicked.connect(_guard(lambda: go('release')))
+    f.btnGrant.clicked.connect(_guard(lambda: go('grant')))
+    f.btnDeny.clicked.connect(_guard(lambda: go('deny')))
+    f.btnSessCopy.clicked.connect(_guard(lambda: _req('copy:link')))
+    f.btnSessDownload.clicked.connect(_guard(lambda: _req('download')))
+    f.btnSessDiag.clicked.connect(_guard(lambda: _req('diag')))
+    f.btnSessStop.clicked.connect(_guard(lambda: go('stop')))
+
+    def kick():
+        it = f.lwPeople.currentItem()
+        cid = it.data(QtCore.Qt.UserRole) if it else ''
+        if cid:
+            go('kick:' + cid)
+
+    f.btnKick.clicked.connect(_guard(kick))
+    f.lwPeople.currentRowChanged.connect(lambda _i: _try(lambda: _paint_session(f)))
+    if after is not None:
+        f.btnSessRefresh.clicked.connect(_guard(after))
+
+
+class FcwebSessionPage(object):
+    """Edit > Preferences > Sharing > Session: the same view and the same actions as the
+    Session panel, for people who look in Preferences. Repaints when it opens, after each
+    action, and on Refresh."""
+
+    def __init__(self):
+        import FreeCADGui as Gui
+        self.form = Gui.PySideUic.loadUi('/fcweb-am/fcweb_share_session.ui')
+        _wire_session(self.form, after=self._repaint)
+
+    def loadSettings(self):
+        self._repaint()
+
+    def saveSettings(self):
+        pass          # every action here happened when its button was pressed
+
+    def _repaint(self):
+        _try(lambda: _paint_session(self.form))
 
 
 def install():
@@ -406,8 +991,10 @@ def install():
     except Exception as e:
         _log('addIcon failed: %r' % (e,))
     try:
-        Gui.addPreferencePage('/fcweb-am/fcweb_share.ui', 'Sharing')
-        _log('sharing preference page registered')
+        Gui.addPreferencePage(FcwebSharingPage, 'Sharing')
+        Gui.addPreferencePage(FcwebSessionPage, 'Sharing')
+        Gui.addPreferencePage(FcwebMcpPage, 'Sharing')
+        _log('sharing preference pages registered: General, Session, MCP')
     except Exception as e:
         _log('sharing page FAILED: %r' % (e,))
     for name, cmd in COMMANDS:
@@ -431,50 +1018,93 @@ def _camera():
 
 def tick():
     """Called from the page's 1.5 s autosave tick. Everything the page needs to know goes
-    into STATE, written only when it changes. Passwords are moved out of the parameter
-    tree the moment they appear: Gui::PrefLineEdit persists them as plaintext into
-    user.cfg, which is now a file we publish."""
+    into STATE, written only when it changes. Passwords never enter the parameter tree:
+    the Sharing page hands them to the browser half through PWFILE (mode 0600), because
+    user.cfg is a file the session publishes."""
     global _last_state, _tick_n, _pin
     _tick_n += 1
     try:
         p = _p()
-        pw = {}
-        for k in ('ViewerPassword', 'EditorPassword'):
-            v = p.GetString(k, '')
-            if v:
-                pw[k] = v
-                p.SetString(k, '')
-        if pw:
-            fd = os.open(PWFILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            os.write(fd, json.dumps(pw).encode())
-            os.close(fd)
-            App.saveParameter()
         c = _ctl()
         enabled = p.GetBool('Enabled', False)
-        if (enabled or c.get('session')) and not _pin:
+        # The session follows the document you are WORKING ON. Pinning the first one and
+        # keeping it meant opening another file left everyone watching the old one with
+        # no way to say so. Only the holder re-pins -- a viewer clicking around their own
+        # copy must not redirect the session -- and never onto FreeCAD's own start page.
+        if enabled or c.get('session'):
             d = App.ActiveDocument
-            if d is not None and not (d.FileName or '').startswith('/freecad/'):
+            mine = d is not None and not (d.FileName or '').startswith('/freecad/')
+            mine = mine and not (d.Name or '').startswith('_fcweb_v')     # a mirror of someone else's
+            if mine and _pin != d.Name and (not _pin or c.get('holder') or not c.get('session')):
+                if _pin:
+                    _log('session follows the active document: %s -> %s' % (_pin, d.Name))
+                    set_readonly(False)          # let go of the one we are leaving
+                    globals()['_last_pub_change'] = 0.0
                 pin(d.Name)
         # Read-only is reconciled HERE, every tick, from what the page says about control.
         # A page-initiated set_readonly() can be dropped while the interpreter is busy; a
         # state the interpreter re-derives itself cannot stay wrong for more than one tick.
         if _pin and _obs is not None and (enabled or c.get('session')):
-            want = not bool(c.get('holder'))
+            # ...and when the session ENDS, everything comes back. The documents stay as
+            # the watcher's own copy, so leaving them locked with every editing command
+            # greyed would hand someone a frozen FreeCAD once the sharer stopped.
+            want = not bool(c.get('holder')) and not c.get('ended')
             if _obs.guard != want:
                 set_readonly(want)
+        # An upload the server refused (409 not_holder is the usual one) means the work
+        # is still only in this tab. publish() advances _last_pub_change when it STAGES,
+        # so without this the change looks published, and losing control then dropped it
+        # rather than detaching it as '<Name> (my changes)'.
+        global _pub_fail_seen
+        if c.get('pub_fail_t') and c['pub_fail_t'] != _pub_fail_seen:
+            _pub_fail_seen = c['pub_fail_t']
+            globals()['_last_pub_change'] = 0.0
+            _log('publish was refused: the change is unpublished again')
         if _tick_n % 2 == 0:
             ensure_menu()
         staged = False
         # A joiner who took control publishes too: their ephemeral home has the sharing group
         # stripped (redaction), so 'Enabled' is false there; the page's CTL says it is a session.
-        if (enabled or c.get('session')) and _pin and c.get('holder'):
+        # NOT gated on _pin: the pin is only 'which document has focus', and a session
+        # whose owner sat on the Start page published NOTHING -- every session on the live
+        # server was at v0 and every visitor saw an empty FreeCAD. publish() decides for
+        # itself, from _my_docs().
+        if (enabled or c.get('session')) and c.get('holder'):
             staged = publish()
             if c.get('role') == 'admin' and (_env_hash is None or _tick_n % 20 == 0):
                 snapshot_env()          # right away on first enable, then every ~30 s
-        global _revert_t, _was_holder
+        global _revert_t, _revert_undone, _was_holder
         if _obs is not None and _obs.tripped and not c.get('holder'):
             _obs.tripped = False
             _revert_t = time.time()
+            # Undo it here, at a safe point, rather than having the page re-open the
+            # document: reopening tears down the 3D view, and doing that while Qt is
+            # delivering the very click that caused the edit crashed the tab
+            # (QWasmScreen::element, memory access out of bounds). FreeCAD's own undo
+            # puts a deleted object back without touching the view at all.
+            _revert_undone = False
+            d = _doc()
+            if d is not None:
+                try:
+                    if int(getattr(d, 'UndoCount', 0) or 0) > 0:
+                        # The guard comes OFF for the duration. Our own undo fires the
+                        # observer exactly like an edit does, so leaving it on marked the
+                        # session dirty again, which undid again, for ever: the interpreter
+                        # never came back and the whole tab stopped answering (measured --
+                        # the control gate sat 2700 s with no progress).
+                        before, guard = _obs.changed, _obs.guard
+                        _obs.guard = False
+                        try:
+                            d.undo()
+                            d.recompute()
+                        finally:
+                            _obs.guard = guard
+                            _obs.changed = before
+                            _obs.tripped = False
+                        _revert_undone = True
+                        _log('read-only: undid an edit made without control')
+                except Exception as e:
+                    _log('undo after a read-only edit failed: %r' % (e,))
         # Losing control with unpublished work: keep it as a separate document, here, where
         # it cannot be dropped by a busy interpreter. The page only tells the person.
         holder_now = bool(c.get('holder'))
@@ -493,10 +1123,17 @@ def tick():
             'enabled': enabled, 'pinned': _pin, 'name': p.GetString('DisplayName', ''),
             'include_env': p.GetBool('IncludeEnv', True), 'agent': p.GetBool('AllowAgent', False),
             'regen_agent': p.GetBool('RegenerateAgent', False),
-            'expiry_days': p.GetInt('ExpiryDays', 0), 'session': p.GetString('SessionId', ''),
+            # A one-shot request, set only by the Enable button. AllowAgent alone is a
+            # SAVED preference, and arming on that meant starting a share re-opened the
+            # endpoint from a box someone ticked days ago, announced by a toast they did
+            # not ask for.
+            'agent_arm': p.GetBool('AgentArm', False),
+            'expires': p.GetInt('Expires', 0), 'session': p.GetString('SessionId', ''),
             'key': p.GetString('WriteKey', ''), 'agent_url': p.GetString('AgentUrl', ''),
-            'pw_pending': bool(pw), 'staged': staged, 'revert_t': _revert_t,
+            'pw_pending': os.path.exists(PWFILE), 'staged': staged, 'revert_t': _revert_t,
+            'revert_undone': _revert_undone,
             'cam': _camera(), 'docs': sorted(App.listDocuments().keys()),
+            'mine': len(_my_docs()),          # 0 => the audience has nothing to open
             'active': App.ActiveDocument.Name if App.ActiveDocument else None,
             'obs_changed': _obs.changed if _obs else None, 'last_pub': _last_pub_change,
             'guard': bool(_obs and _obs.guard), 'tick': _tick_n,
@@ -563,16 +1200,41 @@ def unpublished():
     return bool(_obs and _obs.changed > _last_pub_change)
 
 
+# Tools that need a document. Without one they would raise AttributeError deep inside;
+# the AI gets a code and a hint instead, from one place.
+NEEDS_DOC = {'get_object', 'find', 'shape_info', 'add_object', 'set_property', 'set_expression',
+             'call', 'delete_object', 'undo', 'redo', 'selection_set', 'export', 'recompute'}
+
+
+class ToolError(Exception):
+    def __init__(self, code, hint):
+        Exception.__init__(self, hint)
+        self.code, self.hint = code, hint
+
+
 def _tool(kind, a):
     Gui = _gui()
     d = App.ActiveDocument
+    if d is None and kind in NEEDS_DOC:
+        raise ToolError('no_document', 'No document is open. Create one first: fc_eval(\'App.newDocument("Part")\'), or fc_open_bytes.')
     if kind == 'eval':
         import io
+        import ast
         import contextlib
         buf = io.StringIO()
+        code = a.get('code', '')
+        ns = {'__name__': '__agent__'}
+        # like a REPL: if the last statement is an expression, its value comes back too
+        tree = ast.parse(code, '<agent>')
+        last = tree.body.pop() if tree.body and isinstance(tree.body[-1], ast.Expr) else None
+        value = None
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            exec(compile(a.get('code', ''), '<agent>', 'exec'), {'__name__': '__agent__'})
-        return {'out': buf.getvalue()[-16000:]}
+            exec(compile(tree, '<agent>', 'exec'), ns)
+            if last is not None:
+                v = eval(compile(ast.Expression(last.value), '<agent>', 'eval'), ns)
+                if v is not None:
+                    value = repr(v)[:4000]
+        return {'out': buf.getvalue()[-16000:], 'value': value}
     if kind == 'document_info':
         if d is None:
             return {'document': None}
@@ -704,12 +1366,10 @@ def _tool(kind, a):
         elif a.get('camera'):
             v.setCamera(a['camera'])
         return {'camera': v.getCamera()}
-    if kind == 'fit_all':
-        Gui.SendMsgToActiveView('ViewFit')
-        return {'ok': True}
-    if kind == 'fit_selection':
-        Gui.SendMsgToActiveView('ViewSelection')
-        return {'ok': True}
+    if kind in ('fit_all', 'fit_selection'):
+        Gui.SendMsgToActiveView('ViewFit' if kind == 'fit_all' else 'ViewSelection')
+        # the camera travels to the watchers through the page's /live, like view_set
+        return {'camera': Gui.ActiveDocument.ActiveView.getCamera()}
     if kind == 'console_tail':
         from PySide6 import QtWidgets
         w = Gui.getMainWindow().findChild(QtWidgets.QTextEdit, 'Report view')
@@ -717,25 +1377,49 @@ def _tool(kind, a):
         n = int(a.get('n', 50))
         return {'lines': lines[-n:]}
     if kind == 'export':
+        import hashlib
         import importlib
-        fmt = a.get('format', 'step').lower()
+        import math
+        fmt = (a.get('format') or 'step').lower().lstrip('.')
         objs = [_o(d, n) for n in a.get('objects', [])] or list(d.Objects)
-        out = os.path.join(MCP, a['id'] + '.out')
-        mod = {'step': 'ImportGui', 'stp': 'ImportGui', 'iges': 'ImportGui', 'stl': 'Mesh',
-               'obj': 'Mesh', 'brep': 'Part', 'fcstd': None}.get(fmt)
+        stem = re.sub(r'[^A-Za-z0-9._-]+', '_', a.get('name') or d.Label or d.Name).strip('_') or 'export'
+        name = stem + '.' + fmt
+        out = os.path.join(MCP, a['id'] + '.' + fmt)   # a real extension: the writers pick by it
+        mod = {'step': 'ImportGui', 'stp': 'ImportGui', 'iges': 'ImportGui', 'igs': 'ImportGui',
+               'stl': 'Mesh', '3mf': 'Mesh', 'obj': 'Mesh', 'brep': 'Part', 'fcstd': None}.get(fmt)
+        meshed = None
         if fmt == 'fcstd':
             d.saveCopy(out)
         elif mod == 'Mesh':
             import Mesh
-            Mesh.export(objs, out + '.' + fmt)
-            os.replace(out + '.' + fmt, out)
+            # Tessellate with the caller's deflections: a print-ready mesh is a choice, not
+            # Mesh.export's default. Objects without a solid shape (existing meshes) go
+            # through the plain exporter.
+            ld = float(a.get('linear_deflection') or 0.1)
+            ad = math.radians(float(a.get('angular_deflection') or 0.5))
+            try:
+                import MeshPart
+            except ImportError:
+                MeshPart = None
+            solids = [o for o in objs if MeshPart is not None and hasattr(o, 'Shape') and not o.Shape.isNull()]
+            if solids:
+                m = Mesh.Mesh()
+                for o in solids:
+                    m.addMesh(MeshPart.meshFromShape(Shape=o.Shape, LinearDeflection=ld, AngularDeflection=ad, Relative=False))
+                m.write(out)
+                meshed = {'facets': m.CountFacets, 'linear_deflection': ld, 'angular_deflection_deg': float(a.get('angular_deflection') or 0.5)}
+            else:
+                Mesh.export(objs, out)
         elif mod:
-            m = importlib.import_module(mod)
-            m.export(objs, out + '.' + fmt)
-            os.replace(out + '.' + fmt, out)
+            importlib.import_module(mod).export(objs, out)
         else:
-            raise ValueError('unsupported format %r' % fmt)
-        return {'file': out, 'bytes': os.path.getsize(out), 'format': fmt}
+            raise ToolError('bad_format', 'Unsupported format %r; use step, iges, stl, 3mf, obj, brep or fcstd.' % fmt)
+        data = open(out, 'rb').read()
+        res = {'file': out, 'name': name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
+               'format': fmt, 'inline': bool(a.get('inline')) or len(data) <= 262144}
+        if meshed:
+            res['mesh'] = meshed
+        return res
     if kind in ('import_bytes', 'open_bytes'):
         src = os.path.join(MCP, a['id'] + '.in')
         name = a.get('name', 'import.' + a.get('format', 'step'))
@@ -745,7 +1429,14 @@ def _tool(kind, a):
             nd = App.openDocument(dst)
             return {'document': nd.Name}
         import importlib
-        importlib.import_module('ImportGui' if name.lower().endswith(('.step', '.stp', '.iges', '.igs')) else 'Mesh').insert(dst, d.Name)
+        fmt = (a.get('format') or name.rsplit('.', 1)[-1]).lower().lstrip('.')
+        mod = {'step': 'ImportGui', 'stp': 'ImportGui', 'iges': 'ImportGui', 'igs': 'ImportGui',
+               'stl': 'Mesh', '3mf': 'Mesh', 'obj': 'Mesh', 'brep': 'Part'}.get(fmt)
+        if not mod:
+            raise ToolError('bad_format', 'Unsupported format %r; use step, iges, stl, 3mf, obj or brep.' % fmt)
+        if d is None:
+            d = App.newDocument(name.rsplit('.', 1)[0] or 'Import')
+        importlib.import_module(mod).insert(dst, d.Name)
         return {'imported': name, 'objects': len(d.Objects)}
     if kind == 'screenshot':
         return {'screenshot': a.get('region', 'viewport'), 'max_px': int(a.get('max_px', 1280))}
@@ -787,8 +1478,8 @@ def run_agent(cid):
                 _obs.changed = time.time()
     except Exception as e:
         tb = traceback.format_exc()
-        res.update(code=res.get('code', 'tool_error'), error=str(e)[:2000], trace=tb[-4000:],
-                   hint=res.get('hint', 'Read the error; fc_console_tail() shows FreeCAD\'s own report.'))
+        res.update(code=getattr(e, 'code', res.get('code', 'tool_error')), error=str(e)[:2000], trace=tb[-4000:],
+                   hint=getattr(e, 'hint', res.get('hint', 'Read the error; fc_console_tail() shows FreeCAD\'s own report.')))
     try:
         open(os.path.join(MCP, cid + '.result.json'), 'w').write(json.dumps(res))
     except Exception:

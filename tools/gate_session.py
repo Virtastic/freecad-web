@@ -81,7 +81,7 @@ def _dump(s, tag):
 
 def _state(s):
     try:
-        return s.page.evaluate('({id: window.__fcSession.id, holder: window.__fcSession.holder, role: window.__fcSession.role, v: window.__fcSession.v, applied: window.__fcSession.applied, silent: window.__fcSession.silent, ended: window.__fcSession.ended, agentUrl: window.__fcSession.agentUrl, tab: window.__fcSession.tab, holderName: window.__fcSession.holderName, note: window.__fcSession.note, cam: window.__fcSession.cam})')
+        return s.page.evaluate('({id: window.__fcSession.id, holder: window.__fcSession.holder, role: window.__fcSession.role, v: window.__fcSession.v, applied: window.__fcSession.applied, silent: window.__fcSession.silent, ended: window.__fcSession.ended, agentUrl: window.__fcSession.agentUrl, tab: window.__fcSession.tab, holderName: window.__fcSession.holderName, note: window.__fcSession.note, edit: !!window.__fcSession.edit, cam: window.__fcSession.cam})')
     except Exception:
         return {}
 
@@ -122,30 +122,48 @@ def _wait_volume(s, fail, target, seconds=90):
     return v
 
 
+# Passwords never enter the parameter tree (user.cfg is published); the Sharing page
+# hands them to the browser half through this file, and so does the gate.
+def _pw_py(**pw):
+    return ('import os, json\n'
+            '_fd = os.open("/tmp/fcweb_share_pw", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n'
+            'os.write(_fd, json.dumps(%r).encode())\nos.close(_fd)\n' % (pw,))
+
+
 def _enable_sharing(s, name='Alice', extra=''):
     s.run_python("import FreeCAD as A\np = A.ParamGet(%r)\np.SetString('DisplayName', %r)\n%s\np.SetBool('Enabled', True)\nA.saveParameter()\n"
                  % (GROUP, name, extra))
 
 
-def _dialogs(page, name='Bob', vpw='', epw=''):
-    def on_dialog(d):
-        m = (d.message or '').lower()
-        if 'editor password' in m:
-            d.accept(epw)
-        elif 'password' in m:
-            d.accept(vpw)
-        elif 'your name' in m:
-            d.accept(name)
-        else:
-            d.accept()
-    page.on('dialog', on_dialog)
+def _join_form(page, name='Bob', vpw='', epw=''):
+    """Fill the page's own join form -- real typing and real clicks, the way a person does.
+
+    The page asks for a name, a password and add-on consent inside the loading screen now,
+    not through window.prompt/confirm, so the gate drives the DOM instead of Playwright's
+    dialog handler. Installed as a page hook: it fires whenever the form appears."""
+    page.add_init_script("""(() => {
+      const fill = () => {
+        const f = document.getElementById('ld-join');
+        if (!f || f.hidden) return;
+        const n = document.getElementById('ld-name'), p = document.getElementById('ld-pw');
+        const pwRow = document.getElementById('ld-pw-row');
+        if (n && !n.value) n.value = %s;
+        if (p && pwRow && !pwRow.hidden && !p.value) p.value = %s;
+        const go = document.getElementById('ld-go');
+        if (go) go.click();
+      };
+      // A plain poll, not a MutationObserver: an init script runs at document-start, where
+      // document.documentElement does not exist yet and observe() throws, taking the rest of
+      // the script with it.
+      setInterval(fill, 250);
+    })();""" % (json.dumps(name), json.dumps(vpw)))
 
 
 def _viewer(ctx, url, sid, args, name='Bob', vpw='', epw=''):
     S = _Session()
     ctx2 = ctx.browser.new_context()
     s2 = S(ctx2, url + ('&' if '?' in url else '?') + 's=' + sid, args.timeout)
-    _dialogs(s2.page, name, vpw, epw)
+    _join_form(s2.page, name, vpw, epw)
     return s2
 
 
@@ -225,14 +243,16 @@ def scenario_share(ctx, url, args, fail):
         print('==> [live-edit] viewer console about share: %r' % [c[:200] for c in s2.lines() if 'share' in c and ('applied' in c or 'close' in c or 'fail' in c)][-8:])
     else:
         print('==> live edit reached the viewer: volume 12000.0')
-    # camera follows without a reopen
-    s1.run_python("import FreeCADGui as G\nG.ActiveDocument.ActiveView.viewTop()")
+    # The camera deliberately does NOT travel: being pulled to someone else's viewpoint
+    # mid-inspection is worse than useful. What must still hold is that moving it costs
+    # the viewer nothing -- no reopen, no disturbance of the view they chose.
     before = _state(s2).get('applied')
-    st = _wait_state(s2, lambda x: x.get('cam') and 'GATE' not in x['cam'], 20)
+    s1.run_python("import FreeCADGui as G\nG.ActiveDocument.ActiveView.viewTop()")
     time.sleep(8)
     if _state(s2).get('applied') != before:
         fail('a camera-only change caused a document reopen on the viewer')
-    print('==> camera followed (%s), no reopen' % ('yes' if st else 'not observed'))
+    else:
+        print('==> the owner moved the camera: no reopen, the viewer keeps their own view')
     # stale banner after the owner goes silent
     s1.page.close()
     st = _wait_state(s2, lambda x: x.get('silent'), 90)
@@ -256,9 +276,58 @@ def scenario_share(ctx, url, args, fail):
     return s2
 
 
+def scenario_empty(ctx, url, args, fail):
+    """Share BEFORE opening anything, then open a document -- the audience must get it.
+
+    This is the shape the live server was found in: four sessions, every one at v0, every
+    visitor looking at an empty FreeCAD with only the Start tab. Publishing was gated on a
+    pinned document, and nothing is pinned while the Start page has focus, so a share begun
+    from a fresh window never published -- not then, and not after a document was opened.
+    """
+    S = _Session()
+    s1 = S(ctx, url, args.timeout)
+    if not s1.load():
+        fail('owner never reached Ready (%s)' % s1.phase())
+        return None
+    _enable_sharing(s1)
+    st = _wait_state(s1, lambda x: x.get('id'), 40)
+    if not st:
+        fail('sharing never started with no document open (ring: %s)' % _ring(s1)[-5:])
+        return s1
+    sid = st['id']
+    # nothing to publish, and the owner is TOLD rather than left with a link to an empty app
+    if not _wait(s1, 'sharing with no document open', 30):
+        fail('the owner was not told the share has nothing in it')
+    else:
+        print('==> sharing with nothing open says so')
+    # now open one, the way the person did
+    s1.run_python(MAKE_DOC_PY)
+    if not _wait(s1, 'GATE_DOC ready', 120, 'console'):
+        fail('the gate document was not created')
+        return s1
+    if not _wait(s1, 'publish: pushed v1', 60):
+        fail('a document opened AFTER sharing began was never published (ring: %s)' % _ring(s1)[-6:])
+        return s1
+    print('==> a document opened after the share began was published')
+    s2 = _viewer(ctx, url, sid, args)
+    if not s2.load():
+        fail('viewer never reached Ready in session mode (%s)' % s2.phase())
+        return s1
+    if not _wait(s2, 'share applied v', 90, 'console'):
+        fail('the viewer never applied a version (ring: %s)' % _ring(s2)[-6:])
+        return s1
+    v = _volumes(s2, fail)
+    if not any(abs(x['volume'] - 6000.0) < 1e-6 for x in v.values()):
+        fail('the viewer sees %r, expected the 6000.0 box' % v)
+    else:
+        print('==> the viewer opened it: the tabs are no longer just "Start"')
+    s2.page.close()
+    return s1
+
+
 def scenario_control(ctx, url, args, fail):
     """Read-only is enforced, handover flips roles, force keeps displaced work, auto-grant."""
-    s1, sid = _owner_up(ctx, url, args, fail, extra="p.SetString('EditorPassword', 'e1')")
+    s1, sid = _owner_up(ctx, url, args, fail, extra=_pw_py(editor='e1'))
     if not sid:
         return s1
     if not _wait(s1, 'share: passwords updated', 40):
@@ -278,7 +347,7 @@ def scenario_control(ctx, url, args, fail):
     # 2. a PLAIN VIEWER asks (no editor password) and the owner grants with a real click
     if _state(s2).get('role') != 'viewer':
         fail('the second browser should have joined as a viewer, got %r' % _state(s2).get('role'))
-    s2.page.evaluate('window.fcwebShareRequest(false)')
+    s2.page.evaluate('window.fcwebShareRequest(false); null')
     try:
         s1.page.click('text=Grant', timeout=20000)
     except Exception as e:
@@ -304,33 +373,52 @@ def scenario_control(ctx, url, args, fail):
         print('==> Bob\'s edit reached the owner: volume 15000.0')
     # 2b. a viewer cannot TAKE control: forcing without the editor password is refused,
     #     and the session's holder does not move.
-    s1.page.evaluate('window.fcwebShareRequest(true)')     # owner takes it back to set up
+    s1.page.evaluate('window.fcwebShareRequest(true); null')     # owner takes it back to set up
     _wait_state(s1, lambda x: x.get('holder'), 30)
     s3 = _viewer(ctx, url, sid, args, name='Eve')          # another plain viewer
     if s3.load():
         _wait(s3, 'share applied v', 90, 'console')
         s3.page.evaluate('window.__fcNoPrompt = true')
-        s3.page.evaluate('window.prompt = function () { return null; }')   # decline the password
-        s3.page.evaluate('window.fcwebShareRequest(true)')
+        s3.page.evaluate('window.fcwebShareRequest(true); null')
+        time.sleep(1.5)
+        # the toast asks for the editor password; Eve declines it
+        s3.page.evaluate('Array.from(document.querySelectorAll("#fcweb-toasts button")).filter(b => b.textContent === "Cancel").forEach(b => b.click())')
         time.sleep(6)
         if _state(s3).get('holder'):
             fail('a viewer took control without the editor password')
         elif not _state(s1).get('holder'):
             fail('the owner lost control to a viewer who could not force')
         else:
-            print('==> a viewer cannot take control without the editor password')
+            print('==> a viewer who declines the password does not take control')
+        # ...and with the password typed into that same toast, she does
+        s3.page.evaluate('window.fcwebShareRequest(true); null')
+        time.sleep(2)
+        if not s3.page.evaluate('!!document.querySelector("#fcweb-toasts input[type=password]")'):
+            fail('Take control did not ask a plain viewer for the editor password')
+        else:
+            s3.page.fill('#fcweb-toasts input[type=password]', 'e1')
+            s3.page.evaluate('Array.from(document.querySelectorAll("#fcweb-toasts button")).filter(b => b.textContent === "Take control").forEach(b => b.click())')
+            if not _wait_state(s3, lambda x: x.get('holder'), 30):
+                fail('the editor password typed into the toast did not take control')
+            else:
+                print('==> the editor password, typed into the toast, takes control')
         s3.page.close()
-    # 3. force: Bob edits, owner forces immediately; Bob's unpublished edit must survive
-    # Step 2b handed control back to the owner, so Bob must hold it again before an
-    # unpublished edit of his is his to lose. He learns the editor password and takes it.
-    s2.page.evaluate("window.prompt = function () { return 'e1'; }")
-    s2.page.evaluate('window.fcwebShareRequest(true)')
+        s3.page.close()
+    # 3. force: Bob edits, owner forces immediately; Bob's unpublished edit must survive.
+    # Bob was GRANTED control earlier, and a grant mints an edit token, so he takes it
+    # back without being asked for anything -- that is the point of granting.
+    time.sleep(3)
+    if not _state(s2).get('edit'):
+        fail('being granted control did not leave Bob with an edit token')
+    s2.page.evaluate('window.fcwebShareRequest(true); null')
     if not _wait_state(s2, lambda x: x.get('holder'), 30):
-        fail('Bob could not take control back with the editor password')
+        fail('Bob could not take control back with the token his grant minted')
+    else:
+        print('==> a granted viewer keeps the right to take control back')
     time.sleep(3)                     # let the unlock reconcile in the interpreter tick
     s2.run_python("import FreeCAD as A\nfor _d in A.listDocuments().values():\n    _b=_d.getObject('Box')\n    if _b: _b.Length = 26; _d.recompute()")
     time.sleep(0.5)
-    s1.page.evaluate('window.fcwebShareRequest(true)')
+    s1.page.evaluate('window.fcwebShareRequest(true); null')
     st1 = _wait_state(s1, lambda x: x.get('holder'), 30)
     if not st1:
         fail('the owner could not force control back')
@@ -341,17 +429,20 @@ def scenario_control(ctx, url, args, fail):
     v = _volumes(s2, fail)
     kept = [x for x in v.values() if '(my changes)' in x['label']]
     if not kept:
+        own = _volumes(s1, fail)
+        print('==> [diag] owner has %r' % {k: (x['label'], x['length']) for k, x in own.items()})
+        print('==> [diag] Bob ring: %r' % _ring(s2)[-10:])
         fail('Bob\'s unpublished change was not kept as a separate document: %r' % {k: x['label'] for k, x in v.items()})
     elif abs(kept[0]['length'] - 26) > 1e-6:
         fail('the detached copy lost the edit: length %r' % kept[0]['length'])
     else:
         print('==> displaced work kept as "%s" with the edit intact' % kept[0]['label'])
     # 4. a killed holder: Bob takes control then vanishes; the owner gets it after the silence window
-    s2.page.evaluate('window.fcwebShareRequest(true)')
+    s2.page.evaluate('window.fcwebShareRequest(true); null')
     _wait_state(s2, lambda x: x.get('holder'), 30)
     s2.page.close()
     time.sleep(65)
-    s1.page.evaluate('window.fcwebShareRequest(false)')
+    s1.page.evaluate('window.fcwebShareRequest(false); null')
     st1 = _wait_state(s1, lambda x: x.get('holder'), 30)
     if not st1:
         fail('control was not auto-granted after the holder vanished')
@@ -362,7 +453,7 @@ def scenario_control(ctx, url, args, fail):
 
 def scenario_mcp(ctx, url, args, fail):
     """The MCP endpoint from the exact URL the page shows: everything, seeing, live edit."""
-    s1, sid = _owner_up(ctx, url, args, fail, extra="p.SetBool('AllowAgent', True)")
+    s1, sid = _owner_up(ctx, url, args, fail, extra="p.SetBool('AllowAgent', True); p.SetBool('AgentArm', True)")
     if not sid:
         return s1
     st = _wait_state(s1, lambda x: x.get('agentUrl'), 40)
@@ -391,7 +482,10 @@ def scenario_mcp(ctx, url, args, fail):
         if st_ != 200:
             return {'ok': False, 'code': 'http_%d' % st_, 'hint': str(j)[:200]}
         try:
-            return json.loads(j['result']['content'][0]['text'])
+            blocks = j['result']['content']
+            out = json.loads([b for b in blocks if b.get('type') == 'text'][0]['text'])
+            out['_blocks'] = [(b.get('type'), b.get('mimeType')) for b in blocks]
+            return out
         except Exception:
             return {'ok': False, 'code': 'bad_response', 'hint': str(j)[:300]}
 
@@ -421,6 +515,34 @@ def scenario_mcp(ctx, url, args, fail):
         fail('fc_eval print(6*7) -> %r' % r)
     else:
         print('==> fc_eval: 42')
+    r = tool('fc_eval', {'code': 'x = 6\nx * 7'})
+    if r.get('value') != '42':
+        fail('fc_eval must return a trailing expression\'s value like a REPL: %r' % r)
+    else:
+        print('==> fc_eval: value of a trailing expression comes back')
+    if not info.get('share_url') or ('?s=' + sid) not in info['share_url']:
+        fail('fc_session_info must return the human share_url: %r' % info.get('share_url'))
+    # a tool that needs a document, with none active: a code and a hint, not a traceback
+    # App.ActiveDocument is a module attribute the C++ side rewrites on every document
+    # switch; clearing it is exactly 'no active document' as _tool sees it
+    tool('fc_eval', {'code': 'import FreeCAD as App\nApp.ActiveDocument = None'})
+    r = tool('fc_find', {'label': 'Box'})
+    tool('fc_eval', {'code': 'import FreeCAD as App\nApp.setActiveDocument("GateShare")'})
+    if r.get('ok') or r.get('code') != 'no_document' or 'newDocument' not in (r.get('hint') or ''):
+        fail('a document-less call must say no_document with a hint: %r' % {k: r.get(k) for k in ('ok', 'code', 'hint', 'error')})
+    else:
+        print('==> no active document -> no_document, with the hint')
+    # two callers at once: both answered (queued), neither refused
+    outs = {}
+    def _par(k):
+        outs[k] = tool('fc_eval', {'code': 'import time\ntime.sleep(0.5)\nprint(%r)' % k})
+    import threading
+    ths = [threading.Thread(target=_par, args=(k,)) for k in ('A', 'B')]
+    [t.start() for t in ths]; [t.join() for t in ths]
+    if not (outs['A'].get('ok') and outs['B'].get('ok') and 'A' in outs['A'].get('out', '') and 'B' in outs['B'].get('out', '')):
+        fail('parallel tool calls must both be answered, not refused as busy: %r' % {k: (v.get('ok'), v.get('code')) for k, v in outs.items()})
+    else:
+        print('==> two parallel fc_eval calls both answered')
     r = tool('fc_tree')
     if not r.get('ok') or not any(o['name'] == 'Box' for o in r.get('objects', [])):
         fail('fc_tree does not list the Box: %r' % str(r)[:200])
@@ -451,8 +573,10 @@ def scenario_mcp(ctx, url, args, fail):
         elif not w.get('ok') or (w['width'], w['height']) == (r['width'], r['height']):
             fail('viewport and window returned the same frame: %r vs %r'
                  % ((r['width'], r['height']), (w.get('width'), w.get('height'))))
+        elif ('image', 'image/png') not in r.get('_blocks', []):
+            fail('fc_screenshot must return an image content block the model can see, got blocks %r' % r.get('_blocks'))
         else:
-            print('==> fc_screenshot: viewport %dx%d (cropped, luminance %d), window %dx%d'
+            print('==> fc_screenshot: viewport %dx%d (cropped, luminance %d) as an image block, window %dx%d'
                   % (r['width'], r['height'], r['mean_luminance'], w['width'], w['height']))
     else:
         if r.get('ok') or not r.get('hint'):
@@ -479,6 +603,15 @@ def scenario_mcp(ctx, url, args, fail):
     else:
         dt = time.time() - t0
         print('==> assistant edit reached the viewer in %.1fs' % dt)
+        # where the time went: the owner's publish and the viewer's apply, relative to the call
+        try:
+            t0ms = int(t0 * 1000)
+            own = s1.page.evaluate('(window.__fcSessionRing || []).filter(r => r.t >= %d).map(r => [r.t - %d, r.sub + ": " + r.msg.slice(0, 60)])' % (t0ms, t0ms))
+            vw = s2.page.evaluate('(window.__fcSessionRing || []).filter(r => r.t >= %d).map(r => [r.t - %d, r.sub + ": " + r.msg.slice(0, 60)])' % (t0ms, t0ms))
+            print(('==> timeline owner: %s' % '; '.join('+%dms %s' % (t, m) for t, m in own[:8])).encode('ascii', 'replace').decode())
+            print(('==> timeline viewer: %s' % '; '.join('+%dms %s' % (t, m) for t, m in vw[:8])).encode('ascii', 'replace').decode())
+        except Exception as e:
+            print('==> timeline unavailable: %s' % e)
         if dt > 4.0:
             fail('an assistant edit took %.1fs to reach a viewer; the cadence budgets ~2s' % dt)
     st = _wait_state(s2, lambda x: 'stretched the box' in (x.get('note') or ''), 15)
@@ -487,16 +620,37 @@ def scenario_mcp(ctx, url, args, fail):
     v = _volumes(s2, fail)
     if not any(abs(x['volume'] - 18000.0) < 1e-6 for x in v.values()):
         fail('viewer volume after the assistant edit: %r' % {k: x['volume'] for k, x in v.items()})
-    r = tool('fc_view_set', {'standard': 'top'})
+    # The assistant can move its OWN view; watchers keep theirs. What must hold is that
+    # it costs them nothing -- no reopen, no disturbance.
+    applied_before = _state(s2).get('applied')
+    r = tool('fc_view_set', {'standard': 'front', 'note': 'looking from the front'})
+    time.sleep(6)
     if not r.get('ok'):
         fail('fc_view_set -> %r' % r)
+    elif _state(s2).get('applied') != applied_before:
+        fail('the assistant moving its view disturbed the viewer')
+    else:
+        print('==> fc_view_set: the assistant looks where it likes, the viewer is undisturbed')
+    r = tool('fc_export', {'format': 'stl', 'objects': ['Box'], 'name': 'gate-box', 'linear_deflection': 0.05}, 60)
+    if not r.get('ok') or not r.get('bytes') or not r.get('sha256') or r.get('name') != 'gate-box.stl':
+        fail('fc_export stl -> %r' % {k: r.get(k) for k in ('ok', 'code', 'hint', 'name', 'bytes', 'sha256', 'error')})
+    elif not _wait(s1, 'export offered gate-box.stl', 10):
+        fail('the export was not offered to the person as a download')
+    else:
+        print('==> fc_export: gate-box.stl, %d bytes, %s facets, downloaded in the owner\'s browser%s'
+              % (r['bytes'], (r.get('mesh') or {}).get('facets', '?'), ', inlined' if r.get('bytes_b64') else ''))
+    r = tool('fc_export', {'format': '3mf', 'objects': ['Box']}, 60)
+    if not r.get('ok') or not r.get('bytes'):
+        fail('fc_export 3mf -> %r' % {k: r.get(k) for k in ('ok', 'code', 'hint', 'error')})
+    else:
+        print('==> fc_export: 3mf, %d bytes' % r['bytes'])
     r = tool('fc_install_addon', {'repo': 'FreeCAD/FreeCAD-addons'})
     if r.get('ok') or r.get('code') != 'consent_required':
         fail('fc_install_addon must return consent_required until a click: %r' % r)
     else:
         print('==> fc_install_addon: consent_required')
     # not holding control -> not_holder with a hint pointing at fc_control_request
-    s1.page.evaluate('window.fcwebShareRelease()')
+    s1.page.evaluate('window.fcwebShareRelease(); null')
     _wait_state(s1, lambda x: not x.get('holder'), 20)
     r = tool('fc_set_property', {'name': 'Box', 'prop': 'Length', 'value': 31})
     if r.get('ok') or r.get('code') != 'not_holder' or 'fc_control_request' not in r.get('hint', ''):
@@ -578,7 +732,7 @@ def scenario_env(ctx, url, args, fail):
     s1.page.close()
     time.sleep(2)
     s2 = S(ctx2, url + ('&' if '?' in url else '?') + 's=' + sid, args.timeout)
-    _dialogs(s2.page)
+    _join_form(s2.page)
     if not s2.load():
         fail('visitor never reached Ready in session mode (%s)' % s2.phase())
         return None

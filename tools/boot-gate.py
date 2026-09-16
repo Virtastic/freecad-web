@@ -3614,6 +3614,8 @@ SCENARIOS = (
     # Shared sessions (tools/gate_session.py). Two browser contexts each, so not in "all".
     ('share',         _gs.scenario_share,     False,
      'publishes a shared document that a second browser opens, follows live, and resumes'),
+    ('empty',         _gs.scenario_empty,     False,
+     'publishes a document opened after the share began, and says so when there is none'),
     ('control',       _gs.scenario_control,   False,
      'enforces read-only, hands control over, keeps displaced work, auto-grants a vanished holder'),
     ('mcp',           _gs.scenario_mcp,       False,
@@ -3621,7 +3623,7 @@ SCENARIOS = (
     ('env',           _gs.scenario_env,       False,
      'carries units and macros to a visitor with the owner offline, touching nothing the visitor owns'),
     ('edges',         _gse.scenario_edges,    False,
-     'survives a dead link, gates on the viewer password, collapses the bar, redacts diagnostics, ends cleanly'),
+     'survives a dead link, gates on the viewer password, keeps the floating bar gone, redacts diagnostics, ends cleanly'),
 )
 
 # Nothing below may name a scenario this table does not.

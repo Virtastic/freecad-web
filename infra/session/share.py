@@ -123,6 +123,7 @@ def _sessions():
     except OSError:
         return out
     for n in names:
+        # ponytail: O(n) scandir per GC pass; an index file if the volume ever holds thousands
         if n.endswith('.json') and not n.endswith('.env.json') and n != 'evicted.json':
             i = n[:-5]
             if ID_RE.match(i):
@@ -198,13 +199,50 @@ def _st(i):
             holder_seen=0.0,
             pending=None,    # client id asking
             tabs={},         # tab token -> {seen}
+            kicked={},       # client id -> when, so their tab can be told why
             queue=None,      # {id, code, kind, args}
             inflight=None,
             result=None,
             ev=threading.Event(),
             cmd_ev=threading.Event(),
+            turn=threading.Lock(),   # submit() callers take turns instead of being refused
         )
     return s
+
+
+def _people(s):
+    """Everyone currently in the session: the list the panel shows and acts on.
+
+    The client id travels because the actions need something to name a person BY --
+    display names are self-declared and two people can pick the same one. It is only
+    ever handed to people already in the session."""
+    t = _now()
+    out = []
+    for cid, c in s['clients'].items():
+        if t - c['seen'] > WATCHER_TTL_S:
+            continue
+        out.append({'id': cid, 'name': c['name'], 'role': c['role'],
+                    'holder': cid == s['holder'], 'asking': cid == s['pending'],
+                    'idle': int(t - c['seen'])})
+    # One row per person, not per page load. Every reload mints a new client id, so
+    # someone who refreshed a few times filled the list with copies of their own name
+    # until each aged out. Keep the freshest, and let it carry the holder mark.
+    best = {}
+    for x in out:
+        k = (x['name'] or '').strip().lower()
+        cur = best.get(k)
+        if cur is None:
+            best[k] = x
+        elif x['idle'] < cur['idle']:
+            x['holder'] = x['holder'] or cur['holder']
+            x['asking'] = x['asking'] or cur['asking']
+            best[k] = x
+        else:
+            cur['holder'] = cur['holder'] or x['holder']
+            cur['asking'] = cur['asking'] or x['asking']
+    out = list(best.values())
+    out.sort(key=lambda x: (not x['holder'], x['name'].lower()))
+    return out
 
 
 def _watching(s):
@@ -259,12 +297,14 @@ HINTS = {
     'not_editor': 'Only editors can do this. Ask the sender for the editor password.',
     'not_holder': 'Request control from the Edit menu, or fc_control_request() over MCP.',
     'not_admin': 'Only the person who shared this session can do this.',
+    'removed': 'The owner removed you from this session. Ask them for a new link.',
+    'no_client': 'That person is no longer in the session.',
     'too_big': 'The document is over the size limit for this server.',
     'quota': 'The server is out of space; the operator can raise FCWEB_SHARE_MAX_GB.',
     'already_pending': 'Someone else is already asking for control. Try again in a moment.',
     'no_holder_to_grant': 'Nobody is holding control right now, so there is no one to grant it. The editor password lets you take it yourself.',
-    'no_tab': 'No browser tab is attached to this session. Open the session and tick "Allow an AI assistant" in Edit > Share Session.',
-    'busy': 'One command at a time. Wait for the previous call to return.',
+    'no_tab': 'No browser tab is attached. The OWNER\'s FreeCAD tab -- the one that ticked "Allow an AI assistant" in Edit > Share Session -- must be open; a joined viewer\'s tab does not relay.',
+    'busy': 'Another command was still running when yours timed out waiting its turn. Retry.',
     'bad_request': 'The request body was not what this endpoint expects.',
 }
 
@@ -334,6 +374,12 @@ def _route(method, path, fullpath, h, body):
              'pw_edit': '', 'agent': '', 'agent_on': False, 'expires': None,
              'created': int(_now()), 'last_viewed': int(_now()), 'activity': [],
              'owner': ''}
+        why = _evicted().get(i)
+        if why:
+            # the owner is re-sharing a session the server threw away: say so once
+            m['recreated_after'] = why['why']
+            ev = _evicted(); ev.pop(i, None)
+            _write_atomic(os.path.join(CFG['dir'], 'evicted.json'), json.dumps(ev).encode())
         _save_meta(i, m)
     if m is None:
         why = _evicted().get(i)
@@ -347,6 +393,8 @@ def _route(method, path, fullpath, h, body):
     # ---- who is calling -------------------------------------------------------------
     cid = h.get('x-fcweb-client', '')
     client = s['clients'].get(cid)
+    if client is None and cid and cid in s.get('kicked', {}):
+        return _fail(403, 'removed')
     edit_tok = h.get('x-fcweb-edit', '')
     editor_cid = s['edits'].get(edit_tok)
     if client is None and editor_cid is not None:      # a valid edit token proves membership
@@ -387,7 +435,8 @@ def _route(method, path, fullpath, h, body):
         return _json(200, {'client': cid, 'role': role, 'edit': tok, 'name': name,
                            'owner': m.get('owner', ''), 'document': m.get('n', ''),
                            'addons': (env or {}).get('addons', []), 'v': m['v'],
-                           'env_v': m['env_v'], 'holder': _name(s, s['holder'])})
+                           'env_v': m['env_v'], 'holder': _name(s, s['holder']),
+                           'recreated_after': m.pop('recreated_after', None)})
 
     # everything below needs a joined client or the admin key
     if not client and not admin:
@@ -401,7 +450,11 @@ def _route(method, path, fullpath, h, body):
             'note': m['note'] if _now() - m.get('note_t', 0) < 60 else '',   # an activity line, not a label
             'holder': {'name': _name(s, s['holder']), 'silent': stale} if s['holder'] else None,
             'pending': {'name': _name(s, s['pending'])} if s['pending'] else None,
-            'watching': _watching(s), 'expires': m['expires'], 'owner': m.get('owner', ''),
+            'watching': _watching(s), 'people': _people(s),
+            'expires': m['expires'], 'owner': m.get('owner', ''),
+            # whether a password is in force, for the owner's Sharing page: the page never
+            # sees the passwords themselves after they are set
+            'has_pw': {'viewer': bool(m.get('pw_view')), 'editor': bool(m.get('pw_edit'))} if admin else None,
             'you': {'holder': client is not None and cid == s['holder'],
                     'role': client['role'] if client else 'admin',
                     # their own capability, returned only to them: granted control
@@ -551,6 +604,32 @@ def _route(method, path, fullpath, h, body):
             _save_meta(i, m)
         return _json(200, {'env_v': m['env_v']})
 
+    if method == 'POST' and sub == '/kick':
+        # The owner's session, the owner's call. Removing the client drops their edit
+        # token with it, so a kicked editor cannot publish on the way out; their tab
+        # discovers it on the next poll and says so.
+        if not admin:
+            return _fail(403, 'not_admin')
+        try:
+            b = json.loads(body or b'{}')
+        except Exception:
+            return _fail(400, 'bad_request')
+        who = str(b.get('client', ''))
+        c = s['clients'].pop(who, None)
+        if c is None:
+            return _fail(404, 'no_client')
+        for tok, owner_cid in list(s['edits'].items()):
+            if owner_cid == who:
+                s['edits'].pop(tok, None)
+        if s['holder'] == who:
+            s['holder'] = None
+        if s['pending'] == who:
+            s['pending'] = None
+        s['kicked'][who] = _now()
+        _activity(m, s, None, 'removed %s from the session' % c['name'])
+        _save_meta(i, m)
+        return _json(200, {'ok': True, 'removed': c['name']})
+
     if method == 'PUT' and sub == '/passwords':
         try:
             b = json.loads(body or b'{}')
@@ -618,7 +697,9 @@ def _relay(method, i, op, fullpath, h, body):
         if method != 'POST' or not _agent_ok(i, h.get('x-fcweb-agent', '')):
             return _err(404, 'not_found', 'No such endpoint.')
         t = secrets.token_hex(16)
-        s['tabs'] = {t: {'seen': _now()}}      # one relay target at a time; the newest wins
+        # one relay target at a time; the newest wins. The client id is what fc_session_info
+        # compares with the holder -- identity, not a display name.
+        s['tabs'] = {t: {'seen': _now(), 'client': h.get('x-fcweb-client', '')}}
         return _json(200, {'tab': t})
     tab = h.get('x-fcweb-tab', '')
     if tab not in s['tabs']:
@@ -663,24 +744,35 @@ def submit(i, tok, kind, args, timeout=30.0):
         live = [t for t, v in s['tabs'].items() if _now() - v['seen'] <= HOLDER_SILENCE_S]
         if not live:
             return {'ok': False, 'code': 'no_tab', 'hint': HINTS['no_tab']}
-        if s['queue'] is not None or s['inflight'] is not None:
-            return {'ok': False, 'code': 'busy', 'hint': HINTS['busy']}
-        cid = secrets.token_hex(4)
-        s['queue'] = {'id': cid, 'kind': kind, 'args': args}
-        s['result'] = None
-        s['ev'].clear()
-        s['cmd_ev'].set()
-    ok = s['ev'].wait(min(timeout, 120.0))
-    with LOCK:
-        if not ok:
-            s['queue'] = None
-            s['inflight'] = None
-            return {'ok': False, 'code': 'timeout',
-                    'hint': 'The tab did not answer in %ds -- it may be busy in a long operation '
-                            '(document restore, recompute). Try fc_status, then again.' % int(timeout)}
-        r = s['result']
-        s['result'] = None
-        return r
+    timeout = min(float(timeout), 120.0)
+    # One command runs in the tab at a time (one interpreter), but callers QUEUE for it
+    # rather than being refused: an AI client that issues two tool calls in parallel gets
+    # both answered, in order, instead of one 'busy'.
+    # ponytail: fairness is the lock's; a real deque if ordering ever matters.
+    if not s['turn'].acquire(timeout=timeout):
+        return {'ok': False, 'code': 'busy', 'hint': HINTS['busy']}
+    try:
+        with LOCK:
+            cid = secrets.token_hex(4)
+            # the tab bounds its own wait to this, so a stuck interpreter answers 'timeout'
+            # instead of leaving the relay wedged
+            s['queue'] = {'id': cid, 'kind': kind, 'args': args, 'timeout': timeout}
+            s['result'] = None
+            s['ev'].clear()
+            s['cmd_ev'].set()
+        ok = s['ev'].wait(timeout)
+        with LOCK:
+            if not ok:
+                s['queue'] = None
+                s['inflight'] = None
+                return {'ok': False, 'code': 'timeout',
+                        'hint': 'The tab did not answer in %ds -- it may be busy in a long operation '
+                                '(document restore, recompute). Try fc_status, then again.' % int(timeout)}
+            r = s['result']
+            s['result'] = None
+            return r
+    finally:
+        s['turn'].release()
 
 
 # --------------------------------------------------------------------------- selftest
@@ -720,6 +812,10 @@ def selftest():
     owner, oedit = j['client'], j['edit']
     st, j, _, _ = call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)
     assert j['holder']['name'] == 'Alice' and j['you']['holder'] is True
+    assert j['has_pw'] is None, 'has_pw must be admin-only'
+    assert [x['name'] for x in j['people']] == ['Alice'] and j['people'][0]['holder'], j['people']
+    jo = call('GET', '/share/%s/v' % sid, X_Fcweb_Key=key)[1]
+    assert jo['has_pw'] == {'viewer': False, 'editor': False}, jo['has_pw']
 
     # document publish: wrong/no edit token, then holder
     assert call('PUT', '/share/' + sid, b'ONE', X_Fcweb_Client=owner)[0] == 403
@@ -761,6 +857,9 @@ def selftest():
     assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=owner)[1]['pending']['name'] == 'Bob'
     assert call('POST', '/share/%s/control/grant' % sid, {}, X_Fcweb_Edit=oedit)[1]['holder'] == 'Bob'
     you = call('GET', '/share/%s/v' % sid, X_Fcweb_Client=bob)[1]['you']
+    ppl = {x['name']: x for x in call('GET', '/share/%s/v' % sid, X_Fcweb_Client=bob)[1]['people']}
+    assert set(ppl) >= {'Alice', 'Bob'} and ppl['Bob']['id'] == bob, ppl
+    assert ppl['Bob']['holder'] and not ppl['Alice']['holder'], ppl      # Bob was just granted control
     assert you['holder'] is True and you['edit'], 'a granted viewer must receive an edit token'
     assert call('PUT', '/share/' + sid, b'BOB', X_Fcweb_Edit=you['edit'])[1]['v'] == 2
     assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=cy)[1]['you']['edit'] != you['edit']
@@ -817,8 +916,9 @@ def selftest():
     # relay: attach needs the MCP token; submit needs a live tab; one at a time
     assert call('POST', '/api/s/%s/attach' % sid, X_Fcweb_Agent='x' * 32)[0] == 404
     assert submit(sid, tok2, 'eval', {'code': '1'})['code'] == 'no_tab'
-    st, j, _, _ = call('POST', '/api/s/%s/attach' % sid, X_Fcweb_Agent=tok2)
+    st, j, _, _ = call('POST', '/api/s/%s/attach' % sid, X_Fcweb_Agent=tok2, X_Fcweb_Client=owner)
     tab = j['tab']
+    assert _st(sid)['tabs'][tab]['client'] == owner, 'attach must record the tab\'s client id'
     assert call('GET', '/api/s/%s/cmd' % sid, X_Fcweb_Tab='nope')[0] == 409
     assert call('GET', '/api/s/%s/cmd?wait=0' % sid, X_Fcweb_Tab=tab)[0] == 204
     done = {}
@@ -836,8 +936,37 @@ def selftest():
     r = submit(sid, tok2, 'eval', {'code': 'print(6*7)'}, timeout=5)
     th.join()
     assert r == {'id': done['cmd']['id'], 'ok': True, 'out': '42'} and done['cmd']['kind'] == 'eval', r
+    assert done['cmd']['timeout'] == 5.0, 'the tab must learn the caller\'s timeout'
+    # two callers at once: both are answered, in order, none refused
+    seen = []
+
+    def tab_loop():
+        for _ in range(400):
+            st, j, _, _ = call('GET', '/api/s/%s/cmd?wait=0.05' % sid, X_Fcweb_Tab=tab)
+            if st == 200:
+                seen.append(j['args']['code'])
+                call('POST', '/api/s/%s/result' % sid, {'id': j['id'], 'ok': True, 'out': j['args']['code']}, X_Fcweb_Tab=tab)
+                if len(seen) == 2:
+                    return
+            time.sleep(0.01)
+    th = threading.Thread(target=tab_loop)
+    th.start()
+    outs = {}
+    ths = [threading.Thread(target=lambda c=c: outs.__setitem__(c, submit(sid, tok2, 'eval', {'code': c}, timeout=5))) for c in ('A', 'B')]
+    [t.start() for t in ths]; [t.join() for t in ths]; th.join()
+    assert outs['A']['ok'] and outs['B']['ok'] and sorted(seen) == ['A', 'B'], (outs, seen)
     assert call('DELETE', '/share/%s/agent' % sid, X_Fcweb_Key=key)[0] == 200
     assert call('POST', '/mcp/%s/%s' % (sid, tok2))[0] == 404             # AllowAgent off
+
+    # kick: the owner removes a client; their token dies with them and they are told
+    st, j, _, _ = call('POST', '/share/%s/join' % sid, {'name': 'Mallory', 'viewer_pw': 'v1'})
+    mal = j['client']
+    assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=mal)[0] == 200
+    assert call('POST', '/share/%s/kick' % sid, {'client': mal}, X_Fcweb_Client=mal)[0] == 403   # not the owner
+    assert call('POST', '/share/%s/kick' % sid, {'client': mal}, X_Fcweb_Key=key)[1]['removed'] == 'Mallory'
+    st, j, _, _ = call('GET', '/share/%s/v' % sid, X_Fcweb_Client=mal)
+    assert st == 403 and j['code'] == 'removed' and j['hint'], j
+    assert call('POST', '/share/%s/kick' % sid, {'client': 'nope'}, X_Fcweb_Key=key)[0] == 404
 
     # durability: no expiry -> served 30 simulated days later; expiry -> 404 after it
     clock[0] += 30 * 86400

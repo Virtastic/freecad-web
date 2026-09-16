@@ -2,7 +2,7 @@
 # Copyright (c) Virtastic
 """The shared-session edge paths, each one a thing a real person hits: a dead link, a
 viewer password, stopping a share, the diagnostics panel with its secrets redacted, and
-the collapsible session bar. Registered by tools/boot-gate.py as scenario `edges`."""
+and that the floating session bar stays gone. Registered by boot-gate.py as `edges`."""
 import time
 
 import gate_session as gs
@@ -12,7 +12,7 @@ def scenario_edges(ctx, url, args, fail):
     S = gs._Session()
     # 1. a link to a session that does not exist: FreeCAD boots normally, one honest toast
     dead = S(ctx, url + ('&' if '?' in url else '?') + 's=' + 'd' * 32, args.timeout)
-    gs._dialogs(dead.page)
+    gs._join_form(dead.page)
     if not dead.load():
         fail('a dead link stopped FreeCAD from booting (%s)' % dead.phase())
     else:
@@ -30,7 +30,7 @@ def scenario_edges(ctx, url, args, fail):
 
     # 2. owner shares with a VIEWER password; a viewer must give it (real prompt), and a
     #    wrong one is refused with a hint
-    s1, sid = gs._owner_up(ctx, url, args, fail, extra="p.SetString('ViewerPassword', 'v1')")
+    s1, sid = gs._owner_up(ctx, url, args, fail, extra=gs._pw_py(viewer='v1'))
     if not sid:
         return s1
     if not gs._wait(s1, 'share: passwords updated', 40):
@@ -50,25 +50,34 @@ def scenario_edges(ctx, url, args, fail):
     else:
         print('==> right viewer password: session opened')
 
-    # 3. the session bar collapses to a tab and comes back (real clicks on DOM buttons)
-    g0 = good.page.evaluate('(() => { const b = document.getElementById("fcweb-session-bar"); const r = b.getBoundingClientRect(); return [Math.round(r.height), Math.round(r.top)]; })()')
-    good.page.click('#fcweb-session-bar button[title^="Hide the session bar"]')
-    time.sleep(0.5)
-    g1 = good.page.evaluate('(() => { const b = document.getElementById("fcweb-session-bar"); const r = b.getBoundingClientRect(); return [Math.round(r.height), Math.round(r.top), getComputedStyle(b.querySelector("span:nth-child(3)")).display]; })()')
-    good.page.click('#fcweb-session-bar')
-    time.sleep(0.5)
-    g2 = good.page.evaluate('(() => { const b = document.getElementById("fcweb-session-bar"); const r = b.getBoundingClientRect(); return [Math.round(r.height), Math.round(r.top)]; })()')
-    if not (g1[0] < g0[0] and g1[1] == 0 and g1[2] == 'none' and g2 == g0):
-        fail('the session bar did not collapse and restore: %r %r %r' % (g0, g1, g2))
+    # 3. the floating session bar is gone for good, and the session lives in Preferences
+    #    instead. A leftover bar would sit over the 3D view, which is why it was removed.
+    if good.page.evaluate('!!document.getElementById("fcweb-session-bar")'):
+        fail('the floating session bar is back')
     else:
-        print('==> session bar: %dpx -> %dpx tab at the top edge -> %dpx' % (g0[0], g1[0], g2[0]))
+        print('==> no floating bar over the model')
+    pages = good.run_python(
+        "import FreeCADGui as G, fcweb_share as F, sys\n"
+        "_ok = [hasattr(F, n) for n in ('FcwebSharingPage', 'FcwebSessionPage', 'FcwebMcpPage')]\n"
+        "sys.__stderr__.write('GATE_PAGES ' + repr({'pages': _ok}) + chr(10))")
+    r = good.wait_for('GATE_PAGES', 30)
+    if not isinstance(r, dict) or not all(r.get('pages') or []):
+        fail('the three Sharing preference pages are not all present: %r' % (r,))
+    else:
+        print('==> Sharing preference pages present: General, Session, MCP')
 
     # 4. diagnostics: opens, and the bug-report copy contains no secret. The owner has an
     #    MCP URL in play, so the ring has something to redact.
-    s1.run_python("import FreeCAD as A\nA.ParamGet(%r).SetBool('AllowAgent', True)" % gs.GROUP)
+    # AgentArm is what the Enable button sets; AllowAgent alone is a remembered
+    # preference and no longer mints a URL by itself.
+    s1.run_python("import FreeCAD as A\np = A.ParamGet(%r)\n"
+                  "p.SetBool('AllowAgent', True)\n"
+                  "p.SetBool('AgentArm', True)" % gs.GROUP)
     if not gs._wait_state(s1, lambda x: x.get('agentUrl'), 40):
         fail('no MCP URL minted for the diagnostics check')
-    s1.page.click('#fcweb-session-bar button:has-text("Diagnostics")')
+    # Diagnostics opens from the Session page's button, which asks the browser half
+    # through the request file -- exactly what pressing it does.
+    s1.run_python("import fcweb_share as F\nF._req('diag')")
     time.sleep(1)
     d = s1.page.evaluate('(() => { const h = document.getElementById("fcweb-diag"); return h ? h.textContent : null; })()')
     if not d or 'Session diagnostics' not in d:
