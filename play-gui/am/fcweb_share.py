@@ -47,6 +47,7 @@ _last_state = None
 _obs = None
 _pin = None
 _last_pub_change = 0.0
+_pub_fail_seen = 0.0
 _env_hash = None
 _ro = {}          # doc name -> obj name -> prop name -> original status list
 _actions = {}     # our QActions on the Edit menu
@@ -1050,6 +1051,15 @@ def tick():
             want = not bool(c.get('holder')) and not c.get('ended')
             if _obs.guard != want:
                 set_readonly(want)
+        # An upload the server refused (409 not_holder is the usual one) means the work
+        # is still only in this tab. publish() advances _last_pub_change when it STAGES,
+        # so without this the change looks published, and losing control then dropped it
+        # rather than detaching it as '<Name> (my changes)'.
+        global _pub_fail_seen
+        if c.get('pub_fail_t') and c['pub_fail_t'] != _pub_fail_seen:
+            _pub_fail_seen = c['pub_fail_t']
+            globals()['_last_pub_change'] = 0.0
+            _log('publish was refused: the change is unpublished again')
         if _tick_n % 2 == 0:
             ensure_menu()
         staged = False

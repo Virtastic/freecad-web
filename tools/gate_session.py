@@ -429,6 +429,9 @@ def scenario_control(ctx, url, args, fail):
     v = _volumes(s2, fail)
     kept = [x for x in v.values() if '(my changes)' in x['label']]
     if not kept:
+        own = _volumes(s1, fail)
+        print('==> [diag] owner has %r' % {k: (x['label'], x['length']) for k, x in own.items()})
+        print('==> [diag] Bob ring: %r' % _ring(s2)[-10:])
         fail('Bob\'s unpublished change was not kept as a separate document: %r' % {k: x['label'] for k, x in v.items()})
     elif abs(kept[0]['length'] - 26) > 1e-6:
         fail('the detached copy lost the edit: length %r' % kept[0]['length'])

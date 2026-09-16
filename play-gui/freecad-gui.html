@@ -1459,7 +1459,8 @@ window.fcwebNotify = function (text, kind, actions, opts) {
                              link: S.id ? shareLink() : '', edit: !!S.edit, holderName: S.holderName || '', watching: S.watching || 0,
                              t: S.t || 0, expires: S.expServer || 0, has_pw: S.hasPw || null, contact: S.contact !== false,
                              lastErr: S.lastErr || '', ended: !!S.ended, doc: S.doc || '', agentUrl: S.agentUrl || '',
-                             client: S.client || '', people: S.people || [], pendingName: S.pendingName || '' });
+                             client: S.client || '', people: S.people || [], pendingName: S.pendingName || '',
+                             pub_fail_t: S.pubFailT || 0 });
     if (c !== S.ctlSent) { writeText(CTL, c); S.ctlSent = c; }
   }
   var wantParams = {};
@@ -1701,6 +1702,11 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       log('publish', 'pushed v' + r.json.v + ' (' + safeName(meta.name || S.doc) + ', ' + bytes.length + ' bytes)');
       renderBar();
     } catch (e) {
+      // Staging is not publishing. The interpreter marks the change published when it
+      // stages the bytes, so a refused upload (409 not_holder, most often) left the work
+      // looking safe: it was never on the server, and being displaced then dropped it
+      // instead of detaching it as '<Name> (my changes)'. Tell the interpreter.
+      S.pubFailT = Date.now() / 1000; sendCtl();
       fail('publish', e, 'publish_fail');
       if (++S.pubFails === 3) toast('Your shared session has stopped updating (' + e.message + '). Others are seeing an old copy.', 'error');
     }
