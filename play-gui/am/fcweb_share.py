@@ -46,8 +46,10 @@ SETTLE_S = 0.6                      # publish once edits have been still this lo
 _last_state = None
 _obs = None
 _pin = None
-_last_pub_change = 0.0
+_last_pub_change = 0.0      # staged: do not stage this same change again
+_confirmed_change = 0.0     # ...and the page said the server took it
 _pub_fail_seen = 0.0
+_last_pub_seen = -1         # the page's own count of successful publishes
 _env_hash = None
 _ro = {}          # doc name -> obj name -> prop name -> original status list
 _actions = {}     # our QActions on the Edit menu
@@ -1159,6 +1161,7 @@ def tick():
                     _log('session follows the active document: %s -> %s' % (_pin, d.Name))
                     set_readonly(False)          # let go of the one we are leaving
                     globals()['_last_pub_change'] = 0.0
+                    globals()['_confirmed_change'] = 0.0
                 pin(d.Name)
         # Read-only is reconciled HERE, every tick, from what the page says about control.
         # A page-initiated set_readonly() can be dropped while the interpreter is busy; a
@@ -1174,7 +1177,12 @@ def tick():
         # is still only in this tab. publish() advances _last_pub_change when it STAGES,
         # so without this the change looks published, and losing control then dropped it
         # rather than detaching it as '<Name> (my changes)'.
-        global _pub_fail_seen
+        global _pub_fail_seen, _last_pub_seen
+        lp = p.GetInt('LastPublished', 0)
+        if lp != _last_pub_seen:
+            # the page writes LastPublished only after a PUT came back 200
+            _last_pub_seen = lp
+            globals()['_confirmed_change'] = _last_pub_change
         if c.get('pub_fail_t') and c['pub_fail_t'] != _pub_fail_seen:
             _pub_fail_seen = c['pub_fail_t']
             globals()['_last_pub_change'] = 0.0
@@ -1315,8 +1323,14 @@ def _shape_info(o):
 
 
 def unpublished():
-    """True when the pinned document changed after its last publish."""
-    return bool(_obs and _obs.changed > _last_pub_change)
+    """True when this tab holds changes the SERVER has not taken.
+
+    Staging is not publishing. publish() advances _last_pub_change as soon as it writes the
+    bytes out for the page to upload, which is what stops it staging the same change every
+    tick -- but the upload can still be refused, and 409 not_holder is the normal way to
+    lose a race with someone taking control. Deciding on the staged mark meant work that
+    never reached anyone looked safe at exactly the moment it was about to be discarded."""
+    return bool(_obs and _obs.changed > _confirmed_change)
 
 
 # Tools that need a document. Without one they would raise AttributeError deep inside;
