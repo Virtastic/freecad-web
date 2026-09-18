@@ -7,7 +7,17 @@ const puppeteer = require('puppeteer-core');
 const fs = require('fs');
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';  // set CHROME_PATH to run off macOS
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
-const CODE = fs.readFileSync('/tmp/ccxe2e.py', 'utf8');
+// The payload has never been in this repository, so on any machine but the one that wrote
+// it this threw ENOENT before the browser opened. Say what to run instead: boot-gate's fem
+// scenario solves the same cantilever from tracked code and checks it against the closed
+// form, which is the stronger check anyway.
+const PAYLOAD = '/tmp/ccxe2e.py';
+if (!fs.existsSync(PAYLOAD)) {
+  console.log('SKIP ' + PAYLOAD + ' is not present. Equivalent tracked check:');
+  console.log('  python tools/boot-gate.py --base-url https://freecad.virtastic.app --scenario fem');
+  process.exit(0);
+}
+const CODE = fs.readFileSync(PAYLOAD, 'utf8');
 
 (async () => {
   const errs = [];
