@@ -42,6 +42,8 @@ import time
 ID_RE = re.compile(r'[0-9a-f]{32}\Z')
 TOK_RE = re.compile(r'[0-9a-f]{32,64}\Z')
 PBKDF_ROUNDS = 200_000
+V0_TTL_S = 3600.0                  # a session that never published anything
+KEEP_S = 86400.0                   # viewed this recently: quota pressure must not evict it
 HOLDER_SILENCE_S = 60      # a holder unseen this long can be auto-granted away
 WATCHER_TTL_S = 20         # /v polls keep a watcher alive this long
 ACTIVITY_MAX = 100         # bounded ring per session; no IPs, ever
@@ -135,10 +137,18 @@ def _expired(m):
     return bool(m.get('expires')) and _now() > m['expires']
 
 
+_HEALTH_GC = [0.0, 0]          # when we last swept for /share/health, and what it found
+
+
 def _gc(incoming=0):
     """Expiry on touch, then quota: evict least-recently-viewed sessions WITHOUT an expiry
     until the incoming write fits. Never evicts a session whose owner set a date -- they
-    made a decision, and quota pressure is not a reason to override it silently."""
+    made a decision, and quota pressure is not a reason to override it silently.
+
+    Nor a session someone is still looking at. On a public origin anyone can create one, so
+    an unbounded upload would otherwise delete a stranger's model to make room; refusing the
+    write is the honest failure. A session still at v0 an hour on never published anything --
+    the page publishes within seconds of Start sharing -- so it is an abandoned one."""
     total = 0
     rows = []
     for i in _sessions():
@@ -148,6 +158,9 @@ def _gc(incoming=0):
         if _expired(m):
             _remove(i, 'expired')
             continue
+        if not m.get('v') and _now() - m.get('created', 0) > V0_TTL_S:
+            _remove(i, 'expired')
+            continue
         s = _size(i)
         total += s
         rows.append((m.get('last_viewed', m.get('created', 0)), i, s, bool(m.get('expires'))))
@@ -155,8 +168,8 @@ def _gc(incoming=0):
     for lv, i, s, dated in rows:
         if total + incoming <= CFG['quota']:
             break
-        if dated:
-            continue
+        if dated or _now() - lv < KEEP_S:
+            continue          # dated, or someone opened it today: not ours to delete
         _remove(i, 'quota')
         total -= s
     return total
@@ -345,7 +358,12 @@ def _q(fullpath, key, default=''):
 
 def _route(method, path, fullpath, h, body):
     if path == '/share/health':
-        used = _gc()
+        # Unauthenticated, so it must not be a lever: a real _gc() scandirs the volume,
+        # parses every metadata file and can delete sessions, all under the global lock.
+        # The 30 s docker healthcheck keeps calling this, which is what runs expiry.
+        if _now() - _HEALTH_GC[0] > 60:
+            _HEALTH_GC[0], _HEALTH_GC[1] = _now(), _gc()
+        used = _HEALTH_GC[1]
         return _json(200, {'ok': True, 'v': 1, 'n': len(_sessions()), 'used': used,
                            'quota': CFG['quota'], 'max_mb': CFG['max_bytes'] // 1048576})
 
@@ -355,6 +373,12 @@ def _route(method, path, fullpath, h, body):
 
     if path.startswith('/share/') and not m_share:
         return _fail(400, 'bad_id')
+    # Size BEFORE parse. Every handler below json.loads its body while holding the global
+    # lock, and nginx allows 32m so that this limit, not nginx's, is what answers with a
+    # code and a hint. /api/ is deliberately not covered: it carries screenshots and has
+    # its own 4m ceiling in nginx.
+    if path.startswith('/share/') and len(body) > CFG['max_bytes']:
+        return _fail(413, 'too_big')
     if m_mcp:
         return _mcp_probe(m_mcp.group(1), m_mcp.group(2))
     if m_api:
@@ -364,7 +388,6 @@ def _route(method, path, fullpath, h, body):
 
     i, sub = m_share.group(1), (m_share.group(2) or '')
     admin = _is_admin(i, h.get('x-fcweb-key', ''))
-    s = _st(i)
     m = _meta(i)
 
     # ---- creation: the owner's own /join with the admin key ------------------------
@@ -389,6 +412,10 @@ def _route(method, path, fullpath, h, body):
     if _expired(m):
         _remove(i, 'expired')
         return _fail(404, 'expired')
+    # Only now, for a session that demonstrably EXISTS. _st() allocates a dict, two Events
+    # and a Lock and nothing ever frees it, so creating it above meant any caller could mint
+    # permanent memory with a 32-hex guess that answers 404 -- 5/s per IP, forever.
+    s = _st(i)
 
     # ---- who is calling -------------------------------------------------------------
     cid = h.get('x-fcweb-client', '')
@@ -692,17 +719,19 @@ def _mcp_probe(i, tok):
 
 # --------------------------------------------------------------------------- relay
 def _relay(method, i, op, fullpath, h, body):
-    s = _st(i)
     if op == 'attach':
         if method != 'POST' or not _agent_ok(i, h.get('x-fcweb-agent', '')):
             return _err(404, 'not_found', 'No such endpoint.')
+        s = _st(i)          # only once the capability checked out; see _route
         t = secrets.token_hex(16)
         # one relay target at a time; the newest wins. The client id is what fc_session_info
         # compares with the holder -- identity, not a display name.
         s['tabs'] = {t: {'seen': _now(), 'client': h.get('x-fcweb-client', '')}}
         return _json(200, {'tab': t})
     tab = h.get('x-fcweb-tab', '')
-    if tab not in s['tabs']:
+    s = STATE.get(i)
+    # No state means no attach has ever succeeded here, so no tab token can be valid.
+    if s is None or tab not in s['tabs']:
         return _err(409, 'stale_tab', 'This tab is no longer the relay target; re-attach.')
     s['tabs'][tab]['seen'] = _now()
     if op == 'cmd' and method == 'GET':
@@ -978,13 +1007,14 @@ def selftest():
     assert st == 200
     assert call('PUT', '/share/' + sid, b'w' * 900, X_Fcweb_Edit=j['edit'])[1]['v'] == 1     # expiry wiped the bytes
     bob = call('POST', '/share/%s/join' % sid, {'name': 'Bob'})[1]['client']              # passwords were wiped too
-    clock[0] += 5                                                                          # sid is now strictly the oldest-viewed
+    clock[0] += KEEP_S + 5        # sid is the oldest-viewed AND now idle long enough to evict
 
     # quota: least recently viewed no-expiry session evicted; dated ones spared; owner told
     def mk(k, size):
         s_ = hashlib.sha256(k.encode()).hexdigest()[:32]
         st, j, _, _ = call('POST', '/share/%s/join' % s_, {'name': 'O'}, X_Fcweb_Key=k)
-        assert call('PUT', '/share/' + s_, b'z' * size, X_Fcweb_Edit=j['edit'])[0] == 200, s_
+        _r = call('PUT', '/share/' + s_, b'z' * size, X_Fcweb_Edit=j['edit'])
+        assert _r[0] == 200, (s_, _r[0], _r[1])
         return s_, j
     CFG['quota'] = 10 ** 7
     sa, ja = mk('1' * 64, 900)
@@ -1000,6 +1030,50 @@ def selftest():
     assert call('GET', '/share/%s/v' % sid, X_Fcweb_Client=bob)[1]['code'] == 'evicted', 'oldest no-expiry goes'
     assert call('GET', '/share/%s/v' % sb, X_Fcweb_Client=jb['client'])[0] == 200, 'dated session spared'
     assert call('GET', '/share/%s/v' % sa, X_Fcweb_Client=ja['client'])[0] == 200
+
+    # ...and a stranger cannot make room by uploading. Everything left was viewed moments
+    # ago, so the write is refused instead of deleting somebody's model.
+    for _s, _j in ((sa, ja), (sb, jb), (sc, jc)):
+        call('GET', '/share/' + _s, X_Fcweb_Client=_j['client'])
+    CFG['quota'] = _size(sa) + _size(sb) + _size(sc) + 100
+    n_before = len(_sessions())
+    assert call('PUT', '/share/' + sa, b'q' * 900, X_Fcweb_Edit=ja['edit'])[1]['code'] == 'quota'
+    assert len(_sessions()) == n_before, 'quota pressure must not evict a session in use'
+    CFG['quota'] = 10 ** 7
+
+    # a session that never published anything is an abandoned one
+    kv = '4' * 64
+    sv = hashlib.sha256(kv.encode()).hexdigest()[:32]
+    call('POST', '/share/%s/join' % sv, {'name': 'O'}, X_Fcweb_Key=kv)
+    assert call('GET', '/share/%s/v' % sv, X_Fcweb_Key=kv)[0] == 200
+    clock[0] += V0_TTL_S + 1
+    _gc()
+    assert call('GET', '/share/%s/v' % sv, X_Fcweb_Key=kv)[0] == 404, 'a v0 session ages out'
+
+    # an id nobody has proved exists must not leave anything behind: _st() allocates a dict,
+    # two Events and a Lock, and nothing ever frees them
+    zid = 'f' * 32
+    assert call('GET', '/share/%s/v' % zid)[0] == 404
+    assert call('POST', '/api/s/%s/attach' % zid, {}, X_Fcweb_Agent='0' * 32)[0] == 404
+    assert call('GET', '/api/s/%s/cmd' % zid, X_Fcweb_Tab='0' * 32)[0] == 409
+    assert STATE.get(zid) is None, 'an unauthenticated id must not allocate session state'
+
+    # size is checked BEFORE the body is parsed: oversized junk is 413, never 400
+    st_, j_, _, _ = call('PUT', '/share/%s/env' % sa, b'not json ' + b'x' * 2000, X_Fcweb_Key='1' * 64)
+    assert st_ == 413, 'the size guard must run before json.loads (got %s)' % st_
+
+    # health is unauthenticated, so its sweep is rate limited rather than on demand
+    gc_calls = [0]
+    real_gc = _gc
+    globals()['_gc'] = lambda incoming=0: (gc_calls.__setitem__(0, gc_calls[0] + 1), real_gc(incoming))[1]
+    _HEALTH_GC[0] = 0.0
+    for _ in range(3):
+        assert call('GET', '/share/health')[0] == 200
+    assert gc_calls[0] == 1, 'health swept %d times in a minute' % gc_calls[0]
+    clock[0] += 61
+    call('GET', '/share/health')
+    assert gc_calls[0] == 2, 'health must sweep again once the minute is up'
+    globals()['_gc'] = real_gc
 
     # stop
     assert call('DELETE', '/share/' + sc, X_Fcweb_Edit=jc['edit'])[0] == 403

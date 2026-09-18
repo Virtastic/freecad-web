@@ -35,12 +35,15 @@ services:
   # OPTIONAL: shared sessions + MCP. Off unless you ask for it:
   #     docker compose --profile share up -d
   # Without it, /share/ answers 502 and the app shows "sharing is not available on this
-  # site" -- which is exactly the state the public origin runs in.
+  # site". The virtastic origins do run it; stopping this one container is the kill switch
+  # that puts a site back into that state without touching anything else.
   #
   # PRIVACY: anything shared from this container is readable by anyone holding the link
   # (or the link plus the password). Do not enable it on a box you would not put a public
   # file server on. Sessions do NOT expire on their own; storage is quota-managed instead
-  # (FCWEB_SHARE_MAX_GB), and the least recently viewed session is evicted when it fills.
+  # (FCWEB_SHARE_MAX_GB); when it fills, the least recently viewed session is evicted --
+  # but never one opened in the last day, and never one with an expiry date. If nothing is
+  # evictable the write is refused instead.
   session:
     profiles: ["share"]
     build:
@@ -51,6 +54,8 @@ services:
     environment:
       FCWEB_SHARE_MAX_GB: "5"     # total on the volume before eviction starts
       FCWEB_SHARE_MAX_MB: "25"    # one document
+      # FCWEB_PUBLIC_URL: set this on any origin behind a proxy, or the links the MCP page
+      # hands out are built from the request's own Host. Unset is right for localhost only.
     restart: unless-stopped
 
 volumes:

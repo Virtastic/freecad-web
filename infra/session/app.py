@@ -542,8 +542,11 @@ class McpGate:
             return
         token = CURRENT.set((m.group(1), m.group(2)))
         hdr = {k.decode().lower(): v.decode() for k, v in scope.get('headers', [])}
-        host = hdr.get('x-forwarded-host') or hdr.get('host', '')
-        proto = hdr.get('x-forwarded-proto') or scope.get('scheme', 'http')
+        # Host only: nginx sets it, and does NOT set or strip x-forwarded-*, so trusting
+        # those let a caller choose the origin in the link we hand the model. A real
+        # deployment sets FCWEB_PUBLIC_URL, which wins over this either way.
+        host = hdr.get('host', '')
+        proto = scope.get('scheme', 'http')
         otoken = ORIGIN.set(proto + '://' + host if host else '')
         try:
             inner = dict(scope, path=rp + '/', raw_path=(rp + '/').encode())
