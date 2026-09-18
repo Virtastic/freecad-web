@@ -9,8 +9,9 @@ you work; if they open it three days later it is still exactly as you left it. T
 session can be handed to an AI assistant over MCP, which sees what you see and edits
 alongside you while everyone watches.
 
-This is optional and self-hosted. The public site at <https://freecad.virtastic.app> does
-not run it; nothing about sharing reaches a server unless an operator starts one.
+The Virtastic sites run this. On any other install it is optional: nothing about sharing
+reaches a server unless an operator starts the container, and until you start a session
+nothing of yours leaves your browser either.
 
 ---
 
@@ -30,8 +31,8 @@ and the Sharing page says the service is not running.
 | Setting | Default | What it does |
 |---|---|---|
 | `FCWEB_SHARE_MAX_MB` | 25 | Largest document a session may hold |
-| `FCWEB_SHARE_MAX_GB` | 5 | Total volume before the least recently viewed session with no expiry is evicted |
-| `FCWEB_PUBLIC_URL` | — | The origin used in links. Unset, each request's own host is used, which is right for a plain `docker compose up`. |
+| `FCWEB_SHARE_MAX_GB` | 5 | Total volume before the least recently viewed session with no expiry is evicted. A session opened in the last day is never evicted, and a session that never published anything is dropped after an hour. When nothing may be evicted the write is refused instead. |
+| `FCWEB_PUBLIC_URL` | — | The origin used in links. Set it on any origin behind a proxy. Unset, each request's own host is used, which is right for a plain `docker compose up` and wrong almost everywhere else. |
 
 Sessions live in one Docker volume as plain files — `<id>.fcstd`, `<id>.env.json`,
 `<id>.json`. To see them:
@@ -122,20 +123,29 @@ A first visit downloads the ~88 MB engine; returning visits start in seconds. **
 
 ## Letting an AI assistant in
 
-**Edit → Share Session… → MCP**, press **Enable assistant** (it needs a session, so start
-one on the General page first). A link is minted; **Copy** it from that page and give it
-to your AI client:
+**Edit → Share Session… → MCP**, press **Enable assistant**. The assistant works inside a
+session, so if you have not started one this starts it for you. A link is minted a moment
+later.
+
+For a command-line client, do not retype it. **Copy Claude Code command** and **Copy Codex
+command** put the whole thing on the clipboard, already carrying your link:
 
 ```bash
-claude mcp add --transport http freecad <the link>
+claude mcp remove freecad
+claude mcp add --transport http freecad <your link>
 ```
 
-In Claude Desktop: **Settings → Connectors → add a custom connector** and paste the same
-link. There is nothing else to configure — the link carries the session and the
+Each button copies **two lines**, a remove followed by an add, because both clients refuse a
+name that already exists and the common case is not a first install but a link that changed.
+Paste both into a terminal. The Codex form is `codex mcp remove freecad` then
+`codex mcp add freecad --url <your link>`.
+
+In Claude Desktop: **Settings → Connectors → add a custom connector** and paste the link
+itself. There is nothing else to configure — the link carries the session and the
 capability.
 
-**Regenerate** makes a new link and the old one stops working immediately; remove and
-re-add it in the client afterwards.
+**Regenerate** makes a new link and the old one stops working immediately. Press the copy
+button again and paste: the remove line is what lets the new one take its place.
 
 ### What the assistant can do
 
@@ -195,7 +205,10 @@ report** redacts the token and passwords first.
   than useful. Selections, dialogs and a sketch in progress do not travel either.
 - **Not one file.** Every document you have open is mirrored, so the tabs along the
   bottom of a watcher's window are your tabs, and a file you open mid-session appears
-  for them too. An edit in any of them reaches the audience in a few seconds.
-  selections, dialogs or a sketch in progress.
+  for them too. An edit in any of them reaches the audience in a few seconds, and the tabs
+  you are not touching are left alone while it does.
 - **No version history.** A link shows the current state.
 - **No accounts.** Names are self-declared, and the activity log says so.
+- **Not a ban.** Removing someone ends that tab's session, but the link still works and a
+  reload lets them back in. To actually shut someone out, set or change the viewer password,
+  or stop sharing.

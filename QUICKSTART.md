@@ -126,6 +126,27 @@ docker compose logs -f         # follow the logs
 docker compose ps              # is it healthy?
 ```
 
+### Shared sessions
+
+Shared sessions and the MCP endpoint are a second container, off unless you ask for it:
+
+```bash
+docker compose --profile share up -d      # start it
+docker compose --profile share down       # stop it again
+```
+
+Stopping that one container is the kill switch: the application keeps running exactly as
+before and the Sharing page says the service is not running.
+
+To see what is stored:
+
+```bash
+docker compose exec session python /srv/share.py --list
+docker compose exec session python /srv/share.py --stats
+```
+
+[SHARING.md](SHARING.md) covers the settings, the passwords and what travels in a session.
+
 ### Updating
 
 Re-run the installer with the newer tag:
@@ -141,13 +162,28 @@ docker compose down
 docker image rm ghcr.io/virtastic/freecad-web:1.0.0
 ```
 
-Nothing is written outside Docker. There is no volume to clean up, no service installed
-and no file dropped in a system directory.
+If you ever ran the share profile, the image is not the whole of it: shared sessions live
+in a named Docker volume that `down` leaves behind. Removing it deletes every shared
+document permanently, and nothing else holds a copy of them:
 
-Your **documents are not in the container** — they live in your browser's storage, so
+```bash
+docker compose --profile share down -v
+```
+
+(Compose prefixes the volume name with the directory name, so remove it through compose
+rather than guessing at `docker volume rm`.)
+
+Nothing else is written outside Docker: no service installed and no file dropped in a
+system directory.
+
+Your own **documents are not in the container**. They live in your browser's storage, so
 removing the container does not delete them, and neither does re-running the installer.
 Export anything you care about through *File → Export* first if you are clearing browser
 data.
+
+A document you shared is the exception: a copy of it, plus the settings, macros and
+add-ons the session carries, sits on the volume above as plain unencrypted files. Anyone
+with access to that server can read them. Stop sharing when you are done.
 
 ---
 

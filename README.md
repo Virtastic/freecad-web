@@ -1,6 +1,6 @@
 # freecad-web
 
-**[FreeCAD](https://www.freecad.org) 1.0, compiled to WebAssembly and running in the browser.**
+**[FreeCAD](https://www.freecad.org) 1.1.3, compiled to WebAssembly and running in the browser.**
 No install, no plugin, no server-side rendering — the real application, executing locally in
 your tab.
 
@@ -60,6 +60,14 @@ Verified under real mouse and keyboard input against production, not just script
   FCStd, STEP, IGES, STL, 3MF, OpenSCAD CSG, SVG, DXF.
 - **Your work survives a reload.** Documents autosave to browser storage on edit and are
   restored on boot.
+- **Shared session links.** *Edit → Share Session…* gives a link that opens your document
+  *in your environment* (your units, your theme, your add-ons, your macros) for anyone,
+  now or days later. One person holds control at a time and everyone else is read-only,
+  so conflicting edits cannot happen. Rendering still runs in each visitor's own browser.
+- **An MCP endpoint for AI clients.** *Preferences → Sharing → MCP* mints one URL. Paste
+  it into an AI client and it can see and drive FreeCAD: the object tree, properties,
+  selection, views, export, and every GUI command. The page has copy buttons for the
+  Claude Code and Codex command lines, so there is nothing to type.
 
 ## Requirements and limits
 
@@ -72,7 +80,7 @@ These are real constraints, stated up front rather than discovered:
 | **Memory** | A 16 GB heap ceiling (the wasm64 build; V8 caps wasm64 memory there). The app force-saves your documents and warns before it runs out. |
 | **AddonManager** | Absent (it needs `git` and real sockets). A `.zip` / GitHub workbench installer covers the same use case. |
 | **CalculiX** | Single-threaded, so large FEM jobs are slower than desktop. |
-| **Shared sessions / MCP** | Optional and self-hosted: `docker compose --profile share up -d` adds one container. Edit → Share Session… gives a link that opens your document *in your environment* (units, theme, add-ons, macros) for anyone, now or days later, with turn-taking control; the same page mints one MCP URL through which an AI can see and control everything FreeCAD has. The public origin does not run it, so this README's "no server" claim holds there. |
+| **Shared sessions / MCP** | Self-hosters need one extra container: `docker compose --profile share up -d`. Documents you share are stored unencrypted on that server, so anyone with access to it can read them. Nothing leaves your browser until you start a session. |
 
 ## Documentation
 

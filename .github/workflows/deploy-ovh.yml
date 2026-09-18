@@ -36,7 +36,7 @@ env:
   # must still not become production on the next push -- but at v1.0.0 it meant every
   # push to ovhcloud put the wasm32 build back on the site for the minutes until an
   # explicit-tag dispatch caught up. That happened twice on 2026-09-10.
-  FCWEB_PINNED_RELEASE: build-20260910-wasm64
+  FCWEB_PINNED_RELEASE: build-20260918-session
 
 concurrency:
   group: deploy-ovh-freecad
@@ -125,6 +125,14 @@ jobs:
           DOCKER_BUILDKIT=1 docker build \
             --build-arg "FCWEB_BUILD=$BUILD_ID" \
             -t "freecad:$IMAGE_TAG" -t freecad:ovh -f infra/Dockerfile .
+
+          # The session service: shared sessions and the MCP endpoint. Built here from the
+          # checkout rather than pulled, because it carries no engine and its Dockerfile runs
+          # share.py --selftest as a build layer, so a broken protocol cannot produce an
+          # image. nginx reaches it as "session:8000" on the project-local network that
+          # docker-compose.prod.yml defines; stopping it is the kill switch for sharing.
+          DOCKER_BUILDKIT=1 docker build \
+            -t fcweb-session:ovh -f infra/session/Dockerfile .
           echo "BUILD_ID=$BUILD_ID"   >> "$GITHUB_ENV"
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
 

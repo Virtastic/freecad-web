@@ -2,9 +2,18 @@
 # freecad-web deploy (freecad.virtastic.app)
 
 The live site is deployed by a **self-hosted GitHub Actions runner that runs ON the origin VPS**,
-triggered by a push to the **`ovhcloud`** branch. The runner builds the container locally and
-wires it into a shared `edge-caddy` reverse proxy. The container serves its own COOP/COEP headers
-(mandatory for the Qt multi-thread wasm; without SharedArrayBuffer it will not boot).
+triggered by a push to the **`ovhcloud`** branch. The runner builds the images locally and
+wires them into a shared `edge-caddy` reverse proxy.
+
+Production is **two services**, not one:
+
+- `freecad` — the nginx container that serves the front end and the engine artifacts. It sets
+  its own COOP/COEP headers (mandatory for the Qt multi-thread wasm; without SharedArrayBuffer
+  it will not boot), and it is the only one the edge talks to.
+- `session` — the shared-session and MCP service (`infra/session/`), reached only through the
+  `freecad` container's `/share/` and `/mcp/` proxy locations. Its data lives on a **named
+  volume**, because the container is recreated on every deploy and sessions must outlive that.
+  It is optional: with it stopped the site serves normally and Edit > Share Session says so.
 
 FreeCAD itself is **not** compiled on the box. The prebuilt artifacts ride in a **GitHub
 Release**; the deploy workflow pulls them into the build context before `docker build`.
@@ -26,10 +35,13 @@ the origin stays private. CI reads it from the `ORIGIN_IP` repository variable, 
 |---|---|
 | `.github/workflows/deploy-ovh.yml` | the deploy — self-hosted-runner build + health-check (push to `ovhcloud`) |
 | `.github/workflows/dns.yml` | stateless Cloudflare A-record upsert |
-| `docker-compose.prod.yml` | the prod container: `freecad` on the external `nostalgia` network, no host ports |
+| `docker-compose.prod.yml` | the prod services on the external `nostalgia` network, no host ports |
 | `deploy/freecad.caddy` | edge vhost drop-in: TLS origin cert + `import sec_headers` + `reverse_proxy freecad:80` |
 | `infra/Dockerfile` | `nginx:1.27-alpine` + front-end (git) + artifacts (from Release) |
-| `infra/nginx.conf` | serves COOP/COEP on every response; landing page; hard-caches `.wasm/.data/.js` |
+| `infra/nginx.conf` | serves COOP/COEP on every response; landing page; hard-caches `.wasm/.data/.js`; proxies `/share/` and `/mcp/` to `session:8000` |
+| `infra/session/share.py` | the session protocol core — stdlib only, transport-agnostic. `--selftest` asserts the whole protocol without sockets; `--list` and `--stats` inspect the live store |
+| `infra/session/app.py` | the session process: Starlette serving `share.handle()` in a thread, with the MCP server (FastMCP, Streamable HTTP, stateless) mounted over it |
+| `infra/session/Dockerfile` | the `session` image: `python:3.12-alpine` + those two files. Runs `share.py --selftest` as a build layer, so a broken protocol cannot produce an image |
 
 ## Cut a deploy
 ```bash
@@ -59,4 +71,8 @@ compose and restarts the edge.
 ```bash
 curl -sI https://freecad.virtastic.app/ | grep -i cross-origin
 # COOP=same-origin AND COEP=require-corp, else the app boots to a blank page.
+
+curl -s https://freecad.virtastic.app/share/health
+# ok. A 502 here means the session container is not running: nginx proxies /share/ to
+# session:8000 and has nothing to reach. Sharing and MCP are dead, the rest of the site is fine.
 ```

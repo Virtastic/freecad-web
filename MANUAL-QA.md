@@ -95,7 +95,7 @@ wrong rather than anything that errors.
 **Files and persistence (4 min)**
 - [ ] Save the document, reload the browser tab, reopen it — geometry intact
 - [ ] Export a STEP and an STL; open the STEP back
-- [ ] - [ ] **Save real work, then look for the storage offer.** After the first File > Save the
+- [ ] **Save real work, then look for the storage offer.** After the first File > Save the
       app should either offer to install (which is the only way Chrome grants persistent
       storage) or, if it cannot, warn that the browser may clear your documents and offer a
       backup folder. Seeing neither means the one safeguard against silent data loss is not
@@ -106,7 +106,7 @@ wrong rather than anything that errors.
       tested headlessly — headless Chromium has no install UI — so it is checked here or
       nowhere, and until it returns true a user's documents can be evicted.
 
-**Save via the OS file dialog** — Chromium's `showSaveFilePicker` path cannot be
+- [ ] **Save via the OS file dialog.** Chromium's `showSaveFilePicker` path cannot be
       scripted, so only a person can confirm the picker appears and the file lands where
       they chose. (The download fallback other browsers use is verified automatically.)
 - [ ] **Choose a backup folder, then confirm files appear in it.** Same limitation:
@@ -144,6 +144,34 @@ wrong rather than anything that errors.
       beside it in DejaVu Sans -- every 2D label was invisible until 2026-09-14, when the
       raster shims were empty, and blocky until Coin got FreeType the same day), constraint
       arrows are arrow-sized, and NOTHING in the Report view mentions a fatal error.
+
+**Sharing and MCP (5 min)** — only on a site running the optional `session` container
+- [ ] **Edit > Share Session... starts a session and gives you a link.** The link appears in
+      the field and the copy button lights up. Then open Edit > Preferences > Sharing: the
+      pages are **General**, **Session** and **MCP**, in that order.
+- [ ] **Open the link in a second browser profile** (a second Chrome profile, not a second
+      tab of the same one). The watcher gets your document, and also your units and your
+      theme — check a dimension reads in the same unit you use.
+- [ ] **Edit something as the owner.** The watcher sees it within a few seconds. While it
+      lands, the watcher's camera must NOT jump: they keep the view they were looking at,
+      and they stay on the tab they were on.
+- [ ] **The watcher's menu bar still works.** The editing commands are greyed out, but
+      File, View, Tools, Windows and Help all open. A menu that will not open at all is a
+      regression: read-only means the commands are disabled, not the menu bar.
+- [ ] **Open a second document as the owner mid-session.** The watcher gets a second tab
+      for it. Then edit one of them: the OTHER tab must not flash or redraw. Only the tab
+      that changed changes.
+- [ ] **Request control from the watcher, grant it as the owner.** The watcher's commands
+      come back and the owner's grey out. Then take control back from the owner: it must
+      return without the watcher having to do anything.
+- [ ] **On the MCP page, press Enable assistant with no session started.** It starts one by
+      itself rather than telling you to go to the General page first. Then press each copy
+      button and paste what it gives you: both Claude Code and Codex put **two** lines on
+      the clipboard, a remove followed by an add. One line means the remove was lost, and
+      the second `add` will fail against an existing entry.
+- [ ] **Close the owner's tab with the assistant connected.** Every tool now reports
+      `no_tab`. The tools act inside the live tab, so no tab means no reach — the assistant
+      must say so, not hang or answer from nothing.
 
 **Feel (3 min)**
 - [ ] Nothing takes visibly longer than it should for the size of the model
@@ -499,8 +527,11 @@ actionable; "3D view is janky" is not.
   live view and the actions live in Edit > Preferences > Sharing > Session. The AI over MCP acts inside a
   live browser tab and inherits its rights; with no tab open, every tool says `no_tab`.
 
-- Shared sessions were verified against the **wasm32** engine that v1.0.0 and play-gui
-  actually hold. `dev` has since moved the page to wasm64 (`BigInt` pointers) ahead of any
-  published wasm64 link, so the page on `dev` -- session code or not -- cannot run against
-  the released artifacts until that link ships. When it does, re-run
-  `boot-gate.py --scenario share|mcp|control|env|edges` before believing sharing still works.
+- Shared sessions run on the **wasm64** engine. The wasm64 link shipped on 2026-09-16, and
+  on 2026-09-18 all six session scenarios (`share`, `empty`, `control`, `mcp`, `env`,
+  `edges`) passed against it, as did the full 16-scenario regression sweep. The earlier
+  note here, that the page on `dev` could not run against the released artifacts, is
+  obsolete. The standing rule still holds: after ANY future link, re-run
+  `boot-gate.py --scenario share|empty|control|mcp|env|edges` before believing sharing
+  still works. They are not in `--scenario all` (each drives two browser contexts), so
+  nothing else will run them for you.

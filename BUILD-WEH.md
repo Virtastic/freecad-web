@@ -934,6 +934,21 @@ inside any patch's replacement, so the class cannot come back.
    year, and later cached `FreeCAD.data.gz` from a probe made before nginx served it with
    `Content-Encoding` -- which would have broken every boot had the versioned URL not
    sidestepped it.
+7. **The session image is its own deploy.** `infra/session/Dockerfile` is built and shipped
+   separately from the seven engine artifacts, so an engine release does not update it and
+   a session change does not need a relink. Its build runs
+   `python /srv/share.py --selftest` as a layer on purpose: the selftest asserts the whole
+   protocol with no sockets, so a broken protocol fails the build instead of producing an
+   image that starts fine and hands out sessions nobody can join.
+8. **Set `FCWEB_PUBLIC_URL` to the target origin.** Without it the share and MCP links the
+   page hands out are built from the request's own Host header, so whatever hostname the
+   proxy happened to forward becomes the link a visitor or an AI client is told to use.
+   Behind a reverse proxy that is frequently not the public origin, and the link is dead
+   for everyone but the person who made it.
+9. **Run the six session scenarios by hand.** `tools/boot-gate.py --scenario all`
+   deliberately EXCLUDES them, because each drives two browser contexts. Nothing in the
+   normal gate sweep touches sharing, so after deploying run them explicitly against the
+   deployment: `share`, `empty`, `control`, `mcp`, `env`, `edges`.
 
 The gates worth running against production before announcing anything, all in
 `scratchpad/`: `reg-prod.js` (workbenches, examples, dialog), `workflows.js` (eight real

@@ -9,17 +9,45 @@ services:
     image: freecad:ovh              # built + tagged by the deploy workflow on the runner
     container_name: freecad
     restart: unless-stopped
-    networks: [shared]
+    # `shared` is how the edge reaches this; `internal` is how nginx reaches the session
+    # service. Two networks on purpose: see the session service below.
+    networks: [shared, internal]
     volumes:
       # Event counters (see the /t location in infra/nginx.conf). On a named volume because
       # the container is recreated on every deploy -- inside the image these would be lost
       # each time, which would make the one thing they exist to measure unmeasurable.
       - fcweb-events:/var/log/fcweb
 
+  # Shared sessions and the MCP endpoint. nginx proxies /share/, /api/ and /mcp/ to
+  # "session:8000" through a variable and a resolver, so if this container is missing those
+  # three paths answer 502 and the rest of the site is untouched. That is the kill switch:
+  #     docker compose -f /opt/freecad/docker-compose.prod.yml stop session
+  #
+  # It is NOT on `nostalgia`. That network is shared with every other site on this box, and
+  # compose publishes the service name as an alias there -- a bare "session" would be a
+  # collision waiting to happen. On a project-local network the alias reaches exactly the
+  # two containers that need it, while container_name keeps the daemon-global name unique.
+  #
+  # PRIVACY: this volume holds shared documents as plain unencrypted files.
+  session:
+    image: fcweb-session:ovh       # built + tagged by the deploy workflow on the runner
+    container_name: fcweb-session
+    restart: unless-stopped
+    networks: [internal]
+    volumes:
+      - fcweb-session:/data
+    environment:
+      # Without this the links the MCP page hands out are built from the request Host.
+      FCWEB_PUBLIC_URL: "https://freecad.virtastic.app"
+      FCWEB_SHARE_MAX_GB: "5"
+      FCWEB_SHARE_MAX_MB: "25"
+
 volumes:
   fcweb-events:
+  fcweb-session:
 
 networks:
   shared:
     external: true
     name: nostalgia
+  internal: {}                     # project-local; only freecad and session are on it

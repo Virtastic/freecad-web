@@ -13,7 +13,10 @@ name: rollback (freecad.virtastic.app)
 # deploy-ovh.yml now also tags each build `freecad:<release-tag>+<sha>`. This workflow just
 # re-points `freecad:ovh` at one of those and restarts: seconds, not minutes.
 #
-#   gh workflow run rollback-ovh.yml -f image_tag=build-20260813-eventstack+9d59467
+#   gh workflow run rollback-ovh.yml -f image_tag=build-20260813-eventstack-9d59467
+#
+# Note the HYPHEN before the sha. The deploy sanitises the tag it builds
+# (tr -c 'a-zA-Z0-9._-' '-'), so a + here names an image that does not exist.
 #
 # Run with no input to list what is available on the box and stop.
 on:
