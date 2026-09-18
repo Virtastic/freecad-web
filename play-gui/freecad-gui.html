@@ -1206,6 +1206,23 @@ window.fcwebNotify = function (text, kind, actions, opts) {
   }
 
   // ---- zip reader: stored + deflate, the two methods GitHub emits --------------------
+  // Identity of a published document, so the viewer can tell which tabs actually changed.
+  // SubtleCrypto where it exists (same-origin over http://127.0.0.1 counts as secure); a
+  // plain rolling hash otherwise, since this only has to notice a difference, not resist
+  // an attacker.
+  async function digest(bytes) {
+    if (!bytes || !bytes.length) return '0';
+    try {
+      var b = bytes.buffer ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes;
+      var h = await crypto.subtle.digest('SHA-256', b);
+      return Array.from(new Uint8Array(h).slice(0, 12)).map(function (x) { return x.toString(16).padStart(2, '0'); }).join('');
+    } catch (e) {
+      var a = 0x811c9dc5;
+      for (var i = 0; i < bytes.length; i++) { a ^= bytes[i]; a = (a * 0x01000193) >>> 0; }
+      return bytes.length.toString(16) + '-' + a.toString(16);
+    }
+  }
+
   async function unzip(buf, onFile) {
     var dv = new DataView(buf), u8 = new Uint8Array(buf), n = buf.byteLength, eocd = -1;
     for (var i = n - 22; i >= Math.max(0, n - 65558); i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
@@ -1487,7 +1504,7 @@ window.fcwebNotify = function (text, kind, actions, opts) {
     setParam('CurrentEditor', on ? 'You' : (S.holderName || ''));
     if (S.mode === 'session' || S.id) setReadonly(!on);
     log('control', on ? 'you have control (' + why + ')' : 'control ' + why);
-    if (on) toast('You have control of the shared session.', 'info');
+    if (on && why !== 'owner') toast('You have control of the shared session.', 'info');
     renderBar();
   }
 
@@ -1513,50 +1530,37 @@ window.fcwebNotify = function (text, kind, actions, opts) {
           if (!/\.FCStd$/i.test(nm)) return;
           var p = dir + '/' + safeName(nm);
           fs().writeFile(p, data);
-          files.push({ path: p, name: safeName(nm) });
+          files.push({ path: p, name: safeName(nm), data: data });
         });
       }
       if (!files.length) {
         var one = safeName(meta.n || S.doc);
         var p1 = dir + '/' + one;
         fs().writeFile(p1, bytes);
-        files.push({ path: p1, name: one });
+        files.push({ path: p1, name: one, data: bytes });
       }
       // the copy Download hands out is the active document, or the only one
       try { fs().writeFile('/home/web_user/' + files[0].name, fs().readFile(files[0].path)); } catch (e) {}
+      // A digest per document, so the interpreter can leave the untouched ones open.
+      // Rebuilding every tab on every version is what made a watcher's screen flash, and
+      // a reopened document comes back with a default camera, which moved their view too.
+      for (var di = 0; di < files.length; di++) { files[di].sig = await digest(files[di].data); }
       var marker = '/tmp/_fcshare_applied_' + meta.v;
       unlink(marker);
+      var want = files.map(function (f) { return [f.path, f.name.replace(/\.FCStd$/i, ''), f.sig]; });
+      var activeLabel = (meta.active || '').replace(/\.FCStd$/i, '');
       var ran = py([
-        'import FreeCAD as _App, FreeCADGui as _Gui, sys as _s, fcweb_share as _fs',
-        '_want = ' + JSON.stringify(files.map(function (f) { return [f.path, f.name.replace(/\.FCStd$/i, '')]; })) + '',
-        '_active = ' + JSON.stringify((meta.active || '').replace(/\.FCStd$/i, '')) + '',
-        '_old = list(getattr(_App, "_fcweb_shared_docs", []) or [])',
-        'for _n in _old:',
-        '    if _n in _App.listDocuments():',
-        '        try: _App.closeDocument(_n)',
-        '        except Exception as _e: _s.__stderr__.write("[fcweb] share: close %s failed: %r\\n" % (_n, _e))',
-        '_names = []',
-        'for _p, _lab in _want:',
-        '    try:',
-        '        _d = _App.openDocument(_p)',
-        '        _d.Label = _lab',
-        '        _names.append(_d.Name)',
-        '        if _active and _lab == _active:',
-        '            _App.setActiveDocument(_d.Name)',
-        '    except Exception as _e:',
-        '        _s.__stderr__.write("[fcweb] share: open %s failed: %r\\n" % (_p, _e))',
-        '_App._fcweb_shared_docs = _names',
-        'if _names: _fs.pin(_names[0])',
-        '_fs.set_readonly(' + (S.holder ? 'False' : 'True') + ')',
-        '_s.__stderr__.write("[fcweb] share applied v' + meta.v + ' (%d document(s))\\n" % len(_names)); _s.__stderr__.flush()',
-        'open(' + JSON.stringify(marker) + ', "w").write("%d document(s): %s" % (len(_names), ", ".join(_names)))'
+        'import sys as _s, fcweb_share as _fs',
+        '_r = _fs.apply_files(' + JSON.stringify(want) + ', ' + JSON.stringify(activeLabel) + ', ' + (S.holder ? 'False' : 'True') + ', ' + (S.forceApply ? 'True' : 'False') + ')',
+        '_s.__stderr__.write("[fcweb] share applied v' + meta.v + ' (%d document(s), %d reopened, %d kept)\\n" % (len(_r["names"]), _r["reopened"], _r["kept"])); _s.__stderr__.flush()',
+        'open(' + JSON.stringify(marker) + ', "w").write("%d document(s): %s" % (len(_r["names"]), ", ".join(_r["names"])))'
       ].join('\n'));
       var opened = ran && await pyConfirm(marker, 20000);
       if (!opened) {
         log('apply', 'v' + meta.v + ' downloaded but the interpreter did not confirm opening it' + (ran ? '' : ' (busy)') + ' -- retrying next tick', true);
         return;                                  // S.applied unchanged: the next poll retries
       }
-      S.applied = meta.v; S.doc = meta.n || S.doc;
+      S.applied = meta.v; S.doc = meta.n || S.doc; S.forceApply = false;
       log('apply', 'applied v' + meta.v + ' (' + bytes.length + ' bytes; ' + opened + ')');
     } catch (e) { fail('apply', e, 'apply_fail'); }
     finally {
@@ -1993,8 +1997,12 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       // document is the fallback, and it is violent: it tears down the 3D view, which
       // crashed Qt when the change came from a click (QWasmScreen::element, out of
       // bounds) -- so only do it when the undo did not happen.
-      if (!st.revert_undone) { S.applied = 0; }
-      log('control', 'read-only edit reverted', true);
+      // Re-apply either way, and force it. The undo above is the quick visual fix and
+      // cannot be trusted on its own: a property set with no undo transaction leaves
+      // nothing to undo, and the re-apply that should have corrected it was skipped as
+      // 'unchanged', because the SERVER's bytes had not changed -- only this tab's copy.
+      S.applied = 0; S.forceApply = true;
+      log('control', 'read-only edit reverted (re-applying the session version)', true);
       toast('This session is read-only for you; your change was undone.', 'warn', [{ label: 'Request control', onClick: function () { requestControl(false); } }]);
       S.applied = 0;
     }

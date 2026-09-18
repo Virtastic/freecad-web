@@ -340,14 +340,18 @@ def _prov():
 # What a watcher may still do: look. Everything else is greyed out while the document is
 # not theirs to change -- undoing an edit after the fact tells someone they were not
 # allowed only once they have already done it, which is a worse way to learn.
-_LOOK_PREFIXES = ('Std_View', 'Std_Axo', 'Std_Zoom', 'Std_Fit', 'Std_Ortho', 'Std_Perspective',
-                  'Std_Sel', 'Std_Tree', 'Std_Measure', 'Std_Windows', 'Std_Workbench',
-                  'Std_Print', 'Std_Export', 'Std_Help', 'Std_About', 'Std_WhatsThis',
-                  'Std_DlgPreferences', 'Std_UserInterface', 'Std_ToggleNavigation',
-                  'Std_Drawing', 'Std_Freeze', 'Std_Quit', 'Std_Window', 'Fcweb_')
-_LOOK_EXACT = set(['Std_Refresh', 'Std_SelectAll', 'Std_BoxSelection', 'Std_BoxElementSelection',
-                   'Std_ViewFitSelection', 'Std_SceneInspector', 'Std_DependencyGraph',
-                   'Std_ProjectInfo', 'Std_ProjectUtil', 'Std_TextDocument'])
+# The commands that CHANGE the document and are not workbench commands. Everything else
+# under Std_ is navigation, windows, selection, preferences, help -- a watcher needs all
+# of it, and greying it made the menu bar unusable for the person watching.
+_EDIT_STD = set([
+    'Std_Delete', 'Std_Cut', 'Std_Paste', 'Std_Undo', 'Std_Redo', 'Std_DuplicateSelection',
+    'Std_Placement', 'Std_TransformManip', 'Std_Transform', 'Std_Alignment', 'Std_Edit',
+    'Std_ToggleVisibility', 'Std_ToggleSelectability', 'Std_SetAppearance', 'Std_RandomColor',
+    'Std_Refresh', 'Std_LinkMake', 'Std_LinkMakeRelative', 'Std_LinkReplace', 'Std_LinkUnlink',
+    'Std_LinkImport', 'Std_LinkImportAll', 'Std_GroupCreate',
+])
+# Ours and FreeCAD's own chrome are never touched.
+_KEEP_PREFIXES = ('Std_', 'Fcweb_')
 _greyed = []
 _greyed_on = False
 
@@ -359,9 +363,15 @@ def _grey_commands(on):
     every applied version as well as every control change, so repeating the walk made the
     interpreter the slowest thing in the tab.
 
-    An allow-list rather than a deny-list: there are 459 commands, and one missed from a
-    deny-list is a hole a watcher can edit through. Greying is also what tells someone
-    BEFORE they click that this is not theirs to edit."""
+    What gets greyed: every workbench command (they build and modify geometry) plus the
+    handful of Std_ commands that change a document. What does not: menu titles, and
+    the rest of Std_ -- view, navigation, selection, windows, preferences, help. An
+    allow-list greyed everything it did not recognise, which took the whole menu bar
+    with it and left a watcher unable to reach things they need.
+
+    Greying is guidance, not the enforcement: read-only is enforced by the property
+    lock in set_readonly and by the observer that undoes an edit made without control.
+    A command that slips through this list is caught there."""
     global _greyed, _greyed_on
     if bool(on) == _greyed_on:
         return              # already in this state: do not walk the widget tree again
@@ -388,7 +398,9 @@ def _grey_commands(on):
                 name = a.objectName()
                 if not name or not a.isEnabled():
                     continue
-                if name in _LOOK_EXACT or name.startswith(_LOOK_PREFIXES):
+                if a.menu() is not None:
+                    continue        # a menu TITLE: disabling it closes off everything under it
+                if name.startswith(_KEEP_PREFIXES) and name not in _EDIT_STD:
                     continue
                 a.setEnabled(False)
                 fresh.append(a)
@@ -400,6 +412,98 @@ def _grey_commands(on):
             _log('read-only: %d editing commands greyed out' % len(fresh))
     except Exception as e:
         _log('could not grey the editing commands: %r' % (e,))
+
+
+def _base_label(x):
+    """The published label, with the read-only marker this tab added stripped off."""
+    return (x or '').replace(' (read-only)', '')
+
+
+def apply_files(want, active='', readonly=True, force=False):
+    """Open an incoming version WITHOUT tearing down the documents it did not change.
+
+    The page used to close every mirrored document and reopen all of them on every
+    version. A watcher therefore saw the whole desk flash on each edit -- three tabs
+    rebuilt because one of them changed -- and lost their viewpoint every time, since a
+    reopened document comes back with a default camera. The sharer opening a file and
+    importing into it produced a stream of those.
+
+    `want` is [[path, label, digest], ...]. A document whose digest is unchanged and is
+    still open is left completely alone. One that changed is reopened, and its camera is
+    put back, so the watcher keeps looking at what they were looking at.
+    """
+    Gui = _gui()
+    sig = dict(getattr(App, '_fcweb_shared_sig', None) or {})
+    open_now = App.listDocuments()
+    names, fresh, cams = [], {}, {}
+    byname = {}
+    for n in (getattr(App, '_fcweb_shared_docs', None) or []):
+        d = open_now.get(n)
+        if d is not None:
+            byname[_base_label(d.Label or n)] = n
+            try:
+                cams[_base_label(d.Label or n)] = Gui.getDocument(n).ActiveView.getCamera() if Gui else ''
+            except Exception:
+                cams[_base_label(d.Label or n)] = ''
+    keep, reopened = 0, 0
+    for item in want:
+        path, label = item[0], item[1]
+        digest = item[2] if len(item) > 2 else ''
+        cur = byname.get(label)
+        # `force` is the re-apply that discards an edit made without control. The
+        # digest describes the SERVER's bytes, which did not change when a watcher
+        # edited their own copy, so trusting it there left the edit in place -- the
+        # revert ran, said so in the log, and changed nothing. Measured.
+        if cur and not force and digest and sig.get(label) == digest and cur in App.listDocuments():
+            names.append(cur)
+            fresh[label] = digest
+            keep += 1
+            continue
+        if cur and cur in App.listDocuments():
+            try:
+                App.closeDocument(cur)
+            except Exception as e:
+                _log('apply: close %s failed: %r' % (cur, e))
+            if cur in App.listDocuments():
+                _log('apply: %s did NOT close -- openDocument will hand back the edited copy' % cur)
+        try:
+            d = App.openDocument(path)
+            d.Label = label
+            names.append(d.Name)
+            fresh[label] = digest
+            reopened += 1
+            cam = cams.get(label)
+            if cam:
+                try:
+                    Gui.getDocument(d.Name).ActiveView.setCamera(cam)
+                except Exception:
+                    pass          # no 3D view yet (or headless): the default camera stands
+        except Exception as e:
+            _log('apply: open %s failed: %r' % (path, e))
+    # anything the sharer closed goes away too
+    for label, n in byname.items():
+        if n not in names and n in App.listDocuments():
+            try:
+                App.closeDocument(n)
+            except Exception as e:
+                _log('apply: close %s failed: %r' % (n, e))
+    App._fcweb_shared_docs = names
+    App._fcweb_shared_sig = fresh
+    # Follow the sharer's tab only when it actually MOVED. Re-asserting it on every
+    # version yanked a watcher out of the tab they had clicked into.
+    if active and active != getattr(App, '_fcweb_shared_active', None):
+        n = byname.get(active) or next((x for x in names if (App.listDocuments()[x].Label or '') == active), None)
+        if n:
+            try:
+                App.setActiveDocument(n)
+            except Exception:
+                pass
+        App._fcweb_shared_active = active
+    if names:
+        pin(names[0])
+    set_readonly(bool(readonly))
+    _log('apply: %d document(s), %d reopened, %d left alone' % (len(names), reopened, keep))
+    return {'names': names, 'reopened': reopened, 'kept': keep}
 
 
 def set_readonly(on):
