@@ -28,7 +28,11 @@ const run = (p, c) => p.evaluate((c) => { const m = window.fcInstance;
     await sl(2000);
   }
   await sl(4000);
-  await run(p, fs.readFileSync('/tmp/wf_after.py', 'utf8'));
+  // Optional second phase. /tmp/wf_after.py is not in the repo, so on any other machine
+  // this threw ENOENT and took the run down AFTER the real checks had already passed.
+  const AFTER = '/tmp/wf_after.py';
+  if (fs.existsSync(AFTER)) { await run(p, fs.readFileSync(AFTER, 'utf8')); }
+  else { console.log('WA skipped: ' + AFTER + ' not present (phase-two checks not run)'); }
   await sl(3000);
   const log = await p.evaluate(() => document.getElementById('log').textContent);
   const lines = [...(log.match(/W[FA] [^\n]*/g) || [])];

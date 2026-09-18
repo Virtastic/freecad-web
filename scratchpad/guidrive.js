@@ -61,7 +61,7 @@ const PY_POPUP = 'import sys\nfrom PySide6 import QtWidgets, QtCore\n' +
 
 
   const remap = async () => {
-    await ask(p, fs.readFileSync('/tmp/guimap.py', 'utf8').replace(/GUI /g, '@@ '), 'MAP', 40000);
+    await ask(p, fs.readFileSync(__dirname + '/guimap.py', 'utf8').replace(/GUI /g, '@@ '), 'MAP', 40000);
     const txt = await logOf(p);
     const mn = {}, tl = {};
     for (const m of txt.matchAll(/MAP(\d+)\s+MENU '([^']*)' (\d+) (\d+)/g)) mn[m[2]] = [+m[3], +m[4], +m[1]];
@@ -70,7 +70,7 @@ const PY_POPUP = 'import sys\nfrom PySide6 import QtWidgets, QtCore\n' +
     return { menus: mn, tools: tl };
   };
   // --- where is everything?
-  const map = await ask(p, fs.readFileSync('/tmp/guimap.py', 'utf8').replace(/GUI /g, '@@ '), 'MAP', 40000);
+  const map = await ask(p, fs.readFileSync(__dirname + '/guimap.py', 'utf8').replace(/GUI /g, '@@ '), 'MAP', 40000);
   const full = await logOf(p);
   const menus = {}; const tools = {};
   for (const m of full.matchAll(/MAP\d+\s+MENU '([^']*)' (\d+) (\d+)/g)) menus[m[1]] = [+m[2], +m[3]];
@@ -78,9 +78,21 @@ const PY_POPUP = 'import sys\nfrom PySide6 import QtWidgets, QtCore\n' +
   results.push('menus found: ' + Object.keys(menus).filter(Boolean).join(',') );
   results.push('toolbar buttons found: ' + Object.keys(tools).filter(Boolean).join(','));
 
+  const pick = (map, want) => {
+    const w = want.toLowerCase();
+    const k = Object.keys(map).find((x) => x.toLowerCase() === w) ||
+              Object.keys(map).find((x) => x.toLowerCase().startsWith(w));
+    if (!k) { results.push('NO BUTTON matched ' + JSON.stringify(want)); return null; }
+    return map[k];
+  };
+
   // --- 1. click the New button on the File toolbar
   let before = await ask(p, PY_STATE, 'ST');
-  if (tools['New']) { await p.mouse.click(tools['New'][0], tools['New'][1]); await sl(3500); }
+  // Map again right before clicking, the way the Undo/Redo steps do. The map taken at boot
+  // describes the toolbars the START PAGE shows; the workbench that loads after it lays
+  // them out again, so those coordinates can point at whatever moved into that spot.
+  const bNew = pick((await remap()).tools, 'New');
+  if (bNew) { await p.mouse.click(bNew[0], bNew[1]); await sl(3500); }
   let after = await ask(p, PY_STATE, 'ST');
   results.push('toolbar New: ' + before + '  ->  ' + after);
 
@@ -110,10 +122,12 @@ const PY_POPUP = 'import sys\nfrom PySide6 import QtWidgets, QtCore\n' +
   await sl(3000);          // FreeCAD refreshes action enablement on a 150 ms timer
   const made = await ask(p, PY_STATE, 'ST');
   let fresh = await remap();
-  if (fresh.tools['Undo']) { await p.mouse.click(fresh.tools['Undo'][0], fresh.tools['Undo'][1]); await sl(3000); }
+  const bUndo = pick(fresh.tools, 'Undo');
+  if (bUndo) { await p.mouse.click(bUndo[0], bUndo[1]); await sl(3000); }
   const undone = await ask(p, PY_STATE, 'ST');
   fresh = await remap();
-  if (fresh.tools['Redo']) { await p.mouse.click(fresh.tools['Redo'][0], fresh.tools['Redo'][1]); await sl(3000); }
+  const bRedo = pick(fresh.tools, 'Redo');
+  if (bRedo) { await p.mouse.click(bRedo[0], bRedo[1]); await sl(3000); }
   const redone = await ask(p, PY_STATE, 'ST');
   results.push('made: ' + made + ' | after toolbar Undo: ' + undone + ' | after toolbar Redo: ' + redone);
 
@@ -127,7 +141,8 @@ const PY_POPUP = 'import sys\nfrom PySide6 import QtWidgets, QtCore\n' +
     'sys.__stderr__.flush()\n', 'CAM'));
   const c0 = await cam();
   fresh = await remap();
-  if (fresh.tools['Fit all']) { await p.mouse.click(fresh.tools['Fit all'][0], fresh.tools['Fit all'][1]); await sl(3000); }
+  const bFit = pick(fresh.tools, 'Fit all');
+  if (bFit) { await p.mouse.click(bFit[0], bFit[1]); await sl(3000); }
   const c1 = await cam();
   results.push('toolbar Fit all: camera ' + (c0 !== c1 ? 'MOVED' : 'unchanged') + ' (' + c0 + ' -> ' + c1 + ')');
 
