@@ -18,6 +18,7 @@ import json
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 GROUP = 'User parameter:BaseApp/Preferences/FCWeb/Sharing'
@@ -195,9 +196,28 @@ def _owner_up(ctx, url, args, fail, extra=''):
     return s1, st['id']
 
 
+UA = 'fcweb-gate/1.0 (+https://github.com/Virtastic/freecad-web)'
+
+
+def _origin(u):
+    """scheme://host of a page URL, however the page was addressed.
+
+    Splitting on the page's filename worked only because a serve tree always has one. A
+    deployment answers at '/', so base became the whole URL, query and all, and every
+    request built from it was a POST to the static root -- 405, reported as a dead MCP
+    endpoint."""
+    parts = urllib.parse.urlsplit(u)
+    return '%s://%s' % (parts.scheme, parts.netloc)
+
+
 def _http(base, method, path, body=None, headers=None):
     data = json.dumps(body).encode() if isinstance(body, dict) else body
-    rq = urllib.request.Request(base + path, data=data, method=method, headers=headers or {})
+    h = dict(headers or {})
+    # A deployment behind Cloudflare answers 403 to urllib's default agent string, which
+    # made every MCP call against production read as a dead endpoint. Measured: curl gets
+    # 200 where python-urllib gets 403 on the same URL.
+    h.setdefault('User-Agent', UA)
+    rq = urllib.request.Request(base + path, data=data, method=method, headers=h)
     try:
         r = urllib.request.urlopen(rq, timeout=60)
         return r.status, r.read(), dict(r.headers)
@@ -478,7 +498,7 @@ def scenario_mcp(ctx, url, args, fail):
         fail('no MCP URL was minted after enabling the assistant')
         return s1
     mcp_url = st['agentUrl']
-    base = url.split('/freecad-gui')[0]
+    base = _origin(url)
     print('==> MCP URL minted: %s' % mcp_url[:len(base) + 44] + '...')
     st = _wait_state(s1, lambda x: x.get('tab'), 20)
     if not st:
@@ -741,7 +761,7 @@ def scenario_env(ctx, url, args, fail):
     if not _wait(s1, 'env published', 60):
         fail('the environment bundle was never published (ring: %s)' % _ring(s1)[-6:])
     # redaction, as a plain viewer over HTTP
-    base = url.split('/freecad-gui')[0]
+    base = _origin(url)
     st, body, _ = _http(base, 'POST', '/share/%s/join' % sid, {'name': 'Probe'}, {'Content-Type': 'application/json'})
     cid = json.loads(body)['client']
     st, env, _ = _http(base, 'GET', '/share/%s/env' % sid, None, {'X-Fcweb-Client': cid})
