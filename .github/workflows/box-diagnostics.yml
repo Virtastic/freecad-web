@@ -172,3 +172,44 @@ jobs:
           echo
           echo "--- firewall ---"
           (sudo -n ufw status 2>/dev/null || sudo -n iptables -S 2>/dev/null | head -20 || echo "  (not readable)") | sed 's/^/  /'
+
+      - name: Outbound egress (what the Addon Manager proxy depends on)
+        run: |
+          # /proxy/<key>/<path> in infra/nginx.conf reaches the internet FROM THE CONTAINER.
+          # When it fails the interesting question is which half broke, and the two halves
+          # answer with different status codes: nginx returns 502 when the resolver cannot
+          # answer and 504 when the name resolves but the TCP connect times out (its
+          # proxy_connect_timeout is 10s, so a 504 at ~10.0s is that timer, not Cloudflare).
+          # Everything below runs inside the already-running container. Nothing is started,
+          # pulled or changed.
+          c=freecad
+          docker inspect "$c" >/dev/null 2>&1 || c="$(docker ps --filter name=freecad --format '{{.Names}}' | grep -v session | head -1)"
+          echo "--- container: ${c:-NONE FOUND} ---"
+          [ -n "$c" ] || exit 0
+          echo
+          echo "--- networks it is attached to ---"
+          docker inspect -f '{{range $n,$v := .NetworkSettings.Networks}}  net={{$n}} ip={{$v.IPAddress}} gw={{$v.Gateway}}{{println}}{{end}}' "$c"
+          echo "--- default route (which of those carries egress) ---"
+          docker exec "$c" ip route show default 2>&1 | sed 's/^/  /'
+          echo
+          echo "--- DNS (nginx resolves through 1.1.1.1 / 8.8.8.8) ---"
+          for h in addons.freecad.org www.freecad.org; do
+            docker exec "$c" sh -c "getent hosts $h || echo 'RESOLVE FAILED $h'" 2>&1 | sed 's/^/  /'
+          done
+          echo
+          echo "--- TCP 443 from inside the container ---"
+          for h in addons.freecad.org www.freecad.org; do
+            if docker exec "$c" nc -w 8 -z "$h" 443 2>/dev/null; then echo "  connect OK      $h:443"
+            else echo "  connect BLOCKED $h:443 (no SYN-ACK within 8s)"; fi
+          done
+          echo
+          echo "--- TCP 443 from the host, for comparison ---"
+          for h in addons.freecad.org www.freecad.org; do
+            if timeout 8 bash -c "exec 3<>/dev/tcp/$h/443" 2>/dev/null; then echo "  connect OK      $h:443"
+            else echo "  connect BLOCKED $h:443"; fi
+          done
+          echo
+          echo "--- the proxy location itself, asked from inside ---"
+          for k in addons docswww; do
+            docker exec "$c" curl -s -o /dev/null -m 25 -w "  /proxy/$k/ -> %{http_code} in %{time_total}s\n" "http://127.0.0.1/proxy/$k/" 2>&1
+          done

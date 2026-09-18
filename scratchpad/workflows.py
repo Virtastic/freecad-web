@@ -103,19 +103,24 @@ def _():
 
 @step("techdraw page")
 def _():
-    import TechDraw, os
+    import TechDraw, os, glob
     tdir = App.getResourceDir() + 'Mod/TechDraw/Templates'
-    a4 = sorted(f for f in os.listdir(tdir) if f.startswith('A4') and f.endswith('.svg'))[0]
+    # 1.1 moved the ISO sheets down into Templates/ISO/. Only Default_Template_A4_Landscape.svg
+    # and HowToExample.svg are left at the top, so a listdir of tdir alone matches no "A4*" and
+    # this step died on an IndexError while every A4 template was present and fine.
+    a4 = next(f for f in [os.path.join(tdir, 'Default_Template_A4_Landscape.svg')] + sorted(
+        glob.glob(os.path.join(tdir, '**', 'A4*Landscape*.svg'), recursive=True)) if os.path.exists(f))
     page = d.addObject('TechDraw::DrawPage', 'Page')
     tmpl = d.addObject('TechDraw::DrawSVGTemplate', 'Template')
-    tmpl.Template = os.path.join(tdir, a4)     # without a template the page has no size
+    tmpl.Template = a4                         # without a template the page has no size
     page.Template = tmpl
     v = d.addObject('TechDraw::DrawViewPart', 'View')
     page.addView(v)
     v.Source = [d.getObject('Cut')]
     v.Direction = App.Vector(0, 0, 1)
     d.recompute()
-    ok("techdraw page", "page=%.0fx%.0f mm views=%d (edges checked after HLR settles)" % (
+    ok("techdraw page", "%s page=%.0fx%.0f mm views=%d (edges checked after HLR settles)" % (
+        os.path.basename(a4),
         tmpl.Width.Value if hasattr(tmpl.Width, 'Value') else tmpl.Width,
         tmpl.Height.Value if hasattr(tmpl.Height, 'Value') else tmpl.Height,
         len(page.Views)))
