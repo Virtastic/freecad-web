@@ -34,9 +34,9 @@ Every one of these opened in the browser, from the build that is live right now.
 | [![Draft objects](docs/images/draft.png)](docs/images/draft.png) | [![An 18 MB STL mesh](docs/images/helm-stl.png)](docs/images/helm-stl.png) |
 | **Draft**, 113 objects: wires, arcs, dimensions and text, shown from the top. | **An 18 MB STL**, imported and shaded. Meshes as well as solids. |
 
-## Run it locally
+## Run it yourself
 
-Docker is the only thing you need. No Python, no Node, no build tools.
+Docker is the only thing you need. No Python, no Node, no build tools, no clone.
 
 ```bash
 curl -fsSLO https://github.com/Virtastic/freecad-web/releases/download/v1.0.0/setup.sh
@@ -49,16 +49,71 @@ irm https://github.com/Virtastic/freecad-web/releases/download/v1.0.0/setup.ps1 
 .\setup.ps1
 ```
 
-Then open **<http://localhost:8080/>** in Chrome or Edge 137+.
+That is the whole install. It checks Docker first and says exactly what to fix if something
+is wrong, pulls the prebuilt image, starts it, and then **proves the running site is correct**
+before telling you it worked. Real output from a first run:
 
-The script checks that Docker is installed, running, recent enough and in Linux-container
-mode, and tells you exactly what to fix if not. It then pulls the prebuilt image, starts it,
-and verifies the running site actually serves correctly before saying it worked.
+```text
+==> Verifying
+==> freecad serving contract: http://localhost:8080
+  ok   COOP: same-origin
+  ok   COEP: require-corp
+  ok   root serves the FreeCAD GUI
+  ok   legal.html served
+  ok   LICENSE served
+  ok   GUI links to the license page
+  ok   FreeCAD.wasm served
+  ok   FreeCAD.js served
+  ok   FreeCAD.data served
+  ok   FreeCAD.wasm is application/wasm
+  ok   payload carries its Python packages
 
-- `sh setup.sh --build` builds the image locally from the release artifacts (~445 MB)
-  instead of pulling it.
-- `sh full-build.sh` clones the repository at a tag and builds from that.
-- `sh setup.sh --port 9000` serves somewhere other than 8080.
+==> contract OK
+
+  freecad-web is running:   http://localhost:8080/
+```
+
+Then open **<http://localhost:8080/>** in Chrome or Edge 137+. Use `localhost` rather than
+the machine's LAN address: the engine needs a secure context to start.
+
+That last check is not decoration. Every asset can return 200 with every header correct while
+the payload inside the engine is missing its Python packages, which is exactly what both
+sites served for two days once, with FEM, the Addon Manager and Draft all dead and the app
+booting happily. The installer looks inside the engine before it claims success.
+
+### Options
+
+| | |
+|---|---|
+| `sh setup.sh` | Pull the prebuilt image, falling back to a local build if the registry is unreachable |
+| `sh setup.sh --build` | Always build locally from the release artifacts (~445 MB download) |
+| `sh setup.sh --pull` | Only pull; fail rather than build |
+| `sh setup.sh --port 9000` | Serve somewhere other than 8080 |
+| `sh setup.sh --tag v1.0.0` | Install a specific release |
+| `sh setup.sh --ref dev` | Take the source tree from a branch instead of the release tag |
+| `sh full-build.sh` | Clone the repository at a tag and build the container from it (~15 min) |
+
+### Running it
+
+The installer leaves you a normal compose project, so nothing here is bespoke:
+
+```bash
+docker compose ps                      # is it healthy?
+docker compose logs -f                 # follow it
+docker compose down                    # stop it
+docker compose up -d                   # start it again
+docker compose --profile share up -d   # add shared sessions and the MCP endpoint
+```
+
+Or skip the installer entirely and run the published image:
+
+```bash
+docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.0
+```
+
+Your documents live in your browser, not in the container, so stopping or removing it does
+not touch them. The one exception is a session you deliberately share, which is copied to a
+volume so the link keeps working while your laptop is shut.
 
 **[QUICKSTART.md](QUICKSTART.md)** covers troubleshooting, updating and uninstalling.
 

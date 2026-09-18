@@ -4,7 +4,11 @@
 # Running freecad-web yourself
 
 FreeCAD compiled to WebAssembly, served by nginx in a container. Docker is the only
-requirement — no Python, no Node, no build tools, no compiler.
+requirement: no Python, no Node, no build tools, no compiler.
+
+[![freecad-web running a 42 MB assembly](docs/images/project-42mb.png)](https://freecad.virtastic.app)
+
+<sub>What you get: the real application, running locally in your browser.</sub>
 
 If you just want to use it and not host it, the hosted instance is
 <https://freecad.virtastic.app> and needs nothing at all.
@@ -29,7 +33,33 @@ Then open **<http://localhost:8080/>**.
 The script does five things, in order, and stops at the first that fails: checks your
 Docker, gets the image, starts the container, waits for it to report healthy, and then
 verifies the running site actually serves correctly. It does not tell you it worked until
-it has checked.
+it has checked:
+
+```text
+==> Verifying
+==> freecad serving contract: http://localhost:8080
+  ok   COOP: same-origin
+  ok   COEP: require-corp
+  ok   root serves the FreeCAD GUI
+  ok   legal.html served
+  ok   LICENSE served
+  ok   GUI links to the license page
+  ok   FreeCAD.wasm served
+  ok   FreeCAD.js served
+  ok   FreeCAD.data served
+  ok   FreeCAD.wasm is application/wasm
+  ok   payload carries its Python packages
+
+==> contract OK
+
+  freecad-web is running:   http://localhost:8080/
+```
+
+The last line of that list is the one worth having. Every asset can return 200 with every
+header correct while the payload inside the engine is missing its Python packages, which is
+what both sites served for two days once: the app booted, drew a box, and FEM, the Addon
+Manager and Draft were all dead. The installer looks inside the engine before claiming
+success.
 
 ### Three ways in
 
@@ -38,6 +68,7 @@ it has checked.
 | `sh setup.sh` | Pulls the prebuilt image from GHCR. If that is unavailable it falls back to building locally, and says so. | ~3 min |
 | `sh setup.sh --build` | Downloads the seven engine artifacts (~445 MB) from the release and builds the image on your machine. | ~15 min |
 | `sh full-build.sh` | Clones the repository at the release tag, then does the `--build` path from that clone. | ~15 min |
+| `docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.0` | No installer at all. You get the app; shared sessions need the compose file. | ~2 min |
 
 All three produce the same running container. Use `--build` if you want to build what you
 can read, or if you are on an arm64 machine and would rather have a native image than an
@@ -53,8 +84,8 @@ job needing ~100 GB of disk and 16+ GB of RAM, and it is documented in
 |---|---|---|
 | `--port 9000` | `FCWEB_PORT` | `8080` |
 | `--tag v1.0.0` | `FCWEB_RELEASE` | `v1.0.0` |
-| `--ref dev` | — | same as `--tag` |
-| `--build` / `--pull` | — | pull, with fallback to build |
+| `--ref dev` | none | same as `--tag` |
+| `--build` / `--pull` | none | pull, with fallback to build |
 
 `--tag` is the release whose engine artifacts and image get installed. `--ref` is the
 source tree (branch or tag) the Dockerfile and compose file come from. They are the same
@@ -79,37 +110,37 @@ loads the page and then never boots the engine.
 
 To serve it to other machines, put it behind a reverse proxy with real TLS. Pass the
 `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers through unchanged
-and do not add your own — duplicates break isolation just as effectively as absence.
+and do not add your own, because duplicates break isolation just as effectively as absence.
 
 ---
 
 ## Troubleshooting
 
-**"Docker is not installed"** — install it from
+**"Docker is not installed"**: install it from
 <https://docs.docker.com/get-started/get-docker/>. Docker Desktop for Windows/macOS,
 Docker Engine plus the compose plugin for Linux.
 
-**"Docker is installed but the daemon is not reachable"** — the command-line tool exists
+**"Docker is installed but the daemon is not reachable"**: the command-line tool exists
 but nothing is listening. On Windows/macOS, start Docker Desktop and wait for "Engine
 running". On Linux, `sudo systemctl start docker`; if it says permission denied, run
 `sudo usermod -aG docker "$USER"` and then log out and back in.
 
-**"Docker is in Windows container mode"** — right-click the Docker whale in the system
+**"Docker is in Windows container mode"**: right-click the Docker whale in the system
 tray, choose *Switch to Linux containers…*, wait for the engine to restart, re-run.
 
-**"You have the legacy docker-compose (v1)"** — Compose v1 is end-of-life. Install the V2
+**"You have the legacy docker-compose (v1)"**: Compose v1 is end-of-life. Install the V2
 plugin: <https://docs.docker.com/compose/install/>.
 
-**The pull fails and it builds instead** — expected if the package has not been made
+**The pull fails and it builds instead**: expected if the package has not been made
 public yet. The local build produces the same thing; it just takes longer.
 
-**Port 8080 is already in use** — `sh setup.sh --port 9000`.
+**Port 8080 is already in use**: `sh setup.sh --port 9000`.
 
-**The page loads but the engine never reaches Ready** — almost always either a
+**The page loads but the engine never reaches Ready**: almost always either a
 non-loopback URL (see above) or an unsupported browser. Check the browser console for a
 `crossOriginIsolated` warning.
 
-**The Addon Manager cannot reach anything** — `infra/nginx.conf` proxies a fixed allowlist
+**The Addon Manager cannot reach anything**: `infra/nginx.conf` proxies a fixed allowlist
 of upstreams through `1.1.1.1` and `8.8.8.8`. On a network that blocks those resolvers the
 Addon Manager will not work; the application itself is unaffected.
 
