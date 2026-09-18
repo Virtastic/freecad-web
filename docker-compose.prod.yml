@@ -50,4 +50,14 @@ networks:
   shared:
     external: true
     name: nostalgia
-  internal: {}                     # project-local; only freecad and session are on it
+  # `internal: true` is load-bearing, not tidiness. Without it docker gives this bridge a
+  # gateway of its own, and freecad -- attached to two networks -- took its DEFAULT ROUTE
+  # from this one: it sorts before nostalgia, so it lands on eth0 and wins. Egress then
+  # left from 172.19.0.0/16, which this box does not masquerade, and every outbound connect
+  # was dropped. Measured on production 2026-09-18: DNS resolved fine, TCP 443 got no
+  # SYN-ACK in 8s, and /proxy/ answered 504 at exactly nginx's 10s proxy_connect_timeout --
+  # the Addon Manager dead site-wide. A bridge with no external connectivity has no gateway
+  # to offer, so the default route necessarily comes from nostalgia. Safe here because the
+  # session service makes no outbound calls of its own.
+  internal:
+    internal: true                 # project-local; only freecad and session are on it

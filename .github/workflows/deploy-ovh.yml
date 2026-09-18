@@ -215,8 +215,14 @@ jobs:
         if: always()
         run: docker rm -f freecad-canary >/dev/null 2>&1 || true
 
+      # --force-recreate because a changed NETWORK definition is otherwise handled badly:
+      # compose recreates the network and RECONNECTS the running containers to it without
+      # their aliases, so nginx's `session` lookup starts answering NXDOMAIN and /share/
+      # 502s while every container reports healthy. Recreating the containers attaches them
+      # fresh, aliases and all. Costs nothing on an ordinary deploy, where a rebuilt image
+      # recreates them anyway. (Measured 2026-09-18 on a two-network repro of this stack.)
       - name: Start / update container
-        run: docker compose -f /opt/freecad/docker-compose.prod.yml up -d
+        run: docker compose -f /opt/freecad/docker-compose.prod.yml up -d --force-recreate
 
       # Validate, then restart the shared edge to apply the new vhost (admin API disabled, so
       # `caddy reload` can't be used; restart re-reads the Caddyfile, ~3s blip). Validate first to
@@ -233,6 +239,23 @@ jobs:
           docker run --rm --network nostalgia curlimages/curl:latest \
             -fsS -D - -o /dev/null http://freecad:80/ \
             | tee /dev/stderr | grep -qi '^cross-origin-opener-policy: same-origin'
+
+      # Two things this stack can break while every container still reports healthy, both
+      # found the hard way on 2026-09-18: nginx reaching the session service by name, and
+      # the container reaching the internet at all (the /proxy/ allowlist the Addon Manager
+      # rides on). Only OUR failure codes fail the deploy -- 502 is the resolver, 504 is
+      # egress. Anything else, a third party being down included, is reported and passes.
+      - name: Health check (session + outbound proxy)
+        run: |
+          set -e
+          docker exec freecad curl -fsS -m 10 http://127.0.0.1/share/health | head -c 200; echo
+          code=$(docker exec freecad curl -s -o /dev/null -m 25 -w '%{http_code}' http://127.0.0.1/proxy/addons/status)
+          echo "/proxy/addons/status -> $code"
+          case "$code" in
+            502) echo "::error::proxy resolver broken (502): nginx cannot resolve the allowlisted host"; exit 1 ;;
+            504) echo "::error::no outbound egress (504): check the default route -- a second non-internal network steals it"; exit 1 ;;
+            *) echo "outbound proxy OK" ;;
+          esac
 
       # Real end-to-end gate for the config THIS deploy controls: the shared edge (TLS + sec_headers
       # + reverse_proxy to the container). Hit the edge DIRECTLY via --resolve to 127.0.0.1, bypassing
