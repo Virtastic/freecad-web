@@ -53,12 +53,16 @@ them. Passwords and the MCP token are stored only as hashes.
 sharing**. Sharing begins immediately — you do not need to press OK — and the page then
 shows *Sharing …* with the link and a **Copy** button beside it.
 
+[![Preferences, Sharing, General: start sharing, the link, passwords, expiry](docs/images/share-general.png)](docs/images/share-general.png)
+
 **Preferences → Sharing** has three pages: **General** (start and stop, your name, the
 link, passwords, expiry), **Session** (who is here, who is editing, and the actions --
 Request, Take, Release, Grant, Deny, Remove from session, Copy link, Download, Diagnostics,
 Stop sharing) and **MCP** (the AI link). The Session page is the live surface: who is
 editing, how many others are here, and whether contact was lost. **Refresh** reads the
 state again; it also repaints itself whenever you press one of its buttons.
+
+[![The Session page, with two people in the session](docs/images/share-session.png)](docs/images/share-session.png)
 
 **What travels:** the document, your full `user.cfg` (units, decimals, theme, navigation,
 toolbars), your macros, and your add-ons. A visitor gets your working environment, not a
@@ -102,6 +106,11 @@ document, never silently.
 
 ## Opening someone's link
 
+[![A shared document open in a visitor's browser, read-only](docs/images/share-viewer.png)](docs/images/share-viewer.png)
+
+<sub>What arrives: the document, in your own browser, marked read-only in the tree and
+on the tab. Your camera is yours.</sub>
+
 Click it. The loading screen asks your name, the password if there is one, and — if the
 session carries add-ons — whether to install them:
 
@@ -126,6 +135,8 @@ A first visit downloads the ~88 MB engine; returning visits start in seconds. **
 **Edit → Share Session… → MCP**, press **Enable assistant**. The assistant works inside a
 session, so if you have not started one this starts it for you. A link is minted a moment
 later.
+
+[![The MCP page](docs/images/share-mcp.png)](docs/images/share-mcp.png)
 
 For a command-line client, do not retype it. **Copy Claude Code command** and **Copy Codex
 command** put the whole thing on the clipboard, already carrying your link:

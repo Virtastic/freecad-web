@@ -144,10 +144,20 @@ units, your theme, your add-ons, your macros. They need no install, no account a
 matching version, and it works whether they open it now or in three days, because the
 session lives on the server rather than in your tab.
 
+| | |
+|---|---|
+| [![Starting a shared session](docs/images/share-general.png)](docs/images/share-general.png) | [![What the visitor sees](docs/images/share-viewer.png)](docs/images/share-viewer.png) |
+| **Your side.** Press Start sharing, copy the link. Passwords and an expiry if you want them. | **Their side.** The same model, in their browser, marked read-only. No install, no account. |
+
 One person holds control at a time. Everyone else watches live, read-only, with the editing
 commands greyed out, keeping their own camera and their own tab. Control can be requested,
 granted, or taken with the editor password. Work that has not reached the server is kept as
 a separate document rather than discarded.
+
+[![The session page: who is here and who is editing](docs/images/share-session.png)](docs/images/share-session.png)
+
+<sub>*Preferences → Sharing → Session*: who is here, who is editing, and every action in one
+place. Two people in this one, the owner holding control.</sub>
 
 Rendering still happens in each visitor's own browser. This is not screen sharing.
 
@@ -157,6 +167,8 @@ Rendering still happens in each visitor's own browser. This is not screen sharin
 drive FreeCAD: the object tree, every property, the selection, the views, screenshots,
 export, and every GUI command, plus arbitrary Python as the backstop. The page has copy
 buttons for the Claude Code and Codex command lines, so there is nothing to type.
+
+[![The MCP page, with a minted endpoint and the CLI copy buttons](docs/images/share-mcp.png)](docs/images/share-mcp.png)
 
 The assistant works inside your tab and inherits its rights, so it is off until you press
 Enable. **[SHARING.md](SHARING.md)** covers both features, including what the operator turns
