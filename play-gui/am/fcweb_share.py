@@ -166,11 +166,17 @@ def _safe_name(x):
 
 
 def _mine(d):
-    """A document of this user's own: not FreeCAD's start page, not a mirror of someone
-    else's session, not the copy we detached when control was taken."""
+    """A document of this user's own: not the copy we detached when control was taken.
+
+    This used to drop anything whose FileName was under /freecad/, to keep FreeCAD's own
+    start page out. The start page is not a document at all -- measured on the shipped
+    build: with it on screen and nothing else open, App.listDocuments() is empty -- so the
+    only thing that rule ever excluded was a BUNDLED EXAMPLE the user had deliberately
+    opened. Open one from the Start page, press Start sharing, and the session went up
+    holding nothing: "sharing with no document open: nothing to publish". A file someone
+    opened is theirs to share, wherever it came from.
+    """
     if d is None:
-        return False
-    if (getattr(d, 'FileName', '') or '').startswith('/freecad/'):
         return False
     if (d.Name or '').startswith('_fcweb_v'):
         return False
@@ -1151,11 +1157,12 @@ def tick():
         # The session follows the document you are WORKING ON. Pinning the first one and
         # keeping it meant opening another file left everyone watching the old one with
         # no way to say so. Only the holder re-pins -- a viewer clicking around their own
-        # copy must not redirect the session -- and never onto FreeCAD's own start page.
+        # copy must not redirect the session.
         if enabled or c.get('session'):
             d = App.ActiveDocument
-            mine = d is not None and not (d.FileName or '').startswith('/freecad/')
-            mine = mine and not (d.Name or '').startswith('_fcweb_v')     # a mirror of someone else's
+            # Same rule as _mine(), and it has to stay the same rule: publishing an
+            # example while refusing to pin it would share a document nobody is watching.
+            mine = _mine(d)
             if mine and _pin != d.Name and (not _pin or c.get('holder') or not c.get('session')):
                 if _pin:
                     _log('session follows the active document: %s -> %s' % (_pin, d.Name))

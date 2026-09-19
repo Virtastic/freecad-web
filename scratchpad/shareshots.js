@@ -122,14 +122,16 @@ const shot = async (p, name) => {
     'import FreeCAD as App, FreeCADGui as Gui',
     'import shutil',
     'hits = glob.glob("/freecad/**/PartDesignExample.FCStd", recursive=True)',
-    // Copy it out of /freecad/ first. fcweb_share._mine() excludes every document whose
-    // FileName starts with /freecad/ -- that is where FreeCAD's own bundled files and the
-    // start page live, and publishing those would be wrong. Opening the example IN PLACE
-    // therefore shares a session with nothing in it ("sharing with no document open:
-    // nothing to publish"), which is what three attempts at the visitor shot photographed.
+    // The shots copy the example into the home directory, so the frames show a file that
+    // looks like the viewer's own work rather than a read-only payload path.
+    // FCWEB_SHOT_INPLACE=1 opens it straight out of /freecad/ instead -- what a person
+    // does from the Start page, and the case fcweb_share._mine() used to exclude, so the
+    // session went up holding nothing. Keep it: it is the regression check for that fix.
     'mine = "/home/web_user/PartDesignExample.FCStd"',
-    'shutil.copyfile(hits[0], mine) if hits else None',
-    'App.openDocument(mine) if hits else App.newDocument("Model")',
+    'INPLACE = ' + (process.env.FCWEB_SHOT_INPLACE ? 'True' : 'False'),
+    'src = hits[0] if (hits and INPLACE) else (mine if hits else "")',
+    'shutil.copyfile(hits[0], mine) if (hits and not INPLACE) else None',
+    'App.openDocument(src) if hits else App.newDocument("Model")',
     'App.ActiveDocument.recompute()',
     '_v = Gui.activeDocument().activeView() if Gui.activeDocument() else None',
     'hasattr(_v, "viewAxonometric") and _v.viewAxonometric()',
