@@ -48,7 +48,7 @@ const SEQ = [
   [card('Open source', 'LGPL. One Docker<br>command to <b>self-host</b>.', 'docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.0', 'freecad.virtastic.app · github.com/Virtastic/freecad-web'), null, 6],
 ];
 
-const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t], i) => [h, c, i === 0 ? 3 : i === 4 ? 4 : 2]);
+const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t], i) => [h, c, i === 4 ? 4 : 3]);
 (async () => {
   fs.mkdirSync(TMP, { recursive: true });
   const b = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] });
