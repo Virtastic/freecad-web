@@ -8,8 +8,9 @@ your tab.
 
 [![A 42 MB 3D printer assembly open in freecad-web](docs/images/project-42mb.png)](https://freecad.virtastic.app)
 
-<sub>A real 42 MB project, 34 top-level parts, opened from the browser. Every screenshot on
-this page is the application running, captured from the shipped build.</sub>
+<sub>A real 42 MB project, 34 top-level parts, opened from the browser: GA3Dtech's open-hardware
+[GA3D-basicbot-2023](https://github.com/GA3Dtech/GA3D-basicbot-2023) (CERN-OHL-W-2.0). Every
+screenshot on this page is the application running, captured from the shipped build.</sub>
 
 This is not a viewer or a cut-down demo. It is upstream FreeCAD built for
 `wasm64-emscripten` with wasm exceptions and JSPI: the same workbenches, the same commands,
@@ -32,7 +33,7 @@ Every one of these opened in the browser, from the build that is live right now.
 | [![FEM example](docs/images/fem.png)](docs/images/fem.png) | [![Assembly example](docs/images/assembly.png)](docs/images/assembly.png) |
 | **FEM.** Gmsh meshes and CalculiX solves in the tab, within 1% of beam theory. | **Assembly**, 54 objects, with joints and constraints. |
 | [![Draft objects](docs/images/draft.png)](docs/images/draft.png) | [![An 18 MB STL mesh](docs/images/helm-stl.png)](docs/images/helm-stl.png) |
-| **Draft**, 113 objects: wires, arcs, dimensions and text, shown from the top. | **An 18 MB STL**, imported and shaded. Meshes as well as solids. |
+| **Draft**, 113 objects: wires, arcs, dimensions and text, shown from the top. | **An 18 MB STL**, imported and shaded. Meshes as well as solids. [Dovahkiin Helm Reforged](https://www.thingiverse.com/thing:1979664) by MHypothetical. |
 
 ## Run it yourself
 
