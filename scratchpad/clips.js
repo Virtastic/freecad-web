@@ -15,6 +15,7 @@
 //   project-42mb  the 42 MB real project loaded from disk into the tab, then orbited
 //   helm-stl      the 18 MB STL mesh
 //   share-join    a SECOND browser context opening a share link and getting the model
+//   wbtour        nine wb-* clips: one workbench each, with the example that shows it
 //
 // Documents are opened through the Python bridge (that is how the README shots do it too);
 // everything the viewer then sees -- the orbit, the zoom, the join form -- is real input.
@@ -30,7 +31,7 @@ const SAMPLES = process.env.FCWEB_SAMPLES || 'local-serve-final';
 const W = 1600, H = 900;
 const sl = (ms) => new Promise((r) => setTimeout(r, ms));
 const NL = String.fromCharCode(10);
-const want = (n) => !ONLY.length || ONLY.includes(n);
+const want = (n) => !ONLY.length || ONLY.includes(n) || (n === 'wbtour' && ONLY.some((o) => o.startsWith('wb-')));
 
 const runPy = (p, code) => p.evaluate((c) => {
   const m = window.fcInstance;
@@ -143,7 +144,7 @@ async function pushFile(p, local, dest) {
   }, dest);
 }
 
-async function openDoc(p, src, mark, isMesh) {
+async function openDoc(p, src, mark, isMesh, wb) {
   await runPy(p, [
     'import sys, os, glob',
     'import FreeCAD as App, FreeCADGui as Gui',
@@ -156,12 +157,14 @@ async function openDoc(p, src, mark, isMesh) {
     'try:',
     isMesh ? '    import Mesh; _doc = App.newDocument("Model"); Mesh.insert(src, _doc.Name)'
            : '    App.openDocument(src)',
-    '    Gui.activateWorkbench("PartDesignWorkbench")',
+    '    Gui.activateWorkbench(' + JSON.stringify(wb || 'PartDesignWorkbench') + ')',
     '    App.ActiveDocument.recompute()',
     '    _v = Gui.activeDocument().activeView()',
-    '    _v.viewAxonometric()',
-    '    Gui.SendMsgToActiveView("ViewFit")',
-    '    _v.setNavigationType("Gui::GestureNavigationStyle")',
+    '    # a document whose active view is a TechDraw page has no camera to point',
+    '    if hasattr(_v, "viewAxonometric"):',
+    '        _v.viewAxonometric()',
+    '        Gui.SendMsgToActiveView("ViewFit")',
+    '        _v.setNavigationType("Gui::GestureNavigationStyle")',
     '    _n, _c = App.ActiveDocument.Name, len(App.ActiveDocument.Objects)',
     'except Exception as e:',
     '    _n, _c = "FAILED:%r" % (e,), -1',
@@ -265,6 +268,49 @@ async function record(p, name, body) {
     await runPy(p, CLEAN);
     await sl(1500);
     await record(p, m.n, async () => { await tour(p); return line.trim() + ' (opened in ' + loaded + ' s)'; });
+  }
+
+  // 6b. One workbench at a time, each with the example that shows what it is for. The old
+  // tour switched toolbars over an empty Start page and nobody could tell what changed.
+  const TOUR = [
+    { n: 'wb-partdesign', wb: 'PartDesignWorkbench', src: 'PartDesignExample.FCStd' },
+    { n: 'wb-sketcher', wb: 'SketcherWorkbench', src: 'PartDesignExample.FCStd', edit: 'Sketch' },
+    { n: 'wb-part', wb: 'PartWorkbench', src: 'EngineBlock.FCStd' },
+    { n: 'wb-assembly', wb: 'AssemblyWorkbench', src: 'AssemblyExample.FCStd' },
+    { n: 'wb-draft', wb: 'DraftWorkbench', src: 'draft_test_objects.FCStd', top: true },
+    { n: 'wb-bim', wb: 'BIMWorkbench', src: 'BIMExample.FCStd' },
+    { n: 'wb-fem', wb: 'FemWorkbench', src: 'FEMExample.FCStd' },
+    { n: 'wb-techdraw', wb: 'TechDrawWorkbench', src: 'ArchDetail.FCStd', page: true },
+    { n: 'wb-mesh', wb: 'MeshWorkbench', src: '/home/web_user/dovahkiin_helm_reforged.stl', local: path.join(SAMPLES, 'dovahkiin_helm_reforged.stl'), mesh: true },
+  ];
+  if (want('wbtour')) {
+    for (const t of TOUR) {
+      if (ONLY.length && ONLY.some((o) => o.startsWith('wb-')) && !ONLY.includes(t.n)) continue;
+      if (t.local && !await p.evaluate((d) => { try { window.fcInstance.FS.stat(d); return true; } catch (e) { return false; } }, t.src)) {
+        await pushFile(p, t.local, t.src);
+      }
+      const line = await openDoc(p, t.src, 'CLIP_' + t.n.replace(/-/g, '_'), t.mesh, t.wb);
+      if (t.top) await runPy(p, 'import FreeCADGui as Gui' + NL + 'Gui.activeDocument().activeView().viewTop(); Gui.SendMsgToActiveView("ViewFit")');
+      if (t.edit) await runPy(p, 'import FreeCAD as App, FreeCADGui as Gui' + NL + 'Gui.activeDocument().setEdit(App.ActiveDocument.getObject(' + JSON.stringify(t.edit) + '))');
+      if (t.page) await runPy(p, [
+        'import FreeCAD as App, FreeCADGui as Gui',
+        'for o in App.ActiveDocument.Objects:',
+        '    if o.TypeId == "TechDraw::DrawPage":',
+        '        Gui.ActiveDocument.getObject(o.Name).doubleClicked()',
+        '        break',
+      ].join(NL));
+      await sl(2500);
+      await runPy(p, 'import FreeCADGui as Gui' + NL + 'Gui.SendMsgToActiveView("ViewFit")');
+      await sl(1500);
+      await record(p, t.n, async () => {
+        await sl(1200);
+        if (!t.edit && !t.page && !t.top) await orbit(p, 140, -50, 45);
+        else await sl(1500);
+        await sl(1200);
+        return line.trim();
+      });
+      if (t.edit) { await runPy(p, 'import FreeCADGui as Gui' + NL + 'Gui.activeDocument().resetEdit()'); await sl(1000); }
+    }
   }
 
   // 7. The share link, from the visitor's side.

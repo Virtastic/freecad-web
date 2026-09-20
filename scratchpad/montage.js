@@ -18,6 +18,7 @@ const OUT = process.argv[3] || 'launch/assets/clips/launch-montage.mp4';
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const TMP = path.join(process.env.TEMP || '/tmp', 'fc-montage');
 const V = !!process.env.VERTICAL;
+const NLN = String.fromCharCode(10);
 const W = V ? 1080 : 1280, H = V ? 1920 : 720;
 
 const CSS = `
@@ -52,43 +53,70 @@ const overlay = (cap) => `<!doctype html><html><head><meta charset="utf-8"><styl
 const card = (k, h, p, u) => `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</style></head><body>
   <div class="c">${k ? `<div class="k">${k}</div>` : ''}<h1>${h}</h1>${p ? `<p>${p}</p>` : ''}${u ? `<div class="u">${u}</div>` : ''}</div></body></html>`;
 
-// [card html | null, clip name | null, seconds for a card, caption over the clip]
+// [card html | null, clip name | null, seconds for a card (0 = no card), caption over the clip, ffmpeg trim args]
 const SEQ = [
   [card('Virtastic · freecad-web 1.0', 'FreeCAD 1.1.3,<br>in your <b>browser</b>.', 'The real application, compiled to WebAssembly. Nothing installed, nothing uploaded.'), null, 4],
   [card('A first visit', 'One download,<br>then it is <b>yours</b>.', 'The engine is fetched once and kept in the browser. Return visits fetch nothing.'), 'boot', 3, 'A first visit on a fresh profile · Ready in 24 s · 2x speed'],
-  [card('Every workbench', 'All 20 <b>workbenches</b>.', 'Part, PartDesign, Sketcher, Draft, BIM, FEM, CAM, TechDraw, Assembly, Mesh, Spreadsheet and the rest, on first click.'), 'workbenches', 3, 'Every workbench activated in turn · 20 of 20 · 3x speed'],
+  [card('Every workbench', 'All 20 <b>workbenches</b>.', 'The same ones desktop FreeCAD ships. Nine of them, each with the example it is for.'), 'wb-partdesign', 3, 'Part Design · pads, pockets and sketches on a body'],
+  [null, 'wb-sketcher', 0, 'Sketcher · a constrained sketch in edit mode'],
+  [null, 'wb-part', 0, 'Part · booleans and fillets on the EngineBlock'],
+  [null, 'wb-assembly', 0, 'Assembly · 54 objects with joints'],
+  [null, 'wb-draft', 0, 'Draft · 113 wires, arcs, dimensions and text, seen from the top'],
+  [null, 'wb-bim', 0, 'BIM · 361 objects: walls, windows, a site, a section plane'],
+  [null, 'wb-fem', 0, 'FEM · a CalculiX result, solved in the tab'],
+  [null, 'wb-techdraw', 0, 'TechDraw · an A4 drawing sheet with a section and dimensions'],
+  [null, 'wb-mesh', 0, 'Mesh · an 18 MB STL'],
   [card('Real geometry', 'The same <b>OCCT</b> kernel.', 'Booleans and fillets on real solids. A pad measures 8262.4 mm³ against an analytic 8262.4.'), 'engineblock', 3, 'EngineBlock, 36 objects · opened in 6 s · orbited with a real mouse'],
   [card('A real project', '42 MB, 34 parts,<br>opened in a <b>tab</b>.', 'Loaded from disk into the browser and orbited with a real mouse.'), 'project-42mb', 3, '42 MB a2plus assembly, 34 top-level parts · opened in 21 s'],
-  [card('Meshes too', 'An 18 MB <b>STL</b>.', 'Imported and shaded. Opens in about five seconds.'), 'helm-stl', 3, '18 MB STL mesh · imported in 5 s'],
-  [card('Shared sessions', 'Send a link.<br>They get the <b>model</b>.', 'Your units, your theme, your add-ons, in their browser. Read-only until you hand over control.'), 'share-join', 3, 'A visitor opens the share link · gets the model read-only · their own browser'],
+  [card('Shared sessions', 'Send a link.<br>They get the <b>model</b>.', 'Edit → Share Session…, press Start sharing, copy the link. Your units, your theme, your add-ons travel with it.'), 'share-owner', 3, 'Edit → Share Session… · Start sharing · the link appears · Copy', ['-t', '15']],
+  [null, 'share-join', 0, 'A visitor opens the link · types a name · gets the model read-only in their own browser', ['-sseof', '-12']],
+  [null, 'share-owner', 0, 'Back with the owner: the Session page, who is here and who is editing', ['-sseof', '-7']],
+  [card('MCP', 'Let an AI<br>drive <b>FreeCAD</b>.', 'Preferences → Sharing → MCP. Enable assistant mints one URL. Claude Code, Codex or any MCP client sees the tree, the properties, the views, and runs every command.'), 'mcp', 3, 'MCP page · Enable assistant · the URL is minted · copy the Claude Code command'],
   [card('Open source', 'LGPL. One Docker<br>command to <b>self-host</b>.', 'docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.0', 'freecad.virtastic.app · github.com/Virtastic/freecad-web'), null, 6],
 ];
 
-const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t, cap], i) => [h, c, i === 4 ? 4 : 3, cap]);
+// The short keeps the beats a phone screen can carry.
+const KEEP = new Set([null, 'wb-partdesign', 'wb-sketcher', 'wb-fem', 'project-42mb', 'share-owner', 'share-join', 'mcp']);
+const SHORT = SEQ.filter(([h, c], i) => (KEEP.has(c) && !(c === 'share-owner' && i === SEQ.length - 3)) || i === 0 || i === SEQ.length - 1)
+  .filter(([h, c]) => !(c === null && h && h.indexOf('A first visit') >= 0))
+  .map(([h, c, t, cap, tr], i, a) => [h, c, h ? (i === a.length - 1 ? 4 : 3) : 0, cap, tr]);
 (async () => {
   fs.mkdirSync(TMP, { recursive: true });
   const b = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] });
   const p = await b.newPage();
   await p.setViewport({ width: W, height: H, deviceScaleFactor: 1 });
   const parts = [];
-  let i = 0;
-  for (const [html, clip, secs, cap] of (V ? SHORT : SEQ)) {
-    const png = path.join(TMP, 'card' + i + '.png');
-    await p.setContent(html, { waitUntil: 'load', timeout: 120000 });
-    await p.evaluate(() => document.fonts.ready);
-    await new Promise((r) => setTimeout(r, 300));
-    await p.screenshot({ path: png });
-    const seg = path.join(TMP, 'card' + i + '.mp4');
-    execFileSync('ffmpeg', ['-v', 'error', '-y', '-loop', '1', '-i', png, '-t', String(secs),
-      '-vf', `fade=t=in:st=0:d=0.5,fade=t=out:st=${secs - 0.5}:d=0.5,format=yuv420p`,
-      '-r', '30', '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', seg]);
-    parts.push(seg);
+  let i = 0, at = 0;
+  const chapters = [];
+  for (const [html, clip, secs, cap, tr] of (V ? SHORT : SEQ)) {
+    if (html) {
+      chapters.push(Math.round(at) + ' ' + html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').match(/<h1>?([^]*?)(?:\.|$)/) ? '' : '');
+      chapters[chapters.length - 1] = String(Math.floor(at / 60)) + ':' + String(Math.floor(at % 60)).padStart(2, '0') + ' ' +
+        (html.match(/<h1>(.*?)<\/h1>/) || ['', ''])[1].replace(/<[^>]+>/g, '');
+      at += secs;
+      const png = path.join(TMP, 'card' + i + '.png');
+      await p.setContent(html, { waitUntil: 'load', timeout: 120000 });
+      await p.evaluate(() => document.fonts.ready);
+      await new Promise((r) => setTimeout(r, 300));
+      await p.screenshot({ path: png });
+      const seg = path.join(TMP, 'card' + i + '.mp4');
+      execFileSync('ffmpeg', ['-v', 'error', '-y', '-loop', '1', '-i', png, '-t', String(secs),
+        '-vf', `fade=t=in:st=0:d=0.5,fade=t=out:st=${secs - 0.5}:d=0.5,format=yuv420p`,
+        '-r', '30', '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', seg]);
+      parts.push(seg);
+    }
     if (clip) {
       const src = path.join(DIR, clip + '.mp4');
       const seg2 = path.join(TMP, 'clip' + i + '.mp4');
       // share-join is 45 s of joining; keep the last 14 s (the model arriving and the orbit)
-      const trim = clip === 'share-join' ? ['-sseof', V ? '-9' : '-14'] : (V ? ['-t', '8'] : []);
-      const fit = V ? `scale=-2:${H},crop=${W}:${H}` : `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`;
+      const trim = tr ? tr : (V ? ['-t', '8'] : []);
+      // Vertical: a model clip is scaled to full height and centre-cropped (the model is in
+      // the middle of the 3D view). A dialog clip is framed on the Preferences dialog instead,
+      // x 340..1460 of the 1600-wide recording, scaled so the dialog spans the phone's width.
+      const dialog = clip === 'share-owner' || clip === 'mcp';
+      const fit = !V ? `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`
+        : dialog ? `scale=1543:-2,crop=1080:868:328:0,pad=${W}:${H}:0:(oh-ih)/2`
+        : `scale=-2:${H},crop=${W}:${H}`;
       const ov = path.join(TMP, 'ov' + i + '.png');
       await p.setContent(overlay(cap), { waitUntil: 'load', timeout: 120000 });
       await p.evaluate(() => document.fonts.ready);
@@ -98,6 +126,7 @@ const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t, cap], i) =
         '-filter_complex', `[0:v]${fit}[v];[v][1:v]overlay=0:0,fade=t=in:st=0:d=0.3,format=yuv420p`,
         '-r', '30', '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-an', seg2]);
       parts.push(seg2);
+      at += Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', seg2]).toString().trim());
     }
     i++;
   }
@@ -107,4 +136,5 @@ const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t, cap], i) =
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', OUT]);
   const d = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', OUT]).toString().trim();
   console.log(OUT + ' ' + Math.round(Number(d)) + ' s ' + Math.round(fs.statSync(OUT).size / 1024) + ' KB');
+  console.log('chapters:' + NLN + chapters.join(NLN));
 })().catch((e) => { console.log('DRIVER ' + e); process.exit(1); });
