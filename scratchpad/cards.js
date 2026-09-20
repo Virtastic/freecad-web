@@ -66,11 +66,11 @@ const CARDS = [
       <div class="kicker" style="font-size:16px">Virtastic / freecad-web</div>
       <h1 style="font-size:64px;margin-top:18px">FreeCAD, compiled<br>to <b>WebAssembly</b>.</h1>
       <p class="sub" style="font-size:23px;margin-top:22px;width:560px">wasm64 · JSPI · Qt 6 · CPython · OCCT · Coin3D ·
-        Gmsh and CalculiX in the tab. An 18 MB STL opens in five seconds. LGPL, one Docker command to self-host.</p>
+        Gmsh and CalculiX in the tab. A real 42 MB, 34-part assembly opens in the tab. LGPL, one Docker command to self-host.</p>
       <div class="url" style="font-size:24px;margin-top:30px">freecad.virtastic.app</div>
     </div>
     <div class="shot vp" style="left:700px;top:130px;width:540px;height:378px;transform:perspective(1600px) rotateY(-8deg)">
-      <img src="${img('helm-stl.png')}" style="width:240%;height:212%;margin-left:-88%;margin-top:-52%"></div>` },
+      <img src="${img('project-42mb.png')}"></div>` },
 
   // 16:9 post image (X, Bluesky, LinkedIn, Mastodon)
   { name: 'post-1600x900', w: 1600, h: 900, html: `
