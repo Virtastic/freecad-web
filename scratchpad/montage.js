@@ -38,10 +38,10 @@ const CSS = `
 const LOGO = 'data:image/png;base64,' + fs.readFileSync(path.resolve('../virtastic-web/public/logo.png')).toString('base64');
 const overlay = (cap) => `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}
   body { background: transparent; }
-  .lt { position: absolute; left: ${V ? 40 : 40}px; bottom: ${V ? 220 : 44}px; max-width: ${V ? 1000 : 820}px;
+  .lt { position: absolute; left: ${V ? 40 : 40}px; bottom: ${V ? 48 : 44}px; max-width: ${V ? 1000 : 820}px;
         background: rgba(10,11,13,.78); border-left: 3px solid #d3a84e; border-radius: 6px;
-        padding: ${V ? '18px 26px' : '12px 18px'}; font-size: ${V ? 34 : 22}px; color: #e7ecf3; font-weight: 500; line-height: 1.3; }
-  .wm { position: absolute; right: ${V ? 40 : 36}px; top: ${V ? 60 : 24}px; display: flex; align-items: center; gap: 12px;
+        padding: ${V ? '16px 24px' : '12px 18px'}; font-size: ${V ? 32 : 22}px; color: #e7ecf3; font-weight: 500; line-height: 1.3; }
+  .wm { position: absolute; right: ${V ? 40 : 36}px; top: ${V ? 52 : 24}px; display: flex; align-items: center; gap: 12px;
         background: rgba(10,11,13,.6); border-radius: 8px; padding: ${V ? '12px 18px' : '8px 12px'}; }
   .wm img { height: ${V ? 44 : 28}px; }
   .wm span { font-family: 'JetBrains Mono', monospace; color: #eecb78; font-size: ${V ? 26 : 17}px; }
@@ -113,17 +113,21 @@ const SHORT = SEQ.filter(([h, c], i) => (KEEP.has(c) && !(c === 'share-owner' &&
       // Vertical: a model clip is scaled to full height and centre-cropped (the model is in
       // the middle of the 3D view). A dialog clip is framed on the Preferences dialog instead,
       // x 340..1460 of the 1600-wide recording, scaled so the dialog spans the phone's width.
+      // Vertical, model clips: two panes. The whole window letterboxed on top (where you
+      // are), the 3D area magnified underneath (what is happening). 40 + 608 + 1060 + 212 for
+      // the caption band = 1920. A dialog clip is framed on the Preferences dialog instead.
       const dialog = clip === 'share-owner' || clip === 'mcp';
-      const fit = !V ? `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`
-        : dialog ? `scale=1543:-2,crop=1080:868:328:0,pad=${W}:${H}:0:(oh-ih)/2`
-        : `scale=-2:${H},crop=${W}:${H}`;
+      const graph = !V ? `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2[v]`
+        : dialog ? `[0:v]scale=1543:-2,crop=1080:868:328:0,pad=${W}:${H}:0:(oh-ih)/2[v]`
+        : `[0:v]split[a][b];[a]scale=1080:608:force_original_aspect_ratio=decrease,pad=1080:608:(ow-iw)/2:(oh-ih)/2[t];` +
+          `[b]scale=-2:1060,crop=1080:1060:(iw-1080)*0.55:0[z];[t][z]vstack,pad=${W}:${H}:0:40[v]`;
       const ov = path.join(TMP, 'ov' + i + '.png');
       await p.setContent(overlay(cap), { waitUntil: 'load', timeout: 120000 });
       await p.evaluate(() => document.fonts.ready);
       await new Promise((r) => setTimeout(r, 200));
       await p.screenshot({ path: ov, omitBackground: true });
       execFileSync('ffmpeg', ['-v', 'error', '-y', ...trim, '-i', src, '-i', ov,
-        '-filter_complex', `[0:v]${fit}[v];[v][1:v]overlay=0:0,fade=t=in:st=0:d=0.3,format=yuv420p`,
+        '-filter_complex', `${graph};[v][1:v]overlay=0:0,fade=t=in:st=0:d=0.3,format=yuv420p`,
         '-r', '30', '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-an', seg2]);
       parts.push(seg2);
       at += Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', seg2]).toString().trim());
