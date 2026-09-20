@@ -33,22 +33,38 @@ const CSS = `
   p { font-size: ${V ? 36 : 24}px; color: #9aa4b4; margin-top: 22px; line-height: 1.4; max-width: 900px; }
   .u { font-family: 'JetBrains Mono', monospace; color: #eecb78; font-size: ${V ? 34 : 24}px; margin-top: 34px; }
 `;
+// Over every clip: a lower-third naming what is on screen, and the wordmark with the URL.
+const LOGO = 'data:image/png;base64,' + fs.readFileSync(path.resolve('../virtastic-web/public/logo.png')).toString('base64');
+const overlay = (cap) => `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}
+  body { background: transparent; }
+  .lt { position: absolute; left: ${V ? 40 : 40}px; bottom: ${V ? 220 : 44}px; max-width: ${V ? 1000 : 820}px;
+        background: rgba(10,11,13,.78); border-left: 3px solid #d3a84e; border-radius: 6px;
+        padding: ${V ? '18px 26px' : '12px 18px'}; font-size: ${V ? 34 : 22}px; color: #e7ecf3; font-weight: 500; line-height: 1.3; }
+  .wm { position: absolute; right: ${V ? 40 : 36}px; top: ${V ? 60 : 24}px; display: flex; align-items: center; gap: 12px;
+        background: rgba(10,11,13,.6); border-radius: 8px; padding: ${V ? '12px 18px' : '8px 12px'}; }
+  .wm img { height: ${V ? 44 : 28}px; }
+  .wm span { font-family: 'JetBrains Mono', monospace; color: #eecb78; font-size: ${V ? 26 : 17}px; }
+</style></head><body>
+  <div class="wm"><img src="${LOGO}"><span>freecad.virtastic.app</span></div>
+  ${cap ? `<div class="lt">${cap}</div>` : ''}
+</body></html>`;
+
 const card = (k, h, p, u) => `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</style></head><body>
   <div class="c">${k ? `<div class="k">${k}</div>` : ''}<h1>${h}</h1>${p ? `<p>${p}</p>` : ''}${u ? `<div class="u">${u}</div>` : ''}</div></body></html>`;
 
-// [card html | null, clip name | null, seconds for a card]
+// [card html | null, clip name | null, seconds for a card, caption over the clip]
 const SEQ = [
   [card('Virtastic · freecad-web 1.0', 'FreeCAD 1.1.3,<br>in your <b>browser</b>.', 'The real application, compiled to WebAssembly. Nothing installed, nothing uploaded.'), null, 4],
-  [card('A first visit', 'One download,<br>then it is <b>yours</b>.', 'The engine is fetched once and kept in the browser. Return visits fetch nothing.'), 'boot', 3],
-  [card('Every workbench', 'All 20 <b>workbenches</b>.', 'Part, PartDesign, Sketcher, Draft, BIM, FEM, CAM, TechDraw, Assembly, Mesh, Spreadsheet and the rest, on first click.'), 'workbenches', 3],
-  [card('Real geometry', 'The same <b>OCCT</b> kernel.', 'Booleans and fillets on real solids. A pad measures 8262.4 mm³ against an analytic 8262.4.'), 'engineblock', 3],
-  [card('A real project', '42 MB, 34 parts,<br>opened in a <b>tab</b>.', 'Loaded from disk into the browser and orbited with a real mouse.'), 'project-42mb', 3],
-  [card('Meshes too', 'An 18 MB <b>STL</b>.', 'Imported and shaded. Opens in about five seconds.'), 'helm-stl', 3],
-  [card('Shared sessions', 'Send a link.<br>They get the <b>model</b>.', 'Your units, your theme, your add-ons, in their browser. Read-only until you hand over control.'), 'share-join', 3],
+  [card('A first visit', 'One download,<br>then it is <b>yours</b>.', 'The engine is fetched once and kept in the browser. Return visits fetch nothing.'), 'boot', 3, 'A first visit on a fresh profile · Ready in 24 s · 2x speed'],
+  [card('Every workbench', 'All 20 <b>workbenches</b>.', 'Part, PartDesign, Sketcher, Draft, BIM, FEM, CAM, TechDraw, Assembly, Mesh, Spreadsheet and the rest, on first click.'), 'workbenches', 3, 'Every workbench activated in turn · 20 of 20 · 3x speed'],
+  [card('Real geometry', 'The same <b>OCCT</b> kernel.', 'Booleans and fillets on real solids. A pad measures 8262.4 mm³ against an analytic 8262.4.'), 'engineblock', 3, 'EngineBlock, 36 objects · opened in 6 s · orbited with a real mouse'],
+  [card('A real project', '42 MB, 34 parts,<br>opened in a <b>tab</b>.', 'Loaded from disk into the browser and orbited with a real mouse.'), 'project-42mb', 3, '42 MB a2plus assembly, 34 top-level parts · opened in 21 s'],
+  [card('Meshes too', 'An 18 MB <b>STL</b>.', 'Imported and shaded. Opens in about five seconds.'), 'helm-stl', 3, '18 MB STL mesh · imported in 5 s'],
+  [card('Shared sessions', 'Send a link.<br>They get the <b>model</b>.', 'Your units, your theme, your add-ons, in their browser. Read-only until you hand over control.'), 'share-join', 3, 'A visitor opens the share link · gets the model read-only · their own browser'],
   [card('Open source', 'LGPL. One Docker<br>command to <b>self-host</b>.', 'docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.0', 'freecad.virtastic.app · github.com/Virtastic/freecad-web'), null, 6],
 ];
 
-const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t], i) => [h, c, i === 4 ? 4 : 3]);
+const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t, cap], i) => [h, c, i === 4 ? 4 : 3, cap]);
 (async () => {
   fs.mkdirSync(TMP, { recursive: true });
   const b = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] });
@@ -56,7 +72,7 @@ const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t], i) => [h,
   await p.setViewport({ width: W, height: H, deviceScaleFactor: 1 });
   const parts = [];
   let i = 0;
-  for (const [html, clip, secs] of (V ? SHORT : SEQ)) {
+  for (const [html, clip, secs, cap] of (V ? SHORT : SEQ)) {
     const png = path.join(TMP, 'card' + i + '.png');
     await p.setContent(html, { waitUntil: 'load', timeout: 120000 });
     await p.evaluate(() => document.fonts.ready);
@@ -73,8 +89,13 @@ const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t], i) => [h,
       // share-join is 45 s of joining; keep the last 14 s (the model arriving and the orbit)
       const trim = clip === 'share-join' ? ['-sseof', V ? '-9' : '-14'] : (V ? ['-t', '8'] : []);
       const fit = V ? `scale=-2:${H},crop=${W}:${H}` : `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`;
-      execFileSync('ffmpeg', ['-v', 'error', '-y', ...trim, '-i', src,
-        '-vf', `${fit},fade=t=in:st=0:d=0.3,format=yuv420p`,
+      const ov = path.join(TMP, 'ov' + i + '.png');
+      await p.setContent(overlay(cap), { waitUntil: 'load', timeout: 120000 });
+      await p.evaluate(() => document.fonts.ready);
+      await new Promise((r) => setTimeout(r, 200));
+      await p.screenshot({ path: ov, omitBackground: true });
+      execFileSync('ffmpeg', ['-v', 'error', '-y', ...trim, '-i', src, '-i', ov,
+        '-filter_complex', `[0:v]${fit}[v];[v][1:v]overlay=0:0,fade=t=in:st=0:d=0.3,format=yuv420p`,
         '-r', '30', '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-an', seg2]);
       parts.push(seg2);
     }
