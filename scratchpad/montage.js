@@ -2,9 +2,12 @@
 // Copyright (c) Virtastic
 //
 // The launch video: title cards (HTML photographed at 1280x720) cut between the real clips
-// from scratchpad/clips.js. No narration; every card is a README sentence. ~75 s.
+// from scratchpad/clips.js. No narration; every card is a README sentence. ~98 s.
+// VERTICAL=1 makes the 9:16 short for Reels / TikTok / Shorts instead (~35 s): clips are
+// scaled to full height and centre-cropped, which keeps the model and drops the panels.
 //
 //   node scratchpad/montage.js [clips-dir] [out.mp4]
+//   VERTICAL=1 node scratchpad/montage.js launch/assets/clips launch/assets/clips/launch-short.mp4
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
@@ -14,7 +17,8 @@ const DIR = process.argv[2] || 'launch/assets/clips';
 const OUT = process.argv[3] || 'launch/assets/clips/launch-montage.mp4';
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const TMP = path.join(process.env.TEMP || '/tmp', 'fc-montage');
-const W = 1280, H = 720;
+const V = !!process.env.VERTICAL;
+const W = V ? 1080 : 1280, H = V ? 1920 : 720;
 
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
@@ -22,12 +26,12 @@ const CSS = `
   body { width: ${W}px; height: ${H}px; overflow: hidden; font-family: Inter, sans-serif; color: #e7ecf3;
          background: radial-gradient(800px 380px at 18% 108%, rgba(198,90,46,.30) 0%, rgba(198,90,46,0) 70%),
                      radial-gradient(900px 500px at 85% 15%, #171a21 0%, #0a0b0d 65%); }
-  .c { position: absolute; left: 90px; top: 0; height: 100%; width: 1100px; display: flex; flex-direction: column; justify-content: center; }
+  .c { position: absolute; left: ${V ? 80 : 90}px; top: 0; height: 100%; width: ${V ? 920 : 1100}px; display: flex; flex-direction: column; justify-content: center; }
   .k { font-family: 'JetBrains Mono', monospace; font-size: 15px; letter-spacing: .1em; text-transform: uppercase; color: #d3a84e; margin-bottom: 18px; }
-  h1 { font-family: 'Hoefler Text', Baskerville, 'Palatino Linotype', Palatino, Georgia, serif; font-weight: 600; font-size: 66px; line-height: 1.06; }
+  h1 { font-family: 'Hoefler Text', Baskerville, 'Palatino Linotype', Palatino, Georgia, serif; font-weight: 600; font-size: ${V ? 96 : 66}px; line-height: 1.06; }
   h1 b { color: #eecb78; font-weight: 600; }
-  p { font-size: 24px; color: #9aa4b4; margin-top: 22px; line-height: 1.4; max-width: 900px; }
-  .u { font-family: 'JetBrains Mono', monospace; color: #eecb78; font-size: 24px; margin-top: 34px; }
+  p { font-size: ${V ? 36 : 24}px; color: #9aa4b4; margin-top: 22px; line-height: 1.4; max-width: 900px; }
+  .u { font-family: 'JetBrains Mono', monospace; color: #eecb78; font-size: ${V ? 34 : 24}px; margin-top: 34px; }
 `;
 const card = (k, h, p, u) => `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</style></head><body>
   <div class="c">${k ? `<div class="k">${k}</div>` : ''}<h1>${h}</h1>${p ? `<p>${p}</p>` : ''}${u ? `<div class="u">${u}</div>` : ''}</div></body></html>`;
@@ -44,6 +48,7 @@ const SEQ = [
   [card('Open source', 'LGPL. One Docker<br>command to <b>self-host</b>.', 'docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.0', 'freecad.virtastic.app · github.com/Virtastic/freecad-web'), null, 6],
 ];
 
+const SHORT = [SEQ[0], SEQ[3], SEQ[4], SEQ[6], SEQ[7]].map(([h, c, t], i) => [h, c, i === 0 ? 3 : i === 4 ? 4 : 2]);
 (async () => {
   fs.mkdirSync(TMP, { recursive: true });
   const b = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] });
@@ -51,7 +56,7 @@ const SEQ = [
   await p.setViewport({ width: W, height: H, deviceScaleFactor: 1 });
   const parts = [];
   let i = 0;
-  for (const [html, clip, secs] of SEQ) {
+  for (const [html, clip, secs] of (V ? SHORT : SEQ)) {
     const png = path.join(TMP, 'card' + i + '.png');
     await p.setContent(html, { waitUntil: 'load', timeout: 120000 });
     await p.evaluate(() => document.fonts.ready);
@@ -66,9 +71,10 @@ const SEQ = [
       const src = path.join(DIR, clip + '.mp4');
       const seg2 = path.join(TMP, 'clip' + i + '.mp4');
       // share-join is 45 s of joining; keep the last 14 s (the model arriving and the orbit)
-      const trim = clip === 'share-join' ? ['-sseof', '-14'] : [];
+      const trim = clip === 'share-join' ? ['-sseof', V ? '-9' : '-14'] : (V ? ['-t', '8'] : []);
+      const fit = V ? `scale=-2:${H},crop=${W}:${H}` : `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`;
       execFileSync('ffmpeg', ['-v', 'error', '-y', ...trim, '-i', src,
-        '-vf', `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d=0.3,format=yuv420p`,
+        '-vf', `${fit},fade=t=in:st=0:d=0.3,format=yuv420p`,
         '-r', '30', '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-an', seg2]);
       parts.push(seg2);
     }
