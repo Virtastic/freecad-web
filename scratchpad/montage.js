@@ -67,7 +67,7 @@ const SEQ = [
   [null, 'wb-techdraw', 0, 'TechDraw · an A4 drawing sheet with a section and dimensions'],
   [null, 'wb-mesh', 0, 'Mesh · an 18 MB STL: Dovahkiin Helm Reforged by MHypothetical'],
   [card('Real geometry', 'The same <b>OCCT</b> kernel.', 'Booleans and fillets on real solids. A pad measures 8262.4 mm³ against an analytic 8262.4.'), 'engineblock', 3, 'EngineBlock, 36 objects · opened in 6 s · orbited with a real mouse'],
-  [card('A real project', '42 MB, 34 parts,<br>opened in a <b>tab</b>.', 'Loaded from disk into the browser and orbited with a real mouse.'), 'project-42mb', 3, '42 MB a2plus assembly, 34 top-level parts · opened in 21 s · GA3Dtech basicbot, CERN-OHL-W'],
+  [card('A real project', '42 MB, 34 parts,<br>opened in the <b>browser</b>.', 'Loaded from disk into the browser and orbited with a real mouse.'), 'project-42mb', 3, '42 MB a2plus assembly, 34 top-level parts · opened in 21 s · GA3Dtech basicbot, CERN-OHL-W'],
   [card('Shared sessions', 'Send a link.<br>They get the <b>model</b>.', 'Edit → Share Session…, press Start sharing, copy the link. Your units, your theme, your add-ons travel with it.'), 'share-owner', 3, 'Edit → Share Session… · Start sharing · the link appears · Copy', ['-t', '15']],
   [null, 'share-join', 0, 'A visitor opens the link · types a name · gets the model read-only in their own browser', ['-sseof', '-12']],
   [null, 'share-owner', 0, 'Back with the owner: the Session page, who is here and who is editing', ['-sseof', '-7']],
