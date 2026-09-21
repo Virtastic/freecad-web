@@ -42,6 +42,13 @@ twenty minutes there.
 Open https://freecad.virtastic.app in Chrome or Edge, and watch for anything that looks
 wrong rather than anything that errors.
 
+**The wall, before anything else (2 min, Firefox and a phone)**
+- [ ] In Firefox (or Safari): a full-screen "This needs Chrome or Edge on a desktop." page
+      with two buttons, and in devtools' network tab NOTHING under `FreeCAD.*` was requested
+- [ ] On a phone, any browser: "This needs a desktop or laptop." with a Copy-this-link button
+- [ ] `?force=1` on the same phone skips the wall (that is the only way past it; never
+      publish it)
+
 **Boot and first impression (2 min)**
 - [ ] The window looks like FreeCAD — menus, toolbars, tree, 3D view all where they belong
 - [ ] No blank panels, overlapping widgets, clipped text, or missing icons
@@ -477,6 +484,12 @@ actionable; "3D view is janky" is not.
 
 ## Known and accepted — not worth reporting
 
+- Firefox, Safari, and every phone or tablet get the wall, not the app. The gate
+  (`play-gui/freecad-gui.html`, "Browser support gate") compiles a 56-byte memory64 module
+  and calls it through `WebAssembly.promising`; a browser that fails that, or answers a
+  Number where a BigInt is required, cannot run this build whatever it claims about JSPI.
+  `scratchpad/wall.js` is the check. Since 2026-09-21, after launch-day reports of
+  "can't convert N to BigInt" from non-Chromium browsers.
 - The browser console should be EMPTY. The last line it used to carry -- "WebGL: this
   extension has very low support on mobile devices ... WEBGL_polygon_mode", Chrome's note
   the first time a context asks for the polygon-mode extension -- is gone since 2026-09-12:

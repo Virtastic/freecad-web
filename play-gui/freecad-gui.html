@@ -165,6 +165,30 @@ document.addEventListener('DOMContentLoaded', function () {
    #load::before,#load .ld-glyph{animation:none}
    #load.indet .ld-fill{animation:none; width:100%}
  }
+ /* --- The wall: shown INSTEAD of #load when the browser cannot run this build. Nothing on
+    it may look like progress -- no bar, no glyph animation, no lede -- because the previous
+    refusal (a status line inside the loader) was read as "it doesn't load" and reported as a
+    bug. Same type and tokens as #load so it is recognisably the same page. --- */
+ #wall{position:fixed; inset:0; z-index:30; display:none; align-items:center; justify-content:center;
+   padding:24px; text-align:center; background:var(--ash); color:var(--ink);
+   font:16px/1.6 "Optima","Gill Sans","Gill Sans MT",-apple-system,"Segoe UI",Roboto,sans-serif}
+ #wall.show{display:flex}
+ #wall .w-inner{width:100%; max-width:34em}
+ #wall .w-brand{font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--faint); margin:0 0 28px}
+ #wall .w-title{margin:0 0 14px; font-size:clamp(26px,5vw,38px); line-height:1.15; font-weight:600;
+   letter-spacing:.01em; color:var(--gold-hi)}
+ #wall .w-seen{margin:0 0 18px; font-size:15px; color:var(--muted)}
+ #wall .w-why{margin:0 0 28px; font-size:15px; line-height:1.55; color:var(--ink)}
+ #wall .w-btns{display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin:0 0 30px}
+ #wall .w-btns a,#wall .w-btns button{display:inline-block; background:var(--panel-2); border:1px solid var(--bronze-hi);
+   color:var(--bronze-hi); border-radius:8px; padding:12px 22px; font:15px inherit; font-weight:600;
+   text-decoration:none; cursor:pointer; min-width:150px}
+ #wall .w-btns a:hover,#wall .w-btns button:hover{background:var(--bronze-hi); color:var(--ash)}
+ #wall .w-foot{font-size:12px; line-height:1.6; letter-spacing:.04em; color:var(--faint)}
+ #wall .w-foot a{color:var(--bronze-hi); text-decoration:none; border-bottom:1px solid var(--line)}
+ #wall [hidden]{display:none !important}
+ body.walled{overflow:hidden}
+ body.walled #logtoggle{display:none}
 </style></head>
 <body>
 <div id="screen"></div>
@@ -205,6 +229,27 @@ document.addEventListener('DOMContentLoaded', function () {
       &middot; <a href="./legal.html" target="_blank" rel="noopener">LGPL-2.1</a> &middot;
       <a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">Source</a>
       <span id="buildstamp"></span></div>
+  </div>
+</div>
+<!-- Browser wall. Filled and shown by the support gate below; stays display:none on any
+     browser that passes the probe, so the supported path never sees it. -->
+<div id="wall" role="alert">
+  <div class="w-inner">
+    <p class="w-brand">freecad-web by Virtastic</p>
+    <h1 class="w-title" id="w-title">This needs Chrome or Edge on a desktop.</h1>
+    <p class="w-seen" id="w-seen"></p>
+    <p class="w-why" id="w-why">FreeCAD-Web runs the whole application inside your browser and depends on
+      JavaScript Promise Integration, which only Chromium ships today. Nothing has been downloaded.</p>
+    <div class="w-btns" id="w-btns-desktop">
+      <a href="https://www.google.com/chrome/" target="_blank" rel="noopener">Get Chrome</a>
+      <a href="https://www.microsoft.com/edge" target="_blank" rel="noopener">Get Edge</a>
+    </div>
+    <div class="w-btns" id="w-btns-mobile" hidden>
+      <button type="button" id="w-copy">Copy this link</button>
+    </div>
+    <p class="w-foot">Chrome or Edge 137 and later. Firefox and Safari will work the day they ship JSPI.<br>
+      <a href="https://virtastic.app" target="_blank" rel="noopener">virtastic.app</a> &middot;
+      <a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">Source</a></p>
   </div>
 </div>
 <div id="log" class="hidden"><span id="status">loading…</span></div>
@@ -5240,29 +5285,100 @@ window.fcRunPy = fcRunPy;
    user previously watched all of it arrive, saw "DOWNLOADING 100%", and then waited
    forever with nothing logged anywhere.
 
-   JSPI (WebAssembly.Suspending) is the hard one: modal dialogs, the gmsh and CalculiX
-   bridges and every Python-triggered dialog suspend through it. As of today that means
-   Chrome/Edge 137+. SharedArrayBuffer needs COOP+COEP (served by infra/nginx.conf), and
-   Coin renders through WebGL2. */
+   The checks are FUNCTIONAL, not feature flags. The first version of this gate asked
+   `typeof WebAssembly.Suspending === 'function'`; Firefox with the JSPI pref, Safari
+   Technology Preview and Android Chrome all answer yes to that and then die on the first
+   wasm64 pointer call ("can't convert 492342832 to BigInt", reported on launch day
+   2026-09-21). So the gate now compiles a 56-byte memory64 module, wraps an import with
+   WebAssembly.Suspending, calls the export through WebAssembly.promising with a BigInt and
+   requires (a) the round trip to work and (b) a Number argument to be REJECTED -- which is
+   the exact contract the Python bridge below relies on (see __fcPyBigInt).
+
+   Phones and tablets are refused outright: the window is unusable at that size, the engine
+   is 115 MB on mobile data, and iPad "Chrome" is WebKit underneath. `?force=1` skips the
+   wall -- for us, to try Firefox the day it ships JSPI; it is not advertised.
+
+   SharedArrayBuffer needs COOP+COEP (served by infra/nginx.conf), and Coin renders through
+   WebGL2. A refused browser gets #wall instead of the loader; the loader is REMOVED so
+   nothing on the page can look like progress. */
 (function () {
+  var force = /(?:\?|&)force=1\b/.test(location.search);
+
+  // (module (import "env" "wait" (func (param i64) (result i64)))
+  //         (memory 1 i64)
+  //         (func (export "f") (param i64) (result i64) local.get 0 call 0))
+  // Assembled by hand; the memory limits flag 0x04 is what makes it memory64.
+  var PROBE = new Uint8Array([0,97,115,109,1,0,0,0,1,6,1,96,1,126,1,126,2,12,1,3,101,110,118,4,
+    119,97,105,116,0,0,3,2,1,0,5,3,1,4,1,7,5,1,1,102,0,1,10,8,1,6,0,32,0,16,0,11]);
+
+  function isMobile() {
+    try {
+      if (navigator.userAgentData && navigator.userAgentData.mobile === true) return true;
+      if (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')) return true;
+      if ((navigator.maxTouchPoints || 0) > 1 &&
+          Math.min(screen.width || 9999, screen.height || 9999) < 700) return true;
+    } catch (e) {}
+    return false;
+  }
   function webgl2() {
     try { return !!document.createElement('canvas').getContext('webgl2'); }
     catch (e) { return false; }
   }
-  var missing = [];
-  if (typeof WebAssembly === 'undefined' || typeof WebAssembly.Suspending !== 'function') {
-    missing.push(['JavaScript Promise Integration (JSPI)',
-                  'Chrome or Edge 137 and later. Firefox and Safari do not support it yet.']);
-  }
-  if (typeof SharedArrayBuffer === 'undefined' || !self.crossOriginIsolated) {
-    missing.push(['SharedArrayBuffer with cross-origin isolation',
-                  'the page must be served with COOP and COEP headers.']);
-  }
-  if (!webgl2()) {
-    missing.push(['WebGL2', 'hardware acceleration may be disabled in your browser settings.']);
+  // Resolves true only if memory64 + JSPI work the way the engine uses them.
+  function jspiWorks() {
+    return new Promise(function (ok) {
+      var done = false, fin = function (v) { if (!done) { done = true; ok(v); } };
+      setTimeout(function () { fin(false); }, 3000);
+      try {
+        if (typeof WebAssembly === 'undefined' || typeof WebAssembly.Suspending !== 'function' ||
+            typeof WebAssembly.promising !== 'function' || !WebAssembly.validate(PROBE)) { return fin(false); }
+        WebAssembly.instantiate(PROBE, { env: { wait: new WebAssembly.Suspending(function (x) { return Promise.resolve(x); }) } })
+          .then(function (r) {
+            var f = WebAssembly.promising(r.instance.exports.f);
+            return f(BigInt(7)).then(function (v) {
+              if (v !== BigInt(7)) return fin(false);
+              var rejected = false;
+              try { var p = f(7); rejected = false;
+                    if (p && typeof p.then === 'function') { p.then(function () { fin(false); }, function () { fin(true); }); return; }
+              } catch (e) { rejected = true; }
+              fin(rejected);
+            });
+          }, function () { fin(false); })
+          .catch(function () { fin(false); });
+      } catch (e) { fin(false); }
+    });
   }
 
-  if (!missing.length) {
+  // What we saw, for the wall's second line. Brands from UA-CH when present, else a small
+  // regex over the UA string; rendered with textContent, never as HTML.
+  function describe() {
+    var b = null, v = '', os = '';
+    try {
+      var brands = navigator.userAgentData && navigator.userAgentData.brands;
+      if (brands && brands.length) {
+        var pick = brands.filter(function (x) { return !/Not.A.Brand|Chromium/i.test(x.brand); })[0] || brands[0];
+        b = pick.brand; v = pick.version;
+      }
+    } catch (e) {}
+    var ua = navigator.userAgent || '';
+    if (!b) {
+      var m;
+      if ((m = /Firefox\/(\d+)/.exec(ua))) { b = 'Firefox'; v = m[1]; }
+      else if ((m = /Edg\/(\d+)/.exec(ua))) { b = 'Edge'; v = m[1]; }
+      else if ((m = /Chrome\/(\d+)/.exec(ua))) { b = 'Chrome'; v = m[1]; }
+      else if (/Safari\//.test(ua) && (m = /Version\/(\d+)/.exec(ua))) { b = 'Safari'; v = m[1]; }
+    }
+    if (/Windows/.test(ua)) os = 'Windows';
+    else if (/Android/.test(ua)) os = 'Android';
+    else if (/iPhone|iPad|iPod/.test(ua)) os = 'iOS';
+    else if (/Mac OS/.test(ua)) os = 'macOS';
+    else if (/CrOS/.test(ua)) os = 'ChromeOS';
+    else if (/Linux/.test(ua)) os = 'Linux';
+    var s = b ? (b + (v ? ' ' + v : '')) : 'a browser we could not identify';
+    return os ? s + ' on ' + os : s;
+  }
+
+  function loadEngine() {
     ['FreeCAD.js', 'qtloader.js'].reduce(function (chain, src) {
       return chain.then(function () {
         return new Promise(function (ok, no) {
@@ -5275,36 +5391,59 @@ window.fcRunPy = fcRunPy;
       var d = document.getElementById('ld-status');
       if (d) { d.textContent = 'could not load ' + e.message; }
     });
-    return;
   }
 
-  window.__FC_UNSUPPORTED = true;
-  // Which capability turned them away, so "how many arrivals can't run this at all, and
-  // is it still JSPI?" is answerable -- that decides when Firefox becomes worth supporting.
-  // Records the check name only; `missing` holds fixed strings, never anything user-derived.
-  try {
-    var why = /JSPI/.test(missing[0][0]) ? 'jspi'
-            : /SharedArrayBuffer/.test(missing[0][0]) ? 'sab'
-            : /WebGL2/.test(missing[0][0]) ? 'webgl2' : 'other';
-    window.fcwebEvent('boot_gate', why);
-  } catch (e) {}
-  var boot = document.getElementById('load');
-  if (boot) { boot.className = ''; }
-  var st = document.getElementById('ld-status');
-  if (st) { st.textContent = 'This browser cannot run FreeCAD-Web'; }
-  var fill = document.getElementById('ld-fill');
-  if (fill && fill.parentNode) { fill.parentNode.style.display = 'none'; }
-  var det = document.getElementById('ld-detail');
-  if (det) {
-    var html = 'Nothing has been downloaded. FreeCAD-Web needs:<br><br>';
-    for (var i = 0; i < missing.length; i++) {
-      html += '<b>' + missing[i][0] + '</b> &mdash; ' + missing[i][1] + '<br>';
+  function wall(why) {
+    // Which capability turned them away, so "how many arrivals can't run this at all, and
+    // is it still JSPI?" is answerable. Fixed strings only, never anything user-derived.
+    try { window.fcwebEvent('boot_gate', why); } catch (e) {}
+    var load = document.getElementById('load');
+    if (load && load.parentNode) { load.parentNode.removeChild(load); }
+    document.body.className += ' walled';
+    var w = document.getElementById('wall');
+    if (!w) return;
+    var mobile = why === 'mobile';
+    var title = document.getElementById('w-title');
+    var seen = document.getElementById('w-seen');
+    var whyEl = document.getElementById('w-why');
+    if (mobile) {
+      if (title) title.textContent = 'This needs a desktop or laptop.';
+      if (seen) seen.textContent = 'You are on a phone or tablet.';
+      if (whyEl) whyEl.textContent = 'FreeCAD-Web is the full desktop application running inside your browser. ' +
+        'It needs a big screen, a mouse and a lot of memory, and only Chrome or Edge 137 and later on a desktop can run it. ' +
+        'Nothing has been downloaded.';
+      var bd = document.getElementById('w-btns-desktop'); if (bd) bd.hidden = true;
+      var bm = document.getElementById('w-btns-mobile'); if (bm) bm.hidden = false;
+      var cp = document.getElementById('w-copy');
+      if (cp) cp.onclick = function () {
+        var url = location.href.replace(/[?&]force=1/, '');
+        var done = function () { cp.textContent = 'Copied. Open it on a desktop.'; };
+        try { navigator.clipboard.writeText(url).then(done, done); } catch (e) { done(); }
+      };
+    } else {
+      if (seen) seen.textContent = 'You are on ' + describe() + '.';
+      if (why === 'sab') {
+        if (whyEl) whyEl.textContent = 'This page was served without cross-origin isolation, so the browser will not give it shared memory. ' +
+          'If you are self-hosting, the nginx.conf in the repository sets the two headers needed. Nothing has been downloaded.';
+      } else if (why === 'webgl2') {
+        if (whyEl) whyEl.textContent = 'WebGL2 is unavailable, usually because hardware acceleration is turned off in the browser settings. ' +
+          'Nothing has been downloaded.';
+      }
     }
-    html += '<br>Please open this page in Chrome or Edge 137 or later on a desktop.';
-    det.innerHTML = html;
-    det.style.maxWidth = '34em';
-    det.style.lineHeight = '1.6';
+    w.className = 'show';
   }
+
+  if (force) {
+    try { console.warn('[fcweb] ?force=1: browser support gate skipped'); } catch (e) {}
+    return loadEngine();
+  }
+  if (isMobile()) return wall('mobile');
+  jspiWorks().then(function (ok) {
+    if (!ok) return wall('jspi');
+    if (typeof SharedArrayBuffer === 'undefined' || !self.crossOriginIsolated) return wall('sab');
+    if (!webgl2()) return wall('webgl2');
+    loadEngine();
+  });
 })();
 </script>
 <script>
