@@ -5270,7 +5270,7 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
  // renderSimpleArray: normal and coord from vertex_array;
  // no texture, color, highlight or selection but highet possible speed;
  // all vertices written in one go!
-@@ -716,15 +749,31 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
+@@ -716,15 +749,32 @@ void SoBrepFaceSet::GLRender(SoGLRenderA
          }
      }
  
@@ -5290,15 +5290,16 @@ diff -ruNp a/src/Mod/Part/Gui/SoBrepFaceSet.cpp b/src/Mod/Part/Gui/SoBrepFaceSet
      // correctly.
 -    if (this->shouldGLRender(action)) {
 +#if defined(__EMSCRIPTEN__)
-+    // wasm: do NOT call shouldGLRender() at all -- its frustum/complexity-cull
-+    // and transparency path misbehave in the emulated GL state (it never returns
-+    // control to the normal render path; geometry silently vanishes). Render the
-+    // normal opaque path unconditionally.
-+    bool fcShouldRender = true;
-+    if (::getenv("FCWEB_DEBUG")) { fprintf(stderr, "[FCWEB-SR] forced render (shouldGLRender skipped)\n"); fflush(stderr); }
-+#else
-+    bool fcShouldRender = this->shouldGLRender(action);
++    // wasm: this once skipped shouldGLRender() because its cull and transparency
++    // paths made geometry vanish in the emulated GL state. But that also skipped
++    // handleTransparency(), which is what delays a transparent shape into the
++    // sorted blending pass -- so nothing here was ever transparent, however the
++    // material was set (reported 2026-09-22). Measured the same day: a plain Coin
++    // SoCube at transparency 0.7 DOES blend in this build, so the delayed pass
++    // works and the bypass is no longer needed. Upstream call restored.
++    if (::getenv("FCWEB_DEBUG")) { fprintf(stderr, "[FCWEB-SR] shouldGLRender restored\n"); fflush(stderr); }
 +#endif
++    bool fcShouldRender = this->shouldGLRender(action);
 +    if (fcShouldRender) {
          Binding mbind = this->findMaterialBinding(state);
          Binding nbind = this->findNormalBinding(state);
