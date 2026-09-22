@@ -128,7 +128,10 @@ const SCENE = [
   const lift = overlap.r - alone.r;
   console.log('  red picked up through the plate: ' + lift);
   ok(red.r > 90 && red.g < 90, 'the red box renders red: ' + JSON.stringify(red));
-  ok(alone.g > 90, 'the green plate renders green: ' + JSON.stringify(alone));
+  // Hue, not brightness: shading changed when glColor stopped driving the ambient material
+  // to match desktop (lightcmp.js), and an absolute threshold would fail on a correct render.
+  ok(alone.g > 60 && alone.g > alone.r * 1.8 && alone.g > alone.b * 1.8,
+     'the green plate renders green: ' + JSON.stringify(alone));
   ok(lift > 25, 'the red box shows THROUGH the 70% transparent plate (red lift ' + lift + ', needs > 25)');
   console.log('  screenshot: ' + shot);
   await b.close();

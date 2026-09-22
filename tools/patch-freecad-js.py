@@ -425,11 +425,28 @@ PATCHES = [
         'var _glBegin=mode=>{if(mode===8)mode=5;else if(mode===9)mode=6;',   # 4th field: the stateful-attribute reset follows
     ),
     (
-        'glColor drives material colour',
+        # Diffuse only. Real GL_COLOR_MATERIAL defaults to AMBIENT_AND_DIFFUSE, but Coin
+        # sets the ambient material itself with glMaterialfv(GL_AMBIENT), so feeding the
+        # colour into ambient as well double-counts it and lifts every dark surface.
+        # Measured against desktop 1.1.3 with scratchpad/lightcmp.js: mean brightness
+        # 195.1 -> 173.6 against desktop's 165.4, and the specular highlight lands on
+        # desktop's exact pixel.
+        'glColor drives the diffuse material colour',
         'GLImmediate.clientColor[3]=a}};var _glColor3f=',
-        'GLImmediate.clientColor[3]=a}if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;GLEmulation.materialDiffuse[1]=g;GLEmulation.materialDiffuse[2]=b;GLEmulation.materialDiffuse[3]=a;GLEmulation.materialAmbient[0]=r;GLEmulation.materialAmbient[1]=g;GLEmulation.materialAmbient[2]=b;GLEmulation.materialAmbient[3]=a}};var _glColor3f=',
+        'GLImmediate.clientColor[3]=a}if(GLEmulation&&GLEmulation.materialDiffuse){GLEmulation.materialDiffuse[0]=r;GLEmulation.materialDiffuse[1]=g;GLEmulation.materialDiffuse[2]=b;GLEmulation.materialDiffuse[3]=a}};var _glColor3f=',
         # 4th field: the material-version bump below inserts into this replacement
         'if(GLEmulation&&GLEmulation.materialDiffuse){',
+    ),
+    (
+        # The same change against an ALREADY-PATCHED engine. Release artifacts are patched
+        # before publication, so without this the old ambient assignments survive into
+        # production and every dark surface stays lifted. Measured against desktop with
+        # scratchpad/lightcmp.js: mean brightness 195.1 -> 173.6, desktop 165.4.
+        'glColor drives the diffuse material colour (migrate: drop the ambient half)',
+        'GLEmulation.materialDiffuse[3]=a;GLEmulation.materialAmbient[0]=r;'
+        'GLEmulation.materialAmbient[1]=g;GLEmulation.materialAmbient[2]=b;'
+        'GLEmulation.materialAmbient[3]=a}}',
+        'GLEmulation.materialDiffuse[3]=a}}',
     ),
     (
         'immediate renderer binds the app ARRAY_BUFFER before setting attributes',
