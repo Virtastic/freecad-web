@@ -32,11 +32,14 @@ on:
 # To unfreeze: delete FCWEB_PINNED_RELEASE and the fallback returns to /releases/latest.
 # A workflow_dispatch release_tag still overrides it either way.
 env:
-  # v1.0.0 carries the same seven engine assets as build-20260918-session did (checked
-  # name and size on 2026-09-20 before that release and the 42 other build-* releases
-  # were deleted). The pin stays: a publish from a green link must still not become
-  # production on the next push. Moving it is a commit, on purpose.
-  FCWEB_PINNED_RELEASE: v1.0.0
+  # v1.0.1 is the first engine change since the launch: SoBrepFaceSet no longer skips
+  # shouldGLRender(), so transparent objects are transparent again (issue #5). Gated
+  # before the pin moved -- boot gate, the eight workflow checks, the reused-profile
+  # regression sweep (8/8 workbenches, 7/7 examples, zero page errors) and
+  # scratchpad/transcheck.js, which measures how much of a red box shows through a 70%
+  # transparent plate: 4 before, 78 after. The pin stays: a publish from a green link
+  # must still not become production on the next push. Moving it is a commit, on purpose.
+  FCWEB_PINNED_RELEASE: v1.0.1
 
 concurrency:
   group: deploy-ovh-freecad
