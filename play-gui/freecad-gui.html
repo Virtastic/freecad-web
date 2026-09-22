@@ -5950,6 +5950,20 @@ window.fcRunPy = fcRunPy;
       ctrlKey:e.ctrlKey, shiftKey:e.shiftKey, altKey:e.altKey, metaKey:e.metaKey,
       repeat:e.repeat, isComposing:e.isComposing, bubbles:true, cancelable:true, composed:true
     }));
+    // The key now belongs to FreeCAD, so the browser must not ALSO act on it. Reported on
+    // launch day: Ctrl+N opened a Chrome window (and a FreeCAD document behind it). Chrome
+    // lets a page cancel most accelerators from keydown; the ones it reserves (Ctrl+W/T/
+    // Tab, Ctrl+Shift+N) cannot be cancelled and are not FreeCAD shortcuts anyway.
+    // Ctrl+R is left to the browser on purpose: someone who reloads expects a reload.
+    // Only keydown is cancelled, never keyup, and never inside a text field (the guard
+    // above), so native editing and the Python console keep their own keys.
+    if(e.type==='keydown' && (e.ctrlKey||e.metaKey) && e.cancelable){
+      var key=(e.key||'').toLowerCase();
+      var browserOwned = key==='r' || key==='w' || key==='t' || key==='tab' || key==='q';
+      var isShortcut = /^[a-z0-9]$/.test(key) || key==='+' || key==='-' || key==='=' || key==='backspace' || key==='enter' ||
+                       key==='home' || key==='end' || key==='pageup' || key==='pagedown' || /^f\d{1,2}$/.test(key);
+      if(isShortcut && !browserOwned) e.preventDefault();
+    }
   }
   window.addEventListener('keydown', forwardKeyToQt, true);
   window.addEventListener('keyup', forwardKeyToQt, true);
