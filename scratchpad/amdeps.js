@@ -32,7 +32,9 @@ const waitMarker = async (p, marker, ms) => {
   const t = Date.now();
   while (Date.now() - t < ms) {
     const log = await p.evaluate(() => (document.getElementById('log') || {}).textContent || '');
-    const m = log.match(new RegExp('(' + marker + ') ([^\\n]*)'));
+    // Anchored to a log line's start (after the "{12.3s} " stamp) so a marker word
+    // inside some other line cannot match.
+    const m = log.match(new RegExp('(?:^|\\n)(?:\\{[^}]*\\} )?(' + marker + ') ([^\\n]*)'));
     if (m) return m[2];
     await sl(1500);
   }
@@ -52,8 +54,11 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
   await p.goto(URL, { waitUntil: 'domcontentloaded', timeout: 300000 });
   const t = Date.now();
   while (Date.now() - t < 420000) {
-    if (await p.evaluate(() => !!window.__fcWorkReady)) break;
+    if (await p.evaluate(() => !!window.__fcWorkReady && !!(window.fcInstance && window.fcInstance._malloc))) break;
     await sl(1000);
+  }
+  if (!(await p.evaluate(() => !!(window.fcInstance && window.fcInstance._malloc)))) {
+    console.log('  FAIL engine never became ready'); process.exit(1);
   }
   await sl(10000);
 
@@ -220,6 +225,39 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
   ok(Array.isArray(g.commits) && g.commits.length === 1 && g.commits[0][0] === 'first from the browser' && g.commits[0][1] === 'Web User', 'log parsed: ' + JSON.stringify(g.commits));
   ok(Array.isArray(g.files_in_head) && g.files_in_head.includes('part.FCStd'), 'diff-tree lists the file');
   ok(g.show === true, 'show returns the committed bytes');
+
+  // 6. `xdg-open <url>` from an add-on opens a tab (fcweb_open through the same
+  //    subprocess hooks), and a spawn of anything unknown is FileNotFoundError, which is
+  //    what add-ons handle as "not installed".
+  const tabsBefore = (await b.pages()).length;
+  await runPy(p, [
+    'import sys, json, subprocess',
+    'try:',
+    '    o = {}',
+    '    r = subprocess.run(["xdg-open", "https://virtastic.app/?fcweb-open-check"], capture_output=True, text=True)',
+    '    o["xdg"] = [r.returncode, r.stderr]',
+    '    try:',
+    '        subprocess.run(["definitely-not-installed", "--version"], capture_output=True)',
+    '        o["unknown"] = "no error"',
+    '    except FileNotFoundError as e:',
+    '        o["unknown"] = "FileNotFoundError"',
+    '    except OSError as e:',
+    '        o["unknown"] = "OSError %s" % (e.errno,)',
+    '    sys.__stderr__.write("OPENPROOF " + json.dumps(o) + "\\n")',
+    'except Exception as e:',
+    '    import traceback; sys.__stderr__.write("OPENPROOF FAILED " + traceback.format_exc().replace(chr(10), " | ") + "\\n")',
+    'sys.__stderr__.flush()',
+  ].join(NL));
+  const op = await waitMarker(p, 'OPENPROOF', 30000);
+  console.log('  open proof: ' + op);
+  let o = {};
+  try { o = JSON.parse(op); } catch (e) {}
+  ok(Array.isArray(o.xdg) && o.xdg[0] === 0, 'xdg-open returned 0');
+  ok(o.unknown === 'FileNotFoundError', 'unknown program is FileNotFoundError: ' + o.unknown);
+  await sl(4000);
+  const pages = await b.pages();
+  const opened = pages.map(x => x.url()).filter(u => /fcweb-open-check/.test(u));
+  ok(pages.length > tabsBefore && opened.length === 1, 'a tab opened with the URL (' + opened.join(',') + ')');
 
   const log = await p.evaluate(() => (document.getElementById('log') || {}).textContent || '');
   const tail = log.split(NL).filter(l => /fcweb_wheels|Successfully installed|Requirement already|proxy|pypi|wheel/i.test(l)).slice(-8);

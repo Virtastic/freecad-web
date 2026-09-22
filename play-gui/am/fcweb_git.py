@@ -564,10 +564,23 @@ def _no_such_process(argv):
     raise FileNotFoundError(2, "No such file or directory (no processes in the browser)", str(name))
 
 
-def _call_hook(argv, *a, **kwargs):
+def _dispatch(argv, cwd=None, env=None):
+    """(code, out, err) for our git or an open-style command; None for anything else."""
     if _is_git(argv):
-        return _run_hook(argv, *a, **kwargs).returncode
-    _no_such_process(argv)
+        return run(argv, cwd=cwd, env=env)
+    try:
+        import fcweb_open
+        r = fcweb_open.handle(list(argv) if isinstance(argv, (list, tuple)) else [str(argv)], cwd)
+    except Exception:
+        r = None
+    return r
+
+
+def _call_hook(argv, *a, **kwargs):
+    r = _dispatch(argv, kwargs.get("cwd"), kwargs.get("env"))
+    if r is None:
+        _no_such_process(argv)
+    return r[0]
 
 
 def _is_git(argv):
@@ -592,11 +605,12 @@ def _completed(argv, kwargs, code, out, err):
 
 
 def _run_hook(argv, *a, **kwargs):
-    if not _is_git(argv):
+    r = _dispatch(argv, kwargs.get("cwd"), kwargs.get("env"))
+    if r is None:
         if sys.platform == "emscripten":
             _no_such_process(argv)
         return _orig_run(argv, *a, **kwargs)
-    code, out, err = run(argv, cwd=kwargs.get("cwd"), env=kwargs.get("env"))
+    code, out, err = r
     cp = _completed(argv, kwargs, code, out, err)
     if kwargs.get("check") and code != 0:
         raise subprocess.CalledProcessError(code, argv, cp.stdout, cp.stderr)
@@ -637,12 +651,13 @@ class _FakePopen:
         return cls
 
     def __new__(cls, argv, *a, **kw):
-        if not _is_git(argv):
+        r = _dispatch(argv, kw.get("cwd"), kw.get("env"))
+        if r is None:
             if sys.platform == "emscripten":
                 _no_such_process(argv)
             return _orig_popen(argv, *a, **kw)
         self = object.__new__(cls)
-        code, out, err = run(argv, cwd=kw.get("cwd"), env=kw.get("env"))
+        code, out, err = r
         cp = _completed(argv, kw, code, out, err)
         self.args, self.returncode = argv, code
         self._out, self._err = cp.stdout, cp.stderr

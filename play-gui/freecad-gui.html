@@ -5484,7 +5484,8 @@ window.fcRunPy = fcRunPy;
                     'fcweb_share.py', 'fcweb_share.ui', 'fcweb_share_session.ui', 'fcweb_share_mcp.ui',   // shared sessions: the FreeCAD-side half + its three preference pages
                     'fcweb_asyncio.py',                     // asyncio without socketpair (CAM's asset manager runs on asyncio.run)
                     'fcweb_wheels.py',                      // add-on Python dependencies without pip: pure wheels from PyPI via the proxy
-                    'fcweb_git.py'];                        // a `git` for add-ons that shell out to one (History Workbench), on dulwich
+                    'fcweb_git.py',                         // a `git` for add-ons that shell out to one (History Workbench), on dulwich
+                    'fcweb_open.py'];                       // open / xdg-open / explorer: a URL opens a tab, a file downloads
   var amOverlayDone = false;
   async function installAmOverlay(){
     if(amOverlayDone || !ready()) return;
@@ -5855,6 +5856,35 @@ window.fcRunPy = fcRunPy;
   }
 
   window.fcwebDownload=download; window.fcwebOpen=openFile; window.fcwebRegisterSave=registerSave;
+
+  // "Open in the OS" requests from add-ons (play-gui/am/fcweb_open.py answers `open`,
+  // `xdg-open`, `explorer`, `gio open`): Python appends a JSON line to a MEMFS file, the
+  // same channel the sharing module uses; this reads and clears it on a 2 s tick. A URL
+  // opens a new tab, a file downloads. window.open outside a click is a popup to Chrome,
+  // so a blocked one falls back to a notification carrying the link.
+  (function(){
+    var REQ='/tmp/fcweb-open.jsonl';
+    setInterval(function(){
+      var m=window.fcInstance; if(!m||!m.FS) return;
+      var txt; try{ txt=m.FS.readFile(REQ,{encoding:'utf8'}); }catch(e){ return; }
+      try{ m.FS.unlink(REQ); }catch(e){}
+      txt.split('\n').forEach(function(line){
+        if(!line.trim()) return;
+        var r; try{ r=JSON.parse(line); }catch(e){ return; }
+        try{
+          if(r.kind==='url'){
+            if(!/^(https?:|mailto:)/i.test(r.target)) return;
+            var w=window.open(r.target,'_blank','noopener');
+            if(!w && typeof window.fcwebNotify==='function'){
+              window.fcwebNotify('The add-on wants to open a link the browser blocked: '+r.target,'info');
+            }
+          } else if(r.kind==='file'){
+            downloadBytes(r.target, m.FS.readFile(r.target));
+          }
+        }catch(e){ try{ console.warn('[fcweb] open request failed', r, e); }catch(_){} }
+      });
+    }, 2000);
+  })();
   window.fcInstallAddon=installAddonFromGitHub; window.fcLoadUserMods=loadUserMods;
   window.fcInstallWorkbenchZip=installWorkbenchZip;
 
