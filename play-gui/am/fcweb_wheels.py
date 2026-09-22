@@ -282,6 +282,42 @@ def run_installer(self):
     do_required(0)
 
 
+def fetch_and_install(dist, on_done, target=None):
+    """Install one pure-Python distribution outside the Addon Manager's installer flow
+    (fcweb_git uses it for dulwich). on_done(ok, why) runs once, on the main thread."""
+    from addonmanager_fcweb_async import async_get
+    if target is None:
+        import addonmanager_utilities as utils
+        target = utils.get_pip_target_directory()
+    if _already_present(dist):
+        return on_done(True, "already present")
+    index_url = PYPI_SIMPLE + _norm(dist) + "/"
+
+    def got_index(ok, page):
+        if not ok:
+            return on_done(False, "could not query PyPI for %s" % dist)
+        try:
+            pick, why = _pick_wheel_from_page(dist, page)
+        except Exception as e:
+            return on_done(False, "could not read the PyPI index for %s: %s" % (dist, e))
+        if pick is None:
+            return on_done(False, why)
+        fname, ver, url = pick
+
+        def got_wheel(ok2, data):
+            if not ok2 or not data:
+                return on_done(False, "downloading %s failed" % fname)
+            try:
+                _install_wheel(data, target)
+            except Exception as e:
+                return on_done(False, "installing %s failed: %s" % (fname, e))
+            on_done(True, "installed %s-%s (%d KB)" % (dist, ver, len(data) // 1024))
+
+        async_get(url, got_wheel, timeout_ms=180000)
+
+    async_get(index_url, got_index, timeout_ms=30000)
+
+
 def install_hooks():
     """Route the Addon Manager's dependency installer here. Idempotent."""
     if sys.platform != "emscripten":

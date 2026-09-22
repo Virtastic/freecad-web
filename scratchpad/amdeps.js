@@ -143,6 +143,54 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
   ok(pr.vendor_on_path === true, 'vendor dir on sys.path');
   ok(pr.wb_dir === true && pr.wb_pkg === true, 'HistoryWorkbench installed into Mod');
 
+  // 5. git, through the History Workbench's own adapter class, against a repo in the
+  //    persisted home. Waits for dulwich (fetched as a wheel on first AM activation).
+  await runPy(p, [
+    'import sys, os, json, importlib, shutil',
+    'try:',
+    '    importlib.invalidate_caches()',
+    '    import dulwich',
+    '    import fcweb_git',
+    '    mod = os.path.join(os.path.dirname(__import__("addonmanager_utilities").get_pip_target_directory()), "Mod", "HistoryWorkbench")',
+    '    if mod not in sys.path: sys.path.insert(0, mod)',
+    '    from freecad.history_wb.infrastructure.git.git_port_adapter import GitPortAdapter',
+    '    class _S:',
+    '        def get_git_executable(self): return ""',
+    '    ad = GitPortAdapter(_S())',
+    '    root = os.path.expanduser("~/gitcheck"); shutil.rmtree(root, ignore_errors=True); os.makedirs(root)',
+    '    o = {"which": shutil.which("git"), "available": ad.is_git_executable_available()}',
+    '    o["init"] = ad.initialize_repository(root)',
+    '    o["top"] = ad.find_top_level_git_path(root)',
+    '    open(os.path.join(root, "part.FCStd"), "wb").write(b"PK\\x03\\x04fake")',
+    '    o["dirty_before"] = [d.git_path for d in ad.get_dirty_files(root)]',
+    '    o["stage"] = ad.stage_files(root, ["part.FCStd"])',
+    '    o["staged"] = ad.get_staged_paths(root)',
+    '    from freecad.history_wb.domain.git.models import GitIdentity',
+    '    o["ident"] = ad.save_identity(root, GitIdentity(name="Web User", email="web@example.com"), False)',
+    '    o["commit"] = ad.commit(root, "first from the browser")',
+    '    cs = ad.get_commits(root)',
+    '    o["commits"] = [(c.message.strip(), c.author) for c in cs]',
+    '    o["files_in_head"] = ad.get_committed_files(root, cs[0].id) if cs else None',
+    '    o["show"] = ad.get_file_bytes_from_ref(root, cs[0].id, "part.FCStd") == b"PK\\x03\\x04fake" if cs else None',
+    '    o["all_fcstd"] = ad.get_all_fcstd_paths(root, None)',
+    '    sys.__stderr__.write("GITPROOF " + json.dumps(o) + "\\n")',
+    'except Exception as e:',
+    '    import traceback; sys.__stderr__.write("GITPROOF FAILED " + traceback.format_exc().replace(chr(10), " | ") + "\\n")',
+    'sys.__stderr__.flush()',
+  ].join(NL));
+  const gp = await waitMarker(p, 'GITPROOF', 120000);
+  console.log('  git proof: ' + gp);
+  let g = {};
+  try { g = JSON.parse(gp); } catch (e) {}
+  ok(g.available === true, 'adapter finds git');
+  ok(g.init === true && typeof g.top === 'string' && g.top.endsWith('/gitcheck'), 'init + rev-parse --show-toplevel');
+  ok(Array.isArray(g.dirty_before) && g.dirty_before.includes('part.FCStd'), 'untracked FCStd reported dirty');
+  ok(g.stage === true && Array.isArray(g.staged) && g.staged.includes('part.FCStd'), 'stage + staged paths');
+  ok(g.ident === true && g.commit === true, 'identity saved + commit');
+  ok(Array.isArray(g.commits) && g.commits.length === 1 && g.commits[0][0] === 'first from the browser' && g.commits[0][1] === 'Web User', 'log parsed: ' + JSON.stringify(g.commits));
+  ok(Array.isArray(g.files_in_head) && g.files_in_head.includes('part.FCStd'), 'diff-tree lists the file');
+  ok(g.show === true, 'show returns the committed bytes');
+
   const log = await p.evaluate(() => (document.getElementById('log') || {}).textContent || '');
   const tail = log.split(NL).filter(l => /fcweb_wheels|Successfully installed|Requirement already|proxy|pypi|wheel/i.test(l)).slice(-8);
   console.log(tail.map(l => '    ' + l).join(NL));

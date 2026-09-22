@@ -315,6 +315,29 @@ def _patch_pip():
     return "pip -> fcweb_wheels" if fcweb_wheels.install_hooks() else "fcweb_wheels: not emscripten, left alone"
 
 
+def _patch_git():
+    """A `git` on PATH, answered in-process by dulwich: see fcweb_git.
+
+    The History Workbench runs git through subprocess behind a GitPort adapter and
+    checks shutil.which("git") first. Neither exists here, so it installed and did
+    nothing (launch-day report, 2026-09-21). fcweb_git puts a `git` file on PATH and
+    routes subprocess.run for it to a dulwich-backed implementation of the sixteen
+    sub-commands the workbench uses, byte-compatible with real git on every format the
+    adapter parses (scratchpad/gitshim-check.py). dulwich itself is fetched as a pure
+    wheel the first time it is needed and kept in the persisted vendor directory.
+    """
+    import fcweb_git
+
+    note = fcweb_git.install()
+
+    def done(ok):
+        print("[fcweb] dulwich %s" % ("ready" if ok else "UNAVAILABLE: git commands will fail until it installs"))
+        sys.stdout.flush()
+
+    fcweb_git.ensure_dulwich(done)
+    return note
+
+
 def _fix_stats_url():
     """Ask for the stats file at the host that actually serves it.
 
@@ -368,6 +391,10 @@ def _install_now():
         notes.append(_patch_pip())
     except Exception as e:
         notes.append("pip patch FAILED %r" % (e,))
+    try:
+        notes.append(_patch_git())
+    except Exception as e:
+        notes.append("git patch FAILED %r" % (e,))
     try:
         notes.append(_stash_command())
     except Exception as e:
