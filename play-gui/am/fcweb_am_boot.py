@@ -293,7 +293,26 @@ def _fix_proxy_host_map():
     # of the Addon Manager's own boot, so the host is registered on the one path
     # that needs it, with no timing to lose.
     hosts["addons.freecad.org"] = "addons"
-    return "www.freecad.org -> docswww, addons.freecad.org -> addons"
+    # PyPI, for fcweb_wheels: the simple index and the file host wheels download from.
+    hosts["pypi.org"] = "pypi"
+    hosts["files.pythonhosted.org"] = "pyfiles"
+    return "www.freecad.org -> docswww, addons.freecad.org -> addons, pypi.org -> pypi, files.pythonhosted.org -> pyfiles"
+
+
+def _patch_pip():
+    """Python dependencies without pip: see fcweb_wheels.
+
+    Upstream's DependencyInstaller shells out to `python -m pip`; under emscripten
+    create_pip_call raises before pip is even tried ("Could not locate Python executable",
+    measured on production 2026-09-21, reported by the History Workbench's author whose
+    add-on depends on PyYAML -- which the image already ships). fcweb_wheels answers the
+    installer's pip calls itself: already-importable packages are reported satisfied, pure
+    Python wheels are fetched from PyPI through the proxy and unzipped into the vendor
+    directory, and compiled-only packages get a sentence that says so.
+    """
+    import fcweb_wheels
+
+    return "pip -> fcweb_wheels" if fcweb_wheels.install_hooks() else "fcweb_wheels: not emscripten, left alone"
 
 
 def _fix_stats_url():
@@ -345,6 +364,10 @@ def _install_now():
         notes.append(_fix_proxy_host_map())
     except Exception as e:
         notes.append("proxy host map patch FAILED %r" % (e,))
+    try:
+        notes.append(_patch_pip())
+    except Exception as e:
+        notes.append("pip patch FAILED %r" % (e,))
     try:
         notes.append(_stash_command())
     except Exception as e:

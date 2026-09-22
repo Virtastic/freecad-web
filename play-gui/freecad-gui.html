@@ -5482,7 +5482,8 @@ window.fcRunPy = fcRunPy;
   // image rebuild (seconds) rather than a relink (~2 h).
   var AM_MODULES = ['addonmanager_fcweb_async.py', 'addonmanager_workers_utility.py', 'addonmanager_workers_startup.py', 'fcweb_am_install.py', 'fcweb_am_boot.py',
                     'fcweb_share.py', 'fcweb_share.ui', 'fcweb_share_session.ui', 'fcweb_share_mcp.ui',   // shared sessions: the FreeCAD-side half + its three preference pages
-                    'fcweb_asyncio.py'];                    // asyncio without socketpair (CAM's asset manager runs on asyncio.run)
+                    'fcweb_asyncio.py',                     // asyncio without socketpair (CAM's asset manager runs on asyncio.run)
+                    'fcweb_wheels.py'];                     // add-on Python dependencies without pip: pure wheels from PyPI via the proxy
   var amOverlayDone = false;
   async function installAmOverlay(){
     if(amOverlayDone || !ready()) return;
