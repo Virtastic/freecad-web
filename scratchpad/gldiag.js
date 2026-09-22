@@ -112,6 +112,21 @@ const waitFile = async (p, f, ms) => {
              colorAttrib: I.clientAttributes && I.clientAttributes[2] ? { size: I.clientAttributes[2].size, type: I.clientAttributes[2].type, enabled: I.clientAttributes[2].enabled } : null };
   });
   console.log('  EMULATION state: ' + JSON.stringify(emu));
+  // The state the emulation used when it BUILT its fixed-function shader, and the shader.
+  const gen = await p.evaluate(() => {
+    const g = globalThis.__fcShaderGen || [], src = globalThis.__fcShaderSrc || [];
+    const lit = src.filter(s => /u_lightDiffuse|diffuseI/.test(s));
+    return { generations: g.length, states: g.slice(0, 6), compiled: src.length,
+             withLighting: lit.length, sample: (lit[0] || src.find(s => /a_color/.test(s)) || src[0] || '').slice(0, 700) };
+  });
+  const emuEn = await p.evaluate(() => ({ enable: globalThis.__fcEmuEnable || null, disable: globalThis.__fcEmuDisable || null }));
+  const nm = (c) => ({ 2896: 'GL_LIGHTING', 16384: 'GL_LIGHT0', 16385: 'GL_LIGHT1', 2903: 'GL_COLOR_MATERIAL', 3042: 'GL_BLEND', 2929: 'GL_DEPTH_TEST', 2884: 'GL_CULL_FACE', 3553: 'GL_TEXTURE_2D', 2912: 'GL_FOG', 32823: 'GL_POLYGON_OFFSET_FILL', 3089: 'GL_SCISSOR_TEST', 2848: 'GL_LINE_SMOOTH', 2832: 'GL_POINT_SMOOTH', 2960: 'GL_STENCIL_TEST', 3024: 'GL_DITHER', 32925: 'GL_SAMPLE_ALPHA_TO_COVERAGE', 32926: 'GL_SAMPLE_ALPHA_TO_ONE', 32928: 'GL_SAMPLE_COVERAGE', 3008: 'GL_ALPHA_TEST' }[c] || c);
+  const pretty = (o) => JSON.stringify(Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [nm(+k), v])));
+  console.log('  EMULATION enable():  ' + pretty(emuEn.enable));
+  console.log('  EMULATION disable(): ' + pretty(emuEn.disable));
+  console.log('  SHADER generations: ' + gen.generations + ', compiled: ' + gen.compiled + ', with a lighting pass: ' + gen.withLighting);
+  console.log('  SHADER gen state: ' + JSON.stringify(gen.states));
+  console.log('  SHADER sample:' + NL + gen.sample);
   console.log('  GLUE blendFunc args: ' + JSON.stringify((glue.args || {}).blendFunc));
   console.log('  GLUE no-ops: ' + JSON.stringify(glue.noop));
   const table = await p.evaluate(() => {

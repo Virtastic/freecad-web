@@ -74,6 +74,38 @@ const IMPORTS = ['function getWasmImports(){ assignWasmImports();',
 // the lighting shader multiplies by, and its alpha never becomes the fragment's alpha.
 // This applies what the fixed-function pipeline does: with colour material on (default
 // mode GL_AMBIENT_AND_DIFFUSE), glColor sets the ambient and diffuse material.
+// Capture the state the emulation uses when it GENERATES its fixed-function shader, and
+// the shader itself. This is the question behind "lighting is off": the emulation
+// intercepts glEnable(GL_LIGHTING) and glEnable(GL_LIGHT0..7) in its own override and
+// returns before the raw path, so counting the raw path says nothing. What decides the
+// output is GLEmulation.lightingEnabled / lightEnabled at the moment the shader is built.
+const SHADER = [
+  // A statement in front of the array literal, so the expression it belongs to is untouched.
+  ['}}var vsSource=[',
+   '}}(globalThis.__fcShaderGen=globalThis.__fcShaderGen||[]).push({' +
+   'lighting:GLEmulation.lightingEnabled,lights:Array.prototype.slice.call(GLEmulation.lightEnabled||[]),' +
+   'twoSide:GLEmulation.lightModelTwoSide,clientAttribs:Array.prototype.slice.call(GLImmediate.enabledClientAttributes||[]),' +
+   'matDiffuse:Array.prototype.slice.call(GLEmulation.materialDiffuse||[]),' +
+   'clientColor:Array.prototype.slice.call(GLImmediate.clientColor||[])});var vsSource=[' ],
+  // the generated source, as compiled
+  ['GLctx.shaderSource(GL.shaders[shader],source)};_glCompileShader',
+   '(globalThis.__fcShaderSrc=globalThis.__fcShaderSrc||[]).push(source);GLctx.shaderSource(GL.shaders[shader],source)};_glCompileShader'],
+];
+
+// The emulation REPLACES _glEnable at init (`var orig_glEnable=_glEnable;
+// _glEnable=_emscripten_glEnable=cap=>{...}`), so a counter on the original only sees the
+// caps the override forwards to real WebGL. The override is where GL_LIGHTING (2896) and
+// GL_LIGHT0..7 (16384+) are handled, so that is where to ask whether Coin ever enables
+// lighting at all.
+const OVERRIDE = [
+  // Two overrides are installed in sequence (the emulation's, then the texture-env JIT's).
+  // The outermost one runs first, so it is the one that sees every call Coin makes.
+  ['var glEnable=_glEnable;_glEnable=_emscripten_glEnable=cap=>{',
+   'var glEnable=_glEnable;_glEnable=_emscripten_glEnable=cap=>{(globalThis.__fcEmuEnable=globalThis.__fcEmuEnable||{})[cap]=((globalThis.__fcEmuEnable||{})[cap]||0)+1;'],
+  ['var glDisable=_glDisable;_glDisable=_emscripten_glDisable=cap=>{',
+   'var glDisable=_glDisable;_glDisable=_emscripten_glDisable=cap=>{(globalThis.__fcEmuDisable=globalThis.__fcEmuDisable||{})[cap]=((globalThis.__fcEmuDisable||{})[cap]||0)+1;'],
+];
+
 const FIX = [
   ['var _emscripten_glColor4f=(r,g,b,a)=>{',
    'var _emscripten_glColor4f=(r,g,b,a)=>{if(GLEmulation.__fcColorMaterial!==false){' +
@@ -96,6 +128,18 @@ let applied = 0; const missing = [];
 for (const [anchor, replacement] of PATCHES) {
   const n = src.split(anchor).length - 1;
   if (n !== 1) { missing.push(anchor.slice(0, 48) + '  (' + n + ' matches)'); continue; }
+  src = src.replace(anchor, replacement);
+  applied++;
+}
+for (const [anchor, replacement] of OVERRIDE) {
+  const n = src.split(anchor).length - 1;
+  if (n !== 1) { missing.push('OVERRIDE ' + anchor.slice(0, 44) + '  (' + n + ' matches)'); continue; }
+  src = src.replace(anchor, replacement);
+  applied++;
+}
+for (const [anchor, replacement] of SHADER) {
+  const n = src.split(anchor).length - 1;
+  if (n !== 1) { missing.push('SHADER ' + anchor.slice(0, 44) + '  (' + n + ' matches)'); continue; }
   src = src.replace(anchor, replacement);
   applied++;
 }
