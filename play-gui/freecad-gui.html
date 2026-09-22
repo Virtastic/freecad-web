@@ -5697,24 +5697,151 @@ window.fcRunPy = fcRunPy;
     return "\ntry:\n import os; os.remove("+JSON.stringify(p)+")\nexcept Exception: pass";
   }
 
+  // ---- staging uploads -------------------------------------------------------------
+  // A document that links to other documents (an App::Link assembly) stores the paths of
+  // its children RELATIVE to itself, so FreeCAD resolves them next to the file it opened.
+  // The picker used to take a single file and flatten its name into /home/web_user/_up,
+  // which is why a multi-file assembly opened with one broken link per child:
+  //   Exception opening file: /home/web_user/_up/profiles/30x30e-3.FCStd ... does not exist
+  // (reported 2026-09-22 with that exact shape). So: several files at once are accepted,
+  // and a file's folder path is preserved when the browser gives us one
+  // (webkitRelativePath, set when a directory was chosen), which is what makes the
+  // children land where the master expects them.
+  var UP='/home/web_user/_up';
+  // Per segment, the same character class the single-file path always used. '..' and
+  // absolute paths cannot survive it, so a crafted archive cannot escape the staging dir.
+  function safeRel(rel){
+    return String(rel||'').split('/').filter(function(s){ return s && s!=='.' && s!=='..'; })
+      .map(function(s){ return s.replace(/[^A-Za-z0-9._-]/g,'_'); }).join('/');
+  }
+  // Write [{rel, bytes}] under _up, keeping folders. Returns the written paths.
+  function stageFiles(list){
+    var m=window.fcInstance, FS=m.FS, out=[];
+    for(var i=0;i<list.length;i++){
+      var rel=safeRel(list[i].rel||list[i].name), path=UP+'/'+rel;
+      if(!rel) continue;
+      try{ FS.mkdirTree(path.slice(0,path.lastIndexOf('/'))); }catch(e){}
+      try{ FS.writeFile(path, list[i].bytes); out.push(path); }
+      catch(e){ append('staging '+rel+' failed: '+e,'err'); }
+    }
+    return out;
+  }
+  // The master of a set is the .FCStd nearest the top of the chosen folder; children of an
+  // assembly sit beside it or below it. With one .FCStd there is nothing to decide.
+  function pickMaster(paths){
+    var fc=paths.filter(function(p){ return /\.fcstd$/i.test(p); });
+    if(!fc.length) return null;
+    fc.sort(function(a,b){
+      var d=a.split('/').length-b.split('/').length;
+      return d || a.localeCompare(b);
+    });
+    return fc[0];
+  }
+  window.__fcStageFiles=stageFiles; window.__fcPickMaster=pickMaster;   // scratchpad/assembly.js
+
+  // Offer the folder when a document opened with missing links. FreeCAD prints one line per
+  // unresolved child, and the directory picker needs a user gesture, so this arrives as a
+  // toast with a button rather than opening anything by itself.
+  function watchForMissingLinks(masterPath){
+    var seen=0, tries=0;
+    var iv=setInterval(function(){
+      tries++;
+      var log=(document.getElementById('log')||{}).textContent||'';
+      var miss=(log.match(/does not exist/g)||[]).length;
+      if(miss>seen){
+        seen=miss; clearInterval(iv);
+        var name=masterPath.replace(/^.*\//,'');
+        window.fcwebNotify('Some files this document links to are not here. On a desktop they '
+          + 'sit next to ' + name + '. Choose that folder and it will open with everything in place.',
+          'warn', [{label:'Choose folder', onClick:function(){ openFolder(name); }}], {timeout:0});
+      }
+      if(tries>20) clearInterval(iv);
+    }, 1000);
+  }
+
+  // Open a whole folder: the browser hands us every file in it with its relative path, so an
+  // assembly's children land beside their master exactly as on disk. Chromium only; the
+  // attribute is ignored elsewhere and the user gets a plain multi-select.
+  function openFolder(preferName){
+    if(!ready()){ return; }
+    var inp=document.createElement('input'); inp.type='file';
+    inp.multiple=true; inp.webkitdirectory=true; inp.setAttribute('webkitdirectory','');
+    inp.style.cssText='position:fixed;left:-9999px;'; document.body.appendChild(inp);
+    inp.onchange=async function(){
+      try{
+        var fs=Array.prototype.slice.call(inp.files||[]);
+        if(!fs.length) return;
+        var list=[];
+        for(var i=0;i<fs.length;i++){
+          list.push({ rel: fs[i].webkitRelativePath || fs[i].name,
+                      bytes: new Uint8Array(await fs[i].arrayBuffer()) });
+        }
+        var written=stageFiles(list);
+        var master=null;
+        if(preferName){
+          master=written.filter(function(p){ return p.replace(/^.*\//,'')===safeRel(preferName); })[0]||null;
+        }
+        if(!master) master=pickMaster(written);
+        if(!master){ window.fcwebNotify('No FreeCAD document in that folder.','warn'); return; }
+        append('folder staged: '+written.length+' files, opening '+master);
+        // The half-open copy has to go first or FreeCAD keeps its broken links.
+        py([
+          "import FreeCAD, FreeCADGui as Gui",
+          "_p = " + JSON.stringify(master),
+          "for _d in list(FreeCAD.listDocuments().values()):",
+          "    if (_d.FileName or '').replace('\\\\', '/').split('/')[-1] == _p.split('/')[-1]:",
+          "        FreeCAD.closeDocument(_d.Name)",
+          "D = FreeCAD.openDocument(_p)",
+          "Gui.updateGui()",
+          "try:",
+          " v = Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()",
+          "except Exception: pass",
+        ].join('\n'));
+      } finally { inp.remove(); }
+    };
+    inp.click();
+  }
+  window.fcwebOpenFolder=openFolder;
+
   function openFile(filter){
     if(!ready()){ return; }
     var inp=document.createElement('input'); inp.type='file';
     // .ply/.3mf via Mesh, .ifc via the compiled-in ifcopenshell -- everything the
     // engine's import map registers should be pickable here.
     inp.accept='.FCStd,.fcstd,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.3mf,.ifc,.FCMacro,.py,.svg,.dxf,.zip';
+    inp.multiple=true;   // an assembly's children can be selected with its master
     inp.style.cssText='position:fixed;left:-9999px;'; document.body.appendChild(inp);
     inp.onchange=async function(){
       try{
       var f=inp.files&&inp.files[0]; if(!f){ inp.remove(); return; }
+      // More than one file: stage them all, then open the master among them. The extra
+      // files are exactly the linked children, so this alone fixes the common case where
+      // an assembly's parts sit in one folder.
+      if(inp.files.length>1){
+        var many=[];
+        for(var i=0;i<inp.files.length;i++){
+          many.push({ rel: inp.files[i].webkitRelativePath || inp.files[i].name,
+                      bytes: new Uint8Array(await inp.files[i].arrayBuffer()) });
+        }
+        var paths=stageFiles(many), master=pickMaster(paths);
+        append('staged '+paths.length+' files'+(master?', opening '+master:''));
+        if(master){
+          py("import FreeCAD, FreeCADGui as Gui\nD=FreeCAD.openDocument("+JSON.stringify(master)+")\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
+          watchForMissingLinks(master);
+        } else {
+          window.fcwebNotify('Staged '+paths.length+' files. Open the assembly master from File then Open.','info');
+        }
+        return;
+      }
       var buf=new Uint8Array(await f.arrayBuffer());
-      var m=window.fcInstance, FS=m.FS, dir='/home/web_user/_up';
+      var m=window.fcInstance, FS=m.FS, dir=UP;
       try{ FS.mkdirTree ? FS.mkdirTree(dir) : FS.mkdir(dir); }catch(e){}
       var safe=f.name.replace(/[^A-Za-z0-9._-]/g,'_'), path=dir+'/'+safe;
       FS.writeFile(path, buf);
       var ext=(f.name.split('.').pop()||'').toLowerCase();
       if(ext==='fcstd'){
         py("import FreeCAD, FreeCADGui as Gui\nD=FreeCAD.openDocument("+JSON.stringify(path)+")\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass");
+        watchForMissingLinks(path);   // a linked assembly needs its folder, not one file
       } else if(ext==='fcmacro'||ext==='py'){
         // Macro / Python script: copy into the user macro dir (so it shows in Macro > Macros...)
         // and run it immediately, exactly like FreeCAD's "Execute macro".

@@ -58,7 +58,11 @@ http.createServer((req, res) => {
   if (m) return proxy(req, res, m[1], m[2]);
   if (req.url.startsWith('/t?')) { res.writeHead(204, ISO); return res.end(); }
   const url = req.url.split('?')[0];
-  const file = path.join(ROOT, url === '/' ? 'index.html' : url);
+  // FCJS_OVERRIDE serves an instrumented FreeCAD.js in place of the shipped one, so the
+  // engine's own GL glue can be counted without a 2 h relink (scratchpad/glinstrument.js).
+  const file = (process.env.FCJS_OVERRIDE && url === '/FreeCAD.js')
+    ? process.env.FCJS_OVERRIDE
+    : path.join(ROOT, url === '/' ? 'index.html' : url);
   fs.readFile(file, (e, buf) => {
     if (e) { res.writeHead(404); return res.end('not found'); }
     const h = Object.assign({}, ISO, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
