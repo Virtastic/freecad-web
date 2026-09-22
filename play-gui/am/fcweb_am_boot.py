@@ -329,6 +329,15 @@ def _patch_git():
     import fcweb_git
 
     note = fcweb_git.install()
+    # The Addon Manager itself keeps using ZIP downloads and its metadata-based update
+    # check, exactly as before a `git` existed: upstream's own switch for that. The
+    # shim is for add-ons that shell out to git, not for the manager's clone path,
+    # which would pull every add-on's full history through the proxy.
+    try:
+        import FreeCAD
+        FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Addons").SetBool("disableGit", True)
+    except Exception:
+        pass
 
     def done(ok):
         print("[fcweb] dulwich %s" % ("ready" if ok else "UNAVAILABLE: git commands will fail until it installs"))

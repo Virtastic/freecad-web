@@ -551,6 +551,23 @@ def run(argv, cwd=None, env=None):
 
 _orig_run = subprocess.run
 _orig_popen = subprocess.Popen
+_orig_call = subprocess.call
+
+
+def _no_such_process(argv):
+    """What a spawn of anything that is not our git means here. emscripten raises
+    OSError(138, 'emscripten does not support processes'); callers written for a real
+    OS handle FileNotFoundError as "that program is not installed" (dulwich's hook
+    runner does exactly that, hooks.py: `except FileNotFoundError: # no file. silent
+    failure.`), and that is the truthful answer: the program is not installed."""
+    name = argv[0] if isinstance(argv, (list, tuple)) and argv else str(argv)
+    raise FileNotFoundError(2, "No such file or directory (no processes in the browser)", str(name))
+
+
+def _call_hook(argv, *a, **kwargs):
+    if _is_git(argv):
+        return _run_hook(argv, *a, **kwargs).returncode
+    _no_such_process(argv)
 
 
 def _is_git(argv):
@@ -576,6 +593,8 @@ def _completed(argv, kwargs, code, out, err):
 
 def _run_hook(argv, *a, **kwargs):
     if not _is_git(argv):
+        if sys.platform == "emscripten":
+            _no_such_process(argv)
         return _orig_run(argv, *a, **kwargs)
     code, out, err = run(argv, cwd=kwargs.get("cwd"), env=kwargs.get("env"))
     cp = _completed(argv, kwargs, code, out, err)
@@ -599,15 +618,28 @@ def install():
         subprocess.run = _run_hook
     if subprocess.Popen is not _FakePopen:
         subprocess.Popen = _FakePopen
+    if subprocess.call is not _call_hook:
+        subprocess.call = _call_hook
     return "git -> fcweb_git (dulwich) at %s" % GIT_PATH
 
 
 class _FakePopen:
     """Enough of Popen for check_output/communicate-style callers that name our git.
-    Anything else falls through to the real Popen (which raises under emscripten)."""
+    Anything else falls through to the real Popen (which raises under emscripten).
+
+    Subscriptable, because the real class is generic and code annotates with
+    ``subprocess.Popen[bytes]`` at definition time (dulwich/filters.py:154 does); after
+    the swap that subscript must keep working or importing dulwich itself throws.
+    Measured in the engine on 2026-09-21: "type '_FakePopen' is not subscriptable".
+    """
+
+    def __class_getitem__(cls, item):
+        return cls
 
     def __new__(cls, argv, *a, **kw):
         if not _is_git(argv):
+            if sys.platform == "emscripten":
+                _no_such_process(argv)
             return _orig_popen(argv, *a, **kw)
         self = object.__new__(cls)
         code, out, err = run(argv, cwd=kw.get("cwd"), env=kw.get("env"))
@@ -706,5 +738,11 @@ if __name__ == "__main__":
     cp = subprocess.run([GIT_PATH, "show", "HEAD:a.FCStd"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
     assert cp.stdout == b"one-changed", cp
     subprocess.run = _orig_run
+    # The Popen swap must not break code that subscripts the class (dulwich does).
+    subprocess.Popen = _FakePopen
+    assert subprocess.Popen[bytes] is _FakePopen
+    cp = subprocess.Popen([GIT_PATH, "rev-parse", "--show-toplevel"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    outb, errb = cp.communicate(); assert cp.returncode == 0 and outb.strip().endswith(os.path.basename(d).encode()), (cp.returncode, outb, errb)
+    subprocess.Popen = _orig_popen
     shutil.rmtree(d, ignore_errors=True)
     print("fcweb_git self-check ok")

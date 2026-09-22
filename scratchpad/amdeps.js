@@ -32,8 +32,8 @@ const waitMarker = async (p, marker, ms) => {
   const t = Date.now();
   while (Date.now() - t < ms) {
     const log = await p.evaluate(() => (document.getElementById('log') || {}).textContent || '');
-    const m = log.match(new RegExp(marker + ' [^\\n]*'));
-    if (m) return m[0].slice(marker.length + 1);
+    const m = log.match(new RegExp('(' + marker + ') ([^\\n]*)'));
+    if (m) return m[2];
     await sl(1500);
   }
   return null;
@@ -57,18 +57,17 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
   }
   await sl(10000);
 
-  // 1. Activate the Addon Manager so the overlay's on-activate patches run.
-  await runPy(p, [
-    'import sys, FreeCADGui as Gui',
-    'try:',
-    '    Gui.runCommand("Std_AddonMgr")',
-    '    sys.__stderr__.write("AMOPEN ok\\n")',
-    'except Exception as e:',
-    '    sys.__stderr__.write("AMOPEN FAILED %r\\n" % (e,))',
-    'sys.__stderr__.flush()',
-  ].join(NL));
-  ok((await waitMarker(p, 'AMOPEN', 60000)) === 'ok', 'Addon Manager opened');
-  await sl(8000);
+  // 1. The overlay applies its Addon Manager patches (fcweb_wheels and fcweb_git among
+  //    them) as soon as the AM package is importable, which is at boot; it logs one
+  //    "[fcweb] addon-manager: ..." note per patch. Wait for ours rather than opening the
+  //    GUI: Gui.runCommand('Std_AddonMgr') is exactly the path fcweb_am_boot documents as
+  //    aborting the engine when it races the patches.
+  const notes = await waitMarker(p, '\\[fcweb\\] addon-manager: pip ->', 90000);
+  ok(notes !== null, 'overlay applied the pip patch: ' + notes);
+  const gitNote = await waitMarker(p, '\\[fcweb\\] addon-manager: git ->', 30000);
+  ok(gitNote !== null, 'overlay applied the git patch: ' + gitNote);
+  const dl = await waitMarker(p, '\\[fcweb\\] dulwich', 240000);
+  ok(dl !== null && /ready/.test(dl), 'dulwich fetched and importable: ' + dl);
 
   // 2. Are the hooks in? (DependencyInstaller.run must be ours now.)
   await runPy(p, [
@@ -116,6 +115,32 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
   ok(res.finished === true, 'finished(True)');
   ok(!res.failure, 'no failure signal');
 
+  // 3b. Then the add-on itself, as the GUI does after `proceed`: its own AddonInstaller
+  //     (the overlay's ZIP pre-fetch path), waiting on finished.
+  await runPy(p, [
+    'import sys, os, json',
+    'try:',
+    '    from addonmanager_installer import AddonInstaller',
+    '    from Addon import Addon',
+    '    _a = Addon("HistoryWorkbench", "https://github.com/eblanshey/HistoryWorkbench", Addon.Status.NOT_INSTALLED, "release")',
+    '    _ai = AddonInstaller(_a)',
+    '    _r = {}',
+    '    def _s(x): _r["success"] = True',
+    '    def _f(x, m): _r["failure"] = m',
+    '    def _d():',
+    '        sys.__stderr__.write("ADDONDONE " + json.dumps(_r) + "\\n"); sys.__stderr__.flush()',
+    '    _ai.success.connect(_s); _ai.failure.connect(_f); _ai.finished.connect(_d)',
+    '    sys._fcweb_ai = _ai',
+    '    _ai.run()',
+    'except Exception as e:',
+    '    import traceback; sys.__stderr__.write("ADDONDONE FAILED " + traceback.format_exc().replace(chr(10), " | ") + "\\n"); sys.__stderr__.flush()',
+  ].join(NL));
+  const ad = await waitMarker(p, 'ADDONDONE', 240000);
+  console.log('  addon install: ' + ad);
+  let adr = {};
+  try { adr = JSON.parse(ad); } catch (e) {}
+  ok(adr.success === true && !adr.failure, 'HistoryWorkbench AddonInstaller succeeded');
+
   // 4. Prove it: imports and files.
   await runPy(p, [
     'import sys, os, json, importlib',
@@ -125,7 +150,8 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
     '    import ' + PKG_MOD,
     '    import addonmanager_utilities as U',
     '    _vd = U.get_pip_target_directory()',
-    '    _mod = os.path.join(os.path.dirname(_vd), "Mod", "HistoryWorkbench")',
+    '    import addonmanager_freecad_interface as fci',
+    '    _mod = os.path.join(fci.DataPaths().mod_dir, "HistoryWorkbench")',
     '    _o = {"yaml": yaml.__version__ if hasattr(yaml, "__version__") else "?", "pkg": getattr(' + PKG_MOD + ', "__file__", "?"),',
     '          "vendor_on_path": _vd in sys.path, "vendor_files": sorted(os.listdir(_vd))[:6] if os.path.isdir(_vd) else None,',
     '          "wb_dir": os.path.isdir(_mod), "wb_pkg": os.path.exists(os.path.join(_mod, "package.xml"))}',
@@ -151,8 +177,12 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
     '    importlib.invalidate_caches()',
     '    import dulwich',
     '    import fcweb_git',
-    '    mod = os.path.join(os.path.dirname(__import__("addonmanager_utilities").get_pip_target_directory()), "Mod", "HistoryWorkbench")',
+    '    import addonmanager_freecad_interface as fci',
+    '    mod = os.path.join(fci.DataPaths().mod_dir, "HistoryWorkbench")',
+    '    # FreeCAD puts Mod/<addon> on sys.path at the next boot (the "reload to finish" flow);',
+    '    # do the same here, and drop any stale namespace-package cache for "freecad".',
     '    if mod not in sys.path: sys.path.insert(0, mod)',
+    '    sys.modules.pop("freecad", None); importlib.invalidate_caches()',
     '    from freecad.history_wb.infrastructure.git.git_port_adapter import GitPortAdapter',
     '    class _S:',
     '        def get_git_executable(self): return ""',

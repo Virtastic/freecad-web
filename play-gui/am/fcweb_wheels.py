@@ -207,13 +207,51 @@ def run_installer(self):
 
     def finish(ok):
         self.required_succeeded = ok
-        if ok and not cancelled():
-            try:
-                self._install_addons()
-                self.finished_successfully = self.required_succeeded
-            except RuntimeError as e:
-                fci.Console.PrintError(str(e) + "\n")
-        self.finished.emit(self.finished_successfully)
+        if not ok or cancelled():
+            return self.finished.emit(self.finished_successfully)
+        install_addons(0)
+
+    def install_addons(i):
+        """Upstream's _install_addons, one add-on at a time on signals. In the browser
+        the overlay's AddonInstaller.run() pre-fetches the ZIP asynchronously and
+        returns False on first entry, so its return value means nothing here; the
+        success/failure signals it emits when the re-entered run() completes do."""
+        from addonmanager_installer import AddonInstaller, MacroInstaller
+        addons = list(self.addons)
+        if i >= len(addons):
+            self.finished_successfully = self.required_succeeded
+            return self.finished.emit(self.finished_successfully)
+        if cancelled():
+            return self.finished.emit(False)
+        addon = addons[i]
+        fci.Console.PrintMessage(translate("AddonsInstaller", "Installing required dependency {}").format(addon.name) + "\n")
+        installer = AddonInstaller(addon) if addon.macro is None else MacroInstaller(addon)
+        state = {"done": False, "ok": None}
+        # Held on self so the QObject outlives this frame; upstream keeps it as a local
+        # because its run() is synchronous.
+        self._fcweb_addon_installer = installer
+
+        def on_success(_addon):
+            state["ok"] = True
+
+        def on_failure(_addon, _msg):
+            state["ok"] = False
+
+        def on_finished():
+            if state["done"]:
+                return
+            state["done"] = True
+            if state["ok"] is False or (state["ok"] is None and not os.path.isdir(
+                    os.path.join(fci.DataPaths().mod_dir, addon.name))):
+                self.failure.emit(
+                    translate("AddonsInstaller", "Installation of addon {} failed").format(addon.name), "")
+                return self.finished.emit(False)
+            install_addons(i + 1)
+
+        installer.success.connect(on_success)
+        installer.failure.connect(on_failure)
+        installer.finished.connect(on_finished)
+        installer.run()
 
     def fail_required(pymod, why):
         fci.Console.PrintError("%s\n" % why)
