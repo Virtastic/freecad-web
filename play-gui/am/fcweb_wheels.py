@@ -162,9 +162,42 @@ def _install_wheel(data, target):
             if name.startswith("/") or ".." in name.split("/"):
                 raise ValueError("wheel contains an unsafe path: %s" % name)
         z.extractall(target)
+        deps = _requires_dist(z)
     if target not in sys.path:
         sys.path.append(target)
     importlib.invalidate_caches()
+    return deps
+
+
+def _requires_dist(z):
+    """The wheel's own dependencies, as pip would resolve them: every Requires-Dist
+    from *.dist-info/METADATA except extras. A requirement with another environment
+    marker (python_version, sys_platform...) is kept when `packaging` can evaluate it
+    and treated as optional otherwise (a wheel that does not exist for this platform
+    just fails to install, non-fatally)."""
+    meta = [n for n in z.namelist() if n.endswith(".dist-info/METADATA") and n.count("/") == 1]
+    if not meta:
+        return []
+    out = []
+    for line in z.read(meta[0]).decode("utf-8", "replace").splitlines():
+        if not line.startswith("Requires-Dist:"):
+            continue
+        req = line.split(":", 1)[1].strip()
+        marker = ""
+        if ";" in req:
+            req, marker = [x.strip() for x in req.split(";", 1)]
+        if "extra" in marker:
+            continue
+        optional = False
+        if marker:
+            try:
+                from packaging.markers import Marker
+                if not Marker(marker).evaluate():
+                    continue
+            except Exception:
+                optional = True
+        out.append((_split_requirement(req)[0], optional))
+    return out
 
 
 def _completed(args, code, out, err=""):
@@ -262,36 +295,14 @@ def run_installer(self):
 
     def install_one(req, on_ok, on_err):
         dist, _spec = _split_requirement(req)
-        if _already_present(dist):
-            fci.Console.PrintMessage("Requirement already satisfied: %s\n" % dist)
-            return on_ok()
-        index_url = PYPI_SIMPLE + _norm(dist) + "/"
 
-        def got_index(ok, page):
+        def done(ok, why):
             if not ok:
-                return on_err("could not query PyPI for %s (is the proxy key 'pypi' deployed?)" % dist)
-            try:
-                pick, why = _pick_wheel_from_page(dist, page)
-            except Exception as e:
-                return on_err("could not read the PyPI index for %s: %s" % (dist, e))
-            if pick is None:
                 return on_err(why)
-            fname, ver, url = pick
+            fci.Console.PrintMessage("%s: %s\n" % (dist, why))
+            on_ok()
 
-            def got_wheel(ok2, data):
-                if not ok2 or not data:
-                    return on_err("downloading %s failed" % fname)
-                try:
-                    _install_wheel(data, target)
-                except Exception as e:
-                    return on_err("installing %s failed: %s" % (fname, e))
-                fci.Console.PrintMessage("Successfully installed %s-%s (%d KB) into %s\n"
-                                         % (dist, ver, len(data) // 1024, target))
-                on_ok()
-
-            async_get(url, got_wheel, timeout_ms=180000)
-
-        async_get(index_url, got_index, timeout_ms=30000)
+        fetch_and_install(dist, done, target)
 
     def do_optional(i):
         if i >= len(optional) or cancelled():
@@ -320,20 +331,23 @@ def run_installer(self):
     do_required(0)
 
 
-def fetch_and_install(dist, on_done, target=None):
-    """Install one pure-Python distribution outside the Addon Manager's installer flow
-    (fcweb_git uses it for dulwich). on_done(ok, why) runs once, on the main thread."""
+def fetch_and_install(dist, on_done, target=None, _seen=None):
+    """Install one pure-Python distribution and, like pip, the distributions its wheel
+    requires. on_done(ok, why) runs once, on the main thread. Used by the Addon
+    Manager's dependency installer (run_installer) and by fcweb_git for dulwich."""
     from addonmanager_fcweb_async import async_get
     if target is None:
         import addonmanager_utilities as utils
         target = utils.get_pip_target_directory()
+    seen = _seen if _seen is not None else set()
+    seen.add(_norm(dist))
     if _already_present(dist):
         return on_done(True, "already present")
     index_url = PYPI_SIMPLE + _norm(dist) + "/"
 
     def got_index(ok, page):
         if not ok:
-            return on_done(False, "could not query PyPI for %s" % dist)
+            return on_done(False, "could not query PyPI for %s (is the proxy key 'pypi' deployed?)" % dist)
         try:
             pick, why = _pick_wheel_from_page(dist, page)
         except Exception as e:
@@ -346,10 +360,25 @@ def fetch_and_install(dist, on_done, target=None):
             if not ok2 or not data:
                 return on_done(False, "downloading %s failed" % fname)
             try:
-                _install_wheel(data, target)
+                deps = _install_wheel(data, target)
             except Exception as e:
                 return on_done(False, "installing %s failed: %s" % (fname, e))
-            on_done(True, "installed %s-%s (%d KB)" % (dist, ver, len(data) // 1024))
+            note = "installed %s-%s (%d KB)" % (dist, ver, len(data) // 1024)
+            todo = [(d, opt) for d, opt in deps if _norm(d) not in seen]
+
+            def next_dep(i):
+                if i >= len(todo):
+                    return on_done(True, note)
+                d, opt = todo[i]
+
+                def dep_done(ok3, why3):
+                    if not ok3 and not opt:
+                        return on_done(False, "%s needs %s: %s" % (dist, d, why3))
+                    next_dep(i + 1)
+
+                fetch_and_install(d, dep_done, target, seen)
+
+            next_dep(0)
 
         async_get(url, got_wheel, timeout_ms=180000)
 
@@ -404,9 +433,21 @@ if __name__ == "__main__":
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("demo_pkg/__init__.py", "VALUE = 42\n")
-        z.writestr("demo_pkg-1.0.dist-info/METADATA", "Name: demo_pkg\n")
+        z.writestr("demo_pkg-1.0.dist-info/METADATA", "Name: demo_pkg\n"
+                   "Requires-Dist: urllib3<3,>=1.21.1\n"
+                   "Requires-Dist: PySocks!=1.5.7; extra == \"socks\"\n"
+                   "Requires-Dist: pywin32>=1; sys_platform == \"win32\"\n"
+                   "Requires-Dist: colorama; python_version < \"3.0\"\n")
     with tempfile.TemporaryDirectory() as d:
-        _install_wheel(buf.getvalue(), d)
+        deps = _install_wheel(buf.getvalue(), d)
+        # as pip: transitive deps kept, extras dropped, markers evaluated (or optional)
+        names = [n for n, _ in deps]
+        assert names[0] == "urllib3" and "PySocks" not in names, deps
+        try:
+            import packaging.markers  # noqa: F401
+            assert names == ["urllib3"] + (["pywin32"] if sys.platform == "win32" else []), deps
+        except ImportError:
+            assert names == ["urllib3", "pywin32", "colorama"] and deps[1][1] is True, deps
         assert os.path.exists(os.path.join(d, "demo_pkg", "__init__.py"))
         sys.path.remove(d)
     bad = io.BytesIO()

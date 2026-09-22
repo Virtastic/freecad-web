@@ -514,6 +514,16 @@ actionable; "3D view is janky" is not.
   the catalogue, installs and download stats come through it.
 - Wheel over the transparent part of the Tasks overlay scrolls the panel, not the 3D view.
   Desktop does the same unless the overlay is put in its transparent (mouse-through) mode.
+- Add-ons that use `requests` (Ondsel Lens) work, and Chrome prints one line about a
+  deprecated synchronous XMLHttpRequest on the main thread the first time one is sent.
+  That is the transport (`/dev/fcweb-http`, see `play-gui/am/fcweb_requests.py`): the
+  add-on blocks on the network exactly as it does on a desktop, from any context, and a
+  sync XHR is the only browser primitive that can. Its `timeout=` is ignored (the browser
+  forbids one) and redirects are followed by the browser. Lens's own "Listed" share-link
+  parser trips over a link whose model carries no `attributes` (the add-on's dataclass
+  requires it; the live API omits it on some entries) -- that reproduces on a desktop and
+  belongs upstream. Login and workspaces need a Lens account; `scratchpad/lens.js` takes
+  `LENS_EMAIL` / `LENS_PASSWORD` for that leg.
 - Chrome/Edge 137+ only (other browsers are refused up front, having downloaded nothing)
 - First load downloads ~115 MB. Later loads really are cached now — the engine is held in
   Cache Storage, so a return visit fetches **nothing** and reaches Ready in seconds.

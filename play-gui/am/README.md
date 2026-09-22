@@ -1,6 +1,6 @@
 # Addon Manager overlay
 
-Five Python modules, served by nginx from `/am/` and fetched at runtime by
+Python modules served by nginx from `/am/` and fetched at runtime by
 `freecad-gui.html`, which writes them into `/fcweb-am` and imports `fcweb_am_boot`.
 
 | file | what it is |
@@ -10,6 +10,16 @@ Five Python modules, served by nginx from `/am/` and fetched at runtime by
 | `addonmanager_workers_startup.py` | **fork** of upstream — the five startup workers off QThread |
 | `fcweb_am_install.py` | new — install/uninstall class patches |
 | `fcweb_am_boot.py` | new — loads the shadows, applies the class patches |
+| `fcweb_wheels.py` | new — add-on Python dependencies without pip: pure wheels from PyPI, `Requires-Dist` followed |
+| `fcweb_git.py` | new — a `git` on `PATH` for add-ons that shell out to one (dulwich underneath) |
+| `fcweb_open.py` | new — `open` / `xdg-open` / `explorer`: a URL opens a tab, a file downloads |
+| `fcweb_requests.py` | new — `requests` over `/dev/fcweb-http`, a device whose read is a synchronous XHR |
+| `sitecustomize.py` | new — the first Python to run; disarms urllib3's Pyodide backend and hooks `requests` at import |
+| `_sysconfigdata__emscripten_wasm64-emscripten.py` | CPython's own build output, never in the image; `import zoneinfo` needs it |
+
+The last three are not fetched into `/fcweb-am` at 10 s like the others: an installed
+add-on's `InitGui.py` runs at 2 s, so the page writes them into the interpreter's
+site-packages directory in emscripten's `preRun`, before the first Python statement.
 
 `UPSTREAM.txt` pins the sha256 of every upstream file a fork was derived from;
 `tools/check-addon-overlay-drift.py` fails CI when one moves.

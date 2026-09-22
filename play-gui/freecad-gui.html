@@ -2274,6 +2274,57 @@ window.fcwebNotify = function (text, kind, actions, opts) {
 // in flight (including while suspended); periodic callers below skip their tick
 // while it's set, so nothing re-enters the interpreter concurrently.
 window.__fcPyBusy = window.__fcPyBusy || false;
+
+// ---- /dev/fcweb-http: `requests` for add-ons, synchronously, from any context ------
+// Add-ons written for a desktop call requests.get() and block until the reply (the Lens
+// add-on does it inside its InitGui.py, at startup). Under JSPI only a promising export
+// may suspend, and FreeCAD's Mod loop is not one, so anything that waits on an event
+// loop there kills the interpreter (measured 2026-09-22: a stack dump out of
+// RunInitGuiPy). The one browser primitive that blocks the main thread for the network
+// without suspending is a synchronous XMLHttpRequest, and the one channel Python already
+// has to synchronous JS is the emscripten filesystem. So: a character device. Python
+// (play-gui/am/fcweb_requests.py) writes one JSON request to it and reads the JSON
+// response back; the device's read op performs the XHR. Same-origin /proxy rewrites and
+// CORS apply exactly as for any other request from this page. Registered in preRun so it
+// exists before the first Python statement runs.
+//
+// Known limits of a sync XHR on the main thread, all inherited: no timeout (the browser
+// forbids it; the add-on's timeout= is ignored), redirects are followed by the browser
+// (Response.history stays empty), and Chrome logs a one-line deprecation notice.
+window.__fcHttpDeviceInstall = function (FS) {   // on window: this block is an IIFE, the boot below is another
+  function xhr(chunks){
+    var total = 0, i; for (i = 0; i < chunks.length; i++) total += chunks[i].length;
+    var all = new Uint8Array(total), o = 0; for (i = 0; i < chunks.length; i++){ all.set(chunks[i], o); o += chunks[i].length; }
+    var res;
+    try {
+      var req = JSON.parse(new TextDecoder().decode(all));
+      var x = new XMLHttpRequest();
+      x.open(req.method || 'GET', req.url, false);
+      x.overrideMimeType('text/plain; charset=x-user-defined');   // bytes in, via responseText
+      for (var k in (req.headers || {})) { try { x.setRequestHeader(k, req.headers[k]); } catch(e){} }
+      x.send(req.body ? Uint8Array.from(atob(req.body), function(c){ return c.charCodeAt(0); }) : null);
+      var t = x.responseText || '', bin = '';
+      for (i = 0; i < t.length; i += 8192) bin += String.fromCharCode.apply(null, Array.prototype.map.call(t.slice(i, i + 8192), function(c){ return c.charCodeAt(0) & 255; }));
+      res = { status: x.status, reason: x.statusText, headers: x.getAllResponseHeaders(), url: x.responseURL, body: btoa(bin) };
+    } catch(e){ res = { status: 0, error: String(e) }; }
+    return new TextEncoder().encode(JSON.stringify(res));
+  }
+  var ops = {
+    open: function(s){ s.fcReq = []; s.fcRes = null; s.fcPos = 0; },
+    close: function(s){},
+    write: function(s, buf, off, len){ off = Number(off); len = Number(len); s.fcReq.push(buf.slice(off, off + len)); return len; },
+    read: function(s, buf, off, len){
+      off = Number(off); len = Number(len);
+      if (!s.fcRes){ s.fcRes = xhr(s.fcReq); s.fcReq = []; }
+      var n = Math.min(len, s.fcRes.length - s.fcPos);
+      if (n > 0) buf.set(s.fcRes.subarray(s.fcPos, s.fcPos + n), off);
+      s.fcPos += n; return n;
+    }
+  };
+  var dev = FS.makedev(64, 0);
+  FS.registerDevice(dev, ops);
+  FS.mkdev('/dev/fcweb-http', dev);
+};
 // The page and the engine leapfrog each other during the wasm64 migration, so the
 // argument form of fcweb_run_python is DETECTED rather than assumed.
 //
@@ -2674,6 +2725,21 @@ window.fcRunPy = fcRunPy;
        __fcDataBytes = await __engineFetch(DATA_URL, 'data', (n,_t,cached) => {
          __dataGot = n; if (!cached) __fromCache = false; __report(); });
      } catch(e){ append('engine prefetch failed: '+e,'err'); }
+     // Python that must run BEFORE FreeCAD's Mod loop (an installed add-on's InitGui.py
+     // runs at ~2 s; the Addon Manager overlay lands at ~10 s, too late for it): CPython's
+     // own `sitecustomize` hook. Its site-packages directory is on the interpreter's
+     // lookup list but absent from the image, so the files are written there in preRun.
+     // fcweb_requests.py is the `requests` transport sitecustomize hooks in; the third file
+     // is the build-generated sysconfig data the image never carried (see its header),
+     // without which `import zoneinfo` fails.
+     const __siteFiles = {};
+     for (const name of ['sitecustomize.py', 'fcweb_requests.py', '_sysconfigdata__emscripten_wasm64-emscripten.py']) {
+       try {
+         const r = await fetch('am/' + name, {cache: 'no-cache'});
+         if (r.ok) __siteFiles[name] = new Uint8Array(await r.arrayBuffer());
+         else append('site-packages: ' + name + ' HTTP ' + r.status, 'err');
+       } catch(e){ append('site-packages: ' + name + ' fetch failed: '+e,'err'); }
+     }
      // Shared sessions: in session mode (?s=<id>) join, fetch the environment bundle and the
      // add-ons BEFORE boot, then write them in preRun. See the session block above.
      const __sess = await (window.__fcSessionPreboot
@@ -2823,9 +2889,23 @@ window.fcRunPy = fcRunPy;
          containerElements: [screen],
        }
      };
+     __cfg.preRun = [function () {
+       try { window.__fcHttpDeviceInstall(__cfg.FS); }
+       catch(e){ append('/dev/fcweb-http install failed: ' + e + ' (add-ons using requests will see connection errors)', 'err'); }
+     }];
+     if (Object.keys(__siteFiles).length) {
+       __cfg.preRun.push(function () {
+         const F = __cfg.FS, dir = '/usr/local/lib/python3.13/site-packages';   // sys.prefix + site.getsitepackages()
+         try { F.mkdirTree(dir); } catch(e){ append('site-packages mkdir failed: '+e,'err'); }
+         for (const name in __siteFiles) {
+           try { F.writeFile(dir + '/' + name, __siteFiles[name]); }
+           catch(e){ append('site-packages: ' + name + ' write failed: '+e,'err'); }
+         }
+       });
+     }
      if (__sess && __sess.files) {
        __cfg.fcwebSessionMode = true;   // the patched pre-js reads this and skips the IDBFS home mount
-       __cfg.preRun = [function () { window.__fcSessionWrite(__cfg); }];
+       __cfg.preRun.push(function () { window.__fcSessionWrite(__cfg); });
      }
      const instance = window.fcInstance = await qtLoad(__cfg);
    } catch(e){ append('qtLoad failed: '+e,'err'); if(e&&e.stack) append(e.stack,'err'); }
@@ -5486,6 +5566,8 @@ window.fcRunPy = fcRunPy;
                     'fcweb_wheels.py',                      // add-on Python dependencies without pip: pure wheels from PyPI via the proxy
                     'fcweb_git.py',                         // a `git` for add-ons that shell out to one (History Workbench), on dulwich
                     'fcweb_open.py'];                       // open / xdg-open / explorer: a URL opens a tab, a file downloads
+  // fcweb_requests.py (`requests` for add-ons) is NOT here: it must exist before the Mod
+  // loop, so it goes into site-packages in preRun with sitecustomize.py (see boot).
   var amOverlayDone = false;
   async function installAmOverlay(){
     if(amOverlayDone || !ready()) return;

@@ -387,6 +387,38 @@ def _patch_preference_pack_rescan():
     return "preference packs rescanned after install"
 
 
+def _patch_zip_wrapper_detection():
+    """Flatten the archive's wrapper folder by structure, not by name (backport of
+    upstream AddonManager main, _archive_wrapper_subdirectory).
+
+    1.1.3's _finalize_zip_installation looks for a folder named "{repo}-{branch}" and
+    otherwise leaves the code nested, so the add-on installs but nothing in it is
+    importable. GitHub names the folder after the branch it actually served: the
+    catalogue lists Ondsel-Lens at branch "main", GitHub redirects that renamed branch
+    and delivers "Ondsel-Lens-Addon-develop" (measured 2026-09-22), and GitLab appends a
+    commit hash. On a desktop git clones and never sees this; here every install is a
+    zip, so every such add-on was silently broken.
+    """
+    import shutil
+    import addonmanager_installer as inst
+    cls = inst.AddonInstaller
+
+    def _code_in_branch_subdirectory(self, destination):
+        entries = os.listdir(destination)
+        return len(entries) == 1 and os.path.isdir(os.path.join(destination, entries[0]))
+
+    def _move_code_out_of_subdirectory(self, destination):
+        subdirectory = os.path.join(destination, os.listdir(destination)[0])
+        for extracted_filename in os.listdir(subdirectory):
+            shutil.move(os.path.join(subdirectory, extracted_filename),
+                        os.path.join(destination, extracted_filename))
+        os.rmdir(subdirectory)
+
+    cls._code_in_branch_subdirectory = _code_in_branch_subdirectory
+    cls._move_code_out_of_subdirectory = _move_code_out_of_subdirectory
+    return "zip wrapper folder detected by structure (upstream main backport)"
+
+
 def _patch_user_agent_header():
     """Build the request without the User-Agent header at all.
 
@@ -516,7 +548,7 @@ def install():
     """Apply the patches. Returns notes for the caller to log."""
     notes = []
     for fn in (_patch_move_to_thread, _patch_allowed_packages, _patch_verify_pip,
-               _patch_zip_install, _patch_macro_fetch,
+               _patch_zip_install, _patch_zip_wrapper_detection, _patch_macro_fetch,
                _patch_macro_toolbar_prompt, _patch_preference_pack_rescan,
                _patch_user_agent_header, _patch_restart_prompt):
         try:

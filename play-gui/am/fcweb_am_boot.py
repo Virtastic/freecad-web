@@ -315,6 +315,14 @@ def _patch_pip():
     return "pip -> fcweb_wheels" if fcweb_wheels.install_hooks() else "fcweb_wheels: not emscripten, left alone"
 
 
+def _patch_requests():
+    """`requests` in the browser: see fcweb_requests (site-packages, written by the page
+    in preRun) and sitecustomize, which hooks it at import. This late call only covers a
+    `requests` that was imported before sitecustomize could see it, and reports state."""
+    import fcweb_requests
+    return fcweb_requests.install()
+
+
 def _patch_git():
     """A `git` on PATH, answered in-process by dulwich: see fcweb_git.
 
@@ -404,6 +412,10 @@ def _install_now():
         notes.append(_patch_git())
     except Exception as e:
         notes.append("git patch FAILED %r" % (e,))
+    try:
+        notes.append(_patch_requests())
+    except Exception as e:
+        notes.append("requests patch FAILED %r" % (e,))
     try:
         notes.append(_stash_command())
     except Exception as e:
