@@ -10,5 +10,9 @@
 freecad.virtastic.app {
 	tls /certs/virtastic.crt /certs/virtastic.key
 	import sec_headers
+	# sec_headers sends X-Frame-Options SAMEORIGIN for every site on this edge. FreeCAD is
+	# meant to be embedded (?embed=1, GitHub #3), so this vhost alone drops it. Embedding
+	# still needs the host page to be cross-origin isolated, which no header here can grant.
+	header -X-Frame-Options
 	reverse_proxy freecad:80
 }

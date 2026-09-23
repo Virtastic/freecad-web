@@ -275,6 +275,8 @@ jobs:
           echo "--- / headers (edge, pre-CF) ---"; cat /tmp/h
           grep -qi '^cross-origin-opener-policy: same-origin'   /tmp/h
           grep -qi '^cross-origin-embedder-policy: require-corp' /tmp/h
+          # embeddable (GitHub #3): the shared sec_headers snippet must not re-add a frame ban
+          if grep -qi '^x-frame-options' /tmp/h; then echo '::error::X-Frame-Options is back; freecad.caddy drops it'; exit 1; fi
           # engine wasm carries the correct MIME through the edge
           E -D - -o /dev/null https://freecad.virtastic.app/FreeCAD.wasm \
             | tee /tmp/w | grep -qi '^content-type: *application/wasm'
