@@ -7161,3 +7161,104 @@ diff -ruNp a/src/Mod/Measure/Gui/AppMeasureGui.cpp b/src/Mod/Measure/Gui/AppMeas
      // load dependent module
      try {
          Base::Interpreter().loadModule("Measure");
+diff --git a/src/Gui/Dialogs/DlgCustomizeSpaceball.cpp b/src/Gui/Dialogs/DlgCustomizeSpaceball.cpp
+--- a/src/Gui/Dialogs/DlgCustomizeSpaceball.cpp
++++ b/src/Gui/Dialogs/DlgCustomizeSpaceball.cpp
+@@ -31,6 +31,9 @@
+ #include <QSplitter>
+ #include <QTableView>
+ #include <QVBoxLayout>
++#ifdef __EMSCRIPTEN__
++# include <emscripten.h>
++#endif
+ 
+ #include "Base/Console.h"
+ 
+@@ -771,6 +774,25 @@
+     layout2->addWidget(messageLabel);
+     layout2->addStretch();
+     layout->addItem(layout2);
++#ifdef __EMSCRIPTEN__
++    // wasm: a browser reaches a 3D mouse through WebHID, and WebHID only opens a device
++    // the user has picked once from the browser's chooser, inside a click. Desktop
++    // detects the device by itself; here this button is the one-time grant, after which
++    // the page reconnects it on every boot (freecad-gui.html, fcwebSpaceballConnect).
++    auto connectButton = new QPushButton(tr("Connect a 3D mouse..."), this);
++    connect(connectButton, &QPushButton::clicked, this, [] {
++        EM_ASM({
++            if (window.fcwebSpaceballConnect) {
++                window.fcwebSpaceballConnect();
++            }
++        });
++    });
++    auto layout3 = new QHBoxLayout();
++    layout3->addStretch();
++    layout3->addWidget(connectButton);
++    layout3->addStretch();
++    layout->addItem(layout3);
++#endif
+     this->setLayout(layout);
+ }
+ 
+diff --git a/src/Gui/resource.cpp b/src/Gui/resource.cpp
+--- a/src/Gui/resource.cpp
++++ b/src/Gui/resource.cpp
+@@ -50,7 +50,8 @@
+ #include "Dialogs/DlgActionsImp.h"
+ #include "Dialogs/DlgKeyboardImp.h"
+ 
+-#if defined(_USE_3DCONNEXION_SDK) || defined(SPNAV_FOUND)
++// wasm: the device arrives through WebHID (fcweb_spaceball.cpp), so the pages exist too.
++#if defined(_USE_3DCONNEXION_SDK) || defined(SPNAV_FOUND) || defined(__EMSCRIPTEN__)
+ # include "Dialogs/DlgCustomizeSpaceball.h"
+ # include "Dialogs/DlgCustomizeSpNavSettings.h"
+ #endif
+@@ -97,7 +98,7 @@
+     new CustomPageProducer<DlgCustomKeyboardImp>;
+     new CustomPageProducer<DlgCustomToolbarsImp>;
+     new CustomPageProducer<DlgCustomActionsImp>;
+-#if defined(_USE_3DCONNEXION_SDK) || defined(SPNAV_FOUND)
++#if defined(_USE_3DCONNEXION_SDK) || defined(SPNAV_FOUND) || defined(__EMSCRIPTEN__)
+     new CustomPageProducer<DlgCustomizeSpNavSettings>;
+     new CustomPageProducer<DlgCustomizeSpaceball>;
+ #endif
+diff --git a/src/Gui/Dialogs/DlgCustomizeSpNavSettings.cpp b/src/Gui/Dialogs/DlgCustomizeSpNavSettings.cpp
+--- a/src/Gui/Dialogs/DlgCustomizeSpNavSettings.cpp
++++ b/src/Gui/Dialogs/DlgCustomizeSpNavSettings.cpp
+@@ -25,6 +25,10 @@
+ #include "ui_DlgCustomizeSpNavSettings.h"
+ #include "Application.h"
+ #include "GuiApplicationNativeEventAware.h"
++#ifdef __EMSCRIPTEN__
++# include <QPushButton>
++# include <emscripten.h>
++#endif
+ 
+ 
+ using namespace Gui::Dialog;
+@@ -117,6 +121,25 @@
+     layout2->addWidget(messageLabel);
+     layout2->addStretch();
+     layout->addItem(layout2);
++#ifdef __EMSCRIPTEN__
++    // wasm: a browser reaches a 3D mouse through WebHID, and WebHID only opens a device
++    // the user has picked once from the browser's chooser, inside a click. Desktop
++    // detects the device by itself; here this button is the one-time grant, after which
++    // the page reconnects it on every boot (freecad-gui.html, fcwebSpaceballConnect).
++    auto connectButton = new QPushButton(tr("Connect a 3D mouse..."), this);
++    connect(connectButton, &QPushButton::clicked, this, [] {
++        EM_ASM({
++            if (window.fcwebSpaceballConnect) {
++                window.fcwebSpaceballConnect();
++            }
++        });
++    });
++    auto layout3 = new QHBoxLayout();
++    layout3->addStretch();
++    layout3->addWidget(connectButton);
++    layout3->addStretch();
++    layout->addItem(layout3);
++#endif
+     this->setLayout(layout);
+ }
+ 

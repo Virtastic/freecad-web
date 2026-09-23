@@ -100,7 +100,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: qt/6.11.2/wasm_mt_weh
-          key: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v2
+          key: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v3
 
       - name: Install emsdk 6.0.9
         run: |

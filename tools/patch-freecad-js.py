@@ -1161,7 +1161,7 @@ PATCHES += INDEX_TYPE
 #     diffuse      = diffuseI * u_lightDiffuse0.xyz * u_materialDiffuse.xyz;
 #
 # There is no GL_COLOR_MATERIAL in it at all. Immediate mode survives that because Coin
-# calls glColor3f per face and this table's 'glColor drives material colour' feeds it into
+# calls glColor3f per face and this table's 'glColor drives the diffuse material colour' feeds it into
 # materialDiffuse. SoBrepFaceSet's VBO path supplies colours as an interleaved ARRAY and
 # never calls glColor, so every face shades with whatever material was last set -- measured
 # as the whole assembly rendering SOLID BLACK with a correct silhouette under ?vbofaces=1.
@@ -1703,6 +1703,25 @@ PATCHES += [
     ),
 ]
 
+# ---- invariant gl_Position ------------------------------------------------------------
+#
+# FreeCAD draws a preselected face twice: once normally, then again with an emissive
+# highlight, trusting the second pass to land at EXACTLY the first pass's depth so that
+# GL_LEQUAL lets it through (SoBrepFaceSet::renderHighlight). Fixed-function GL gives that
+# for free. Here each pass is a generated shader, and the two passes are DIFFERENT
+# programs (the first carries a per-vertex colour, the highlight does not), and GLSL only
+# guarantees two programs compute the same gl_Position when it is declared invariant.
+# Without it a compiler may contract the matrix multiply differently per program, and the
+# highlight z-fights the face it covers: the blocky half-highlighted face of GitHub #1,
+# reported on macOS, where ANGLE compiles to Metal.
+PATCHES += [
+    (
+        'emulated vertex shader: invariant gl_Position',
+        '"uniform mat4 u_modelView;","uniform mat4 u_projection;",vsPointSizeDefs',
+        '"uniform mat4 u_modelView;","uniform mat4 u_projection;","invariant gl_Position;",vsPointSizeDefs',
+    ),
+]
+
 # ---- GL_LIGHT_MODEL_TWO_SIDE ---------------------------------------------------------
 #
 # The emulation tracks GLEmulation.lightModelTwoSide (it is even in the renderer cache
@@ -2088,7 +2107,7 @@ def emsdk6(s):
 _EMSDK6_FIXUPS = {
     'getWasmTableEntry null-function guard': [
         ('wasmTable.get(funcPtr)', 'wasmTable.get(BigInt(funcPtr))')],
-    'glColor drives material colour': [
+    'glColor drives the diffuse material colour': [
         (';var _glColor3f=', ';var _glColor4f=_emscripten_glColor4f;var _emscripten_glColor3f=')],
     'glMaterialfv: EMISSION and AMBIENT_AND_DIFFUSE': [
         ('}};var _emscripten_glMaterialfv=', '}}var _emscripten_glMatrixMode=')],
@@ -2146,6 +2165,12 @@ def emsdk6_count(name, old, new):
 
 
 def _selftest_emsdk6():
+    # The emsdk6 tables are keyed by entry NAME: renaming an entry silently drops its
+    # rewrite, and the next wasm64 link fails with NOT FOUND (2026-09-22, three sites).
+    names = {e[0] for e in PATCHES}
+    for table in (_EMSDK6_FIXUPS, _EMSDK6_OVERRIDES):
+        stale = [k for k in table if k not in names]
+        assert not stale, 'emsdk6 table names no patch: %r' % stale
     # Derivations pinned to strings copied from the first wasm64 FreeCAD.js.
     assert emsdk6('GLEmulation.materialShininess[0]=HEAPF32[param>>2]}else{throw"glMaterialfv: TODO: "+pname}') == \
         'GLEmulation.materialShininess[0]=(growMemViews(),HEAPF32)[param/4]}else{abort("glMaterialfv: TODO: "+pname)}'

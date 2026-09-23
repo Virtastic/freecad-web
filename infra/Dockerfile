@@ -22,6 +22,30 @@ RUN python /patch.py --selftest \
  && python /patch.py /FreeCAD.js \
  && python /patch.py /FreeCAD.js --check
 
+# FreeCAD's own translations. Desktop compiles every src/**/*_<lang>.ts with lrelease and
+# embeds the .qm files in its binaries; the wasm build skips that step (SetupQt.cmake in
+# patches/freecad.patch), so only the handful of modules that ship prebuilt .qm files
+# were translated -- a German user got German Draft menus around an English FreeCAD.
+# Embedding them all would add ~110 MB to every visitor's download, so they are compiled
+# here, served as plain files, and fetched only for the language the user picks (the page
+# registers them in the wasm filesystem by size and reads the bytes on first open; see
+# __fcI18nInstall in freecad-gui.html).
+FROM debian:bookworm-slim AS i18n
+COPY patches/freecad.version /freecad.version
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends qt6-l10n-tools curl ca-certificates python3 \
+ && rm -rf /var/lib/apt/lists/*
+RUN set -e; V=$(grep -v '^#' /freecad.version | grep -v '^ *$' | tail -1); \
+    mkdir -p /src /i18n; \
+    curl -fsSL "https://github.com/FreeCAD/FreeCAD/archive/refs/tags/$V.tar.gz" \
+      | tar xz -C /src --strip-components=1 --wildcards '*.ts'; \
+    find /src/src -name '*_*.ts' | while read -r ts; do \
+      /usr/lib/qt6/bin/lrelease -silent "$ts" -qm "/i18n/$(basename "${ts%.ts}").qm"; \
+    done; \
+    python3 -c "import json,os; d='/i18n'; json.dump({'version': '$V', 'files': {f: os.path.getsize(os.path.join(d, f)) for f in sorted(os.listdir(d)) if f.endswith('.qm')}}, open(d + '/index.json', 'w'))"; \
+    n=$(ls /i18n/*_de.qm | wc -l); echo "i18n: $(ls /i18n/*.qm | wc -l) files, $n for German, $(du -sh /i18n | cut -f1)"; \
+    test "$n" -gt 20
+
 FROM nginx:1.27-alpine
 
 # Drop the base image's stock pages along with its config. /index.html was serving nginx's
@@ -45,6 +69,8 @@ COPY LICENSES /usr/share/nginx/html/LICENSES/
 # shadowed onto sys.path at boot (see the loader in freecad-gui.html). Plain files so a
 # change is an image rebuild, not a ~2 h relink.
 COPY play-gui/am /usr/share/nginx/html/am/
+# The compiled translations from the i18n stage above.
+COPY --from=i18n /i18n /usr/share/nginx/html/i18n/
 COPY play-gui/manifest.webmanifest play-gui/sw.js play-gui/icon-192.png play-gui/icon-512.png /usr/share/nginx/html/
 # Build artifacts (fetched into play-gui/ by CI from the release).
 # FreeCAD.js comes from the glpatch stage above, already GL-patched. Splitting it out of

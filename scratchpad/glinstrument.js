@@ -62,6 +62,10 @@ const IMPORTS = ['function getWasmImports(){ assignWasmImports();',
   `for(const k in wasmImports){if(!/^(emscripten_)?gl/.test(k))continue;const f=wasmImports[k];if(typeof f!=="function"||f.__fcCounted)continue;` +
   `const w=function(...a){globalThis.__fcglAll[k]=(globalThis.__fcglAll[k]||0)+1;` +
   `if(/Color4|Color3|Materialfv|Materialf$/.test(k)){const s=globalThis.__fcglSeen[k]=globalThis.__fcglSeen[k]||[];if(s.length<10)s.push(a.join(","));}` +
+  // An ORDERED trace of the calls that decide whether a transparent object shows:
+  // the blend state, the depth mask, the colour, and the draw itself.
+  `if(/^(emscripten_)?gl(DepthMask|BlendFunc|Enable|Disable|Color4ub|DrawElements|DrawArrays|DepthFunc)$/.test(k)){` +
+  `const t=globalThis.__fcglTrace=globalThis.__fcglTrace||[];if(t.length<4000)t.push(k.replace("emscripten_","")+"("+a.join(",")+")");}` +
   `return f.apply(this,a)};w.__fcCounted=true;wasmImports[k]=w;}})();`];
 
 // --fix: the candidate repair for flat shading and lost transparency.
@@ -106,6 +110,17 @@ const OVERRIDE = [
    'var glDisable=_glDisable;_glDisable=_emscripten_glDisable=cap=>{(globalThis.__fcEmuDisable=globalThis.__fcEmuDisable||{})[cap]=((globalThis.__fcEmuDisable||{})[cap]||0)+1;'],
 ];
 
+// What normals does the GPU actually get? A flat box face should give one axis-aligned
+// normal per face; if every face carries the same normal, flat surfaces all shade alike,
+// which is what the desktop comparison showed (scratchpad/lightcmp.js).
+const NORMALS = [
+  ['function _emscripten_glNormalPointer(type,stride,pointer){',
+   'function _emscripten_glNormalPointer(type,stride,pointer){' +
+   'try{var __p=Number(pointer)/4,__h=(growMemViews(),HEAPF32),__st=(stride||12)/4,__n=[];' +
+   'for(var __i=0;__i<8;__i++){__n.push(__h[__p+__i*__st].toFixed(2)+","+__h[__p+__i*__st+1].toFixed(2)+","+__h[__p+__i*__st+2].toFixed(2));}' +
+   '(globalThis.__fcNormPtr=globalThis.__fcNormPtr||[]).length<14&&globalThis.__fcNormPtr.push({stride:stride,first:__n});}catch(e){}'],
+];
+
 const FIX = [
   ['var _emscripten_glColor4f=(r,g,b,a)=>{',
    'var _emscripten_glColor4f=(r,g,b,a)=>{if(GLEmulation.__fcColorMaterial!==false){' +
@@ -128,6 +143,12 @@ let applied = 0; const missing = [];
 for (const [anchor, replacement] of PATCHES) {
   const n = src.split(anchor).length - 1;
   if (n !== 1) { missing.push(anchor.slice(0, 48) + '  (' + n + ' matches)'); continue; }
+  src = src.replace(anchor, replacement);
+  applied++;
+}
+for (const [anchor, replacement] of NORMALS) {
+  const n = src.split(anchor).length - 1;
+  if (n !== 1) { missing.push('NORMALS ' + anchor.slice(0, 44) + '  (' + n + ' matches)'); continue; }
   src = src.replace(anchor, replacement);
   applied++;
 }

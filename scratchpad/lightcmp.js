@@ -104,6 +104,7 @@ function analyse(png) {
   const variant = process.env.FCWEB_LIGHT_VARIANT || 'full';
   await runPy(p, ['import os',
                   'os.environ["FCWEB_LIGHT_VARIANT"] = ' + JSON.stringify(variant),
+                  'os.environ["FCWEB_LIGHT_LAYOUT"] = ' + JSON.stringify(process.env.FCWEB_LIGHT_LAYOUT || 'default'),
                   'exec(open("/tmp/lightprobe.py").read())'].join(NL));
   console.log('  variant: ' + variant);
   console.log('  probe: ' + (await waitFile(p, '/tmp/lightprobe.json', 120000)));

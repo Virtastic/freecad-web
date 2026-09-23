@@ -63,6 +63,8 @@ FC_SRC="$ROOT/deps/src/freecad/src"
 FC_GEN="$ROOT/build-freecad-gui-weh/src"
 # PyCXX moved to src/3rdParty/PyCXX in 1.1 (QuantityPy.h includes <CXX/Objects.hxx>); Boost for Base/Exception.h.
 QTCONVFLAGS="-std=c++20 $PYFLAGS -I$SBK_SRC -I$SBK_GEN -I$FC_SRC -I$FC_SRC/3rdParty/PyCXX -I$FC_GEN -I$FC_GEN/.. -I$ROOT/deps/wasm/include -I$QT/include -I$QT/include/QtCore -DFC_OS_LINUX -DHAVE_CONFIG_H"
+# fcweb_spaceball.cpp calls into FreeCAD's Gui application class, which is a QApplication.
+FCGUIFLAGS="-std=c++20 -I$FC_SRC -I$QT/include -I$QT/include/QtCore -I$QT/include/QtGui -I$QT/include/QtWidgets"
 echo "  shiboken:       $SBK_SRC (+ $SBK_GEN)"
 echo "  freecad:        $FC_SRC (+ generated $FC_GEN)"
 echo "  python include: $PYINC"
@@ -100,6 +102,7 @@ fcweb_gmsh_module.cpp|em++|PY|PyInit__fcwebgmsh
 fcweb_ccx_module.cpp|em++|PY|PyInit__fcwebccx
 fcweb_qtconv_module.cpp|em++|QTCONV|PyInit__fcwebqt
 wasm_event_dispatch.cpp|em++|QT|fcweb_dispatch_event
+fcweb_spaceball.cpp|em++|FCGUI|fcweb_spaceball_motion
 "
 
 NM="$ROOT/emsdk/upstream/bin/llvm-nm"
@@ -115,6 +118,7 @@ echo "$UNITS" | while IFS='|' read -r src cc kind want; do
         PY) extra="$PYFLAGS" ;;
         QT) extra="$QTFLAGS" ;;
         QTCONV) extra="$QTCONVFLAGS" ;;
+        FCGUI) extra="$FCGUIFLAGS" ;;
     esac
     if ! $cc $COMMON $extra -c "$src" -o "$obj" 2>/tmp/weh-obj-err.txt; then
         echo "  FAILED   $src"

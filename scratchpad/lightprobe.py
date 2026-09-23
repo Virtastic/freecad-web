@@ -27,6 +27,11 @@ def build(App, Gui):
     box = doc.addObject("Part::Box", "Box")
     box.Length = box.Width = box.Height = 26
     box.Placement.Base = App.Vector(30, -13, -13)
+    # FCWEB_LIGHT_LAYOUT=swap puts the box at the origin and moves the sphere instead.
+    # If a surface goes wrong when it moves, the normal matrix is picking up translation.
+    if os.environ.get("FCWEB_LIGHT_LAYOUT") == "swap":
+        box.Placement.Base = App.Vector(-13, -13, -13)
+        sph.Placement.Base = App.Vector(-40, 0, 0)
     doc.recompute()
 
     # FCWEB_LIGHT_VARIANT=diffuse strips the ambient and specular terms, leaving the pure
@@ -65,7 +70,8 @@ def build(App, Gui):
 def report(App, Gui, where):
     """What the renderer was asked to do, so a difference in the image can be attributed."""
     out = {"version": ".".join(App.Version()[0:3]), "where": where,
-           "variant": os.environ.get("FCWEB_LIGHT_VARIANT", "full")}
+           "variant": os.environ.get("FCWEB_LIGHT_VARIANT", "full"),
+           "layout": os.environ.get("FCWEB_LIGHT_LAYOUT", "default")}
     try:
         from pivy import coin
         v = Gui.activeDocument().activeView()
@@ -94,6 +100,39 @@ def report(App, Gui, where):
 
         walk(sg)
         out["lights"] = lights
+
+        # The box's own normals and coordinates, straight from its view provider's scene
+        # graph. Identical on both sides means the geometry is right and the difference is
+        # in how normals reach the GPU; different means FreeCAD built different normals.
+        box = App.ActiveDocument.getObject("Box")
+        found = {}
+
+        def grab(node, depth=0):
+            if depth > 10:
+                return
+            name = str(node.getTypeId().getName().getString())
+            if name == "Normal" and "normals" not in found:
+                n = coin.cast(node, "SoNormal")
+                found["normals"] = [[round(n.vector[i][k], 3) for k in range(3)]
+                                    for i in range(n.vector.getNum())]
+            if name == "Coordinate3" and "coords" not in found:
+                c = coin.cast(node, "SoCoordinate3")
+                found["coords"] = c.point.getNum()
+            if name in ("SoBrepFaceSet", "BrepFaceSet") and "faceset" not in found:
+                f = node
+                try:
+                    found["faceset"] = {"partIndex": [f.partIndex[i] for i in range(f.partIndex.getNum())],
+                                        "coordIndex_len": f.coordIndex.getNum()}
+                except Exception as exc:
+                    found["faceset"] = repr(exc)[:80]
+            if name == "NormalBinding" and "normalBinding" not in found:
+                found["normalBinding"] = int(coin.cast(node, "SoNormalBinding").value.getValue())
+            if hasattr(node, "getNumChildren"):
+                for i in range(node.getNumChildren()):
+                    grab(node.getChild(i), depth + 1)
+
+        grab(box.ViewObject.RootNode)
+        out["box_geometry"] = found
     except Exception as exc:  # pivy differs slightly between builds; the image still counts
         out["probe_error"] = repr(exc)[:200]
     return out
@@ -111,6 +150,14 @@ def main():
         os.makedirs(os.path.dirname(OUT + ".png") or ".", exist_ok=True)
         view.saveImage(OUT + ".png", SIZE[0], SIZE[1], "Current")
         info["image"] = OUT + ".png"
+        # saveImage renders offscreen, and there Coin adds a fourth light (a copy of the
+        # back light) that the live viewport never has (measured 2026-09-22). What a user
+        # sees is the live viewport, so grab that too, straight off the screen.
+        from PySide import QtGui
+        Gui.updateGui()
+        mw = Gui.getMainWindow()
+        QtGui.QApplication.primaryScreen().grabWindow(mw.winId()).save(OUT + "-live.png")
+        info["live_image"] = OUT + "-live.png"
     with open(OUT + ".json", "w") as fh:
         json.dump(info, fh)
     sys.__stderr__.write("LIGHTPROBE " + json.dumps(info) + "\n")

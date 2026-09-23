@@ -561,6 +561,100 @@ window.fcwebPrompt = function(title, text, deflt){
     }catch(e){ resolve(null); }
   });
 };
+// A 3D mouse through WebHID. Desktop FreeCAD reads the device in an OS backend
+// (src/Gui/3Dconnexion/) and hands six axis values to FreeCAD; fcweb_spaceball.cpp is that
+// hand-off for the browser, and this is the OS backend. The report parsing and the axis
+// convention are GuiNativeEventWin32.cpp's, since Windows reads the same raw HID reports:
+// report 1 carries translation (and, from a high-speed device, rotation too), report 2
+// rotation, report 3 the button bits; each processed report is scaled by the milliseconds
+// since the previous one and posted with X translation and X rotation negated (Move3d).
+// The device is picked once from Chrome's chooser (Customize > Spaceball, "Connect a 3D
+// mouse...") and reconnected on every boot after that, the way desktop finds it by itself.
+(function () {
+  if (!navigator.hid) { return; }
+  // Both vendors the Windows backend accepts, limited to the multi-axis controller usage
+  // so a CadMouse (an ordinary mouse from the same vendor) is not offered.
+  var FILTERS = [
+    { vendorId: 0x046d, usagePage: 0x01, usage: 0x08 },
+    { vendorId: 0x256f, usagePage: 0x01, usage: 0x08 },
+  ];
+  var open = new Set();
+  var axes = [0, 0, 0, 0, 0, 0], keys = 0, last = 0;
+  var call = function (name, args) {
+    var M = window.fcInstance;
+    if (M && typeof M[name] === 'function') { try { M[name].apply(null, args); } catch (e) {} }
+  };
+  var post = function () {
+    var now = performance.now(), dt;
+    if (!last) { dt = 10; } else { dt = now - last; if (dt < 1) { dt = 1; } else if (dt > 500) { dt = 10; } }
+    last = now;
+    var m = axes.map(function (a) { return Math.ceil(a * dt); });
+    call('_fcweb_spaceball_motion', [-m[0], m[1], m[2], -m[3], m[4], m[5]]);
+  };
+  var onReport = function (e) {
+    var d = e.data, n = d.byteLength;
+    // Windows zeroes the device while the application is not in the foreground.
+    if (!document.hasFocus()) { axes = [0, 0, 0, 0, 0, 0]; return; }
+    if (e.reportId === 1 && n >= 6) {
+      axes[0] = d.getInt16(0, true); axes[1] = d.getInt16(2, true); axes[2] = d.getInt16(4, true);
+      if (n >= 12) {
+        axes[3] = d.getInt16(6, true); axes[4] = d.getInt16(8, true); axes[5] = d.getInt16(10, true);
+        post();
+      }
+    } else if (e.reportId === 2 && n >= 6) {
+      axes[3] = d.getInt16(0, true); axes[4] = d.getInt16(2, true); axes[5] = d.getInt16(4, true);
+      post();
+    } else if (e.reportId === 3) {
+      var now = 0;
+      for (var i = 0; i < Math.min(n, 4); i++) { now |= d.getUint8(i) << (8 * i); }
+      var change = (now ^ keys) >>> 0;
+      for (var b = 0; b < 32; b++) {
+        if (change & (1 << b)) { call('_fcweb_spaceball_button', [b, (now >>> b) & 1]); }
+      }
+      keys = now >>> 0;
+    }
+  };
+  var attach = async function (dev) {
+    if (open.has(dev)) { return true; }
+    try { if (!dev.opened) { await dev.open(); } } catch (e) { return false; }
+    dev.addEventListener('inputreport', onReport);
+    open.add(dev);
+    call('_fcweb_spaceball_present', [1]);
+    return true;
+  };
+  var matches = function (dev) {
+    return FILTERS.some(function (f) {
+      return dev.vendorId === f.vendorId && (dev.collections || []).some(function (c) {
+        return c.usagePage === f.usagePage && c.usage === f.usage;
+      });
+    });
+  };
+  var reconnect = async function () {
+    try { (await navigator.hid.getDevices()).filter(matches).forEach(attach); } catch (e) {}
+  };
+  // Called from FreeCAD's Spaceball pages, inside the click that makes the chooser legal.
+  window.fcwebSpaceballConnect = async function () {
+    var picked = [];
+    try { picked = await navigator.hid.requestDevice({ filters: FILTERS }); } catch (e) {}
+    var ok = false;
+    for (var i = 0; i < picked.length; i++) { ok = (await attach(picked[i])) || ok; }
+    if (ok && typeof window.fcwebNotify === 'function') {
+      window.fcwebNotify((picked[0].productName || '3D mouse') + ' connected. Reopen this page to customise it.', 'info');
+    }
+    return ok;
+  };
+  navigator.hid.addEventListener('connect', function (e) { if (matches(e.device)) { attach(e.device); } });
+  navigator.hid.addEventListener('disconnect', function (e) {
+    if (!open.delete(e.device)) { return; }
+    axes = [0, 0, 0, 0, 0, 0];
+    if (!open.size) { call('_fcweb_spaceball_present', [0]); }
+  });
+  // After the engine is up: the exports have to exist before a device can be reported.
+  var iv = setInterval(function () {
+    if (window.__fcWorkReady && window.fcInstance) { clearInterval(iv); reconnect(); }
+  }, 1000);
+})();
+
 window.fcwebConfirm = function(title, text, buttonsPipe){
   return new Promise(function(resolve){
     try{
@@ -2291,6 +2385,47 @@ window.__fcPyBusy = window.__fcPyBusy || false;
 // Known limits of a sync XHR on the main thread, all inherited: no timeout (the browser
 // forbids it; the add-on's timeout= is ignored), redirects are followed by the browser
 // (Response.history stays empty), and Chrome logs a one-line deprecation notice.
+// FreeCAD's translations, one language at a time. Translator::supportedLocales lists a
+// language when any *_<code>.qm sits in one of its directories, and installQMFiles loads
+// them when the language is activated (src/Gui/Language/Translator.cpp). Desktop embeds
+// all of them; here that would be ~110 MB for every visitor, so the image carries them
+// as plain files (infra/Dockerfile, stage i18n) and this puts each one into the wasm
+// filesystem at <resourceDir>/translations with its real size and NO bytes. Listing the
+// directory costs nothing; the first read of a file fetches it, synchronously, because
+// QTranslator::load is a synchronous C++ call that cannot wait for a promise.
+window.__fcI18nInstall = function (FS, man) {
+  var dir = '/freecad/share/translations';   // App.getResourceDir() + 'translations', measured
+  try { FS.mkdirTree(dir); } catch (e) {}
+  var fetchSync = function (url) {
+    try {
+      var x = new XMLHttpRequest();
+      x.open('GET', url, false);
+      x.overrideMimeType('text/plain; charset=x-user-defined');   // bytes, via responseText
+      x.send(null);
+      if (x.status !== 200) { return new Uint8Array(0); }
+      var t = x.responseText, out = new Uint8Array(t.length);
+      for (var i = 0; i < t.length; i++) { out[i] = t.charCodeAt(i) & 255; }
+      return out;
+    } catch (e) { return new Uint8Array(0); }
+  };
+  Object.keys(man.files).forEach(function (name) {
+    var size = man.files[name], data = null, node;
+    try { node = FS.createFile(dir, name, null, true, false); } catch (e) { return; }
+    var url = 'i18n/' + encodeURIComponent(name) + '?v=' + encodeURIComponent(man.version);
+    // MEMFS sizes a file by usedBytes and reads node.contents, so those two are the lazy
+    // seam: stat answers from the manifest, and the first read pulls the bytes.
+    Object.defineProperty(node, 'usedBytes', {
+      configurable: true,
+      get: function () { return data ? data.length : size; },
+      set: function () {},
+    });
+    Object.defineProperty(node, 'contents', {
+      configurable: true,
+      get: function () { if (!data) { data = fetchSync(url); } return data; },
+      set: function (v) { data = v; },
+    });
+  });
+};
 window.__fcHttpDeviceInstall = function (FS) {   // on window: this block is an IIFE, the boot below is another
   function xhr(chunks){
     var total = 0, i; for (i = 0; i < chunks.length; i++) total += chunks[i].length;
@@ -2889,10 +3024,23 @@ window.fcRunPy = fcRunPy;
          containerElements: [screen],
        }
      };
+     // The translation manifest, before boot: preRun is synchronous and the files have to
+     // be listed before FreeCAD's Translator first scans. A missing or slow manifest (a
+     // local dev server has no i18n/) costs the languages, never the boot.
+     const __i18n = await Promise.race([
+       fetch('i18n/index.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).catch(() => null),
+       new Promise(r => setTimeout(() => r(null), 5000)),
+     ]);
      __cfg.preRun = [function () {
        try { window.__fcHttpDeviceInstall(__cfg.FS); }
        catch(e){ append('/dev/fcweb-http install failed: ' + e + ' (add-ons using requests will see connection errors)', 'err'); }
      }];
+     if (__i18n && __i18n.files) {
+       __cfg.preRun.push(function () {
+         try { window.__fcI18nInstall(__cfg.FS, __i18n); }
+         catch(e){ append('translations: ' + e, 'err'); }
+       });
+     }
      if (Object.keys(__siteFiles).length) {
        __cfg.preRun.push(function () {
          const F = __cfg.FS, dir = '/usr/local/lib/python3.13/site-packages';   // sys.prefix + site.getsitepackages()

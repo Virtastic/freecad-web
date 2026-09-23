@@ -124,6 +124,19 @@ const waitFile = async (p, f, ms) => {
   const pretty = (o) => JSON.stringify(Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [nm(+k), v])));
   console.log('  EMULATION enable():  ' + pretty(emuEn.enable));
   console.log('  EMULATION disable(): ' + pretty(emuEn.disable));
+  // The tail of the ordered trace: what happens around the last draws of the frame, which
+  // is where the sorted transparent pass runs.
+  // The window around Coin's own geometry draws (glDrawElements), which is where the
+  // sorted transparent pass lives. The tail of the trace is Qt's compositor.
+  const trace = await p.evaluate(() => {
+    const t = globalThis.__fcglTrace || [];
+    const idx = t.map((x, i) => [x, i]).filter(([x]) => /DrawElements/.test(x)).map(([, i]) => i);
+    if (!idx.length) return { draws: 0, window: [] };
+    const first = idx[Math.max(0, idx.length - 3)];
+    return { draws: idx.length, window: t.slice(Math.max(0, first - 30), first + 12) };
+  });
+  console.log('  TRACE around the last geometry draws (' + trace.draws + ' drawElements total):' + NL +
+    trace.window.map(x => '    ' + x).join(NL));
   console.log('  SHADER generations: ' + gen.generations + ', compiled: ' + gen.compiled + ', with a lighting pass: ' + gen.withLighting);
   console.log('  SHADER gen state: ' + JSON.stringify(gen.states));
   console.log('  SHADER sample:' + NL + gen.sample);

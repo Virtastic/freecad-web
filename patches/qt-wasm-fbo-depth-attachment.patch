@@ -1,0 +1,16 @@
+--- a/qtbase/src/opengl/qopenglframebufferobject.cpp
++++ b/qtbase/src/opengl/qopenglframebufferobject.cpp
+@@ -667,7 +667,12 @@
+     // WebGL doesn't allow separately attach buffers to
+     // STENCIL_ATTACHMENT and DEPTH_ATTACHMENT
+     // QTBUG-69913
+-    if (attachment == QOpenGLFramebufferObject::CombinedDepthStencil) {
++    // A Depth-only request gets the same combined buffer: without this it got nothing at
++    // all, and every FBO asking for Depth (FreeCAD's saveImage/Save Picture, its
++    // multisample viewport) rendered with no depth test. The result is reported as
++    // CombinedDepthStencil below, exactly as for an explicit combined request.
++    if (attachment == QOpenGLFramebufferObject::CombinedDepthStencil
++        || attachment == QOpenGLFramebufferObject::Depth) {
+         funcs.glGenRenderbuffers(1, &depth_buffer);
+         funcs.glBindRenderbuffer(GL_RENDERBUFFER, depth_buffer);
+         Q_ASSERT(funcs.glIsRenderbuffer(depth_buffer));
