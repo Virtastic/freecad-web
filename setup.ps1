@@ -16,7 +16,7 @@ param(
     [switch] $Build,
     [switch] $Pull,
     [int]    $Port    = $(if ($env:FCWEB_PORT) { $env:FCWEB_PORT } else { 8080 }),
-    [string] $Tag     = $(if ($env:FCWEB_RELEASE) { $env:FCWEB_RELEASE } else { 'v1.0.0' }),
+    [string] $Tag     = $(if ($env:FCWEB_RELEASE) { $env:FCWEB_RELEASE } else { 'v1.0.2' }),
     [string] $Repo    = $(if ($env:FCWEB_REPO) { $env:FCWEB_REPO } else { 'Virtastic/freecad-web' }),
     [string] $Image   = $(if ($env:FCWEB_IMAGE) { $env:FCWEB_IMAGE } else { 'ghcr.io/virtastic/freecad-web:1.0.0' })
 )

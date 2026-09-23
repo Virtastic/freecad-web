@@ -17,7 +17,7 @@
 set -eu
 
 REPO="${FCWEB_REPO:-Virtastic/freecad-web}"
-RELEASE="${FCWEB_RELEASE:-v1.0.0}"
+RELEASE="${FCWEB_RELEASE:-v1.0.2}"
 IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.0}"
 PORT="${FCWEB_PORT:-8080}"
 MODE=auto
