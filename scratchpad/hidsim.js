@@ -57,6 +57,30 @@ const cam = async (p) => {
   console.log('  camera ' + before + ' -> ' + after);
   ok(before && after && before !== after, 'report-1 rotation from the device turns the view');
   ok(logs.some((l) => /opened: 3Dconnexion Universal Receiver 256f:c652/.test(l)) && logs.some((l) => /first report id=1 bytes=12/.test(l)), 'the console says what was opened and what arrived');
+  // GitHub #2: a push after a pause must not throw the camera away. The SpaceMouse sends
+  // nothing at rest; the old code scaled the first report after a pause by the pause.
+  const h = async () => { for (let i = 0; i < 6; i++) { await p.evaluate(() => { try { window.fcInstance.FS.unlink('/tmp/h.txt'); } catch (e) {} });
+    await runPy(p, 'import FreeCADGui as Gui' + NL + 'c = Gui.ActiveDocument.ActiveView.getCamera()' + NL + 'import re' + NL + 'm = re.search(r"(height|heightAngle)[ ]+([-0-9.e]+)", c)' + NL + 'open("/tmp/h.txt","w").write(m.group(2) if m else "nan")'); await sl(1500);
+    const r = await p.evaluate(() => { try { return window.fcInstance.FS.readFile('/tmp/h.txt', { encoding: 'utf8' }); } catch (e) { return null; } }); if (r) return +r; } return null; };
+  const h0 = await h();
+  // A real SpaceMouse repeats its report every few ms while deflected and sends a zero
+  // report on release; nothing at rest. Short full push, then a long one.
+  const push = (ms, z) => p.evaluate(async (ms, z) => {
+    const send = (vals) => { const dv = new DataView(new ArrayBuffer(12)); vals.forEach((v, k) => dv.setInt16(k * 2, v, true)); const e = new Event('inputreport'); e.reportId = 1; e.data = dv; window.__fakeDev.dispatchEvent(e); };
+    await new Promise((r) => setTimeout(r, 400));   // at rest: nothing sent
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) { send([0, 0, z, 0, 0, 0]); await new Promise((r) => setTimeout(r, 8)); }
+    send([0, 0, 0, 0, 0, 0]);
+  }, ms, z);
+  await push(100, 350);
+  await sl(1500);
+  const h1 = await h();
+  await push(2000, -350);
+  await sl(1500);
+  const h2 = await h();
+  console.log('  camera height ' + h0 + ' -> ' + h1 + ' (100 ms full push) -> ' + h2 + ' (2 s full pull)');
+  ok(h0 && h1 && h1 / h0 < 3 && h0 / h1 < 3, 'a short full push after a pause zooms a little, not off the scale');
+  ok(h2 > 0 && isFinite(h2), 'a long full pull never inverts the camera (height stays positive)');
   // a silent device: paired, never reports
   const warned = await p.evaluate(async () => {
     const d = new EventTarget(); Object.assign(d, { productName: 'Silent Receiver', vendorId: 0x256f, productId: 0xc652, opened: false, collections: [] }); d.open = async () => { d.opened = true; };

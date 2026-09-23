@@ -1,0 +1,74 @@
+--- a/qtbase/src/plugins/platforms/wasm/qwasmwindowstack.cpp
++++ b/qtbase/src/plugins/platforms/wasm/qwasmwindowstack.cpp
+@@ -2,6 +2,9 @@
+ // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+ 
+ #include "qwasmwindowstack.h"
++#include "qwasmwindow.h"
++
++#include <QtGui/qwindow.h>
+ 
+ QT_BEGIN_NAMESPACE
+ 
+@@ -62,12 +65,9 @@
+ {
+     Q_ASSERT(m_windowStack.count(window) == 1);
+ 
+-    if (window == topWindow())
+-        return;
+-
+-    auto it = std::find(m_windowStack.begin(), m_windowStack.end(), window);
+-    auto itEnd = ([this, position = getWindowPositionPreference(it)]() {
+-        switch (position) {
++    // The end of the z-order zone a window may be raised within.
++    const auto zoneEnd = [this](StorageType::iterator it) {
++        switch (getWindowPositionPreference(it)) {
+         case PositionPreference::StayOnTop:
+             return m_windowStack.end();
+         case PositionPreference::Regular:
+@@ -75,9 +75,42 @@
+         case PositionPreference::StayOnBottom:
+             return m_regularWindowsBegin;
+         }
+-    })();
+-    std::rotate(it, it + 1, itEnd);
+-    m_windowOrderChangedCallback();
++        return m_windowStack.end();
++    };
++
++    bool changed = false;
++    if (window != topWindow()) {
++        auto it = std::find(m_windowStack.begin(), m_windowStack.end(), window);
++        std::rotate(it, it + 1, zoneEnd(it));
++        changed = true;
++    }
++
++    // A window's transient children (its dialogs, tool windows) stay above it, as every
++    // desktop window manager keeps them. Without this, clicking a main window buried its
++    // own non-modal dialog, and re-showing an already-visible dialog does not raise it, so
++    // the dialog was unreachable until the page reloaded. Raised bottom-to-top so the
++    // children keep their order among themselves.
++    const auto owns = [window](QWasmWindow *w) {
++        for (QWindow *t = w->window()->transientParent(); t; t = t->transientParent()) {
++            if (t == window->window())
++                return true;
++        }
++        return false;
++    };
++    const StorageType order = m_windowStack;
++    for (QWasmWindow *w : order) {
++        if (w == window || !owns(w))
++            continue;
++        auto it = std::find(m_windowStack.begin(), m_windowStack.end(), w);
++        auto end = zoneEnd(it);
++        if (it + 1 != end) {
++            std::rotate(it, it + 1, end);
++            changed = true;
++        }
++    }
++
++    if (changed)
++        m_windowOrderChangedCallback();
+ }
+ 
+ void QWasmWindowStack::lower(QWasmWindow *window)
