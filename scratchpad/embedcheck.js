@@ -20,11 +20,13 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
   while (Date.now() - t < 420000 && !(await p.evaluate(() => window.readyAt))) await sl(1500);
   ok(await p.evaluate(() => window.readyAt) > 0, 'the frame boots and announces ready (' + Math.round((Date.now() - t) / 1000) + ' s)');
   const ask = async (m) => {
-    const id = Math.random().toString(36).slice(2); await p.evaluate((m) => window.send(m), Object.assign({ id }, m));
+    const id = Math.random().toString(36).slice(2); const raw = m.data ? Array.from(new Uint8Array(m.data)) : null; await p.evaluate((m, raw) => { if (raw) m.data = new Uint8Array(raw).buffer; window.send(m); }, Object.assign({ id }, m, { data: undefined }), raw);
     for (let i = 0; i < 240; i++) { const r = await p.evaluate((id) => { const x = window.results.find((r) => r.id === id); return x ? { ok: x.ok, value: x.value, error: x.error, bytes: x.data ? x.data.byteLength : 0, head: x.data ? Array.from(new Uint8Array(x.data).slice(0, 5)) : null, size: x.data && x.data.byteLength > 84 ? (() => { const dv = new DataView(x.data), n = dv.getUint32(80, true), lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; for (let t = 0; t < n; t++) for (let v = 0; v < 3; v++) for (let k = 0; k < 3; k++) { const f = dv.getFloat32(84 + t * 50 + 12 + v * 12 + k * 4, true); lo[k] = Math.min(lo[k], f); hi[k] = Math.max(hi[k], f); } return hi.map((h, k) => +(h - lo[k]).toFixed(3)); })() : null } : null; }, id); if (r) return r; await sl(500); }
     return { ok: false, error: 'no reply' };
   };
-  const o = await ask({ fcweb: 'open', url: 'param.FCStd', name: 'param.FCStd' });
+  // A cross-origin frame cannot fetch the host's files by relative URL, so pass the bytes.
+  const bytes = await p.evaluate(async () => Array.from(new Uint8Array(await (await fetch('param.FCStd')).arrayBuffer())));
+  const o = await ask({ fcweb: 'open', data: new Uint8Array(bytes).buffer, name: 'param.FCStd' });
   ok(o.ok, 'open a parametric model by URL: ' + JSON.stringify(o));
   const s = await ask({ fcweb: 'set', sheet: 'Spreadsheet', cell: 'A1', value: '40' });
   ok(s.ok && /^40/.test(String(s.value)), 'set the driving cell to 40: ' + JSON.stringify(s));
