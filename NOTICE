@@ -76,6 +76,23 @@ Anyone redistributing this application should confirm that arrangement against t
 own legal advice rather than relying on this note.
 
 ================================================================================
+Loaded in the page only when a 3D mouse is connected
+================================================================================
+
+3DconnexionJS 0.8.1     3Dconnexion SDK license (proprietary)
+                        https://3dconnexion.com/service/software-developer/licence-agreement.html
+AutobahnJS              MIT, (c) 2011-2014 Tavendo GmbH           https://autobahn.ws
+when.js                 MIT, (c) B Cavalier & J Hann (in AutobahnJS) https://github.com/cujojs/when
+CryptoJS 4.2.0          MIT, (c) 2009-2013 Jeff Mott, 2013-2016 Evan Vosberg
+                                                                  https://github.com/brix/crypto-js
+
+These ship as play-gui/3dx/3dconnexion.min.js and play-gui/3dx/autobahn.min.js,
+unmodified, each keeping its original @license header. They are not covered by this
+repository's LGPL license. 3D input device development tools and related technology
+are provided under license from 3Dconnexion. (c) 3Dconnexion 1992 - 2025. All rights
+reserved. The MIT license text is in LICENSES/MIT.txt.
+
+================================================================================
 Qt licensing
 ================================================================================
 
