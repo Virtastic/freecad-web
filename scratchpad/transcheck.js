@@ -115,9 +115,11 @@ const SCENE = [
   // CSS pixels and scaled. Getting this wrong samples the tree view and reads as "opaque".
   const k = png.width / 1400;
   const box = (x, y, w, h) => patch(png, Math.round(x * k), Math.round(y * k), Math.round(w * k), Math.round(h * k));
-  const overlap = box(700, 420, 90, 90);   // plate where it covers the red box
-  const alone = box(620, 700, 80, 70);     // plate over empty background
-  const red = box(960, 560, 90, 80);       // the red box beside the plate
+  // Positions for FreeCAD's layout WITH its status bar, as desktop has it (the web build hid
+  // the status bar until 2026-09-23, which made the 3D view 34 px taller).
+  const overlap = box(720, 420, 60, 60);   // plate where it covers the red box
+  const alone = box(570, 420, 60, 60);     // plate over empty background
+  const red = box(920, 560, 60, 60);       // the red box beside the plate
   console.log('  screenshot ' + png.width + 'x' + png.height + ' (scale ' + k + ')');
   console.log('  green over red: ' + JSON.stringify(overlap));
   console.log('  green over background: ' + JSON.stringify(alone));

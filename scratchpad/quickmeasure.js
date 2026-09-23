@@ -29,7 +29,7 @@ const STATE = ['import FreeCADGui as Gui, json, sys', 'from PySide import QtWidg
   await sl(8000);
   console.log('  at boot: ' + JSON.stringify(await ask(p, STATE)));
   await runPy(p, ['import FreeCAD as App, FreeCADGui as Gui', 'd = App.newDocument("Q")', 'c = d.addObject("Part::Cylinder", "C"); c.Radius = 5; c.Height = 20', 'd.recompute()',
-    'v = Gui.ActiveDocument.ActiveView', 'v.viewTop(); v.fitAll(); Gui.updateGui()'].join(NL));
+    'v = Gui.ActiveDocument.ActiveView', 'v.viewTop(); v.fitAll(); Gui.updateGui()', ...(process.env.FORCE_SB ? ['Gui.getMainWindow().statusBar().show()'] : [])].join(NL));
   await sl(5000);
   // find a pixel on the cylinder's top circular edge from FreeCAD's own picking, then click it
   const pick = await ask(p, ['import FreeCADGui as Gui, json', 'v = Gui.ActiveDocument.ActiveView', 'w, h = v.getSize()', 'hit = None',
