@@ -39,7 +39,7 @@ env:
   # scratchpad/transcheck.js, which measures how much of a red box shows through a 70%
   # transparent plate: 4 before, 78 after. The pin stays: a publish from a green link
   # must still not become production on the next push. Moving it is a commit, on purpose.
-  FCWEB_PINNED_RELEASE: v1.0.2
+  FCWEB_PINNED_RELEASE: v1.0.3
 
 concurrency:
   group: deploy-ovh-freecad

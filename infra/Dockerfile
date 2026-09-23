@@ -69,6 +69,8 @@ COPY LICENSES /usr/share/nginx/html/LICENSES/
 # shadowed onto sys.path at boot (see the loader in freecad-gui.html). Plain files so a
 # change is an image rebuild, not a ~2 h relink.
 COPY play-gui/am /usr/share/nginx/html/am/
+# 3Dconnexion's JavaScript client, loaded only when a user connects a 3D mouse (legal.html).
+COPY play-gui/3dx /usr/share/nginx/html/3dx/
 # The compiled translations from the i18n stage above.
 COPY --from=i18n /i18n /usr/share/nginx/html/i18n/
 COPY play-gui/manifest.webmanifest play-gui/sw.js play-gui/icon-192.png play-gui/icon-512.png /usr/share/nginx/html/

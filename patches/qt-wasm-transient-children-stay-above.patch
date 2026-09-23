@@ -1,0 +1,32 @@
+--- a/qtbase/src/plugins/platforms/wasm/qwasmwindow.cpp
++++ b/qtbase/src/plugins/platforms/wasm/qwasmwindow.cpp
+@@ -1011,7 +1011,12 @@
+     if (isModal())
+         return true;
+ 
+-    if (flags.testFlag(Qt::Tool) ||
++    // A dialog stays above the window that owns it, as every desktop window manager keeps
++    // it. Without Qt::Dialog here, clicking a main window buried its own non-modal dialog
++    // (FreeCAD's Tools > Customize), and showing an already-visible dialog does not raise
++    // it, so it was unreachable until the page reloaded.
++    if (flags.testFlag(Qt::Dialog) ||
++        flags.testFlag(Qt::Tool) ||
+         flags.testFlag(Qt::SplashScreen) ||
+         flags.testFlag(Qt::ToolTip) ||
+         flags.testFlag(Qt::Popup))
+--- a/qtbase/src/plugins/platforms/wasm/qwasmwindowstack.inc
++++ b/qtbase/src/plugins/platforms/wasm/qwasmwindowstack.inc
+@@ -340,7 +340,12 @@
+ template <typename Window>
+ bool QWasmWindowStack<Window>::shouldBeAboveTransientParentFlags(Qt::WindowFlags flags) const
+ {
+-    if (flags.testFlag(Qt::Tool) ||
++    // A dialog stays above the window that owns it, as every desktop window manager keeps
++    // it. Without Qt::Dialog here, clicking a main window buried its own non-modal dialog
++    // (FreeCAD's Tools > Customize), and showing an already-visible dialog does not raise
++    // it, so it was unreachable until the page reloaded.
++    if (flags.testFlag(Qt::Dialog) ||
++        flags.testFlag(Qt::Tool) ||
+         flags.testFlag(Qt::SplashScreen) ||
+         flags.testFlag(Qt::ToolTip) ||
+         flags.testFlag(Qt::Popup))

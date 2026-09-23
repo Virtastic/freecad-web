@@ -64,7 +64,9 @@ FC_GEN="$ROOT/build-freecad-gui-weh/src"
 # PyCXX moved to src/3rdParty/PyCXX in 1.1 (QuantityPy.h includes <CXX/Objects.hxx>); Boost for Base/Exception.h.
 QTCONVFLAGS="-std=c++20 $PYFLAGS -I$SBK_SRC -I$SBK_GEN -I$FC_SRC -I$FC_SRC/3rdParty/PyCXX -I$FC_GEN -I$FC_GEN/.. -I$ROOT/deps/wasm/include -I$QT/include -I$QT/include/QtCore -DFC_OS_LINUX -DHAVE_CONFIG_H"
 # fcweb_spaceball.cpp calls into FreeCAD's Gui application class, which is a QApplication.
-FCGUIFLAGS="-std=c++20 -I$FC_SRC -I$QT/include -I$QT/include/QtCore -I$QT/include/QtGui -I$QT/include/QtWidgets"
+# The navlib half reads the active view's Coin camera, so it needs FreeCAD's Gui headers in
+# full: generated headers, fmt (Base/Console.h), Python and Coin, as fcweb_qtconv does.
+FCGUIFLAGS="$QTCONVFLAGS -I$ROOT/build-freecad-gui-weh/_deps/fmt-src/include -I$QT/include/QtGui -I$QT/include/QtWidgets -I$QT/include/QtOpenGL -I$QT/include/QtOpenGLWidgets"
 echo "  shiboken:       $SBK_SRC (+ $SBK_GEN)"
 echo "  freecad:        $FC_SRC (+ generated $FC_GEN)"
 echo "  python include: $PYINC"
