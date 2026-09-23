@@ -236,10 +236,10 @@ document.addEventListener('DOMContentLoaded', function () {
 <div id="wall" role="alert">
   <div class="w-inner">
     <p class="w-brand">freecad-web by Virtastic</p>
-    <h1 class="w-title" id="w-title">This needs Chrome or Edge on a desktop.</h1>
+    <h1 class="w-title" id="w-title">This needs Chrome, Edge or Firefox on a desktop.</h1>
     <p class="w-seen" id="w-seen"></p>
     <p class="w-why" id="w-why">FreeCAD-Web runs the whole application inside your browser and depends on
-      JavaScript Promise Integration, which only Chromium ships today. Nothing has been downloaded.</p>
+      JavaScript Promise Integration, which Chrome and Edge 137 and Firefox 153 ship. Nothing has been downloaded.</p>
     <div class="w-btns" id="w-btns-desktop">
       <a href="https://www.google.com/chrome/" target="_blank" rel="noopener">Get Chrome</a>
       <a href="https://www.microsoft.com/edge" target="_blank" rel="noopener">Get Edge</a>
@@ -247,7 +247,7 @@ document.addEventListener('DOMContentLoaded', function () {
     <div class="w-btns" id="w-btns-mobile" hidden>
       <button type="button" id="w-copy">Copy this link</button>
     </div>
-    <p class="w-foot">Chrome or Edge 137 and later. Firefox and Safari will work the day they ship JSPI.<br>
+    <p class="w-foot">Chrome or Edge 137 and later, or Firefox 153 and later. Safari will work the day it ships JSPI.<br>
       <a href="https://virtastic.app" target="_blank" rel="noopener">virtastic.app</a> &middot;
       <a href="https://github.com/Virtastic/freecad-web" target="_blank" rel="noopener">Source</a></p>
   </div>
@@ -591,8 +591,13 @@ window.fcwebPrompt = function(title, text, deflt){
     var m = axes.map(function (a) { return Math.ceil(a * dt); });
     call('_fcweb_spaceball_motion', [-m[0], m[1], m[2], -m[3], m[4], m[5]]);
   };
+  var seen = false;
   var onReport = function (e) {
     var d = e.data, n = d.byteLength;
+    if (!seen) {
+      seen = true;
+      try { console.info('[fcweb] 3D mouse: first report id=' + e.reportId + ' bytes=' + n); } catch (x) {}
+    }
     // Windows zeroes the device while the application is not in the foreground.
     if (!document.hasFocus()) { axes = [0, 0, 0, 0, 0, 0]; return; }
     if (e.reportId === 1 && n >= 6) {
@@ -620,7 +625,28 @@ window.fcwebPrompt = function(title, text, deflt){
     dev.addEventListener('inputreport', onReport);
     open.add(dev);
     call('_fcweb_spaceball_present', [1]);
+    // What the device says it sends, for bug reports: a paired device that never sends an
+    // input report is the one failure that is otherwise completely silent.
+    try {
+      console.info('[fcweb] 3D mouse opened: ' + dev.productName + ' ' + dev.vendorId.toString(16) + ':' + dev.productId.toString(16) +
+        ' collections=' + JSON.stringify((dev.collections || []).map(function (c) {
+          return [c.usagePage, c.usage, (c.inputReports || []).map(function (r) { return r.reportId; })];
+        })));
+    } catch (x) {}
     return true;
+  };
+  // Connected but silent. The usual reason is 3Dconnexion's own driver (3DxWare): when it
+  // is installed it takes the device for itself and the browser receives nothing, which
+  // is documented for macOS (CloudCompare PR #2339). Say so instead of failing quietly.
+  var watchSilence = function (name) {
+    seen = false;
+    setTimeout(function () {
+      if (seen || !open.size || typeof window.fcwebNotify !== 'function') { return; }
+      window.fcwebNotify(name + ' is connected, but no movement has reached the browser. If the 3Dconnexion ' +
+        'driver (3DxWare) is installed, it keeps the device to itself: quit 3DxWare, then unplug the ' +
+        'receiver, plug it back in and connect again. Also click in the 3D view first; like desktop ' +
+        'FreeCAD, the 3D mouse moves the view that has focus.', 'warn');
+    }, 15000);
   };
   var matches = function (dev) {
     return FILTERS.some(function (f) {
@@ -639,7 +665,9 @@ window.fcwebPrompt = function(title, text, deflt){
     var ok = false;
     for (var i = 0; i < picked.length; i++) { ok = (await attach(picked[i])) || ok; }
     if (ok && typeof window.fcwebNotify === 'function') {
-      window.fcwebNotify((picked[0].productName || '3D mouse') + ' connected. Reopen this page to customise it.', 'info');
+      window.fcwebNotify((picked[0].productName || '3D mouse') + ' connected. Click in the 3D view and move it; ' +
+        'reopen this page to customise it.', 'info');
+      watchSilence(picked[0].productName || 'The 3D mouse');
     }
     return ok;
   };
@@ -5775,7 +5803,7 @@ window.fcRunPy = fcRunPy;
       if (title) title.textContent = 'This needs a desktop or laptop.';
       if (seen) seen.textContent = 'You are on a phone or tablet.';
       if (whyEl) whyEl.textContent = 'FreeCAD-Web is the full desktop application running inside your browser. ' +
-        'It needs a big screen, a mouse and a lot of memory, and only Chrome or Edge 137 and later on a desktop can run it. ' +
+        'It needs a big screen, a mouse and a lot of memory, and Chrome, Edge or Firefox on a desktop to run it. ' +
         'Nothing has been downloaded.';
       var bd = document.getElementById('w-btns-desktop'); if (bd) bd.hidden = true;
       var bm = document.getElementById('w-btns-mobile'); if (bm) bm.hidden = false;
@@ -5788,8 +5816,21 @@ window.fcRunPy = fcRunPy;
     } else {
       if (seen) seen.textContent = 'You are on ' + describe() + '.';
       if (why === 'sab') {
-        if (whyEl) whyEl.textContent = 'This page was served without cross-origin isolation, so the browser will not give it shared memory. ' +
-          'If you are self-hosting, the nginx.conf in the repository sets the two headers needed. Nothing has been downloaded.';
+        // Not a browser problem, so no "Get Chrome": the browser is fine, the page it was
+        // served in is not isolated. In a frame that is almost always the EMBEDDING page
+        // (GitHub #3: a reporter on Chrome was told to get Chrome).
+        var framed = false;
+        try { framed = window.self !== window.top; } catch (e) { framed = true; }
+        var bd2 = document.getElementById('w-btns-desktop'); if (bd2) bd2.hidden = true;
+        if (title) title.textContent = framed ? 'The page embedding FreeCAD is not cross-origin isolated.'
+                                              : 'This page is not cross-origin isolated.';
+        if (whyEl) whyEl.textContent = framed
+          ? 'FreeCAD needs shared memory, and a browser only allows it inside a frame when the page around it ' +
+            'sends Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp, ' +
+            'and the iframe has allow="cross-origin-isolated". Add those to the embedding page. Nothing has been downloaded.'
+          : 'The browser will only give this page shared memory when it is served with ' +
+            'Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp. ' +
+            'If you are self-hosting, the nginx.conf in the repository sets both. Nothing has been downloaded.';
       } else if (why === 'webgl2') {
         if (whyEl) whyEl.textContent = 'WebGL2 is unavailable, usually because hardware acceleration is turned off in the browser settings. ' +
           'Nothing has been downloaded.';
