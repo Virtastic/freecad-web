@@ -9,6 +9,11 @@ your tab.
 [![Join us on Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PzFfDkbSue)
 &nbsp;Questions, bugs, feature requests, or just want to show what you built? **[Come talk to us on Discord.](https://discord.gg/PzFfDkbSue)**
 
+[![Support on Patreon](https://img.shields.io/badge/Patreon-support-F96854?logo=patreon&logoColor=white)](https://www.patreon.com/virtastic)
+[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-buy%20us%20a%20coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/virtastic)
+[![YouTube](https://img.shields.io/badge/YouTube-Virtastic-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@Virtastic-Apps)
+[![Reddit](https://img.shields.io/badge/Reddit-r%2Fvirtastic-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/virtastic)
+
 [![A 42 MB 3D printer assembly open in freecad-web](docs/images/project-42mb.png)](https://freecad.virtastic.app)
 
 <sub>A real 42 MB project, 34 top-level parts, opened from the browser: GA3Dtech's open-hardware
@@ -223,7 +228,17 @@ shell in [play-gui/](play-gui/), and the verification harnesses in `scratchpad/`
 - **Discord:** <https://discord.gg/PzFfDkbSue>. The fastest way to get help, report something odd, or
   see what is coming next.
 - **Bugs and feature requests:** [GitHub issues](https://github.com/Virtastic/freecad-web/issues).
+- **YouTube:** [Virtastic](https://www.youtube.com/@Virtastic-Apps), with demos and walkthroughs.
+- **Reddit:** [r/virtastic](https://www.reddit.com/r/virtastic).
+- **LinkedIn:** [Virtastic](https://www.linkedin.com/company/virtastic).
 - **More from Virtastic:** other desktop software running in the browser, at <https://virtastic.app>.
+
+## Support the project
+
+freecad-web is built and hosted by [Virtastic](https://virtastic.app). If it is useful to you,
+you can support us on [Ko-fi](https://ko-fi.com/virtastic) or
+[Patreon](https://www.patreon.com/virtastic). It pays for the servers and the development time.
+Nothing is behind a paywall: every workbench is free to everyone, and no tier buys a feature.
 
 ## License
 
