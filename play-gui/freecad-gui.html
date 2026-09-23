@@ -708,6 +708,15 @@ window.fcwebPrompt = function(title, text, deflt){
   };
   // Called from FreeCAD's Spaceball pages, inside the click that makes the chooser legal.
   window.fcwebSpaceballConnect = async function () {
+    // The driver first: if 3DxWare is running it owns the device and WebHID would pair a
+    // device that never reports. Kept short so the click still counts as a user gesture
+    // for the WebHID chooser below when there is no driver.
+    if (typeof window.__fc3dxDriver === 'function' && await window.__fc3dxDriver(2000)) {
+      if (typeof window.fcwebNotify === 'function') {
+        window.fcwebNotify('3D mouse connected through the 3Dconnexion driver. Reopen this page to customise it.', 'info');
+      }
+      return true;
+    }
     var picked = [];
     try { picked = await navigator.hid.requestDevice({ filters: FILTERS }); } catch (e) {}
     var ok = false;
@@ -849,6 +858,146 @@ window.fcwebPrompt = function(title, text, deflt){
     var out = '/tmp/fcembed-ui.json';
     py(['import FreeCADGui as Gui, json'].concat(HIDE).concat(['open(' + J(out) + ', "w").write(json.dumps({"ok": True}))']).join('\n'), out).then(go);
   }, 500);
+})();
+
+// 3D mouse through 3Dconnexion's driver (GitHub #2). When 3DxWare is installed it owns the
+// device and WebHID receives nothing, so desktop FreeCAD talks to the driver's navlib
+// instead (src/Gui/3Dconnexion/navlib/). The browser reaches the same navlib through
+// 3Dconnexion's JavaScript client (3dx/3dconnexion.min.js, 3DxWare SDK, used under the
+// 3Dconnexion SDK licence; attribution in legal.html), which connects to the driver on
+// the loopback address. Its property reads and writes are answered by fcweb_nl_* in
+// fcweb_spaceball.cpp, a port of desktop's NavlibNavigation.cpp / NavlibPivot.cpp.
+//
+// Nothing here runs, and the driver is never contacted, until the user asks for a 3D
+// mouse; after one successful connection it reconnects on later visits.
+(function () {
+  var KEY = 'fcweb3dxDriver';
+  var M = function () { return window.fcInstance; };
+  var have = function () { var m = M(); return m && typeof m._fcweb_nl_read === 'function'; };
+  var rd = function (prop) {
+    var m = M(), n = m._fcweb_nl_read(prop);
+    if (n < 0) { return undefined; }
+    var out = [];
+    for (var i = 0; i < n; i++) { out.push(m._fcweb_nl_buf(i)); }
+    return out;
+  };
+  var wr = function (prop, v) {
+    var a = [prop];
+    for (var i = 0; i < 16; i++) { a.push(+(v && v[i]) || 0); }
+    return M()._fcweb_nl_write.apply(null, a);
+  };
+  var flag = function (prop) { var r = rd(prop); return r ? r[0] === 1 : undefined; };
+  var sm = null, created = false, animating = false, lastView = 0, loading = null;
+
+  var client = {
+    // NavlibInterface::GetCoordinateSystem / GetFrontView: FreeCAD is Z-up.
+    getCoordinateSystem: function () { return [1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1]; },
+    getFrontView: function () { return [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1]; },
+    getUnitsToMeters: function () { return 0.001; },
+    getViewMatrix: function () { return rd(0); },
+    getViewExtents: function () { return rd(1); },
+    getPerspective: function () { return flag(2); },
+    getViewFrustum: function () { return rd(3); },
+    getModelExtents: function () { return rd(4); },
+    getSelectionEmpty: function () { var e = flag(5); return e === undefined ? true : e; },
+    getSelectionExtents: function () { return rd(6); },
+    getLookAt: function () { return rd(7); },
+    getViewRotatable: function () { return !!flag(8); },
+    getFrameTime: function () { return performance.now(); },
+    setViewMatrix: function (d) { return wr(0, d); },
+    setViewExtents: function (d) { return wr(1, d); },
+    setLookFrom: function (d) { return wr(10, d); },
+    setLookDirection: function (d) { return wr(11, d); },
+    setLookAperture: function (d) { return wr(12, [d]); },
+    setSelectionOnly: function (d) { return wr(13, [d ? 1 : 0]); },
+    setPivotPosition: function (d) { return wr(14, d); },
+    setPivotVisible: function (d) { return wr(15, [d ? 1 : 0]); },
+    setTransaction: function () { return 0; },
+    // Motion frames, the pattern of the SDK's own samples: while the device moves, each
+    // animation frame opens a navlib transaction with its time.
+    onStartMotion: function () {
+      if (animating) { return; }
+      animating = true;
+      var frame = function (time) {
+        if (!animating || !sm) { return; }
+        sm.update3dcontroller({ frame: { time: time } })
+          .then(function () { requestAnimationFrame(frame); },
+                function () { animating = false; });
+      };
+      requestAnimationFrame(frame);
+    },
+    onStopMotion: function () { animating = false; },
+    onConnect: function () { sm.create3dmouse(window, 'FreeCAD'); },
+    on3dmouseCreated: function () {
+      created = true;
+      try { localStorage.setItem(KEY, '1'); } catch (e) {}
+      try { M()._fcweb_spaceball_present(1); } catch (e) {}
+      pushView();
+      try { console.info('[fcweb] 3D mouse: connected to the 3Dconnexion driver (navlib)'); } catch (e) {}
+    },
+    onDisconnect: function (reason) {
+      created = false; animating = false; sm = null;
+      try { console.info('[fcweb] 3D mouse: 3Dconnexion driver disconnected: ' + reason); } catch (e) {}
+    },
+  };
+
+  // NavlibInterface::onViewChanged: a new active view announces its model and camera.
+  var pushView = function () {
+    if (!created || !sm || !have()) { return; }
+    var id = M()._fcweb_nl_view_id();
+    if (id === lastView) { return; }
+    lastView = id;
+    var upd = {};
+    var ext = rd(4), aff = rd(0);
+    if (ext) { upd['model.extents'] = ext; }
+    if (aff) { upd['view.affine'] = aff; }
+    if (Object.keys(upd).length) { sm.update3dcontroller(upd).catch(function () {}); }
+  };
+  setInterval(pushView, 500);
+
+  var loadScript = function (src) {
+    return new Promise(function (ok, bad) {
+      var s = document.createElement('script');
+      s.src = src; s.async = true; s.onload = ok; s.onerror = bad;
+      document.head.appendChild(s);
+    });
+  };
+  var loadSdk = function () {
+    if (!loading) {
+      loading = loadScript('3dx/autobahn.min.js').then(function () { return loadScript('3dx/3dconnexion.min.js'); });
+    }
+    return loading;
+  };
+
+  // Resolves true once the driver has accepted this page as a 3D view, false if there is
+  // no driver (nothing answers on its loopback port) within the time allowed.
+  window.__fc3dxDriver = function (waitMs) {
+    if (created) { return Promise.resolve(true); }
+    if (!have()) { return Promise.resolve(false); }
+    return loadSdk().then(function () {
+      if (typeof window._3Dconnexion !== 'function') { return false; }
+      if (!sm) {
+        sm = new window._3Dconnexion(client);
+        try { sm.connect(); } catch (e) { sm = null; return false; }
+      }
+      return new Promise(function (ok) {
+        var t0 = Date.now();
+        var iv = setInterval(function () {
+          if (created) { clearInterval(iv); ok(true); }
+          else if (Date.now() - t0 > (waitMs || 2500)) { clearInterval(iv); ok(false); }
+        }, 100);
+      });
+    }, function () { return false; });
+  };
+
+  // Reconnect on later visits, once the engine is up.
+  var boot = setInterval(function () {
+    if (!window.__fcWorkReady || !have()) { return; }
+    clearInterval(boot);
+    var used = false;
+    try { used = localStorage.getItem(KEY) === '1'; } catch (e) {}
+    if (used) { window.__fc3dxDriver(8000); }
+  }, 1000);
 })();
 
 window.fcwebConfirm = function(title, text, buttonsPipe){
