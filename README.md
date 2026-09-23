@@ -6,6 +6,9 @@ your tab.
 
 👉 **<https://freecad.virtastic.app>**
 
+[![Join us on Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PzFfDkbSue)
+&nbsp;Questions, bugs, feature requests, or just want to show what you built? **[Come talk to us on Discord.](https://discord.gg/PzFfDkbSue)**
+
 [![A 42 MB 3D printer assembly open in freecad-web](docs/images/project-42mb.png)](https://freecad.virtastic.app)
 
 <sub>A real 42 MB project, 34 top-level parts, opened from the browser: GA3Dtech's open-hardware
@@ -214,6 +217,13 @@ The vendored source trees (`deps/`), toolchains (`emsdk/`, `qt/`) and build outp
 gitignored. What this repository holds is everything needed to *recreate* them: the patch set
 in [patches/](patches/), the configure and build scripts, the link commands, the front-end
 shell in [play-gui/](play-gui/), and the verification harnesses in `scratchpad/`.
+
+## Community
+
+- **Discord:** <https://discord.gg/PzFfDkbSue>. The fastest way to get help, report something odd, or
+  see what is coming next.
+- **Bugs and feature requests:** [GitHub issues](https://github.com/Virtastic/freecad-web/issues).
+- **More from Virtastic:** other desktop software running in the browser, at <https://virtastic.app>.
 
 ## License
 
