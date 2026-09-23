@@ -40,7 +40,9 @@ const STATE = ['import FreeCADGui as Gui, json, sys', 'from PySide import QtWidg
   console.log('  pick: ' + JSON.stringify(pick));
   if (pick && pick.hit) {
     // viewer y is from the bottom in getObjectInfo coordinates? getObjectInfo takes window coords (y down)
-    await p.mouse.click(pick.origin[0] + pick.hit[0], pick.origin[1] + pick.hit[1]); await sl(2500);
+    // FreeCAD's window starts where #screen starts (the hosted site puts a 40 px bar above it).
+    const off = await p.evaluate(() => { const r = document.getElementById('screen').getBoundingClientRect(); return [r.left, r.top]; });
+    await p.mouse.click(off[0] + pick.origin[0] + pick.hit[0], off[1] + pick.origin[1] + pick.hit[1]); await sl(2500);
   }
   const s = await ask(p, STATE);
   console.log('  after clicking the edge: ' + JSON.stringify(s));
