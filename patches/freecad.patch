@@ -1666,15 +1666,6 @@ diff -ruNp a/src/Gui/InputField.cpp b/src/Gui/InputField.cpp
 diff -ruNp a/src/Gui/MainWindow.cpp b/src/Gui/MainWindow.cpp
 --- a/src/Gui/MainWindow.cpp
 +++ b/src/Gui/MainWindow.cpp
-@@ -341,7 +341,7 @@ MainWindow::MainWindow(QWidget* parent,
-     d->whatsthis = false;
-     d->assistant = new Assistant();
- 
--#if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
-+#if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)) && !defined(__EMSCRIPTEN__)
-     // this forces QT to switch to OpenGL mode, this prevents delay and flickering of the window
-     // after opening project and prevent issues with double initialization of the window
-     //
 @@ -2049,6 +2049,13 @@ void MainWindow::saveWindowSettings(bool
  
  void MainWindow::startSplasher()
