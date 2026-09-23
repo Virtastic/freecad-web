@@ -655,6 +655,126 @@ window.fcwebPrompt = function(title, text, deflt){
   }, 1000);
 })();
 
+// Embedding: FreeCAD in an <iframe>, driven by the page around it (GitHub #3). The
+// embedder loads a model, sets its parameters, and asks for an export; FreeCAD does the
+// work with its own document, recompute and exporters. Nothing here models geometry.
+//
+//   <iframe src="https://<host>/?embed=1" allow="cross-origin-isolated"></iframe>
+//   (the embedding page must itself send COOP same-origin + COEP require-corp, or the
+//    frame gets no SharedArrayBuffer and cannot start)
+//
+// Messages to the frame, each with an `id` echoed in the reply:
+//   {fcweb:'open',   id, url | data:ArrayBuffer, name?}         open an .FCStd
+//   {fcweb:'set',    id, object, property, value}               e.g. Box.Length = 40
+//   {fcweb:'set',    id, sheet, cell, value}                    e.g. Spreadsheet A1
+//   {fcweb:'export', id, format:'stl'|'step'|'fcstd', objects?} -> reply carries data
+// Replies: {fcweb:'result', id, ok, value?, data?, error?}; {fcweb:'ready'} once at boot.
+// ?embed=1 hides FreeCAD's menus, toolbars, docks and status bar, leaving the 3D view.
+(function () {
+  if (window.parent === window) { return; }
+  var embed = /[?&]embed=1\b/.test(location.search);
+  var queue = [], running = false, seq = 0;
+  var reply = function (src, origin, msg, transfer) {
+    try { src.postMessage(msg, origin === 'null' ? '*' : origin, transfer || []); } catch (e) {}
+  };
+  var fs = function () { return window.fcInstance && window.fcInstance.FS; };
+  // One Python job at a time: a page Python call is a no-op while another runs, so wait
+  // for the interpreter to be free, then poll for the job's answer file.
+  var py = function (code, out) {
+    return new Promise(function (resolve) {
+      var t0 = Date.now(), sent = false;
+      var tick = function () {
+        var F = fs();
+        if (!sent && !window.__fcPyBusy) {
+          try { F.unlink(out); } catch (e) {}
+          var m = window.fcInstance, n = new TextEncoder().encode(code).length + 1, q = m._malloc(n);
+          m.stringToUTF8(code, q, n);
+          try { window.fcRunPy(m, q); sent = true; } catch (e) { resolve({ ok: false, error: String(e) }); return; }
+        }
+        if (sent) {
+          try { resolve(JSON.parse(F.readFile(out, { encoding: 'utf8' }))); return; } catch (e) {}
+        }
+        if (Date.now() - t0 > 180000) { resolve({ ok: false, error: 'timed out' }); return; }
+        setTimeout(tick, 200);
+      };
+      tick();
+    });
+  };
+  var J = JSON.stringify;
+  // What ?embed=1 hides. Re-applied after every request: opening a document brings
+  // FreeCAD's overlay task panel back (Gui::OverlayTabWidget, src/Gui/OverlayWidgets.cpp).
+  var HIDE = ['from PySide import QtWidgets', 'mw = Gui.getMainWindow()', 'mw.menuBar().hide()', 'mw.statusBar().hide()',
+              'for w in mw.findChildren(QtWidgets.QToolBar) + mw.findChildren(QtWidgets.QDockWidget) + mw.findChildren(QtWidgets.QTabBar):',
+              '    w.hide()',
+              'for w in mw.findChildren(QtWidgets.QWidget):',
+              '    if w.metaObject().className() == "Gui::OverlayTabWidget":',
+              '        w.hide()'];
+  var job = async function (d) {
+    var out = '/tmp/fcembed-' + (++seq) + '.json', body;
+    if (d.fcweb === 'open') {
+      var bytes = d.data ? new Uint8Array(d.data) : new Uint8Array(await (await fetch(d.url)).arrayBuffer());
+      var path = '/tmp/' + (String(d.name || 'embedded').replace(/[^A-Za-z0-9_.-]/g, '_').replace(/\.FCStd$/i, '') || 'embedded') + '.FCStd';
+      fs().writeFile(path, bytes);
+      body = ['d = App.openDocument(' + J(path) + ')', 'Gui.updateGui()',
+              'v = Gui.ActiveDocument.ActiveView', 'v.viewIsometric()', 'v.fitAll()',
+              'res = {"ok": True, "value": d.Name}'];
+    } else if (d.fcweb === 'set' && d.sheet) {
+      body = ['d = App.ActiveDocument', 's = d.getObject(' + J(String(d.sheet)) + ')',
+              's.set(' + J(String(d.cell)) + ', ' + J(String(d.value)) + ')', 'd.recompute()',
+              'res = {"ok": True, "value": str(s.get(' + J(String(d.cell)) + '))}'];
+    } else if (d.fcweb === 'set') {
+      body = ['d = App.ActiveDocument', 'o = d.getObject(' + J(String(d.object)) + ')',
+              'setattr(o, ' + J(String(d.property)) + ', json.loads(' + J(J(d.value)) + '))', 'd.recompute()',
+              'res = {"ok": True, "value": str(getattr(o, ' + J(String(d.property)) + '))}'];
+    } else if (d.fcweb === 'export') {
+      var fmt = String(d.format || 'stl').toLowerCase(), ext = { stl: 'stl', step: 'step', fcstd: 'FCStd' }[fmt];
+      if (!ext) { return { ok: false, error: 'format must be stl, step or fcstd' }; }
+      var file = '/tmp/fcembed-export.' + ext;
+      body = ['d = App.ActiveDocument',
+              'objs = [d.getObject(n) for n in json.loads(' + J(J(d.objects || [])) + ')] or [o for o in d.Objects if o.isDerivedFrom("Part::Feature") and o.Visibility]',
+              fmt === 'stl' ? 'import Mesh; Mesh.export(objs, ' + J(file) + ')'
+              : fmt === 'step' ? 'import Import; Import.export(objs, ' + J(file) + ')'
+              : 'd.saveCopy(' + J(file) + ')',
+              'res = {"ok": True, "file": ' + J(file) + '}'];
+    } else {
+      return { ok: false, error: 'unknown request' };
+    }
+    if (d.fcweb === 'set') { body.push('Gui.updateGui()', 'Gui.ActiveDocument.ActiveView.fitAll()'); }
+    if (embed) { body = body.concat(HIDE); }
+    var code = ['import FreeCAD as App, FreeCADGui as Gui, json, traceback', 'try:']
+      .concat(body.map(function (l) { return '    ' + l; }))
+      .concat(['except Exception:', '    res = {"ok": False, "error": traceback.format_exc()[-600:]}',
+               'open(' + J(out) + ', "w").write(json.dumps(res))']).join('\n');
+    var r = await py(code, out);
+    if (r.ok && r.file) { r.data = fs().readFile(r.file).buffer; delete r.file; }
+    return r;
+  };
+  var pump = async function () {
+    if (running) { return; }
+    running = true;
+    while (queue.length) {
+      var e = queue.shift(), d = e.data, r;
+      try { r = await job(d); } catch (err) { r = { ok: false, error: String(err) }; }
+      r.fcweb = 'result'; r.id = d.id;
+      reply(e.source, e.origin, r, r.data ? [r.data] : []);
+    }
+    running = false;
+  };
+  window.addEventListener('message', function (e) {
+    if (e.source !== window.parent || !e.data || typeof e.data.fcweb !== 'string') { return; }
+    queue.push(e);
+    if (window.__fcWorkReady) { pump(); }
+  });
+  var iv = setInterval(function () {
+    if (!window.__fcWorkReady || !window.fcInstance) { return; }
+    clearInterval(iv);
+    var go = function () { reply(window.parent, '*', { fcweb: 'ready' }); pump(); };
+    if (!embed) { go(); return; }
+    var out = '/tmp/fcembed-ui.json';
+    py(['import FreeCADGui as Gui, json'].concat(HIDE).concat(['open(' + J(out) + ', "w").write(json.dumps({"ok": True}))']).join('\n'), out).then(go);
+  }, 500);
+})();
+
 window.fcwebConfirm = function(title, text, buttonsPipe){
   return new Promise(function(resolve){
     try{

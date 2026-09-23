@@ -1,0 +1,7 @@
+<!doctype html><meta charset="utf-8"><title>embed test</title>
+<iframe id="f" src="freecad-gui.html?embed=1" allow="cross-origin-isolated" style="width:1000px;height:700px;border:0"></iframe>
+<script>
+window.results = []; window.readyAt = 0;
+addEventListener('message', (e) => { if (e.data && e.data.fcweb === 'ready') window.readyAt = Date.now(); if (e.data && e.data.fcweb === 'result') window.results.push(e.data); });
+window.send = (m) => document.getElementById('f').contentWindow.postMessage(m, '*');
+</script>
