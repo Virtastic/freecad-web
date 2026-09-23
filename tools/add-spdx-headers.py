@@ -41,6 +41,8 @@ SKIP_DIRS = {
 }
 SKIP_FILES = {
     'qtloader.js',          # The Qt Company, LicenseRef-Qt-Commercial OR GPL-3.0-only
+    '3dconnexion.min.js',   # 3Dconnexion SDK, keeps its own @license header
+    'autobahn.min.js',      # CryptoJS + AutobahnJS bundle (MIT), keeps its own @license headers
 }
 
 
