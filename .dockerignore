@@ -13,4 +13,6 @@
 !NOTICE
 !LICENSES
 !tools/patch-freecad-js.py
+# infra/Dockerfile stage i18n: which FreeCAD release to compile translations from
+!patches/freecad.version
 !infra/session
