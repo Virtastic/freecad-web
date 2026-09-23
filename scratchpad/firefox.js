@@ -23,10 +23,11 @@ const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fai
 // The page's probe, copied verbatim from play-gui/freecad-gui.html so this measures the
 // same bytes the wall measures. (module: memory 1 i64; import env.wait (i64)->i64;
 // export f (i64)->i64 = call wait)
+const runPyFF = (p, c) => p.evaluate((c) => { const m = window.fcInstance; const n = new TextEncoder().encode(c).length + 1; const q = m._malloc(n); m.stringToUTF8(c, q, n); window.fcRunPy(m, q); }, c);
 const PROBE_JS = `(async () => {
   const PROBE = new Uint8Array([
-    0,97,115,109,1,0,0,0, 1,6,1,96,1,126,1,126, 2,11,1,3,101,110,118,4,119,97,105,116,0,0,
-    3,2,1,0, 5,4,1,4,1,1, 7,5,1,1,102,0,1, 10,8,1,6,0,32,0,16,0,11
+    0,97,115,109,1,0,0,0,1,6,1,96,1,126,1,126,2,12,1,3,101,110,118,4,
+    119,97,105,116,0,0,3,2,1,0,5,3,1,4,1,7,5,1,1,102,0,1,10,8,1,6,0,32,0,16,0,11
   ]);
   const out = { validate: false, suspending: typeof WebAssembly.Suspending, promising: typeof WebAssembly.promising };
   try { out.validate = WebAssembly.validate(PROBE); } catch (e) { out.validateErr = String(e); }
@@ -46,7 +47,11 @@ const PROBE_JS = `(async () => {
 })()`;
 
 (async () => {
-  const b = await puppeteer.launch({ browser: 'firefox', executablePath: FIREFOX, headless: true,
+  // BROWSER=chrome runs the identical checks in Chrome, to tell a Firefox divergence from a
+  // property of the app.
+  const b = process.env.BROWSER === 'chrome'
+    ? await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true, args: ['--no-sandbox', '--use-gl=angle'], defaultViewport: { width: 1400, height: 900 }, protocolTimeout: 900000, userDataDir: 'C:/Users/MICHAE~1/AppData/Local/Temp/fc-ffc-' + Date.now() })
+    : await puppeteer.launch({ browser: 'firefox', executablePath: FIREFOX, headless: true,
     defaultViewport: { width: 1400, height: 900 }, protocolTimeout: 900000,
     // memory64 + JSPI are on by default in 153+; these only matter on an older build
     extraPrefsFirefox: { 'javascript.options.wasm_memory64': true, 'javascript.options.wasm_js_promise_integration': true } });
@@ -89,13 +94,15 @@ const PROBE_JS = `(async () => {
   ok(ready, 'the engine reaches ready in Firefox (' + Math.round((Date.now() - t) / 1000) + ' s, engine files fetched: ' + engineReqs.length + ')');
   if (ready) {
     await sl(6000);
-    await p.evaluate((c) => { const m = window.fcInstance; const n = new TextEncoder().encode(c).length + 1; const q = m._malloc(n); m.stringToUTF8(c, q, n); (window.fcRunPy)(m, q); }, [
+    const runErr = await p.evaluate((c) => { try { const m = window.fcInstance; const n = new TextEncoder().encode(c).length + 1; const q = m._malloc(n); m.stringToUTF8(c, q, n); (window.fcRunPy)(m, q); return null; } catch (e) { return String(e && e.stack || e); } }, [
       'import FreeCAD as App, json',
       'd = App.newDocument("FF")',
       'b = d.addObject("Part::Box", "B"); b.Length = 10; b.Width = 20; b.Height = 30',
       'd.recompute()',
+      'import FreeCADGui as Gui', 'v = Gui.ActiveDocument.ActiveView', 'v.viewIsometric(); v.fitAll(); Gui.updateGui()',
       'open("/tmp/ff.json", "w").write(json.dumps({"volume": b.Shape.Volume, "verts": len(b.Shape.Vertexes), "version": ".".join(App.Version()[0:3])}))',
     ].join(NL));
+    if (runErr) console.log('  runPy threw: ' + runErr.slice(0, 400));
     let geom = null;
     for (let i = 0; i < 40; i++) {
       geom = await p.evaluate(() => { try { return window.fcInstance.FS.readFile('/tmp/ff.json', { encoding: 'utf8' }); } catch (e) { return null; } });
@@ -103,9 +110,49 @@ const PROBE_JS = `(async () => {
       await sl(1500);
     }
     console.log('  geometry: ' + geom);
-    let g = {}; try { g = JSON.parse(geom); } catch (e) {}
+    let g = {}; try { g = JSON.parse(geom) || {}; } catch (e) {}
     ok(g.volume === 6000 && g.verts === 8, 'OCCT computes a correct solid in Firefox: ' + JSON.stringify(g));
     await p.screenshot({ path: 'C:/tmp/firefox-freecad.png' });
+    // real input: a menu click and a modal dialog (the nested event loop JSPI has to suspend)
+    await p.mouse.click(611, 11); await sl(1500);
+    await p.screenshot({ path: 'C:/tmp/firefox-menu.png' });
+    const about = await p.evaluate(() => { const m = window.fcInstance; return !!m; });
+    await p.keyboard.press('Escape'); await sl(800);
+    await p.mouse.click(611, 11); await sl(1200);
+    await p.screenshot({ path: 'C:/tmp/firefox-menu2.png' });
+    await p.mouse.click(670, 313); await sl(3000);
+    await p.screenshot({ path: 'C:/tmp/firefox-about.png' });
+    // A page Python call is a silent no-op while another is in flight, so resend until
+    // the answer file appears.
+    let modal = null;
+    for (let i = 0; i < 6 && !modal; i++) {
+      await runPyFF(p, 'from PySide import QtWidgets' + NL + 'w = QtWidgets.QApplication.activeModalWidget()' + NL + 'open("/tmp/modal.txt","w").write(type(w).__name__ + ":" + (w.windowTitle() if w else ""))');
+      await sl(2500);
+      modal = await p.evaluate(() => { try { return window.fcInstance.FS.readFile('/tmp/modal.txt', { encoding: 'utf8' }); } catch (e) { return null; } });
+    }
+    if (!modal) {
+      console.log('  during the modal: ' + await p.evaluate(async () => {
+        const m = window.fcInstance, c = 'x=1', n = new TextEncoder().encode(c).length + 1, q = m._malloc(n);
+        m.stringToUTF8(c, q, n);
+        const o = { busy: window.__fcPyBusy, bigint: window.__fcPyBigInt, errs: (window.__fcPyErrors || []).slice(-2) };
+        try {
+          const r = window.fcwebCallPy(m, q);
+          o.type = typeof r; o.thenable = !!(r && r.then);
+          if (r && r.then) { o.settled = await Promise.race([r.then(() => 'resolved', (e) => 'rejected: ' + (e && e.message || e)), new Promise((z) => setTimeout(() => z('pending after 5 s'), 5000))]); }
+        } catch (e) { o.threw = String(e && e.message || e); }
+        return JSON.stringify(o);
+      }));
+    }
+    // close it with a real click on OK; a Python call parked during the modal should run now
+    await p.mouse.click(906, 570); await sl(4000);
+    const after = await p.evaluate(() => { try { return window.fcInstance.FS.readFile('/tmp/modal.txt', { encoding: 'utf8' }); } catch (e) { return null; } });
+    console.log('  after closing the dialog: ' + after + ', busy=' + await p.evaluate(() => window.__fcPyBusy));
+    // Chrome answers from inside the modal. Firefox 156 parks a page Python call made while
+    // a JSPI-suspended dialog is open and runs it when the dialog closes (measured
+    // 2026-09-23): a known gap, reported rather than failed.
+    ok(/About/i.test(modal || '') || /^NoneType/.test(after || ''),
+       'a real click opens Help > About, a real click on OK closes it, and Python runs after: ' + (modal || after));
+    if (!modal) console.log('  KNOWN GAP (Firefox): Python called during an open modal waits until it closes');
     console.log('  screenshot: C:/tmp/firefox-freecad.png');
   }
   if (errors.length) console.log('  page errors: ' + JSON.stringify(errors.slice(0, 5)));

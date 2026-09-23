@@ -2480,6 +2480,22 @@ function fcwebCallPy(m, ptr) {
   if (window.__fcPyBigInt === null) {
     try {
       var r0 = m._fcweb_run_python(ptr);
+      // Firefox reports the conversion failure as a REJECTED promise rather than a
+      // synchronous throw (measured, Firefox 156: "can't convert N to BigInt" on every
+      // Python call, because this branch had already settled on Number). Read the
+      // outcome there too, and retry the first call in the other form.
+      if (r0 && typeof r0.then === 'function') {
+        return r0.then(function (v) {
+          if (window.__fcPyBigInt === null) { window.__fcPyBigInt = false; }
+          return v;
+        }, function (e) {
+          if (window.__fcPyBigInt === null && e instanceof TypeError) {
+            window.__fcPyBigInt = true;
+            return m._fcweb_run_python(BigInt(ptr));
+          }
+          throw e;
+        });
+      }
       window.__fcPyBigInt = false;
       return r0;
     } catch (e) {
