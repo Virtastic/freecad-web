@@ -49,6 +49,7 @@ ELSEWHERE = {
     'qt-wasm-gl-context-rehome.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-*.patch'),
     'qt-wasm-fbo-depth-attachment.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-*.patch'),
     'qt-wasm-transient-children-stay-above.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-*.patch'),
+    'qt-wasm-chorded-mouse-buttons.patch': ('.github/workflows/build-qt-wasm.yml', 'patches/qt-*.patch'),
     # libffi is a release tarball that configure-ctypes.sh fetches into deps/src/libffi
     # itself, outside apply.sh's build-deps run; the same script applies this one,
     # zero-fuzz and fail-closed, before configure.

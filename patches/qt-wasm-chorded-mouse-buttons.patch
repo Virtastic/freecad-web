@@ -1,0 +1,20 @@
+--- a/qtbase/src/plugins/platforms/wasm/qwasmwindow.cpp
++++ b/qtbase/src/plugins/platforms/wasm/qwasmwindow.cpp
+@@ -861,8 +861,16 @@
+             qBound(geometryF.top(), pointInScreen.y(), geometryF.bottom()));
+ 
+     if (event.pointerType == PointerType::Mouse) {
+-        const QEvent::Type eventType =
++        QEvent::Type eventType =
+                 MouseEvent::mouseEventTypeFromEventType(event.type, WindowArea::Client);
++        // A button pressed or released while another is held (a chord) reaches the page as
++        // a pointermove whose `button` names it -- Pointer Events never send a second
++        // pointerdown/pointerup for it. Mapped to MouseMove, that button never reached Qt:
++        // FreeCAD's CAD navigation (hold middle, then press left or right: rotate) panned.
++        // `button` is -1 (NoButton) on an ordinary move, so only a real chord change lands here.
++        if (event.type == EventType::PointerMove && event.mouseButton != Qt::NoButton)
++            eventType = event.mouseButtons.testFlag(event.mouseButton) ? QEvent::MouseButtonPress
++                                                                        : QEvent::MouseButtonRelease;
+ 
+         return eventType != QEvent::None
+                 && QWindowSystemInterface::handleMouseEvent(
