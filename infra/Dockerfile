@@ -57,7 +57,7 @@ RUN rm -f /etc/nginx/conf.d/default.conf \
 COPY infra/nginx.conf /etc/nginx/conf.d/freecad.conf
 
 # Front-end (in git).
-COPY play-gui/freecad-gui.html play-gui/qtloader.js play-gui/legal.html /usr/share/nginx/html/
+COPY play-gui/freecad-gui.html play-gui/qtloader.js play-gui/legal.html play-gui/calculix-demo.html /usr/share/nginx/html/
 # Social card + crawler files (see the matching locations in infra/nginx.conf).
 COPY play-gui/og.png play-gui/robots.txt play-gui/sitemap.xml /usr/share/nginx/html/
 # LGPL attribution served same-origin, so the notices reach a user who cannot reach GitHub.
@@ -145,8 +145,11 @@ RUN GM=$(md5sum /usr/share/nginx/html/gmsh.wasm | cut -c1-12) \
  && sed -i "s|'gmsh\.js'|'gmsh.js?v=$GM'|g; \
             s|'ccx\.js'|'ccx.js?v=$CX'|g" \
         /usr/share/nginx/html/freecad-gui.html \
+ && sed -i "s|'ccx\.js'|'ccx.js?v=$CX'|g" \
+        /usr/share/nginx/html/calculix-demo.html \
  && grep -q "gmsh.js?v=$GM" /usr/share/nginx/html/freecad-gui.html \
  && grep -q "ccx.js?v=$CX"  /usr/share/nginx/html/freecad-gui.html \
+ && grep -q "ccx.js?v=$CX"  /usr/share/nginx/html/calculix-demo.html \
  && echo "stamped gmsh=$GM ccx=$CX"
 
 # Build identity, so a bug report can name the build it came from. Supplied by CI as the
