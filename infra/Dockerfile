@@ -57,7 +57,11 @@ RUN rm -f /etc/nginx/conf.d/default.conf \
 COPY infra/nginx.conf /etc/nginx/conf.d/freecad.conf
 
 # Front-end (in git).
-COPY play-gui/freecad-gui.html play-gui/qtloader.js play-gui/legal.html play-gui/calculix-demo.html /usr/share/nginx/html/
+COPY play-gui/freecad-gui.html play-gui/qtloader.js play-gui/legal.html /usr/share/nginx/html/
+# Site-only: the CalculiX-on-wasm demo page belongs to freecad.virtastic.app and must never be
+# in the published GHCR image. The glob makes the COPY optional -- publish-ghcr.yml deletes the
+# file before building, so this copies nothing there, while the site deploy still ships it.
+COPY play-gui/calculix-demo.htm[l] /usr/share/nginx/html/
 # Social card + crawler files (see the matching locations in infra/nginx.conf).
 COPY play-gui/og.png play-gui/robots.txt play-gui/sitemap.xml /usr/share/nginx/html/
 # LGPL attribution served same-origin, so the notices reach a user who cannot reach GitHub.

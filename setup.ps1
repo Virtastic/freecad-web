@@ -18,7 +18,7 @@ param(
     [int]    $Port    = $(if ($env:FCWEB_PORT) { $env:FCWEB_PORT } else { 8080 }),
     [string] $Tag     = $(if ($env:FCWEB_RELEASE) { $env:FCWEB_RELEASE } else { 'v1.0.5' }),
     [string] $Repo    = $(if ($env:FCWEB_REPO) { $env:FCWEB_REPO } else { 'Virtastic/freecad-web' }),
-    [string] $Image   = $(if ($env:FCWEB_IMAGE) { $env:FCWEB_IMAGE } else { 'ghcr.io/virtastic/freecad-web:1.0.0' })
+    [string] $Image   = $(if ($env:FCWEB_IMAGE) { $env:FCWEB_IMAGE } else { 'ghcr.io/virtastic/freecad-web:1.0.6' })
 )
 
 # NOT 'Stop': under Stop, PowerShell 5.1 turns anything a native .exe writes to stderr

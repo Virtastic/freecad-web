@@ -949,6 +949,16 @@ inside any patch's replacement, so the class cannot come back.
    deliberately EXCLUDES them, because each drives two browser contexts. Nothing in the
    normal gate sweep touches sharing, so after deploying run them explicitly against the
    deployment: `share`, `empty`, `control`, `mcp`, `env`, `edges`.
+10. **Bump the pinned image tag in the install files, in the same release.** `setup.sh`,
+   `setup.ps1`, `docker-compose.yml`, `README.md` and `QUICKSTART.md` all pin
+   `ghcr.io/virtastic/freecad-web:<tag>`, and a pinned tag never moves. They sat on
+   `1.0.0` through v1.0.5, so a self-hoster following the docs ran an old image with
+   Firefox bugs already fixed (measured 2026-09-30: his console showed the 1.0.1 page).
+   Check before tagging: `grep -ho "freecad-web:[0-9][0-9.]*" setup.sh setup.ps1 docker-compose.yml README.md QUICKSTART.md | sort -u`
+   must print exactly the release being cut.
+11. **`calculix-demo.html` is site-only.** The Dockerfile copies it optionally,
+   `publish-ghcr.yml` deletes it before building and fails the verify step if it is in the
+   image, so it reaches the site deploy but never GHCR or the release assets.
 
 The gates worth running against production before announcing anything, all in
 `scratchpad/`: `reg-prod.js` (workbenches, examples, dialog), `workflows.js` (eight real

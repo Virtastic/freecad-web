@@ -74,6 +74,11 @@ jobs:
           done
           ls -l play-gui/ | sed 's/^/  /'
 
+      # The CalculiX demo page is site-only (infra/Dockerfile copies it optionally). Remove it
+      # from the build context so it can never reach GHCR or a self-hoster's image.
+      - name: Drop site-only files
+        run: rm -f play-gui/calculix-demo.html
+
       # No docker/build-push-action: the plain CLI needs no new third-party action pinned,
       # and the GL patch that used to run here now lives inside infra/Dockerfile.
       - name: Build the image
@@ -103,6 +108,8 @@ jobs:
             sleep 2
           done
           ci/jenkins/smoke-test.sh http://localhost:8099
+          # site-only page must not be in the published image
+          docker exec verify test ! -e /usr/share/nginx/html/calculix-demo.html
           docker rm -f verify
 
       - name: Push

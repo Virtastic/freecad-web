@@ -48,13 +48,13 @@ Every one of these opened in the browser, from the build that is live right now.
 Docker is the only thing you need. No Python, no Node, no build tools, no clone.
 
 ```bash
-curl -fsSLO https://github.com/Virtastic/freecad-web/releases/download/v1.0.0/setup.sh
+curl -fsSLO https://github.com/Virtastic/freecad-web/releases/latest/download/setup.sh
 sh setup.sh
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://github.com/Virtastic/freecad-web/releases/download/v1.0.0/setup.ps1 -OutFile setup.ps1
+irm https://github.com/Virtastic/freecad-web/releases/latest/download/setup.ps1 -OutFile setup.ps1
 .\setup.ps1
 ```
 
@@ -117,7 +117,7 @@ docker compose --profile share up -d   # add shared sessions and the MCP endpoin
 Or skip the installer entirely and run the published image:
 
 ```bash
-docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.0
+docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.6
 ```
 
 Your documents live in your browser, not in the container, so stopping or removing it does

@@ -17,7 +17,7 @@ services:
     # Both image: and build: are present on purpose, and setup.sh picks between them
     # explicitly with --no-build (pull) or --build (local). Compose's own default when
     # both keys are set is to build, so never rely on the implicit behaviour.
-    image: ${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.0}
+    image: ${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.6}
     build:
       context: .
       dockerfile: infra/Dockerfile
