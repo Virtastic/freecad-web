@@ -120,6 +120,11 @@ Or skip the installer entirely and run the published image:
 docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.6
 ```
 
+Using Portainer? Paste [`docker-compose.portainer.yml`](docker-compose.portainer.yml) into
+Stacks -> Add stack. It is image-only (nothing to build), and its header explains the one
+thing that trips people up: open it on `localhost`, or behind an HTTPS reverse proxy, never
+over plain http on a LAN IP.
+
 Your documents live in your browser, not in the container, so stopping or removing it does
 not touch them. The one exception is a session you deliberately share, which is copied to a
 volume so the link keeps working while your laptop is shut.

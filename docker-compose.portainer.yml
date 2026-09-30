@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
+#
+# Portainer stack (Stacks -> Add stack -> Web editor, paste this). It pulls the prebuilt
+# image, so there is nothing to build and no files to put on the host.
+#
+# Open it at http://localhost:<port>/ or http://127.0.0.1:<port>/ from the machine it runs
+# on -- NOT http://<NAS-or-LAN-IP>:<port>/. The app needs a secure context, and plain http
+# is only one on loopback; on a LAN IP the page loads and the engine never boots. To use it
+# from other machines, put it behind an HTTPS reverse proxy (Synology's Application Portal,
+# Caddy, Traefik...) and keep the Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy
+# headers the container sends: do not strip or overwrite them.
+#
+# To update: change the tag below, then Stacks -> this stack -> "Pull and redeploy" (or
+# tick "Re-pull image" in the stack editor). A pinned tag is never re-pulled by itself.
+services:
+  freecad:
+    image: ghcr.io/virtastic/freecad-web:1.0.6
+    ports:
+      - "8080:80"        # host:container -- change the left number to use another port
+    restart: unless-stopped
