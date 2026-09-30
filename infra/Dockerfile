@@ -149,11 +149,11 @@ RUN GM=$(md5sum /usr/share/nginx/html/gmsh.wasm | cut -c1-12) \
  && sed -i "s|'gmsh\.js'|'gmsh.js?v=$GM'|g; \
             s|'ccx\.js'|'ccx.js?v=$CX'|g" \
         /usr/share/nginx/html/freecad-gui.html \
- && sed -i "s|'ccx\.js'|'ccx.js?v=$CX'|g" \
-        /usr/share/nginx/html/calculix-demo.html \
  && grep -q "gmsh.js?v=$GM" /usr/share/nginx/html/freecad-gui.html \
  && grep -q "ccx.js?v=$CX"  /usr/share/nginx/html/freecad-gui.html \
- && grep -q "ccx.js?v=$CX"  /usr/share/nginx/html/calculix-demo.html \
+ && { [ ! -f /usr/share/nginx/html/calculix-demo.html ] \
+      || { sed -i "s|'ccx\.js'|'ccx.js?v=$CX'|g" /usr/share/nginx/html/calculix-demo.html \
+           && grep -q "ccx.js?v=$CX" /usr/share/nginx/html/calculix-demo.html; }; } \
  && echo "stamped gmsh=$GM ccx=$CX"
 
 # Build identity, so a bug report can name the build it came from. Supplied by CI as the
