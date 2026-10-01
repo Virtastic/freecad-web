@@ -39,7 +39,7 @@ the origin stays private. CI reads it from the `ORIGIN_IP` repository variable, 
 | `deploy/freecad.caddy` | edge vhost drop-in: TLS origin cert + `import sec_headers` + `reverse_proxy freecad:80` |
 | `infra/Dockerfile` | `nginx:1.27-alpine` + front-end (git) + artifacts (from Release) |
 | `infra/nginx.conf` | serves COOP/COEP on every response; landing page; hard-caches `.wasm/.data/.js`; proxies `/share/` and `/mcp/` to `session:8000` |
-| `infra/session/share.py` | the session protocol core — stdlib only, transport-agnostic. `--selftest` asserts the whole protocol without sockets; `--list` and `--stats` inspect the live store |
+| `infra/session/share.py` | the session protocol core — stdlib only, transport-agnostic. `--selftest` asserts the whole protocol without sockets; `--list`, `--files` and `--stats` inspect the live store |
 | `infra/session/app.py` | the session process: Starlette serving `share.handle()` in a thread, with the MCP server (FastMCP, Streamable HTTP, stateless) mounted over it |
 | `infra/session/Dockerfile` | the `session` image: `python:3.12-alpine` + those two files. Runs `share.py --selftest` as a build layer, so a broken protocol cannot produce an image |
 
@@ -75,4 +75,9 @@ curl -sI https://freecad.virtastic.app/ | grep -i cross-origin
 curl -s https://freecad.virtastic.app/share/health
 # ok. A 502 here means the session container is not running: nginx proxies /share/ to
 # session:8000 and has nothing to reach. Sharing and MCP are dead, the rest of the site is fine.
+
+curl -s https://freecad.virtastic.app/files
+# 404 "files_off" is the normal answer: server files are OFF unless the session container
+# has FCWEB_FILES=1. That is the same answer as an absent container, so nothing in the UI
+# depends on the operator having enabled it.
 ```

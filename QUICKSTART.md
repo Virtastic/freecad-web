@@ -68,11 +68,12 @@ success.
 | `sh setup.sh` | Pulls the prebuilt image from GHCR. If that is unavailable it falls back to building locally, and says so. | ~3 min |
 | `sh setup.sh --build` | Downloads the seven engine artifacts (~445 MB) from the release and builds the image on your machine. | ~15 min |
 | `sh full-build.sh` | Clones the repository at the release tag, then does the `--build` path from that clone. | ~15 min |
-| `docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.6` | No installer at all. You get the app; shared sessions need the compose file. | ~2 min |
+| `docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.6` | No installer at all. You get the app; shared sessions need the compose file or `--share`. | ~2 min |
+| `sh setup.sh --share` | The above **plus** the session service, so shared sessions and the MCP endpoint work. Pulls `ghcr.io/virtastic/freecad-web-session`. Documents you share are stored unencrypted on your machine's disk, so it is off unless you ask for it. | ~3 min |
 
 All three produce the same running container. Use `--build` if you want to build what you
 can read, or if you are on an arm64 machine and would rather have a native image than an
-emulated one.
+emulated one. Add `--share` if you want shared sessions and MCP.
 
 None of these compiles the WebAssembly engine from source. That is a separate ~7–9 hour
 job needing ~100 GB of disk and 16+ GB of RAM, and it is documented in

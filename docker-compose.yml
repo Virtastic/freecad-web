@@ -46,6 +46,11 @@ services:
   # evictable the write is refused instead.
   session:
     profiles: ["share"]
+    # Same image:/build: pairing as the freecad service above, and for the same reason:
+    # setup.sh picks between them explicitly, and defaults to --no-build when the pull
+    # works. The published image is what makes sharing a one-liner instead of a checkout
+    # plus a local build (issue #7).
+    image: ${FCWEB_SESSION_IMAGE:-ghcr.io/virtastic/freecad-web-session:1.0.6}
     build:
       context: .
       dockerfile: infra/session/Dockerfile
@@ -56,6 +61,23 @@ services:
       FCWEB_SHARE_MAX_MB: "25"    # one document
       # FCWEB_PUBLIC_URL: set this on any origin behind a proxy, or the links the MCP page
       # hands out are built from the request's own Host. Unset is right for localhost only.
+      #
+      # Server files: OFF by default. Set to 1 to let a browser save documents to this
+      # server and reopen them later or on another machine. It is opt-in because it is the
+      # one feature here that puts a user's model somewhere other than their own disk --
+      # everything else, sharing included, is a link the user chooses to send.
+      # The folder is per browser (a key in its own localStorage), so there are no accounts
+      # and one box serves many people without seeing each other's work.
+      # FCWEB_FILES: "1"
+      # FCWEB_FILES_MAX_GB: "2"    # per folder; a write that does not fit is refused,
+                                   # never answered by deleting one of your documents
+      # FCWEB_FILES_TOTAL_GB: "20" # the store as a whole. Anyone can start a folder, so
+                                   # the per-folder cap alone does not bound the volume.
+      # FCWEB_FILES_KEY: set to a secret to make the folder SHARED, so any browser that
+      # has the key sees the same documents -- which is the only way "reopen it on another
+      # machine" can work, since a per-browser folder cannot cross a machine. Users paste it
+      # into Edit > Server Files... or arrive with ?key=... in the URL. Leave it unset and
+      # every browser keeps its own private folder, as before.
     restart: unless-stopped
 
 volumes:

@@ -10,6 +10,7 @@
 #   ./setup.sh --build      always build locally from the release artifacts (~445 MB)
 #   ./setup.sh --port 9000  serve on a different port
 #   ./setup.sh --ref dev    take the source tree from a branch, not the release tag
+#   ./setup.sh --share      also run the session service: shared sessions and MCP (#7)
 #
 # POSIX sh on purpose: this is the first thing a stranger runs, and it must not depend on
 # bash being present or on any particular bash version (macOS still ships 3.2).
@@ -19,8 +20,28 @@ set -eu
 REPO="${FCWEB_REPO:-Virtastic/freecad-web}"
 RELEASE="${FCWEB_RELEASE:-v1.0.6}"
 IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.6}"
+# The session service is a separate package, so a self-hoster who cannot pull it gets a
+# clear warning naming THIS image rather than a confusing compose error about the other one.
+SESSION_IMAGE="${FCWEB_SESSION_IMAGE:-ghcr.io/virtastic/freecad-web-session:1.0.6}"
 PORT="${FCWEB_PORT:-8080}"
 MODE=auto
+# Off unless asked: the session container holds other people's documents on your disk, and
+# that is not a thing an installer should turn on behind someone's back.
+SHARE=no
+# What compose is told to bring up. Empty unless --share, because the session service sits
+# behind the `share` profile and asking for it unconditionally would start a container
+# whose whole purpose is storing documents on the host's disk.
+PROFILES=""
+# The copy-paste lines at the end have to work as printed. Without --share the plain
+# `docker compose down` is right; with it, a bare `up -d` would silently NOT restart the
+# session service, because it sits behind the profile. Someone following the instructions
+# after a reboot would get an app with sharing mysteriously dead and nothing in the log.
+DOWN_ARGS=""
+PROFILE_ARGS=""
+if [ "$SHARE" = yes ]; then
+    DOWN_ARGS="--profile share"
+    PROFILE_ARGS="--profile share"
+fi
 # Which source tree to fetch, which is not always the release being installed. They
 # differ when running a newer installer against an older engine release -- and they had
 # to differ to test the standalone path before the first release that contains it.
@@ -35,6 +56,9 @@ warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf '\nFATAL: %s\n' "$*" >&2; exit 1; }
 
 usage() {
+    # 5..13 is the header and the option list, and nothing else. Widening it by a line to
+    # catch the new --share pulled the "POSIX sh on purpose" implementation note into
+    # --help, which is not what anyone asked for.
     sed -n '5,13p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
@@ -43,6 +67,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --build)      MODE=build ;;
         --pull)       MODE=pull ;;
+        --share)      SHARE=yes; PROFILES=share ;;
         --port)       PORT="${2:?--port needs a number}"; shift ;;
         --tag)        RELEASE="${2:?--tag needs a release tag}"; shift ;;
         --ref)        REF="${2:?--ref needs a branch or tag}"; shift ;;
@@ -223,13 +248,44 @@ fetch_assets() {
 # --------------------------------------------------------------------------------------
 start() {
     cd "$TREE"
-    FCWEB_PORT="$PORT" FCWEB_IMAGE="$IMAGE" \
+    # COMPOSE_PROFILES rather than a --profile flag: compose reads it from the environment,
+    # so the app and the session come up in ONE `up --wait` and the exit status covers both
+    # healthchecks. Starting them separately would report success before the session had
+    # proved itself, which is the failure this feature exists to remove.
+    FCWEB_PORT="$PORT" FCWEB_IMAGE="$IMAGE" FCWEB_SESSION_IMAGE="$SESSION_IMAGE" \
+        COMPOSE_PROFILES="$PROFILES" \
         docker compose up -d --wait --wait-timeout 240 "$@" || {
             say ""
             say "The container did not come up healthy. Last 40 log lines:"
-            FCWEB_PORT="$PORT" FCWEB_IMAGE="$IMAGE" docker compose logs --tail 40 || true
+            FCWEB_PORT="$PORT" FCWEB_IMAGE="$IMAGE" COMPOSE_PROFILES="$PROFILES" \
+                docker compose logs --tail 40 || true
             die "startup failed."
         }
+}
+
+# The session image, pulled on its own terms. It is a SEPARATE package from the app image,
+# so a self-hoster can perfectly well have one and not the other -- and the failure that
+# matters is `docker pull` failing, which means the package is private or not published
+# yet. That is a warning, not a fatal error: the local build is two Python files, and
+# refusing to install over it would be worse than building.
+#
+# Note there is no engine artifact fetch here, and no --build of the app image: the session
+# image needs neither. That is what makes the fallback cheap enough to allow.
+session_built=no
+session_pull() {
+    step "Pulling $SESSION_IMAGE"
+    if docker pull "$SESSION_IMAGE"; then
+        return 0
+    fi
+    warn "could not pull $SESSION_IMAGE -- the package may be private or not published yet."
+    warn "Building it locally instead: two Python files, a few seconds, no 445 MB of engine."
+    # Built DIRECTLY and tagged as the same reference compose will ask for, rather than by
+    # passing --build to `compose up`. That would rebuild the app image too -- 1.1 GB and
+    # ten minutes -- to fix a missing 150 MB image, and only on the one path where the user
+    # already accepted a slower install.
+    DOCKER_BUILDKIT=1 docker build -t "$SESSION_IMAGE" -f infra/session/Dockerfile . \
+        || die "could not build the session image either."
+    session_built=yes
 }
 
 # --------------------------------------------------------------------------------------
@@ -260,10 +316,21 @@ verify() {
 preflight
 resolve_tree
 
+# The session service, resolved BEFORE anything starts: a pull that fails has to degrade
+# to a local build while there is still time to act on it, and the image has to exist under
+# the reference compose will ask for. Nothing here needs the engine artifacts -- the
+# session image is two Python files and three pip packages.
+if [ "$SHARE" = yes ]; then
+    session_pull
+fi
+
 built=no
 if [ "$MODE" = build ]; then
     fetch_assets
     step "Building the image locally (a few minutes -- it compresses 340 MB of engine data)"
+    # --build here builds the session image too, which is correct: the user asked for a
+    # local build and gets one for everything rather than a pull for one and a build for
+    # the other.
     start --build
     built=yes
 else
@@ -291,8 +358,15 @@ cat <<EOF
   Open it in Chrome or Edge 137+ (it needs JSPI, SharedArrayBuffer and WebGL2).
   Use localhost, not this machine's LAN IP -- the engine only starts on a secure context.
 
-  Stop it:     cd $TREE && docker compose down
-  Start again: cd $TREE && docker compose up -d
+  Stop it:     cd $TREE && docker compose $DOWN_ARGS down
+  Start again: cd $TREE && docker compose $PROFILE_ARGS up -d
 EOF
 if [ "$built" = yes ]; then say "  Built locally from release $RELEASE."; fi
+if [ "$SHARE" = yes ]; then
+    say ""
+    say "  Shared sessions and the MCP endpoint are running too."
+    say "  Documents you share are stored UNENCRYPTED in a docker volume on this machine,"
+    say "  and anyone with the link can read them. Do not enable this on a shared host."
+    [ "$session_built" = yes ] && say "  Session image: built locally."
+fi
 exit 0

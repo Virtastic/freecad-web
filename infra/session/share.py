@@ -5,7 +5,7 @@
 
     python share.py --selftest            # the check: asserts the whole protocol, no sockets
     python share.py --serve [port]        # stdlib http.server, for tools/serve-artifact.py
-    python share.py --stats | --list | --purge-expired
+    python share.py --stats | --list | --files | --purge-expired
 
 Everything is a pure function of (method, path, headers, body) -> (status, headers, bytes).
 Three callers share it: infra/session/app.py (Starlette + FastMCP in the container),
@@ -26,6 +26,19 @@ DURABILITY. A session has no expiry unless the admin sets one. Storage is quota-
 past FCWEB_SHARE_MAX_GB the least recently VIEWED no-expiry session is evicted and the
 eviction is remembered, so its owner is told rather than silently losing it.
 
+SERVER FILES (/files/*, opt-in). A separate, much smaller store for documents a user
+chooses to keep on the server, so they can be reopened later or from another machine --
+the thing a browser-only IDBFS home cannot do. It is OFF unless FCWEB_FILES=1, because it
+is the one part of this service that moves a user's model off their machine and the site
+otherwise promises that nothing leaves the browser.
+
+Namespaced, not per-user: the browser invents a 32-hex namespace key and keeps it in
+localStorage, presenting it as X-Fcweb-Ns. So there are no accounts and no login, one
+browser is one folder, and a second browser on the same box gets its own. Like a session
+id it is the only key to anything, so a wrong or absent one is 404, never 403 -- a folder
+cannot be probed by guessing. No IP, no name, no document metadata beyond name, size and
+time.
+
 ERRORS. Every non-2xx is {"error", "code", "hint"} -- the hint is the next step, and the
 page shows it verbatim. The selftest fails if any error path forgets one.
 """
@@ -38,9 +51,16 @@ import secrets
 import sys
 import threading
 import time
+import unicodedata
+from urllib.parse import quote, unquote
 
 ID_RE = re.compile(r'[0-9a-f]{32}\Z')
 TOK_RE = re.compile(r'[0-9a-f]{32,64}\Z')
+# A document name: letters and digits in any script, plus space, dot, dash and underscore.
+# Unicode on purpose -- people name files after what they are building. No path separator,
+# no leading dot, nothing over 64 characters. The name is HASHED, never used as a path, so
+# this is about keeping the listing honest rather than about safety.
+NAME_RE = re.compile(r'[\w .-]+\Z', re.UNICODE)
 PBKDF_ROUNDS = 200_000
 V0_TTL_S = 3600.0                  # a session that never published anything
 KEEP_S = 86400.0                   # viewed this recently: quota pressure must not evict it
@@ -54,11 +74,31 @@ _now = time.time            # monkeypatched by the selftest to simulate days pas
 
 
 def _cfg():
+    d = os.environ.get('FCWEB_SHARE_DIR', '/data')
     return dict(
-        dir=os.environ.get('FCWEB_SHARE_DIR', '/data'),
+        dir=d,
         max_bytes=int(os.environ.get('FCWEB_SHARE_MAX_MB', '25')) * 1048576,
         quota=int(float(os.environ.get('FCWEB_SHARE_MAX_GB', '5')) * 1073741824),
         public_url=os.environ.get('FCWEB_PUBLIC_URL', ''),   # e.g. https://fc.example.com
+        # Server files: a separate opt-in store. Off by default -- see the module docstring.
+        files_on=os.environ.get('FCWEB_FILES', '0').strip().lower() in ('1', 'on', 'true', 'yes'),
+        files_dir=os.environ.get('FCWEB_FILES_DIR', os.path.join(d, 'files')),
+        files_quota=int(float(os.environ.get('FCWEB_FILES_MAX_GB', '2')) * 1073741824),
+        # A ceiling on the store as a whole. The per-folder quota above cannot do this job:
+        # anyone can mint a namespace, so N visitors with a 2 GB folder each is unbounded
+        # disk. This is the operator's backstop and nothing is ever evicted to stay under
+        # it -- a write is refused instead, same rule as a full folder.
+        files_total=int(float(os.environ.get('FCWEB_FILES_TOTAL_GB', '20')) * 1073741824),
+        # An optional SHARED folder key. Set it and every browser that presents it reaches
+        # the same folder, which is what makes "open it on another machine" possible at all:
+        # a per-browser key cannot cross a machine by construction, and there is no way to
+        # copy one across. Unset, each browser is its own folder as before.
+        #
+        # The folder NAME is derived from the key with sha256, never the key itself, so a
+        # secret pasted into a chat or a screenshot never becomes a directory name on disk.
+        # The comparison is constant-time. A browser presenting nothing or the wrong key is
+        # refused as if the folder did not exist, same rule as a session id.
+        files_key=os.environ.get('FCWEB_FILES_KEY', '').strip(),
     )
 
 
@@ -302,6 +342,10 @@ def _err(status, code, hint, error=None):
 
 HINTS = {
     'bad_id': 'The link is malformed. Ask the sender to copy it again from Edit > Share Session.',
+    'files_off': 'This server does not keep documents. Everything stays in this browser; ask the operator to start it with FCWEB_FILES=1.',
+    'no_namespace': 'No folder was named. If this server uses a shared folder key, paste it into '
+                    'Edit > Server Files...; otherwise clear the site\'s data to start a fresh folder.',
+    'no_file': 'That file is not in this folder any more. Refresh the list.',
     'no_session': 'This session does not exist or has ended. Ask the sender for a fresh link.',
     'evicted': 'This session was removed to free space on the server. Ask the sender to share it again.',
     'expired': 'This link has expired. Ask the sender to extend or re-share it.',
@@ -324,6 +368,239 @@ HINTS = {
 
 def _fail(status, code, **kw):
     return _err(status, code, HINTS[code], **kw)
+
+
+# --------------------------------------------------------------------------- server files
+# A folder per browser, addressed by a namespace key the browser invents and keeps. The key
+# is the only thing standing between a stranger's guess and someone else's models, so it is
+# checked for shape and a wrong one is indistinguishable from a missing folder.
+def _ns_dir(ns):
+    return os.path.join(CFG['files_dir'], ns)
+
+
+def _shared_ns():
+    """The folder name for a shared-key install: sha256 of the key, never the key."""
+    return hashlib.sha256(CFG['files_key'].encode()).hexdigest()[:32]
+
+
+def _ns_ok(h):
+    """Which folder this request addresses, or None if it names none.
+
+    With FCWEB_FILES_KEY set, ONLY X-Fcweb-Key counts and the browser's own namespace is
+    ignored entirely -- so a client cannot address a folder it was not given, and every client
+    with the key gets the same one. Constant-time because it is a secret comparison.
+
+    Deliberately not "X-Fcweb-Key or X-Fcweb-Ns": falling back to the namespace would let a
+    namespace value grant access whenever it happened to equal the key, which is confusing to
+    reason about and impossible to audit. One header, one meaning."""
+    if CFG.get('files_key'):
+        given = h.get('x-fcweb-key', '')
+        if given and hmac.compare_digest(str(given), CFG['files_key']):
+            return _shared_ns()
+        return None
+    ns = h.get('x-fcweb-ns', '')
+    return ns if ID_RE.match(ns) else None
+
+
+def _fkey(name):
+    """The on-disk stem for one document. The visible name is kept in the sidecar, because
+    it may hold spaces and accents and must never become a path."""
+    return hashlib.sha256(name.encode('utf-8')).hexdigest()[:32]
+
+
+def _f_ok(name):
+    if not name or len(name) > 64 or name[0] == '.' or not NAME_RE.match(name):
+        return None
+    return name
+
+
+def _f_norm(name):
+    """NFC, so a name typed on macOS (which hands out NFD) and the same name typed on
+    Windows resolve to ONE document instead of two that look identical in the list."""
+    try:
+        return unicodedata.normalize('NFC', name)
+    except Exception:
+        return name
+
+
+def _f_meta(ns, name):
+    try:
+        with open(os.path.join(_ns_dir(ns), _fkey(name) + '.json'), 'rb') as f:
+            m = json.load(f)
+        m['name'] = name
+        return m
+    except Exception:
+        return None
+
+
+def _f_files(ns):
+    """Every document in one folder: name, bytes, saved time. Scandir of a single folder --
+    a browser holds tens, not thousands, so an index file would be a second thing to keep
+    consistent."""
+    out = []
+    d = _ns_dir(ns)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return out
+    for k in names:
+        if not k.endswith('.json'):
+            continue
+        try:
+            with open(os.path.join(d, k), 'rb') as f:
+                m = json.load(f)
+            nm = m.get('n', '')
+            if m.get('d') and os.path.exists(os.path.join(d, m['d'])):
+                out.append({'name': nm, 'bytes': int(m.get('b', 0)), 'saved': int(m.get('t', 0))})
+        except Exception:
+            continue          # a half-written or foreign file is not listed, not fatal
+    out.sort(key=lambda x: (-x['saved'], x['name']))
+    return out
+
+
+def _f_used():
+    total = 0
+    for root, _dirs, files in os.walk(CFG['files_dir']):
+        for n in files:
+            try:
+                total += os.path.getsize(os.path.join(root, n))
+            except OSError:
+                pass
+    return total
+
+
+_f_used_cache = [0.0, -1]      # when we last walked the tree, and the answer
+
+
+def _f_used_now():
+    """_f_used() with a short cache. It walks the whole store, which is fine once in a while
+    and wasteful on every write; the store only changes through this process, so a stale
+    read for a few seconds can only ever be stale in the direction of refusing a write that
+    would just fit -- never of letting the volume grow past the ceiling.
+
+    Invalidated on every write and delete, so the answer is exact immediately after a change
+    and only the idle case pays for the walk."""
+    if _now() - _f_used_cache[0] > 10.0:
+        _f_used_cache[0], _f_used_cache[1] = _now(), _f_used()
+    return _f_used_cache[1]
+
+
+def _f_used_dirty():
+    """Force the next _f_used_now() to re-walk: a write or delete just changed the total."""
+    _f_used_cache[0] = 0.0
+
+
+def _f_delete(ns, name):
+    d = _ns_dir(ns)
+    k = _fkey(name)
+    for ext in ('.bin', '.json'):
+        try:
+            os.remove(os.path.join(d, k + ext))
+        except OSError:
+            pass
+    _f_used_dirty()
+
+
+def _sz(n):
+    """A size a person can act on. The hint and --files quote this, so it must never round a
+    real file down to "0": under a kilobyte it says bytes."""
+    n = float(n)
+    if n >= 1073741824:
+        return '%.1f GB' % (n / 1073741824)
+    if n >= 1048576:
+        return '%.1f MB' % (n / 1048576)
+    if n >= 1024:
+        return '%.1f kB' % (n / 1024.0)
+    return '%d B' % int(n)
+
+
+def _files_route(method, path, fullpath, h, body):
+    if not CFG['files_on']:
+        return _fail(404, 'files_off')
+    ns = _ns_ok(h)
+    if not ns:
+        return _fail(404, 'no_namespace')
+    d = _ns_dir(ns)
+
+    if path == '/files':
+        if method != 'GET':
+            return _err(405, 'method_not_allowed', 'This endpoint does not accept that method.')
+        files = _f_files(ns)
+        return _json(200, {'files': files, 'used': _f_used_now(), 'quota': CFG['files_quota'],
+                           'total_quota': CFG['files_total'], 'max_mb': CFG['max_bytes'] // 1048576})
+
+    m = re.match(r'/files/(.+)\Z', path)
+    if not m:
+        return _fail(400, 'bad_request')
+    name = _f_norm(unquote(m.group(1)))
+    if not _f_ok(name):
+        # A traversal attempt and an over-long name are the same refusal: the name is never
+        # used to build a path, it is hashed, so this only keeps the listing honest.
+        return _fail(400, 'bad_request')
+    key = _fkey(name)
+
+    if method == 'GET':
+        meta = _f_meta(ns, name)
+        if not meta or not meta.get('d'):
+            return _fail(404, 'no_file')
+        try:
+            data = open(os.path.join(d, meta['d']), 'rb').read()
+        except OSError:
+            return _fail(404, 'no_file')
+        if h.get('if-none-match') == '"%d"' % meta.get('t', 0):
+            return 304, {'ETag': '"%d"' % meta.get('t', 0)}, b''
+        return 200, {'Content-Type': 'application/octet-stream', 'ETag': '"%d"' % meta.get('t', 0),
+                     'Content-Disposition': 'attachment; filename*=UTF-8\'\'%s' % quote(name, safe=''),
+                     'Cache-Control': 'no-store'}, data
+
+    if method == 'PUT':
+        if len(body) == 0 or len(body) > CFG['max_bytes']:
+            return _fail(413, 'too_big')
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            return _fail(507, 'quota')
+        old = 0
+        meta = _f_meta(ns, name)
+        if meta and meta.get('d'):
+            try:
+                old = os.path.getsize(os.path.join(d, meta['d']))
+            except OSError:
+                old = 0
+        # Re-saving the same document frees its own previous bytes first.
+        used = _f_used_now()
+        if used - old + len(body) > CFG['files_quota']:
+            # No eviction here, and deliberately. A session is disposable and a public box
+            # must not grow without bound; this folder is the user's own saved work, so a
+            # full disk is answered by refusing the write and naming the limit, never by
+            # deleting a document they did not ask us to delete. Same rule as the session
+            # store's "refused rather than evicting somebody's model".
+            return _err(507, 'quota', 'This folder is full: %s of %s are in use. Delete a '
+                        'document to make room, or the operator can raise FCWEB_FILES_MAX_GB.'
+                        % (_sz(used), _sz(CFG['files_quota'])))
+        if used - old + len(body) > CFG['files_total']:
+            # The backstop for the whole store, not this folder: anyone can mint a namespace,
+            # so per-folder limits alone do not bound the volume. Refused, never evicted.
+            return _err(507, 'quota', 'The server has no room for more documents right now: '
+                        '%s of %s are in use. Try again later, or the operator can raise '
+                        'FCWEB_FILES_TOTAL_GB.' % (_sz(used), _sz(CFG['files_total'])))
+        try:
+            _write_atomic(os.path.join(d, key + '.bin'), body)
+            _write_atomic(os.path.join(d, key + '.json'),
+                          json.dumps({'n': name, 'b': len(body), 't': int(_now()),
+                                      'd': key + '.bin'}).encode())
+        except OSError:
+            return _fail(507, 'quota')
+        _f_used_dirty()
+        return _json(200, {'ok': True, 'name': name, 'bytes': len(body), 'used': _f_used_now()})
+
+    if method == 'DELETE':
+        if not _f_meta(ns, name):
+            return _fail(404, 'no_file')
+        _f_delete(ns, name)
+        return _json(200, {'ok': True, 'name': name})
+
+    return _err(405, 'method_not_allowed', 'This endpoint does not accept that method.')
 
 
 # --------------------------------------------------------------------------- handler
@@ -370,6 +647,13 @@ def _route(method, path, fullpath, h, body):
     m_share = re.match(r'/share/([0-9a-f]{32})(/[a-z/]+)?\Z', path)
     m_api = re.match(r'/api/s/([0-9a-f]{32})/(attach|cmd|result)\Z', path)
     m_mcp = re.match(r'/mcp/([0-9a-f]{32})/([0-9a-f]{32,64})\Z', path)
+
+    # Server files: its own tree, gated on the opt-in and the namespace key. Handled before
+    # the share routes so a document name can never be read as a session id.
+    if path == '/files' or path.startswith('/files/'):
+        if len(body) > CFG['max_bytes']:
+            return _fail(413, 'too_big')     # the same ceiling as a session document
+        return _files_route(method, path, fullpath, h, body)
 
     if path.startswith('/share/') and not m_share:
         return _fail(400, 'bad_id')
@@ -812,6 +1096,12 @@ def selftest():
     _now = lambda: clock[0]
     CFG.update(_cfg())
     CFG.update(dir=tempfile.mkdtemp(), max_bytes=1024, quota=4096, public_url='https://x.test')
+    # Server files live in their own tree, off by default, and the selftest turns them on:
+    # the store is the build gate, so an untested one would ship exactly like an untested
+    # session protocol. max_bytes/quota are the session's small test values, so a document
+    # is 1 KB here and the folder's ceiling is asserted in the same units.
+    CFG.update(files_dir=tempfile.mkdtemp(), files_on=True, files_quota=8192,
+               files_total=10 ** 7)
     STATE.clear()
 
     def call(method, path, body=b'', **hdr):
@@ -1075,6 +1365,134 @@ def selftest():
     assert gc_calls[0] == 2, 'health must sweep again once the minute is up'
     globals()['_gc'] = real_gc
 
+    # ---- server files ----------------------------------------------------------------
+    # Off by default, and the refusal must look like nothing exists rather than "disabled":
+    # a page that probes /files on a site that does not run it should just find no source.
+    CFG['files_on'] = False
+    assert call('GET', '/files', X_Fcweb_Ns='a' * 32)[0] == 404
+    CFG['files_on'] = True
+
+    ns = 'b1' * 16
+    # No key, or a key of the wrong shape, is the same answer as an empty folder: the
+    # namespace is the only thing addressing someone's models, so it is never guessable.
+    assert call('GET', '/files')[1]['code'] == 'no_namespace'
+    assert call('GET', '/files', X_Fcweb_Ns='nope')[1]['code'] == 'no_namespace'
+    assert call('GET', '/files', X_Fcweb_Ns='a' * 32)[1]['files'] == []
+
+    # put / get / list
+    st, j, _, _ = call('PUT', '/files/Box.FCStd', b'FCStd-bytes', X_Fcweb_Ns=ns)
+    assert st == 200 and j['name'] == 'Box.FCStd' and j['bytes'] == 11, j
+    st, j, _, _ = call('GET', '/files', X_Fcweb_Ns=ns)
+    assert [(f['name'], f['bytes']) for f in j['files']] == [('Box.FCStd', 11)], j['files']
+    st, j, hh, bb = call('GET', '/files/Box.FCStd', X_Fcweb_Ns=ns)
+    assert st == 200 and bb == b'FCStd-bytes', bb
+    # a re-fetch of what we just saved is a 304, so an unchanged document costs nothing
+    assert call('GET', '/files/Box.FCStd', X_Fcweb_Ns=ns, If_None_Match=hh['ETag'])[0] == 304
+
+    # names with spaces and accents round-trip, and are never used as a path
+    call('PUT', '/files/' + quote('Ünter Rad 2.FCStd'), b'b', X_Fcweb_Ns=ns)
+    st, j, _, bb = call('GET', '/files/' + quote('Ünter Rad 2.FCStd'), X_Fcweb_Ns=ns)
+    assert st == 200 and bb == b'b'
+    assert any(f['name'] == 'Ünter Rad 2.FCStd' for f in call('GET', '/files', X_Fcweb_Ns=ns)[1]['files'])
+    assert call('PUT', '/files/' + quote('../../etc/passwd'), b'x', X_Fcweb_Ns=ns)[0] == 400
+    assert call('GET', '/files/' + quote('../../etc/passwd'), X_Fcweb_Ns=ns)[0] == 400
+    assert call('PUT', '/files/' + quote('.hidden'), b'x', X_Fcweb_Ns=ns)[0] == 400
+    assert call('PUT', '/files/' + quote('n' * 65), b'x', X_Fcweb_Ns=ns)[0] == 400
+    # macOS hands out NFD; the same name typed on Windows is NFC. One document, not two
+    # that look identical in the list.
+    assert call('PUT', '/files/' + quote('café.FCStd'), b'nfc', X_Fcweb_Ns=ns)[0] == 200
+    assert call('PUT', '/files/' + quote('café.FCStd'), b'nfd', X_Fcweb_Ns=ns)[0] == 200
+    assert call('GET', '/files/' + quote('café.FCStd'), X_Fcweb_Ns=ns)[3] == b'nfd'
+    assert len([f for f in call('GET', '/files', X_Fcweb_Ns=ns)[1]['files']
+                if f['name'].startswith('caf')]) == 1, 'NFC and NFD must be one document'
+
+    # a namespace is a folder: two browsers do not see each other
+    assert call('GET', '/files/Box.FCStd', X_Fcweb_Ns='c2' * 16)[0] == 404
+    assert call('GET', '/files', X_Fcweb_Ns='c2' * 16)[1]['files'] == []
+
+    # re-saving replaces, and the size ceiling is the session's own
+    assert call('PUT', '/files/Box.FCStd', b'x' * 2048, X_Fcweb_Ns=ns)[0] == 413
+    st, j, _, _ = call('PUT', '/files/Box.FCStd', b'new', X_Fcweb_Ns=ns)
+    assert st == 200 and j['bytes'] == 3
+    assert call('GET', '/files/Box.FCStd', X_Fcweb_Ns=ns)[3] == b'new'
+    assert len([f for f in call('GET', '/files', X_Fcweb_Ns=ns)[1]['files']
+                if f['name'] == 'Box.FCStd']) == 1, 'a re-save is not a second entry'
+
+    # delete, then a second delete is a miss
+    assert call('DELETE', '/files/Box.FCStd', X_Fcweb_Ns=ns)[0] == 200
+    assert call('DELETE', '/files/Box.FCStd', X_Fcweb_Ns=ns)[1]['code'] == 'no_file'
+    assert call('GET', '/files/Box.FCStd', X_Fcweb_Ns=ns)[1]['code'] == 'no_file'
+
+    # quota: a folder that cannot fit the write REFUSES it. Nothing is evicted here, unlike
+    # the session store -- these are the user's own documents, so the server never deletes
+    # one it was not asked to delete.
+    CFG['files_quota'] = _f_used() + 400
+    clock[0] += 5
+    assert call('PUT', '/files/Old.FCStd', b'old', X_Fcweb_Ns=ns)[0] == 200
+    clock[0] += 5
+    n_before = len(_f_files(ns))
+    assert call('PUT', '/files/Big.FCStd', b'q' * 300, X_Fcweb_Ns=ns)[0] == 200
+    assert len(_f_files(ns)) == n_before + 1, 'a fit write must not evict anything'
+    CFG['files_quota'] = 8
+    assert call('PUT', '/files/Huge.FCStd', b'q' * 900, X_Fcweb_Ns=ns)[1]['code'] == 'quota'
+    assert len(_f_files(ns)) == n_before + 1, 'a refused write must leave the folder alone'
+    # re-saving an existing document still works when the folder is nearly full: it frees its
+    # own bytes first, so "save" fails only when the NEW file genuinely does not fit. Here
+    # the folder holds N bytes and 'old' is 3 of them, so a quota of N+1 is exactly enough
+    # for 'tiny' (4) and nothing more.
+    CFG['files_quota'] = _f_used() - 3 + 4
+    assert call('PUT', '/files/Old.FCStd', b'tiny', X_Fcweb_Ns=ns)[0] == 200
+    assert call('GET', '/files/Old.FCStd', X_Fcweb_Ns=ns)[3] == b'tiny'
+    assert call('PUT', '/files/Also.FCStd', b'q', X_Fcweb_Ns=ns)[1]['code'] == 'quota'
+    CFG['files_quota'] = 10 ** 7
+    assert call('POST', '/files', X_Fcweb_Ns=ns)[0] == 405
+
+    # The whole-store ceiling. Anyone can mint a namespace, so a per-folder limit alone
+    # does not bound the volume: a second browser with a roomy folder must still hit the
+    # operator's backstop, and hitting it must cost nobody a document.
+    CFG['files_total'] = _f_used() + 200
+    assert call('PUT', '/files/Backstop.FCStd', b'q' * 150, X_Fcweb_Ns=ns)[0] == 200
+    keep = len(_f_files(ns))
+    CFG['files_total'] = _f_used()          # nothing left for anyone
+    assert call('PUT', '/files/Nope.FCStd', b'q' * 100, X_Fcweb_Ns='d4' * 16)[1]['code'] == 'quota'
+    assert len(_f_files(ns)) == keep, 'hitting the store ceiling must delete nothing'
+    assert 'FCWEB_FILES_TOTAL_GB' in call('PUT', '/files/Nope.FCStd', b'q', X_Fcweb_Ns=ns)[1]['hint'], 'the hint names the knob the operator can turn'
+    CFG['files_total'] = 10 ** 7
+    assert call('POST', '/files', X_Fcweb_Ns=ns)[0] == 405
+
+    # A shared folder key: every browser that presents it reaches ONE folder, which is the
+    # only arrangement in which "open it on another machine" is possible at all -- a
+    # per-browser namespace cannot cross a machine and there is no way to copy one across.
+    KEY = 'shared-folder-secret'
+    CFG['files_key'] = KEY
+    assert call('PUT', '/files/Shared.FCStd', b'shared', X_Fcweb_Key=KEY)[0] == 200
+    # Two browsers: different namespaces, same key -> the same folder, so one sees the
+    # other's file. This is the entire point of the feature.
+    assert call('GET', '/files/Shared.FCStd', X_Fcweb_Key=KEY, X_Fcweb_Ns='a' * 32)[3] == b'shared'
+    assert call('GET', '/files/Shared.FCStd', X_Fcweb_Key=KEY, X_Fcweb_Ns='b' * 32)[3] == b'shared'
+    assert [f['name'] for f in call('GET', '/files', X_Fcweb_Key=KEY, X_Fcweb_Ns='c' * 32)[1]['files']] \
+        == ['Shared.FCStd'], 'every holder of the key sees the whole folder'
+    # The namespace is IGNORED, not accepted as a fallback: with a key configured only the
+    # key addresses anything. Otherwise a namespace that happened to equal the key would
+    # grant access, which is unauditable.
+    assert call('GET', '/files', X_Fcweb_Ns=ns)[1]['code'] == 'no_namespace'
+    assert call('GET', '/files', X_Fcweb_Ns=KEY)[1]['code'] == 'no_namespace'
+    assert call('GET', '/files')[1]['code'] == 'no_namespace'
+    assert call('GET', '/files', X_Fcweb_Key='wrong')[1]['code'] == 'no_namespace'
+    assert call('GET', '/files', X_Fcweb_Key=KEY.upper())[1]['code'] == 'no_namespace', \
+        'the key is compared exactly'
+    # The key is never a directory name: sha256 of it, so a pasted secret never lands on disk
+    listing = os.listdir(CFG['files_dir'])
+    assert KEY not in listing, 'the key itself must never become a folder name'
+    assert _shared_ns() in listing, 'and the folder is named by its hash'
+    # The per-browser folder it would otherwise have used is untouched and still separate.
+    assert call('GET', '/files', X_Fcweb_Ns=ns)[1]['code'] == 'no_namespace'
+    CFG['files_key'] = ''
+    assert call('GET', '/files/Shared.FCStd', X_Fcweb_Key=KEY)[0] == 404, \
+        'with no key configured a key header addresses nothing'
+    assert call('GET', '/files/Shared.FCStd', X_Fcweb_Ns=ns)[0] == 404, \
+        'and the shared folder is unreachable without the key'
+
     # stop
     assert call('DELETE', '/share/' + sc, X_Fcweb_Edit=jc['edit'])[0] == 403
     assert call('DELETE', '/share/' + sc, X_Fcweb_Key='3' * 64)[0] == 204
@@ -1126,6 +1544,22 @@ def main(argv):
             m = _meta(i) or {}
             print(i, m.get('n', ''), 'v%d' % m.get('v', 0), '%.1fMB' % (_size(i) / 1048576),
                   'expires=%s' % m.get('expires'))
+        return 0
+    if argv[1:2] == ['--files']:
+        # The operator's view of the opt-in store. Same shape as --list so the two can be
+        # compared line for line when checking what the page is showing.
+        if not CFG['files_on']:
+            print('server files are OFF (set FCWEB_FILES=1 on the session container)')
+            return 0
+        print('files=on used=%s quota=%s' % (_sz(_f_used()), _sz(CFG['files_quota'])))
+        for ns in sorted(os.listdir(CFG['files_dir'])) if os.path.isdir(CFG['files_dir']) else []:
+            if not ID_RE.match(ns):
+                continue
+            rows = _f_files(ns)
+            print('  %s  %d document(s)' % (ns, len(rows)))
+            for r in rows:
+                print('    %s  %s  %s' % (r['name'], _sz(r['bytes']),
+                                          time.strftime('%Y-%m-%d %H:%M', time.localtime(r['saved']))))
         return 0
     if argv[1:2] == ['--purge-expired']:
         _gc()

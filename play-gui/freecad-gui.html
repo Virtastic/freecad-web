@@ -1266,7 +1266,12 @@ window.fcwebNotify = function (text, kind, actions, opts) {
           // stacked a second prompt on top of the first, and the answer went to whichever
           // one happened to be first in the DOM -- so the reply reached a promise that had
           // already been settled, and nothing happened.
-          if (field) kill();
+          //
+          // `dismissOnAction` is opt-in rather than automatic: a toast with a field is a
+          // form, and one with plain buttons may be reporting progress while it stays up
+          // (see watchForMissingLinks, which keeps its toast until the user acts). A
+          // one-shot yes/no offer should ask for this instead of assuming it.
+          if (field || (opts && opts.dismissOnAction)) kill();
         });
         row.appendChild(btn);
       });
@@ -1361,6 +1366,10 @@ window.fcwebNotify = function (text, kind, actions, opts) {
   // both fire and cannot fire before there is anything to protect.
   window.__fcWorkSaved = function () {
     try { window.fcwebOfferInstall(); window.fcwebWarnEvictable(); } catch (e) {}
+    // Same moment, and for the same reason: the user has just saved real work, so "keep a
+    // copy on the server" is a question they can now answer concretely. It only ever asks
+    // once, and only if this site has the feature at all.
+    try { if (window.fcwebServerFiles && window.fcwebServerFiles.offer) window.fcwebServerFiles.offer(); } catch (e) {}
   };
 
   // ---- Backup folder ------------------------------------------------------------------
@@ -2528,6 +2537,7 @@ window.fcwebNotify = function (text, kind, actions, opts) {
       else if (req === 'deny') grant(true);
       else if (req === 'download') downloadCopy();
       else if (req === 'diag') showDiag();
+      else if (req === 'files') { try { if (window.fcwebServerFiles) window.fcwebServerFiles.list(); else toast('Server files are not available in this build.', 'warn'); } catch (e) { toast('Server files: ' + e, 'error'); } }
       else if (req === 'stop') stopSharing();
       else if (req.indexOf('kick:') === 0) kick(req.slice(5));
       else if (req === 'copy:link' && S.id) copy(shareLink(), null, 'Link copied'); else if (req === 'copy:mcp' && S.agentUrl) copy(S.agentUrl, null, 'MCP link copied');
@@ -6229,6 +6239,15 @@ window.fcRunPy = fcRunPy;
       // They have just saved real work: the one moment the install offer is concretely
       // about something they would mind losing.
       try{ window.__fcWorkSaved && window.__fcWorkSaved(); }catch(e){}
+      // ...and the same for the server copy. Ctrl+S and the File > Save button land HERE,
+      // not in the save watcher: that one only sees Save As / Export, which go through
+      // FreeCAD's getSaveFileName and are announced by registerSave(). Plain Save writes to
+      // the document's existing FileName, so nothing ever announced it. Without this the
+      // most common save action never reached the server, and a document synced after Save
+      // As then kept serving its older copy no matter how often it was saved. The bytes are
+      // in hand and the staged copy is already unlinked above, so this passes them
+      // directly rather than re-reading a file that is gone.
+      try{ if(window.fcwebServerFiles){ window.fcwebServerFiles.onSave && window.fcwebServerFiles.onSave(dir+'/'+name, bytes); } }catch(e){}
       return;
     }
     alert('Save timed out');
@@ -6352,6 +6371,480 @@ window.fcRunPy = fcRunPy;
     inp.click();
   }
   window.fcwebOpenFolder=openFolder;
+
+  // ---- Server files (opt-in) ---------------------------------------------------------
+  // Save a document to the server so it can be reopened later, or from another machine.
+  // The IDBFS home cannot do either: IndexedDB is one browser on one machine, and the
+  // browser may evict it or lose it with "clear site data".
+  //
+  // OFF unless the server answers for /files AND this browser was told to. Two independent
+  // gates, because this is the only feature on the page that moves a user's model off
+  // their machine, and the rest of this site promises that nothing leaves the browser.
+  //
+  // There are no accounts. The browser invents a 32-hex key, keeps it in localStorage and
+  // presents it as X-Fcweb-Ns, which the server treats as a folder name. One browser is one
+  // folder, a second browser on the same box is a second folder, and the key is the only
+  // key to either -- so a lost key loses the folder, exactly like a lost share key.
+  var FSNS='fcweb-files-ns', FSON='fcweb-files-on', FSKY='fcweb-files-key';
+  var fcFilesAvail=null;      // null = not asked yet; the answer is cached for the session
+  var fcFilesAsked=false;     // has this browser been asked whether to keep work here?
+  var fcFilesBusy=false;      // a save is in flight; do not stack another
+  var fcFilesKey=null;        // a shared-folder key, when the operator set one
+  var fcFilesWhy=null;        // why the last probe failed: null | 'off' | 'no-namespace'
+
+  // A shared folder key, if this browser was given one: ?key=... on the URL, kept for the
+  // tab in sessionStorage so it survives the engine loading without persisting a secret to
+  // disk. Sent as X-Fcweb-Key, which the server honours ONLY when FCWEB_FILES_KEY is set --
+  // on a site without one the header is ignored and each browser keeps its own folder, so
+  // sending it is harmless either way.
+  (function(){
+    try{
+      var q=new URLSearchParams((typeof location!=='undefined'&&location.search)||'');
+      var k=q.get('key');
+      if(!k){ try{ k=sessionStorage.getItem(FSKY); }catch(le){} }
+      if(k){ fcFilesKey=String(k).slice(0,200); try{ sessionStorage.setItem(FSKY,k); }catch(le2){} }
+    }catch(e){}
+  })();
+
+  // This browser's folder key, minted once and kept. EVERY request must present the same
+  // one: minting per call would address a different, always-empty folder each time, which
+  // looks exactly like the server losing everything. Returns null when there is no crypto
+  // or no storage to keep it in -- both are refusals, not a fallback to something shared.
+  function fcNs(){
+    try{
+      var k=null;
+      try{ k=localStorage.getItem(FSNS); }catch(le){}
+      if(k&&/^[0-9a-f]{32}$/.test(k)){ return k; }
+      if(!window.crypto||!window.crypto.getRandomValues){ return null; }
+      var a=new Uint8Array(16);
+      window.crypto.getRandomValues(a);
+      k='';
+      for(var i=0;i<16;i++){ k+=('0'+a[i].toString(16)).slice(-2); }
+      // A corrupt stored value is replaced rather than sent: the server would refuse it and
+      // the page would report "no folder" with nothing the user could do about it.
+      try{ localStorage.setItem(FSNS,k); }catch(le2){}
+      return k;
+    }catch(e){ return null; }
+  }
+  // The addressing headers, built once per call. A shared key WINS over the per-browser
+  // namespace, because the server ignores the namespace entirely when one is configured --
+  // which is what lets a second machine reach the same folder.
+  function fcFileHdrs(extra){
+    var h={};
+    var ns=fcNs();
+    if(ns){ h['X-Fcweb-Ns']=ns; }
+    if(fcFilesKey){ h['X-Fcweb-Key']=fcFilesKey; }
+    if(extra){ Object.keys(extra).forEach(function(k){ h[k]=extra[k]; }); }
+    return h;
+  }
+  // Adopt or drop the folder key. Dropping it returns this browser to its own per-browser
+  // folder, which is what "Clear" means on a site that has both arrangements available.
+  function fcFileSetKey(k){
+    fcFilesKey=k?String(k).slice(0,200):null;
+    try{
+      if(fcFilesKey){ sessionStorage.setItem(FSKY,fcFilesKey); }
+      else { sessionStorage.removeItem(FSKY); }
+    }catch(e){}
+    fcFilesAvail=null;     // the cached answer was about the folder we just left
+    fcFilesAsked=false;    // offer again once, for the folder now in play
+  }
+  function fcFileApi(method, path, body, ctype){
+    var h=fcFileHdrs(ctype?{'Content-Type':ctype}:null);
+    // Neither a namespace nor a key is a refusal, not a silent empty folder: without one
+    // the request would address a folder that can never be right.
+    if(!h['X-Fcweb-Ns'] && !h['X-Fcweb-Key']){ return Promise.reject(new Error('no key')); }
+    if(ctype){ h['Content-Type']=ctype; }
+    // 404 is NOT one thing. files_off means this server does not keep documents at all;
+    // no_namespace means it DOES and this browser has named no folder -- which is exactly
+    // what a second browser looks like before its folder key is pasted. Collapsing the two
+    // told a user with a working feature that the operator had not enabled it, and pointed
+    // them at FCWEB_FILES when the real answer was the key field a few rows below.
+    return fetch('/files'+path, {method:method, headers:h, body:body, cache:'no-store'})
+      .then(function(r){
+        return r.text().then(function(t){
+          var j=null; try{ j=JSON.parse(t); }catch(e){}
+          if(r.status===404){
+            var e=new Error((j&&j.hint)||'no folder');
+            e.code=j&&j.code;
+            e.off=!!(j&&j.code==='files_off');
+            e.noFolder=!e.off;
+            throw e;
+          }
+          if(!r.ok){ var e2=new Error((j&&(j.hint||j.error))||('HTTP '+r.status));
+                    e2.code=j&&j.code; throw e2; }
+          return j;
+        });
+      });
+  }
+  function fcFileName(path){ return String(path||'').replace(/^.*\//,''); }
+  function fcFileSize(n){
+    if(n<1024){ return n+' B'; }
+    if(n<1048576){ return (n/1024).toFixed(0)+' KB'; }
+    // GB included because the folder quota is usually in GB (FCWEB_FILES_MAX_GB), and
+    // "3072.0 MB" is not a number anyone can act on.
+    if(n<1073741824){ return (n/1048576).toFixed(1)+' MB'; }
+    return (n/1073741824).toFixed(1)+' GB';
+  }
+  function fcFileEnabled(){
+    try{ return localStorage.getItem(FSON)==='1'; }catch(e){ return false; }
+  }
+  function fcFileEnable(on){
+    try{ on?localStorage.setItem(FSON,'1'):localStorage.removeItem(FSON); }catch(e){}
+  }
+
+  // Is there a server on this site that keeps documents? TWO answers, not one, and
+  // collapsing them is what produced "FCWEB_FILES=1 is not set" on a server that had it
+  // set: no_namespace means the feature IS on and this browser has named no folder, which is
+  // a different problem with a different fix and its own field in the panel.
+  // fcFilesWhy records which, so the boolean stays a boolean -- five callers depend on it.
+  function fcFilesAvailable(){
+    if(fcFilesAvail!==null){ return Promise.resolve(fcFilesAvail); }
+    return fcFileApi('GET','').then(function(j){
+      fcFilesAvail=!!(j&&j.files); fcFilesWhy=null; return fcFilesAvail;
+    }).catch(function(e){
+      fcFilesAvail=false;
+      fcFilesWhy=(e&&e.noFolder)?'no-namespace':'off';
+      return false;
+    });
+  }
+
+  // Save one staged file to the server folder. Silent on success: this also runs on the
+  // save tick, so a toast every autosave would be noise. Failures are loud, because the
+  // user believes the work is somewhere safe.
+  // A failure already reported once is not reported again until it changes or succeeds.
+  // Automatic saves go through here on every Ctrl+S, and a model over the server's 25 MB
+  // per-document cap would otherwise raise an error toast every single time -- which is
+  // how a working local save ends up looking broken. Silence is not the answer either:
+  // the user believes the copy is safe, so the first failure must say so plainly.
+  var fcFileFailSeen={};
+  function fcFileSave(path, bytes, quiet){
+    var name=fcFileName(path);
+    if(!name){ return Promise.reject(new Error('no name')); }
+    fcFilesBusy=true;
+    return fcFileApi('PUT', '/'+encodeURIComponent(name), bytes).then(function(j){
+      append('saved to server: '+name+' ('+fcFileSize(j.bytes)+')');
+      delete fcFileFailSeen[name];      // recovered: the next failure of any kind may speak
+      if(!quiet&&window.fcwebNotify){
+        window.fcwebNotify(name+' is on the server. Open it from any browser on this site.',
+          'info');
+      }
+      return j;
+    }).catch(function(e){
+      if(e&&e.off){                       // server has no file store: say so once
+        if(!fcFilesAsked){ fcFilesAsked=true;
+          if(window.fcwebNotify){
+            window.fcwebNotify('This site does not keep documents on its server, so nothing '
+              + 'leaves your browser. Ask the operator to start it with FCWEB_FILES=1.','warn');
+          }
+        }
+        return null;
+      }
+      if(e&&e.noFolder){                  // feature is on; this browser has named no folder
+        if(!fcFilesAsked){ fcFilesAsked=true;
+          if(window.fcwebNotify){
+            window.fcwebNotify('This site keeps documents, but this browser has not been given '
+              + 'its folder key yet, so nothing was sent. Open Edit > Server Files... and paste '
+              + 'the key to save here.','warn');
+          }
+        }
+        return null;
+      }
+      append('server save failed: '+name+' '+(e&&e.message||e),'err');
+      if(window.fcwebNotify&&!fcFileFailSeen[name]){
+        fcFileFailSeen[name]=true;
+        window.fcwebNotify('Could not copy '+name+' to the server: '
+          +(e&&e.message||e)+' It is still saved in this browser and downloaded to your '
+          + 'machine, but the server copy is out of date. Edit > Server Files... lists what '
+          + 'did get through.','error');
+      }
+      throw e;
+    }).then(function(r){ fcFilesBusy=false; return r; },
+             function(e){ fcFilesBusy=false; throw e; });
+  }
+
+  // The hook the save watcher calls. Only ever fires for a file the user saved through
+  // File > Save, and only after they have turned this on -- so the promise that nothing
+  // leaves the browser is kept until they break it deliberately.
+  //
+  // A save arriving while one is in flight is NOT dropped: it waits its turn. Dropping it
+  // would leave the server holding the PREVIOUS version of a document the user has since
+  // saved, which is the one failure this feature exists to prevent. Only the newest
+  // pending pair is kept, so a burst of autosaves still ends up current.
+  var fcFilePending=null;
+  function fcFileOnSave(path, bytes){
+    if(!fcFileEnabled()||!fcFilesAvail){ return; }   // not confirmed on this site; never guessed
+    if(fcFilesBusy){ fcFilePending={path:path, bytes:bytes}; return; }
+    fcFileSave(path, bytes, true).then(fcFileDrain, fcFileDrain);
+  }
+  function fcFileDrain(){
+    if(fcFilesBusy||!fcFilePending){ return; }
+    var p=fcFilePending; fcFilePending=null;
+    fcFileSave(p.path, p.bytes, true).then(fcFileDrain, fcFileDrain);
+  }
+
+  // Read one document's bytes. Separate from fcFileApi because that one parses JSON, and a
+  // .FCStd is not JSON -- so this cannot go through the same .text()/.json() path.
+  function fcFileFetch(name){
+    var h=fcFileHdrs(null);
+    if(!h['X-Fcweb-Ns'] && !h['X-Fcweb-Key']){ return Promise.reject(new Error('no key')); }
+    return fetch('/files/'+encodeURIComponent(name), {
+      headers:h, cache:'no-store'
+    }).then(function(r){
+      // Success: the bytes. Branch on the status BEFORE touching the body -- a Response body
+      // is a single stream, so reading it as text and then as an ArrayBuffer throws
+      // "body stream already read" and every open would fail.
+      if(r.ok){ return r.arrayBuffer(); }
+      return r.text().then(function(t){
+        var j=null; try{ j=JSON.parse(t); }catch(e){}
+        if(r.status===404){
+          var e=new Error((j&&j.hint)||'no folder');
+          e.code=j&&j.code;
+          e.off=!!(j&&j.code==='files_off');
+          e.noFolder=!e.off;
+          throw e;
+        }
+        var e2=new Error((j&&(j.hint||j.error))||('HTTP '+r.status));
+        e2.code=j&&j.code; throw e2;
+      });
+    });
+  }
+
+  function fcFileOpen(name, quiet){
+    if(!ready()){ window.fcwebNotify('FreeCAD is still starting. Try again in a moment.','warn'); return; }
+    var FS=window.fcInstance.FS;
+    fcFileFetch(name).then(function(ab){
+      var bytes=new Uint8Array(ab), dir=UP;
+      try{ FS.mkdirTree ? FS.mkdirTree(dir) : FS.mkdir(dir); }catch(e){}
+      var path=dir+'/'+fcFileName(name);
+      FS.writeFile(path, bytes);
+      if(!quiet) append('opened from server: '+name+' ('+fcFileSize(bytes.length)+')');
+      // A document already open from the same name would keep its old copy and its own
+      // FileName; close it first, exactly as opening a folder from disk does.
+      py([
+        "import FreeCAD, FreeCADGui as Gui",
+        "_p = " + JSON.stringify(path),
+        "for _d in list(FreeCAD.listDocuments().values()):",
+        "    if (_d.FileName or '').replace('\\\\', '/').split('/')[-1] == _p.split('/')[-1]:",
+        "        FreeCAD.closeDocument(_d.Name)",
+        "D = FreeCAD.openDocument(_p)",
+        "Gui.updateGui()",
+        "try:",
+        " v = Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()",
+        "except Exception: pass",
+      ].join('\n'));
+        watchForMissingLinks(path);
+        window.fcwebNotify('Opened '+name+' from the server.','info');
+    }).catch(function(e){
+      if(e&&e.off){ window.fcwebNotify('This site does not keep documents on its server.','warn'); return; }
+      if(e&&e.noFolder){ window.fcwebNotify('This browser has no folder yet — paste the folder key in the field above.','warn'); return; }
+      window.fcwebNotify('Could not open '+name+': '+(e&&e.message||e),'error');
+    });
+  }
+
+  function fcFileDelete(name){
+    fcFileApi('DELETE','/'+encodeURIComponent(name)).then(function(){
+      append('deleted from server: '+name);
+      window.fcwebNotify('Deleted '+name+' from the server.','info');
+      fcFilePanelRefresh();
+    }).catch(function(e){
+      if(e&&e.off){ return; }
+      window.fcwebNotify('Could not delete '+name+': '+(e&&e.message||e),'error');
+    });
+  }
+
+  // ---- the file panel ---------------------------------------------------------------
+  // A plain overlay, not a toast: the list is open-ended, and a toast that expired would
+  // take the user's document choices with it.
+  var fcFilePanel=null;
+  function fcFilePanelClose(){
+    // fcFilePanel is a HANDLE ({el, list, foot}), not the element. Calling .remove() on
+    // the handle threw a TypeError, which the global handler surfaced as "something went
+    // wrong" -- and because the throw happened BEFORE fcFileOpen() on the same click, the
+    // document never opened at all. Found by the manual pass on 2026-10-01.
+    if(fcFilePanel){
+      try{ if(fcFilePanel.el && fcFilePanel.el.remove) fcFilePanel.el.remove(); }catch(e){}
+      fcFilePanel=null;
+    }
+  }
+  function fcFilePanelBuild(){
+    fcFilePanelClose();
+    var back=document.createElement('div');
+    back.style.cssText='position:fixed;inset:0;z-index:10040;background:rgba(0,0,0,.55);'+
+      'display:flex;align-items:center;justify-content:center';
+    var box=document.createElement('div');
+    box.style.cssText='background:#232629;color:#e8e8e8;border:1px solid rgba(255,255,255,.16);'+
+      'border-radius:10px;padding:16px 18px;width:min(640px,92vw);max-height:80vh;'+
+      'display:flex;flex-direction:column;gap:10px;box-shadow:0 18px 50px rgba(0,0,0,.5)';
+    var h=document.createElement('div');
+    h.style.cssText='display:flex;align-items:center;gap:10px;font:600 14px inherit';
+    var t=document.createElement('div'); t.textContent='Documents on this server';
+    t.style.cssText='flex:1';
+    var x=document.createElement('button'); x.textContent='Close';
+    x.style.cssText='background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);'+
+      'color:#e8e8e8;border-radius:6px;padding:4px 10px;font:12px inherit;cursor:pointer';
+    x.addEventListener('click', fcFilePanelClose);
+    h.appendChild(t); h.appendChild(x);
+    var note=document.createElement('div');
+    note.style.cssText='font:11.5px inherit;opacity:.72;line-height:1.5';
+    note.textContent=fcFilesKey
+      ? 'Shared folder. Every browser with this folder key sees the same documents, so you '
+        + 'can open one on another machine. The key is the only thing that grants access.'
+      : 'Kept by this browser under a key only this browser holds. A different browser on this '
+        + 'site has its own folder and cannot see these documents -- paste a folder key below '
+        + 'if this server uses one.';
+    var list=document.createElement('div');
+    list.style.cssText='overflow:auto;display:flex;flex-direction:column;gap:6px';
+    var foot=document.createElement('div');
+    foot.style.cssText='font:11px inherit;opacity:.6;display:flex;gap:12px';
+    box.appendChild(h); box.appendChild(note);
+    // A folder-key row. Present whether or not a key is set: a browser on a SHARED server
+    // arrives here with nothing, and without somewhere to paste the key the only way to ever
+    // see the folder is a URL the operator has to hand over -- which is exactly the trap that
+    // made "open it on another machine" impossible in the first place.
+    var krow=document.createElement('div');
+    krow.style.cssText='display:flex;align-items:center;gap:7px';
+    var kin=document.createElement('input');
+    kin.type='password'; kin.placeholder='Folder key (if this server uses one)';
+    kin.value=fcFilesKey||'';
+    kin.style.cssText='flex:1;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.2);'+
+      'color:#e8e8e8;border-radius:6px;padding:5px 8px;font:12px inherit';
+    var kgo=document.createElement('button'); kgo.textContent='Use folder';
+    kgo.style.cssText='background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);'+
+      'color:#e8e8e8;border-radius:6px;padding:4px 10px;font:12px inherit;cursor:pointer';
+    kgo.addEventListener('click', function(){
+      var v=(kin.value||'').trim();
+      fcFileSetKey(v);
+      // Reload the list so the change is visible immediately: on a shared server this is the
+      // moment the folder appears, and without a repaint it looks like nothing happened.
+      if(fcFilePanel){ fcFilePanelClose(); fcFileList(); }
+    });
+    var kclr=document.createElement('button'); kclr.textContent='Clear';
+    kclr.style.cssText='background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.18);'+
+      'color:#e8e8e8;border-radius:6px;padding:4px 10px;font:12px inherit;cursor:pointer';
+    kclr.addEventListener('click', function(){
+      kin.value=''; fcFileSetKey('');
+      if(fcFilePanel){ fcFilePanelClose(); fcFileList(); }
+    });
+    krow.appendChild(kin); krow.appendChild(kgo); krow.appendChild(kclr);
+    box.appendChild(krow);
+    box.appendChild(list); box.appendChild(foot);
+    back.appendChild(box);
+    back.addEventListener('click', function(e){ if(e.target===back){ fcFilePanelClose(); } });
+    document.body.appendChild(back);
+    fcFilePanel={el:back, list:list, foot:foot};
+    return fcFilePanel;
+  }
+  function fcFileRow(panel, f){
+    var row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:10px;padding:7px 9px;'+
+      'background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);border-radius:7px';
+    var nm=document.createElement('div');
+    nm.textContent=f.name; nm.title=f.name;
+    nm.style.cssText='flex:1;font:12.5px inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    var sz=document.createElement('div');
+    sz.textContent=fcFileSize(f.bytes)+(f.saved?' · '+new Date(f.saved*1000).toLocaleString():'');
+    sz.style.cssText='font:11px inherit;opacity:.62;white-space:nowrap';
+    var open=document.createElement('button'); open.textContent='Open';
+    open.style.cssText='background:rgba(91,141,239,.22);border:1px solid rgba(91,141,239,.5);'+
+      'color:#e8e8e8;border-radius:6px;padding:4px 10px;font:12px inherit;cursor:pointer';
+    open.addEventListener('click', function(){ fcFilePanelClose(); fcFileOpen(f.name); });
+    var del=document.createElement('button'); del.textContent='Delete';
+    del.style.cssText='background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.2);'+
+      'color:#e8e8e8;border-radius:6px;padding:4px 10px;font:12px inherit;cursor:pointer';
+    del.addEventListener('click', function(){
+      del.textContent='Really?'; del.disabled=true;
+      // A delete is the one thing here that cannot be undone from inside the browser, so
+      // it takes a second press on the same button rather than one click.
+      del.onclick=function(){ fcFileDelete(f.name); };
+    });
+    row.appendChild(nm); row.appendChild(sz); row.appendChild(open); row.appendChild(del);
+    panel.list.appendChild(row);
+  }
+  function fcFilePanelRefresh(){
+    if(!fcFilePanel){ return; }
+    return fcFileApi('GET','').then(function(j){
+      var p=fcFilePanel; if(!p){ return; }        // closed while the list was loading
+      p.list.textContent='';
+      if(!j.files.length){
+        var e=document.createElement('div');
+        e.textContent='Nothing here yet. Use File > Save, and this browser will keep a copy.';
+        e.style.cssText='font:12px inherit;opacity:.7;padding:10px 2px';
+        p.list.appendChild(e);
+      } else {
+        j.files.forEach(function(f){ fcFileRow(p,f); });
+      }
+      p.foot.textContent='Using '+fcFileSize(j.used||0)+' of '+fcFileSize(j.quota||0)+
+        ' in this folder · max '+j.max_mb+' MB per document';
+    }).catch(function(e){
+      if(!fcFilePanel){ return; }
+      if(e&&e.off){
+        fcFilePanelClose();
+        window.fcwebNotify('This site does not keep documents on its server.','warn');
+        return;
+      }
+      // The feature is on and this browser simply has no folder yet. Close and reopen is
+      // wrong here -- the panel IS the fix, because it holds the key field -- so leave it up
+      // and put the reason in it, where the user can act on it.
+      if(e&&e.noFolder){
+        fcFilePanel.list.textContent='This browser has no folder yet. Paste the folder key '
+          + 'above and press Use folder.';
+        return;
+      }
+      fcFilePanel.list.textContent='Could not reach the server: '+(e&&e.message||e);
+    });
+  }
+  function fcFileList(){
+    return fcFilesAvailable().then(function(ok){
+      if(!ok){
+        // "No folder" and "no feature" are different, and telling a user to ask an operator
+        // for FCWEB_FILES=1 when it is already set is the wrong instruction at the wrong
+        // moment. On no-namespace the panel is still the right destination: it holds the key
+        // field, so opening it is how the user fixes this themselves.
+        if(fcFilesWhy==='no-namespace'){ fcFilePanelBuild(); fcFilePanelRefresh(); return; }
+        window.fcwebNotify('This site does not keep documents on its server, so nothing leaves '
+          + 'your browser. Ask the operator to start it with FCWEB_FILES=1.','warn');
+        return;
+      }
+      fcFilePanelBuild(); fcFilePanelRefresh();
+    });
+  }
+
+  // Ask, once per browser, at the moment it is concrete: the user has just saved real work
+  // and can now judge what "on the server" means. Answering yes turns the save hook on for
+  // good; no leaves the promise exactly as it was.
+  function fcFileOffer(){
+    if(fcFilesAsked||fcFileEnabled()||fcFilesAvail===false){ return; }
+    fcFilesAvailable().then(function(ok){
+      if(!ok||fcFileEnabled()||fcFilesAsked){ return; }
+      fcFilesAsked=true;
+      if(!window.fcwebNotify){ return; }
+      // Wording matters here more than usual. "Keep documents here" was reported as
+      // ambiguous -- "here" reads as this computer. So: name the server explicitly, say
+      // plainly that the local copy stays, and say what they get.
+      window.fcwebNotify('This site can save a copy of each document to ITS SERVER when you '
+        + 'use File > Save, so you can open it later or from another browser. Your own copy '
+        + 'stays in this browser, and nothing is sent until you turn this on.','info',
+        [{label:'Send copies to the server', onClick:function(){
+          fcFileEnable(true);
+          window.fcwebNotify('Documents will now also be copied to this site\'s server each '
+            + 'time you save -- File > Save, Ctrl+S, Save As and Export alike. Your browser '
+            + 'copy stays, and saves still download to your machine. Review or delete what '
+            + 'is stored from Edit > Server Files...','info');
+        }},{label:'No thanks', onClick:function(){}}],
+        {dismissOnAction:true});
+    }).catch(function(){});
+  }
+
+  // Exposed for a FreeCAD command and for the scratchpad harnesses: the page is where
+  // fetch() and the MEMFS live, and a menu entry has neither.
+  window.fcwebServerFiles={
+    available:fcFilesAvailable, list:fcFileList, enabled:fcFileEnabled,
+    enable:fcFileEnable, save:fcFileSave, open:fcFileOpen, del:fcFileDelete,
+    offer:fcFileOffer, onSave:fcFileOnSave, setKey:fcFileSetKey, key:fcFileHdrs,
+    // What the save watcher hands us, exposed for scratchpad/serverfiles.js. Not part of
+    // the page's own API; the harness asserts on these rather than on a copy of them.
+    ns:fcNs, name:fcFileName, size:fcFileSize
+  };
 
   function openFile(filter){
     if(!ready()){ return; }
@@ -6514,6 +7007,10 @@ window.fcRunPy = fcRunPy;
           if(bytes.length!==size) { pendingSaves[p]=null; return; } // mid-write; retry next tick
           // The user has saved real work through File > Save / Save As / Export.
           try{ window.__fcWorkSaved && window.__fcWorkSaved(); }catch(e){}
+          // Server copy, if THIS browser asked for one. It is a copy, not a move: the
+          // download and the OS-file write below still happen, so turning the feature off
+          // loses nothing and the browser stays the primary home.
+          try{ if(window.fcwebServerFiles){ window.fcwebServerFiles.onSave && window.fcwebServerFiles.onSave(p, bytes); } }catch(e){}
           // Preferred: write straight into the file the user picked in the OS save dialog.
           if(writeToTarget(p, bytes)) return;
           // Fallback (no File System Access API): download it.
