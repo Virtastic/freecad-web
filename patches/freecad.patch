@@ -7253,3 +7253,49 @@ diff --git a/src/Gui/Dialogs/DlgCustomizeSpNavSettings.cpp b/src/Gui/Dialogs/Dlg
      this->setLayout(layout);
  }
  
+diff -ruNp a/src/Gui/CommandView.cpp b/src/Gui/CommandView.cpp
+--- a/src/Gui/CommandView.cpp
++++ b/src/Gui/CommandView.cpp
+@@ -39,6 +39,10 @@
+ #include <QPointer>
+ #include <QTextStream>
+ 
++#ifdef __EMSCRIPTEN__
++# include <emscripten.h>
++#endif
++
+ #include <App/ComplexGeoDataPy.h>
+ #include <App/Document.h>
+ #include <App/DocumentObject.h>
+@@ -2227,6 +2231,31 @@
+ {
+     Q_UNUSED(iMsg);
+ 
++#ifdef __EMSCRIPTEN__
++    {
++        // The Qt dialog below browses the wasm filesystem, never the user's PC, and its
++        // exec() would nest an event loop. First run: ask the page for the browser's file
++        // picker. The page stages the chosen file, records its path here and runs this
++        // command again; that second run builds the viewer exactly as the desktop does.
++        auto hGrp = App::GetApplication().GetParameterGroupByPath(
++            "User parameter:BaseApp/Preferences/Web"
++        );
++        std::string staged = hGrp->GetASCII("LoadImagePath");
++        if (staged.empty()) {
++            EM_ASM({
++                if (typeof window !== 'undefined' && window.fcwebPickImage) window.fcwebPickImage();
++            });
++            return;
++        }
++        hGrp->RemoveASCII("LoadImagePath");
++        ImageView* view = new ImageView(Gui::getMainWindow());
++        view->loadFile(QString::fromUtf8(staged.c_str()));
++        view->resize(400, 300);
++        Gui::getMainWindow()->addWindow(view);
++        return;
++    }
++#endif
++
+     // add all supported QImage formats
+     QStringList mimeTypeFilters;
+     QList<QByteArray> supportedMimeTypes = QImageReader::supportedMimeTypes();
