@@ -952,11 +952,12 @@ inside any patch's replacement, so the class cannot come back.
 10. **Bump the pinned image tag in the install files, in the same release.** `setup.sh`,
    `setup.ps1`, `docker-compose.yml`, `docker-compose.portainer.yml`, `README.md` and
    `QUICKSTART.md` all pin `ghcr.io/virtastic/freecad-web:<tag>`, and `setup.sh` and
-   `setup.ps1` also pin the release they download (`FCWEB_RELEASE` / `$Tag`). A pinned tag
+   `setup.ps1` also pin the release they download (`FCWEB_RELEASE` / `$Tag`), and so do
+   `full-build.sh` and `full-build.ps1` (left on `v1.0.0` through v1.0.6). A pinned tag
    never moves. The image pin sat on
    `1.0.0` through v1.0.5, so a self-hoster following the docs ran an old image with
    Firefox bugs already fixed (measured 2026-09-30: his console showed the 1.0.1 page).
-   Check before tagging: `grep -ho "freecad-web:[0-9][0-9.]*\|RELEASE:-v[0-9.]*\|'v1[0-9.]*'" setup.sh setup.ps1 docker-compose.yml docker-compose.portainer.yml README.md QUICKSTART.md | sort -u`
+   Check before tagging: `grep -ho "freecad-web:[0-9][0-9.]*\|RELEASE:-v[0-9.]*\|'v1[0-9.]*'" setup.sh setup.ps1 full-build.sh full-build.ps1 docker-compose.yml docker-compose.portainer.yml README.md QUICKSTART.md | sort -u`
    must print only the release being cut.
 11. **`calculix-demo.html` is site-only.** The Dockerfile copies it optionally,
    `publish-ghcr.yml` deletes it before building and fails the verify step if it is in the

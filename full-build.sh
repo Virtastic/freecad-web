@@ -20,7 +20,7 @@
 set -eu
 
 REPO="${FCWEB_REPO:-Virtastic/freecad-web}"
-RELEASE="${FCWEB_RELEASE:-v1.0.0}"
+RELEASE="${FCWEB_RELEASE:-v1.0.7}"
 # What to CHECK OUT, which is not always what to DOWNLOAD. They differ when building a
 # branch against an existing release's artifacts -- and they had to differ to test this
 # script at all before the first release that contains it.
