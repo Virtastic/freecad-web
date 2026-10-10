@@ -43,8 +43,9 @@ on:
       runner:
         description: "Where to build"
         type: choice
-        default: vps
+        default: builder
         options:
+          - builder
           - vps
           - ubuntu-latest
 

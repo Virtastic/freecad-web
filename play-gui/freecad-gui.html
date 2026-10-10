@@ -6358,7 +6358,7 @@ window.fcRunPy = fcRunPy;
     var inp=document.createElement('input'); inp.type='file';
     // .ply/.3mf via Mesh, .ifc via the compiled-in ifcopenshell -- everything the
     // engine's import map registers should be pickable here.
-    inp.accept='.FCStd,.fcstd,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.3mf,.ifc,.FCMacro,.py,.svg,.dxf,.zip';
+    inp.accept='.FCStd,.fcstd,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.3mf,.ifc,.FCMacro,.py,.svg,.dxf,.zip,.png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff,.ppm,.pgm,.pbm,.xbm,.xpm';
     inp.multiple=true;   // an assembly's children can be selected with its master
     inp.style.cssText='position:fixed;left:-9999px;'; document.body.appendChild(inp);
     inp.onchange=async function(){
@@ -6418,6 +6418,11 @@ window.fcRunPy = fcRunPy;
         // Custom workbench / addon package: extract into the user Mod dir and load it, so an
         // engineer can install a plugin they already have as a .zip (no network needed).
         installWorkbenchZip(path);
+      } else if(/^(png|jpe?g|bmp|gif|webp|tiff?|p[bgp]m|xbm|xpm)$/.test(ext)){
+        // Bitmap: what Gui/FileHandler.cpp openImage() does on desktop -- an Image::ImagePlane.
+        // ImageFile is a PropertyFileIncluded, so the plane copies the bytes at recompute and
+        // the staged upload can be dropped.
+        py(['import FreeCAD, FreeCADGui as Gui, os','d=FreeCAD.ActiveDocument or FreeCAD.newDocument("Unnamed")','p='+JSON.stringify(path),'n=os.path.splitext(os.path.basename(p))[0]','o=d.addObject("Image::ImagePlane", n)','o.ImageFile=p','o.Label=n','d.recompute()','Gui.updateGui()','try:','  v=Gui.activeDocument().activeView(); v.viewTop(); v.fitAll()','except Exception: pass'].join(String.fromCharCode(10))+DROP_UPLOAD(path));
       } else if(ext==='svg'||ext==='dxf'){
         py("import FreeCAD, FreeCADGui as Gui, importSVG, importDXF\nd=FreeCAD.ActiveDocument or FreeCAD.newDocument('Imported')\n(importSVG if "+JSON.stringify(ext)+"=='svg' else importDXF).insert("+JSON.stringify(path)+", d.Name)\nd.recompute()\nGui.updateGui()\ntry:\n v=Gui.activeDocument().activeView(); v.viewIsometric(); v.fitAll()\nexcept Exception: pass"+DROP_UPLOAD(path));
       } else {
@@ -6433,6 +6438,27 @@ window.fcRunPy = fcRunPy;
     };
     inp.click();
   }
+  // Tools > Load Image (patched Std_ViewLoadImage, CommandView.cpp). Desktop opens a Qt file
+  // dialog; here that dialog could only browse the wasm filesystem. The command calls this
+  // from the click, we stage the chosen bitmap, hand its path back through a parameter and
+  // run the command again -- its second run opens the image viewer on that path.
+  function pickImage(){
+    if(!ready()){ return; }
+    var inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
+    inp.style.cssText='position:fixed;left:-9999px;'; document.body.appendChild(inp);
+    inp.onchange=async function(){
+      try{
+        var f=inp.files&&inp.files[0]; if(!f) return;
+        var paths=stageFiles([{ name:f.name, bytes:new Uint8Array(await f.arrayBuffer()) }]);
+        if(!paths.length) return;
+        py(['import FreeCAD, FreeCADGui as Gui',
+            'FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Web").SetString("LoadImagePath", '+JSON.stringify(paths[0])+')',
+            'Gui.runCommand("Std_ViewLoadImage")'].join(String.fromCharCode(10)));
+      } finally { inp.remove(); }
+    };
+    inp.click();
+  }
+  window.fcwebPickImage=pickImage;
   // Save bridge: FreeCAD's native File > Save / Save As / Export (patched Gui/FileDialog.cpp
   // getSaveFileName) hands us a staging path under /home/web_user/_dl and writes the file there
   // in whatever format the user chose. We watch each registered path and download it to the

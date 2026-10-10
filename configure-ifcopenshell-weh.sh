@@ -126,7 +126,25 @@ if [ -z "$WRAP" ]; then
 fi
 
 mkdir -p "$DW/lib/ifc-mod"
-cp "$WRAP" "$DW/lib/ifc-mod/lib_ifcopenshell_wrapper.a"
+if [ "$(head -c 8 "$WRAP")" = '!<arch>' ]; then
+    cp "$WRAP" "$DW/lib/ifc-mod/lib_ifcopenshell_wrapper.a"
+else
+    # The module target links with -shared, which on emscripten 6.x yields a finished wasm
+    # SIDE_MODULE (39 MB, no target_features section, not linkable as an input) instead of the
+    # ~5 MB archive the FreeCAD link consumes. The module's own code is just the SWIG wrapper
+    # object -- every library it pulls in is staged separately below -- so archive that object,
+    # the same shape the Aug 27 archive had. Measured 2026-10-09 on the builder: the object is
+    # 5.1 MB, defines PyInit__ifcopenshell_wrapper, and passes tools/check-archive-target.py.
+    AR="$ROOT/emsdk/upstream/bin/llvm-ar"
+    WOBJS=""
+    while IFS= read -r o; do
+        if "$NM" "$o" 2>/dev/null | grep -q ' T PyInit__ifcopenshell_wrapper$'; then WOBJS="$WOBJS $o"; fi
+    done < <(find "$BUILD/ifcwrap/CMakeFiles" -name '*.o')
+    [ -n "$WOBJS" ] || { echo "!! $WRAP is not an archive and no object under $BUILD/ifcwrap defines PyInit__ifcopenshell_wrapper"; exit 1; }
+    rm -f "$DW/lib/ifc-mod/lib_ifcopenshell_wrapper.a"
+    # shellcheck disable=SC2086
+    "$AR" rcs "$DW/lib/ifc-mod/lib_ifcopenshell_wrapper.a" $WOBJS
+fi
 # EVERY archive the build produced, not an enumerated subset. The list this replaces --
 # libIfcParse, libIfcGeom*, libgeometry_*, libSerializers -- missed whatever defines the
 # per-schema XML serializer entry points, and the FreeCAD link ended in

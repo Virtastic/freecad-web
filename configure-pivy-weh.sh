@@ -95,7 +95,20 @@ grep -q 'TYPE STATIC' "$SWIG_CM" || {
     echo "!! could not make the SWIG target STATIC -- see the declaration above"; exit 1; }
 
 rm -rf build-pivy-wasm
+# Coin is built with FREETYPE_RUNTIME_LINKING=OFF (configure-coin-weh.sh), so its
+# coin-config.cmake runs find_dependency(Freetype). Without these hints a cold pivy configure
+# stops at "Could NOT find Freetype (missing: FREETYPE_LIBRARY)" -- hidden for months by a
+# cached build-pivy-wasm, surfaced when the cache was evicted. Same probe and paths as Coin's.
+echo 'int main(){return 0;}' > /tmp/ftprobe.c
+emcc --use-port=freetype -c /tmp/ftprobe.c -o /tmp/ftprobe.o
+FT_INC="$(em-config CACHE)/sysroot/include/freetype2"
+FT_LIBDIR="$(em-config CACHE)/sysroot/lib/wasm64-emscripten"
+[ -e "$FT_INC/ft2build.h" ] || { echo "!! no ft2build.h under $FT_INC -- the freetype port did not materialise."; exit 1; }
+
 emcmake cmake -S "$SRC" -B build-pivy-wasm -G Ninja \
+    -DFREETYPE_INCLUDE_DIR_ft2build="$FT_INC" \
+    -DFREETYPE_INCLUDE_DIR_freetype2="$FT_INC" \
+    -DFREETYPE_LIBRARY="$FT_LIBDIR/libfreetype.a" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_FLAGS="$PIVYFLAGS" \

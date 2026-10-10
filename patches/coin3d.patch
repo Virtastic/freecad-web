@@ -128,6 +128,45 @@ diff --git a/src/glue/gl.cpp b/src/glue/gl.cpp
    assert(w->glActiveTexture);
    w->glActiveTexture(texture);
  }
+@@ -2882,6 +2954,11 @@
+                             GLfloat s,
+                             GLfloat t)
+ {
++  /* emscripten's GL emulation has no glMultiTexCoord*, so this pointer is NULL on wasm and
++     the call trapped with "null function" (SoGLMultiTextureCoordinateElement::send, reached by
++     every textured face set, e.g. an Image::ImagePlane). Unit 0 is the unit a plain
++     glTexCoord sets, so degrade to it -- same shape as the glActiveTexture guard above. */
++  if (!w->glMultiTexCoord2f && target == GL_TEXTURE0) { glTexCoord2f(s, t); return; }
+   assert(w->glMultiTexCoord2f);
+   w->glMultiTexCoord2f(target, s, t);
+ }
+@@ -2891,6 +2968,8 @@
+                              GLenum target,
+                              const GLfloat * v)
+ {
++  /* same NULL glMultiTexCoord* on wasm as above: unit 0 degrades to plain glTexCoord */
++  if (!w->glMultiTexCoord2fv && target == GL_TEXTURE0) { glTexCoord2f(v[0], v[1]); return; }
+   assert(w->glMultiTexCoord2fv);
+   w->glMultiTexCoord2fv(target, v);
+ }
+@@ -2900,6 +2979,8 @@
+                              GLenum target,
+                              const GLfloat * v)
+ {
++  /* same NULL glMultiTexCoord* on wasm as above: unit 0 degrades to plain glTexCoord */
++  if (!w->glMultiTexCoord3fv && target == GL_TEXTURE0) { glTexCoord3f(v[0], v[1], v[2]); return; }
+   assert(w->glMultiTexCoord3fv);
+   w->glMultiTexCoord3fv(target, v);
+ }
+@@ -2909,6 +2990,8 @@
+                              GLenum target,
+                              const GLfloat * v)
+ {
++  /* same NULL glMultiTexCoord* on wasm as above: unit 0 degrades to plain glTexCoord */
++  if (!w->glMultiTexCoord4fv && target == GL_TEXTURE0) { glTexCoord4f(v[0], v[1], v[2], v[3]); return; }
+   assert(w->glMultiTexCoord4fv);
+   w->glMultiTexCoord4fv(target, v);
+ }
 diff --git a/src/shapenodes/SoAsciiText.cpp b/src/shapenodes/SoAsciiText.cpp
 index da4fca8..fafc9b2 100644
 --- a/src/shapenodes/SoAsciiText.cpp
