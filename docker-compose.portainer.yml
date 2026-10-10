@@ -15,7 +15,7 @@
 # tick "Re-pull image" in the stack editor). A pinned tag is never re-pulled by itself.
 services:
   freecad:
-    image: ghcr.io/virtastic/freecad-web:1.0.6
+    image: ghcr.io/virtastic/freecad-web:1.0.7
     ports:
       - "8080:80"        # host:container -- change the left number to use another port
     restart: unless-stopped
