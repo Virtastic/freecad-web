@@ -17,8 +17,8 @@
 set -eu
 
 REPO="${FCWEB_REPO:-Virtastic/freecad-web}"
-RELEASE="${FCWEB_RELEASE:-v1.0.6}"
-IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.6}"
+RELEASE="${FCWEB_RELEASE:-v1.0.7}"
+IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.7}"
 PORT="${FCWEB_PORT:-8080}"
 MODE=auto
 # Which source tree to fetch, which is not always the release being installed. They

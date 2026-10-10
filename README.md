@@ -117,7 +117,7 @@ docker compose --profile share up -d   # add shared sessions and the MCP endpoin
 Or skip the installer entirely and run the published image:
 
 ```bash
-docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.6
+docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.7
 ```
 
 Using Portainer? Paste [`docker-compose.portainer.yml`](docker-compose.portainer.yml) into
