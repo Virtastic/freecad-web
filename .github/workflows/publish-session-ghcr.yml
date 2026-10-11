@@ -1,0 +1,205 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
+name: publish-session-ghcr
+
+# Publishes the `session` service image to GitHub Container Registry (#7).
+#
+# The runnable app image made self-hosting a one-liner, but sharing and MCP still needed a
+# full clone and a local build for what is two Python files and three pip dependencies:
+#   docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.6   # the app, a minute
+#   ...sharing needs a 3.4 MB checkout and `docker compose --profile share up -d`
+# The asymmetry is what made sharing feel second-class: the thing you get from an image is
+# the thing without sessions.
+#
+# WHY THIS IS SEPARATE FROM publish-ghcr.yml and not just another job in it: the two
+# images have nothing to do with each other. This one needs no engine artifacts, no release
+# download and no 445 MB of build context -- it is `python:3.12-alpine` plus share.py and
+# app.py -- so it builds in seconds and is ~150 MB. The app image builds for ten minutes and
+# is 1.1 GB. Coupling them would mean a session-only fix waiting on a full engine build, and
+# a session publish failing whenever an artifact fetch did.
+#
+# Consequence worth stating: because this image is tiny, EVERY semver release publishes it,
+# rather than the deliberate selection the app image makes. It is also cheap enough to
+# re-publish on a schedule if the app image's tags move.
+#
+# SAFETY: GitHub-hosted runner, never the Virtastic OVH runner. That box is production.
+#
+# NOTE FOR THE FIRST RUN: a package created by GITHUB_TOKEN starts PRIVATE even on a public
+# repo, and there is no API to change that at creation time. After the first successful
+# push, set the package to public once by hand:
+#   https://github.com/orgs/Virtastic/packages -> freecad-web-session -> Package settings
+#   -> Change visibility -> Public.
+# Until that is done setup.sh --share cannot pull it and falls back to a local build.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "release tag to build and push (e.g. v1.0.6)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    # Same guard as the app image: skip engineering releases, and never run on a fork.
+    if: >-
+      github.repository == 'Virtastic/freecad-web' &&
+      startsWith(github.event.release.tag_name || github.event.inputs.release_tag, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Resolve the release tag
+        id: rel
+        env:
+          FROM_RELEASE: ${{ github.event.release.tag_name }}
+          FROM_INPUT: ${{ github.event.inputs.release_tag }}
+        run: |
+          tag="${FROM_RELEASE:-$FROM_INPUT}"
+          [ -n "$tag" ] || { echo "::error::no release tag"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # ghcr.io rejects an uppercase path, and the org is spelled 'Virtastic'. The
+          # package is a SEPARATE one from the app image, which is why the suffix is here
+          # rather than inherited: they need independent visibility and independent delete.
+          echo "image=ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr 'A-Z' 'a-z')-session" >> "$GITHUB_OUTPUT"
+          echo "building $tag"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.rel.outputs.tag }}
+
+      # No engine artifacts are fetched here, deliberately. This image must never depend on
+      # a Release asset: the whole point of #7 is that `docker pull` alone is enough, and a
+      # build that needed the release tarball would reintroduce the checkout requirement.
+
+      - name: Build the image
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          IMAGE: ${{ steps.rel.outputs.image }}
+        run: |
+          set -eu
+          DOCKER_BUILDKIT=1 docker build \
+            -t "${IMAGE}:${TAG}" \
+            -f infra/session/Dockerfile .
+          docker image inspect "${IMAGE}:${TAG}" --format '  built {{.Id}} {{.Size}} bytes'
+
+      # The protocol is asserted as a build layer inside the Dockerfile, so a broken
+      # share.py cannot produce an image at all. What is left to check HERE is that the
+      # image actually serves, and that the feature this issue is about is reachable in it.
+      - name: Verify the image before pushing
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -eu
+          docker run -d --name verify -p 8098:8000 "${IMAGE}:${TAG}"
+
+          # The HEALTHCHECK is wget /share/health, so this also proves the check passes.
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:8098/share/health; then break; fi
+            [ "$i" = 30 ] && { docker logs verify; echo "::error::container never came up"; exit 1; }
+            sleep 1
+          done
+
+          health=$(curl -fsS http://localhost:8098/share/health)
+          echo "$health"
+          echo "$health" | grep -q '"ok": *true' || { echo "::error::health not ok"; exit 1; }
+
+          # /files must answer, and must answer as OFF. This is the opt-in from #8, and it
+          # is the single most important thing to pin down here: an image that silently
+          # enabled server files would move every user's documents off their machine
+          # without anyone asking. 404 with files_off is the correct default.
+          code=$(curl -s -o /tmp/files.json -w '%{http_code}' http://localhost:8098/files)
+          echo "  /files -> $code $(cat /tmp/files.json)"
+          [ "$code" = "404" ] || { echo "::error::/files must be 404 when FCWEB_FILES is unset"; exit 1; }
+          grep -q 'files_off' /tmp/files.json || { echo "::error::/files should refuse with files_off"; exit 1; }
+
+          # And with the feature turned on, it must work -- otherwise the image ships a
+          # feature that cannot be reached.
+          docker rm -f verify
+          docker run -d --name verify2 -p 8098:8000 -e FCWEB_FILES=1 "${IMAGE}:${TAG}"
+          # Readiness is /share/health, NOT /files: /files answers 404 without a namespace
+          # header even when the feature is on, and `curl -f` turns that into a failure --
+          # so polling it here would loop to timeout on a perfectly healthy container.
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:8098/share/health; then break; fi
+            [ "$i" = 30 ] && { docker logs verify2; echo "::error::container with files on never came up"; exit 1; }
+            sleep 1
+          done
+          ns=0123456789abcdef0123456789abcdef
+          curl -fsS -X PUT -H "X-Fcweb-Ns: $ns" --data-binary 'FCStd-bytes' \
+            -o /dev/null http://localhost:8098/files/Smoke.FCStd
+          # The namespace header is REQUIRED on the listing too, not just the write. /files
+          # answers 404 to a request with no folder named, and `curl -f` turns that into a
+          # failure -- so without -H here this job fails on a perfectly working image. Caught
+          # by running it: the first commit of this workflow failed exactly this way.
+          curl -fsS -H "X-Fcweb-Ns: $ns" http://localhost:8098/files | grep -q Smoke.FCStd \
+            || { echo "::error::a saved document did not come back in the listing"; exit 1; }
+          got=$(curl -fsS -H "X-Fcweb-Ns: $ns" http://localhost:8098/files/Smoke.FCStd)
+          [ "$got" = "FCStd-bytes" ] || { echo "::error::bytes did not round-trip: $got"; exit 1; }
+          echo "  server files reachable when opted in"
+
+          docker rm -f verify2
+
+      - name: Push
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          TAG: ${{ steps.rel.outputs.tag }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          echo "$TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker push "${IMAGE}:${TAG}"
+          bare="${TAG#v}"
+          docker tag "${IMAGE}:${TAG}" "${IMAGE}:${bare}"
+          docker push "${IMAGE}:${bare}"
+          docker tag "${IMAGE}:${TAG}" "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
+          echo "pushed ${IMAGE}:${TAG}, :${bare}, :latest"
+
+      # Same reasoning as the app image: a package GITHUB_TOKEN creates is private, there is
+      # no API to flip it, and until somebody does, `setup.sh --share` quietly degrades to a
+      # local build. Never fatal -- on a first publish "private" is the correct state.
+      - name: Is the package actually pullable by strangers?
+        id: vis
+        if: always()
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -u
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          if docker manifest inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
+            echo "public=yes" >> "$GITHUB_OUTPUT"
+            echo "anonymous pull works -- setup.sh --share will take the fast path"
+          else
+            echo "public=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::${IMAGE} is not public, so setup.sh --share falls back to a local build. Fix once, by hand: https://github.com/orgs/Virtastic/packages/container/freecad-web-session/settings -> Danger Zone -> Change visibility -> Public"
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          {
+            echo "### publish-session-ghcr"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| release | \`${TAG}\` |"
+            echo "| image | \`${IMAGE}:${TAG}\` |"
+            echo "| run | \`docker run -d -p 8000:8000 -v fcweb-session:/data ${IMAGE}:${TAG}\` |"
+            echo "| with the app | \`./setup.sh --share\` |"
+            if [ "${{ steps.vis.outputs.public }}" = "yes" ]; then
+              echo "| anonymous pull | works |"
+            else
+              echo "| anonymous pull | **NO -- package is private.** Flip it at [package settings](https://github.com/orgs/Virtastic/packages/container/freecad-web-session/settings) -> Danger Zone -> Change visibility -> Public. |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

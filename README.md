@@ -100,6 +100,7 @@ booting happily. The installer looks inside the engine before it claims success.
 | `sh setup.sh --port 9000` | Serve somewhere other than 8080 |
 | `sh setup.sh --tag v1.0.0` | Install a specific release |
 | `sh setup.sh --ref dev` | Take the source tree from a branch instead of the release tag |
+| `sh setup.sh --share` | Also run the session service, for shared sessions and the MCP endpoint. Pulls its own image, `ghcr.io/virtastic/freecad-web-session`, and falls back to a local build. Off by default: it stores shared documents unencrypted on your disk. |
 | `sh full-build.sh` | Clone the repository at a tag and build the container from it (~15 min) |
 
 ### Running it
@@ -175,6 +176,30 @@ place. Two people in this one, the owner holding control.</sub>
 
 Rendering still happens in each visitor's own browser. This is not screen sharing.
 
+## Keep documents on the server (opt-in)
+
+Everything above lives in your browser's IndexedDB. That survives a reload, but it is still
+one browser on one machine: clear the site's data and it is gone, and you cannot open it on
+your laptop from the machine where you built it.
+
+*Edit → Server Files…* is a folder on the server for your own documents, so you can reopen
+one later or from another browser. The first time you save real work, the page offers it once
+— and **nothing is sent anywhere until you say yes.** With it off, the site behaves exactly
+as before.
+
+- **A copy, never a move.** Your browser copy stays, and File → Save still downloads to your
+  machine as it always did.
+- **No accounts.** Your browser mints a key, keeps it locally, and presents it as the folder
+  name. One browser is one folder; a second browser is a second folder. Clear the site's data
+  and you lose the key, which is the same bargain as a shared-session key.
+- **Off unless the operator enables it.** Self-hosters set `FCWEB_FILES=1` on the `session`
+  container. Without it the page sees no server files and the menu says so plainly.
+- **A full folder refuses, it never evicts.** Your documents are yours; the server will not
+  delete one you did not ask it to delete.
+
+Documents are stored unencrypted, exactly like shared sessions. Anyone with access to the
+server volume can read them — see **[SHARING.md](SHARING.md)**.
+
 ## Let an AI drive it
 
 *Preferences → Sharing → MCP* mints one URL. Paste it into an AI client and it can see and
@@ -199,6 +224,7 @@ These are real constraints, stated up front rather than discovered:
 | **Memory** | A 16 GB heap ceiling (the wasm64 build; V8 caps wasm64 memory there). The app force-saves your documents and warns before it runs out. |
 | **CalculiX** | Single-threaded, so large FEM jobs are slower than desktop. |
 | **Shared sessions / MCP** | Self-hosters need one extra container: `docker compose --profile share up -d`. Documents you share are stored unencrypted on that server, so anyone with access to it can read them. Nothing leaves your browser until you start a session. |
+| **Server files** | Off unless the operator sets `FCWEB_FILES=1`, and off in your browser until you accept the one-time offer. Once on, every File → Save also copies the document to the server, unencrypted. Delete them from *Edit → Server Files…*. |
 
 ## Documentation
 

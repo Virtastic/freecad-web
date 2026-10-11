@@ -34,7 +34,7 @@ GROUP = 'User parameter:BaseApp/Preferences/FCWeb/Sharing'
 STATE = '/tmp/fcweb_share.json'     # python -> page
 CTL = '/tmp/fcweb_share_ctl.json'   # page -> python: {session, role, holder, name}
 PWFILE = '/tmp/fcweb_share_pw'      # passwords, handed to the page once, mode 0600
-REQ = '/tmp/fcweb_share_req'        # menu commands -> page: share|request|force|release
+REQ = '/tmp/fcweb_share_req'        # menu commands -> page: share|request|force|release|files
 STAGE = '/tmp/_fcsession'           # the session's own save path
 MCP = '/tmp/fcmcp'                  # relay command/result files
 SETTLE_S = 0.6                      # publish once edits have been still this long
@@ -577,6 +577,13 @@ class _Cmd(object):
         c = _ctl()
         if self.req == 'share':
             return True
+        if self.req == 'files':
+            # Always offered: whether THIS site keeps documents is the page's business
+            # (it asks the session service), and a disabled entry would need the page to
+            # tell us -- so the entry opens and the page says plainly that there are none.
+            # An entry that vanished on some sites and not others is worse than one that
+            # always explains itself.
+            return True
         if not c.get('session') or c.get('ended'):
             return False
         if self.req == 'release':
@@ -596,6 +603,10 @@ class _Cmd(object):
                 Gui.showPreferences('Sharing', 0)
             except Exception as e:
                 _log('showPreferences failed: %r' % (e,))
+            return
+        if self.req == 'files':
+            # The browser half owns fetch() and MEMFS, so the panel is built there.
+            _req('files')
             return
         _req(self.req)
 
@@ -642,6 +653,7 @@ COMMANDS = (
     ('Fcweb_ShareSession', _Cmd('Share Session...', 'Share this document as a live, durable link', 'share')),
     ('Fcweb_RequestControl', _Cmd('Request Control', 'Ask the current editor for control of the shared session', 'request')),
     ('Fcweb_TakeControl', _Cmd('Take Control', 'Take control now; the current editor keeps their unpublished work as a separate document', 'force')),
+    ('Fcweb_ServerFiles', _Cmd('Server Files...', 'Open, keep or delete documents on this site\'s server, so you can reopen them later or on another machine', 'files')),
 )
 
 _ICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
@@ -651,7 +663,7 @@ _ICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
 
 
 def ensure_menu():
-    """Put our three entries on the Edit menu, and put them BACK after a workbench switch,
+    """Put our entries on the Edit menu, and put them BACK after a workbench switch,
     which rebuilds the menu bar. Called from tick()."""
     Gui = _gui()
     if Gui is None:
@@ -688,7 +700,7 @@ def ensure_menu():
         act.setEnabled(cmd.IsActive())
         edit.addAction(act)
         _actions[name] = act
-    _log('Edit menu: Share Session, Request Control, Take Control installed')
+    _log('Edit menu: Share Session, Request Control, Take Control, Server Files installed')
     return True
 
 
@@ -1129,6 +1141,24 @@ def install():
             Gui.addCommand(name, cmd)
         except Exception as e:
             _log('addCommand %s failed: %r' % (name, e))
+    # Put the entries in the menu NOW rather than waiting for the first tick(). The tick is
+    # what re-inserts them after a workbench switch rebuilds the menu bar, but it only runs
+    # once the autosave loop starts -- which is after the restore gate, several seconds into
+    # boot. Reported on 2026-10-01 as the entries not appearing until something was saved.
+    #
+    # _later(), NOT a direct call. install() is reached through py() from the browser half,
+    # so this runs on the wasm stack, and touching Qt widgets from there is what this file
+    # already has a measured scar for: a modal opened from such a callback crashed the tab
+    # outright (2026-09-03), and shiboken reports "Internal C++ object already deleted" for
+    # widgets reached off Qt's own call stack. Calling ensure_menu() here directly was tried
+    # and took the engine down with it -- 2026-10-01, reported as "FreeCAD stopped
+    # unexpectedly" on every reload. The delay is deliberate: the menu bar is still being
+    # built at this point in boot, and _try() swallows any refusal so a failure here costs
+    # the menu entry, never the tab.
+    try:
+        _later(ensure_menu, 0.5)
+    except Exception as e:
+        _log('could not schedule ensure_menu: %r' % (e,))
     pinned = _p().GetString('PinnedDocument', '')
     if pinned:
         pin(pinned)

@@ -9,6 +9,8 @@ Three things, one process:
   * /share/* and /api/*  -> share.handle(), the transport-agnostic core, in a thread
                             (the relay's /cmd long-polls for up to 25 s and must not block
                             the event loop).
+  * /files*             -> the same core, same reason: a document PUT can be tens of MB and
+                            must not sit on the event loop either.
   * /mcp/<id>/<token>    -> FastMCP, Streamable HTTP, STATELESS. The path is the
                             capability: a wrong or absent token is 404, never 401, so a
                             closed endpoint cannot be told apart from a nonexistent one.
@@ -41,6 +43,8 @@ import share  # noqa: E402
 
 share.CFG.update(share._cfg())
 os.makedirs(share.CFG['dir'], exist_ok=True)
+if share.CFG['files_on']:
+    os.makedirs(share.CFG['files_dir'], exist_ok=True)
 
 CURRENT = contextvars.ContextVar('fcweb_session', default=None)   # (session id, token)
 # The public origin, for share_url: FCWEB_PUBLIC_URL when the operator set it, else what
@@ -571,6 +575,11 @@ app = Starlette(
     routes=[
         Route('/share/{p:path}', share_route, methods=['GET', 'HEAD', 'POST', 'PUT', 'DELETE']),
         Route('/api/{p:path}', share_route, methods=['GET', 'POST']),
+        # Server files. Its own prefix rather than a sub-path of /share/, because a document
+        # NAME belongs to the user while a session id is a capability: keeping them apart means
+        # no filename can ever be parsed as a session, and vice versa.
+        Route('/files', share_route, methods=['GET']),
+        Route('/files/{p:path}', share_route, methods=['GET', 'HEAD', 'PUT', 'DELETE']),
         Mount('/mcp', app=McpGate(mcp.streamable_http_app())),
     ],
     lifespan=_lifespan,
@@ -578,6 +587,7 @@ app = Starlette(
 
 if __name__ == '__main__':
     import uvicorn
-    sys.stderr.write('[session] listening on :8000 dir=%s max=%dMB quota=%.1fGB sessions=%d\n' % (
-        share.CFG['dir'], share.CFG['max_bytes'] // 1048576, share.CFG['quota'] / 1073741824, len(share._sessions())))
+    sys.stderr.write('[session] listening on :8000 dir=%s max=%dMB quota=%.1fGB sessions=%d files=%s\n' % (
+        share.CFG['dir'], share.CFG['max_bytes'] // 1048576, share.CFG['quota'] / 1073741824,
+        len(share._sessions()), 'on' if share.CFG['files_on'] else 'off'))
     uvicorn.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', '8000')), log_level='warning')

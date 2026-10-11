@@ -180,6 +180,29 @@ wrong rather than anything that errors.
       `no_tab`. The tools act inside the live tab, so no tab means no reach — the assistant
       must say so, not hang or answer from nothing.
 
+**Server files (3 min)** — only on a site where the operator set `FCWEB_FILES=1`. On any
+other site the whole feature is absent, which is the correct default: skip this block.
+- [ ] **Before accepting anything, save a document and watch devtools' network tab.** A
+      `GET /files` probe WILL appear — that is the page asking whether this site keeps
+      documents at all, and it is the only thing it may send. What must NOT appear is a
+      `PUT /files/<name>`. No document bytes leave the browser until you accept, which is
+      what keeps the site's "nothing leaves your browser" promise true.
+- [ ] **The one-time offer appears after the first real save**, and only once. Accepting it
+      says plainly that documents will be *copied* to the server.
+- [ ] **Now File > Save, and the document appears in Edit > Server Files...** with a size
+      and a timestamp. Your browser copy must still be there, and the file must still have
+      downloaded as it always did: this is a copy, not a move.
+- [ ] **Open it from the list.** The document opens and is editable. Then change something,
+      File > Save, and press **Open** again: you must get the NEW version, not a cached one.
+- [ ] **A name with an accent round-trips.** Save `Ünter Rad über.FCStd`; it lists under
+      exactly that name and opens again.
+- [ ] **Delete takes two presses** (Really?), and afterwards the file is gone from the list
+      while your local copy is untouched.
+- [ ] **In a second browser profile, the folder is empty.** Two browsers are two folders, and
+      neither can see the other's documents.
+- [ ] **`docker compose exec session python /srv/share.py --files` agrees with the panel.**
+      A file the panel shows but the volume does not have is a real bug.
+
 **Feel (3 min)**
 - [ ] Nothing takes visibly longer than it should for the size of the model
 - [ ] No moment where the UI is frozen with no indication of progress
