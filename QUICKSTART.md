@@ -68,7 +68,7 @@ success.
 | `sh setup.sh` | Pulls the prebuilt image from GHCR. If that is unavailable it falls back to building locally, and says so. | ~3 min |
 | `sh setup.sh --build` | Downloads the seven engine artifacts (~445 MB) from the release and builds the image on your machine. | ~15 min |
 | `sh full-build.sh` | Clones the repository at the release tag, then does the `--build` path from that clone. | ~15 min |
-| `docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.7` | No installer at all. You get the app; shared sessions need the compose file or `--share`. | ~2 min |
+| `docker run -d -p 8080:80 ghcr.io/virtastic/freecad-web:1.0.8` | No installer at all. You get the app; shared sessions need the compose file or `--share`. | ~2 min |
 | `sh setup.sh --share` | The above **plus** the session service, so shared sessions and the MCP endpoint work. Pulls `ghcr.io/virtastic/freecad-web-session`. Documents you share are stored unencrypted on your machine's disk, so it is off unless you ask for it. | ~3 min |
 
 All three produce the same running container. Use `--build` if you want to build what you
@@ -191,7 +191,7 @@ sh setup.sh --tag v1.1.0
 
 ```bash
 docker compose down
-docker image rm ghcr.io/virtastic/freecad-web:1.0.7
+docker image rm ghcr.io/virtastic/freecad-web:1.0.8
 ```
 
 If you ever ran the share profile, the image is not the whole of it: shared sessions live

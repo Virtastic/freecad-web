@@ -17,7 +17,7 @@ services:
     # Both image: and build: are present on purpose, and setup.sh picks between them
     # explicitly with --no-build (pull) or --build (local). Compose's own default when
     # both keys are set is to build, so never rely on the implicit behaviour.
-    image: ${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.7}
+    image: ${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.8}
     build:
       context: .
       dockerfile: infra/Dockerfile
@@ -50,7 +50,7 @@ services:
     # setup.sh picks between them explicitly, and defaults to --no-build when the pull
     # works. The published image is what makes sharing a one-liner instead of a checkout
     # plus a local build (issue #7).
-    image: ${FCWEB_SESSION_IMAGE:-ghcr.io/virtastic/freecad-web-session:1.0.7}
+    image: ${FCWEB_SESSION_IMAGE:-ghcr.io/virtastic/freecad-web-session:1.0.8}
     build:
       context: .
       dockerfile: infra/session/Dockerfile

@@ -18,11 +18,11 @@
 set -eu
 
 REPO="${FCWEB_REPO:-Virtastic/freecad-web}"
-RELEASE="${FCWEB_RELEASE:-v1.0.7}"
-IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.7}"
+RELEASE="${FCWEB_RELEASE:-v1.0.8}"
+IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.8}"
 # The session service is a separate package, so a self-hoster who cannot pull it gets a
 # clear warning naming THIS image rather than a confusing compose error about the other one.
-SESSION_IMAGE="${FCWEB_SESSION_IMAGE:-ghcr.io/virtastic/freecad-web-session:1.0.7}"
+SESSION_IMAGE="${FCWEB_SESSION_IMAGE:-ghcr.io/virtastic/freecad-web-session:1.0.8}"
 PORT="${FCWEB_PORT:-8080}"
 MODE=auto
 # Off unless asked: the session container holds other people's documents on your disk, and
