@@ -395,7 +395,9 @@ def _ns_ok(h):
     reason about and impossible to audit. One header, one meaning."""
     if CFG.get('files_key'):
         given = h.get('x-fcweb-key', '')
-        if given and hmac.compare_digest(str(given), CFG['files_key']):
+        # Bytes on both sides: compare_digest raises on a non-ASCII str, which turned a wrong
+        # key into a 500 instead of the indistinguishable 404.
+        if given and hmac.compare_digest(str(given).encode('utf-8'), CFG['files_key'].encode('utf-8')):
             return _shared_ns()
         return None
     ns = h.get('x-fcweb-ns', '')
@@ -458,9 +460,9 @@ def _f_files(ns):
     return out
 
 
-def _f_used():
+def _f_used(top=None):
     total = 0
-    for root, _dirs, files in os.walk(CFG['files_dir']):
+    for root, _dirs, files in os.walk(top or CFG['files_dir']):
         for n in files:
             try:
                 total += os.path.getsize(os.path.join(root, n))
@@ -526,7 +528,7 @@ def _files_route(method, path, fullpath, h, body):
         if method != 'GET':
             return _err(405, 'method_not_allowed', 'This endpoint does not accept that method.')
         files = _f_files(ns)
-        return _json(200, {'files': files, 'used': _f_used_now(), 'quota': CFG['files_quota'],
+        return _json(200, {'files': files, 'used': _f_used(d), 'quota': CFG['files_quota'],
                            'total_quota': CFG['files_total'], 'max_mb': CFG['max_bytes'] // 1048576})
 
     m = re.match(r'/files/(.+)\Z', path)
@@ -568,7 +570,9 @@ def _files_route(method, path, fullpath, h, body):
             except OSError:
                 old = 0
         # Re-saving the same document frees its own previous bytes first.
-        used = _f_used_now()
+        # The folder's limit is checked against the folder, the store's against the store.
+        # Both used to read the whole store, so 2 GB across ALL users filled everyone's folder.
+        used = _f_used(d)
         if used - old + len(body) > CFG['files_quota']:
             # No eviction here, and deliberately. A session is disposable and a public box
             # must not grow without bound; this folder is the user's own saved work, so a
@@ -578,12 +582,13 @@ def _files_route(method, path, fullpath, h, body):
             return _err(507, 'quota', 'This folder is full: %s of %s are in use. Delete a '
                         'document to make room, or the operator can raise FCWEB_FILES_MAX_GB.'
                         % (_sz(used), _sz(CFG['files_quota'])))
-        if used - old + len(body) > CFG['files_total']:
+        total = _f_used_now()
+        if total - old + len(body) > CFG['files_total']:
             # The backstop for the whole store, not this folder: anyone can mint a namespace,
             # so per-folder limits alone do not bound the volume. Refused, never evicted.
             return _err(507, 'quota', 'The server has no room for more documents right now: '
                         '%s of %s are in use. Try again later, or the operator can raise '
-                        'FCWEB_FILES_TOTAL_GB.' % (_sz(used), _sz(CFG['files_total'])))
+                        'FCWEB_FILES_TOTAL_GB.' % (_sz(total), _sz(CFG['files_total'])))
         try:
             _write_atomic(os.path.join(d, key + '.bin'), body)
             _write_atomic(os.path.join(d, key + '.json'),
@@ -592,7 +597,7 @@ def _files_route(method, path, fullpath, h, body):
         except OSError:
             return _fail(507, 'quota')
         _f_used_dirty()
-        return _json(200, {'ok': True, 'name': name, 'bytes': len(body), 'used': _f_used_now()})
+        return _json(200, {'ok': True, 'name': name, 'bytes': len(body), 'used': _f_used(d)})
 
     if method == 'DELETE':
         if not _f_meta(ns, name):
@@ -1444,6 +1449,13 @@ def selftest():
     assert call('PUT', '/files/Old.FCStd', b'tiny', X_Fcweb_Ns=ns)[0] == 200
     assert call('GET', '/files/Old.FCStd', X_Fcweb_Ns=ns)[3] == b'tiny'
     assert call('PUT', '/files/Also.FCStd', b'q', X_Fcweb_Ns=ns)[1]['code'] == 'quota'
+    # The folder limit is per folder. With ns already holding more than the quota, an empty
+    # second folder must still save -- it used to be measured against the whole store.
+    CFG['files_quota'] = _f_used(_ns_dir(ns)) - 1
+    st, j, _, _ = call('PUT', '/files/Mine.FCStd', b'm', X_Fcweb_Ns='e5' * 16)
+    assert st == 200 and 0 < j['used'] < 1024, (st, j)
+    assert call('GET', '/files', X_Fcweb_Ns='e5' * 16)[1]['used'] == j['used']
+    assert call('DELETE', '/files/Mine.FCStd', X_Fcweb_Ns='e5' * 16)[0] == 200
     CFG['files_quota'] = 10 ** 7
     assert call('POST', '/files', X_Fcweb_Ns=ns)[0] == 405
 

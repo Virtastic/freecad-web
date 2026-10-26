@@ -156,6 +156,17 @@ RUN GM=$(md5sum /usr/share/nginx/html/gmsh.wasm | cut -c1-12) \
            && grep -q "ccx.js?v=$CX" /usr/share/nginx/html/calculix-demo.html; }; } \
  && echo "stamped gmsh=$GM ccx=$CX"
 
+# The 3D-mouse client scripts match the same year-long immutable rule, so they get a
+# content URL as well, or a vendored update would never reach a returning browser.
+RUN AB=$(md5sum /usr/share/nginx/html/3dx/autobahn.min.js     | cut -c1-12) \
+ && TD=$(md5sum /usr/share/nginx/html/3dx/3dconnexion.min.js  | cut -c1-12) \
+ && sed -i "s|'3dx/autobahn\.min\.js'|'3dx/autobahn.min.js?v=$AB'|g; \
+            s|'3dx/3dconnexion\.min\.js'|'3dx/3dconnexion.min.js?v=$TD'|g" \
+        /usr/share/nginx/html/freecad-gui.html \
+ && grep -q "autobahn.min.js?v=$AB"    /usr/share/nginx/html/freecad-gui.html \
+ && grep -q "3dconnexion.min.js?v=$TD" /usr/share/nginx/html/freecad-gui.html \
+ && echo "stamped 3dx autobahn=$AB 3dconnexion=$TD"
+
 # Build identity, so a bug report can name the build it came from. Supplied by CI as the
 # release tag + short SHA; defaults to "unknown" for a local image build.
 ARG FCWEB_BUILD=unknown

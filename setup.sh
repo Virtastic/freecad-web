@@ -18,11 +18,11 @@
 set -eu
 
 REPO="${FCWEB_REPO:-Virtastic/freecad-web}"
-RELEASE="${FCWEB_RELEASE:-v1.0.8}"
-IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.8}"
+RELEASE="${FCWEB_RELEASE:-v1.0.9}"
+IMAGE="${FCWEB_IMAGE:-ghcr.io/virtastic/freecad-web:1.0.9}"
 # The session service is a separate package, so a self-hoster who cannot pull it gets a
 # clear warning naming THIS image rather than a confusing compose error about the other one.
-SESSION_IMAGE="${FCWEB_SESSION_IMAGE:-ghcr.io/virtastic/freecad-web-session:1.0.8}"
+SESSION_IMAGE="${FCWEB_SESSION_IMAGE:-ghcr.io/virtastic/freecad-web-session:1.0.9}"
 PORT="${FCWEB_PORT:-8080}"
 MODE=auto
 # Off unless asked: the session container holds other people's documents on your disk, and
@@ -38,10 +38,6 @@ PROFILES=""
 # after a reboot would get an app with sharing mysteriously dead and nothing in the log.
 DOWN_ARGS=""
 PROFILE_ARGS=""
-if [ "$SHARE" = yes ]; then
-    DOWN_ARGS="--profile share"
-    PROFILE_ARGS="--profile share"
-fi
 # Which source tree to fetch, which is not always the release being installed. They
 # differ when running a newer installer against an older engine release -- and they had
 # to differ to test the standalone path before the first release that contains it.
@@ -76,6 +72,12 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+# After the loop, not before it: --share is only known once the arguments are read, and
+# deciding earlier printed a bare `up -d` that silently left sharing dead after a restart.
+if [ "$SHARE" = yes ]; then
+    DOWN_ARGS="--profile share"
+    PROFILE_ARGS="--profile share"
+fi
 
 # --------------------------------------------------------------------------------------
 # 1. Docker preflight.

@@ -674,8 +674,8 @@ window.fcwebPrompt = function(title, text, deflt){
       axes[0] = d.getInt16(0, true); axes[1] = d.getInt16(2, true); axes[2] = d.getInt16(4, true);
       if (n >= 12) {
         axes[3] = d.getInt16(6, true); axes[4] = d.getInt16(8, true); axes[5] = d.getInt16(10, true);
-        kick();
       }
+      kick();      // a translation-only report moves the camera too, not just the next rotation
     } else if (e.reportId === 2 && n >= 6) {
       axes[3] = d.getInt16(0, true); axes[4] = d.getInt16(2, true); axes[5] = d.getInt16(4, true);
       kick();
@@ -6466,8 +6466,10 @@ window.fcRunPy = fcRunPy;
           if(r.status===404){
             var e=new Error((j&&j.hint)||'no folder');
             e.code=j&&j.code;
-            e.off=!!(j&&j.code==='files_off');
-            e.noFolder=!e.off;
+            // Only the server's own no_namespace means "paste a key". A host with no /files
+            // route at all answers a bare 404 with no code; that is off, not a missing folder.
+            e.noFolder=!!(j&&j.code==='no_namespace');
+            e.off=!e.noFolder;
             throw e;
           }
           if(!r.ok){ var e2=new Error((j&&(j.hint||j.error))||('HTTP '+r.status));
@@ -6572,7 +6574,14 @@ window.fcRunPy = fcRunPy;
   // pending pair is kept, so a burst of autosaves still ends up current.
   var fcFilePending=null;
   function fcFileOnSave(path, bytes){
-    if(!fcFileEnabled()||!fcFilesAvail){ return; }   // not confirmed on this site; never guessed
+    if(!fcFileEnabled()){ return; }                  // not confirmed on this site; never guessed
+    // Unknown is not "no": a reload (or Use folder / Clear) leaves it null, and returning here
+    // dropped every save until the panel happened to be opened. Ask once, then save.
+    if(fcFilesAvail===null){
+      fcFilesAvailable().then(function(ok){ if(ok){ fcFileOnSave(path, bytes); } });
+      return;
+    }
+    if(!fcFilesAvail){ return; }
     if(fcFilesBusy){ fcFilePending={path:path, bytes:bytes}; return; }
     fcFileSave(path, bytes, true).then(fcFileDrain, fcFileDrain);
   }
@@ -6599,8 +6608,9 @@ window.fcRunPy = fcRunPy;
         if(r.status===404){
           var e=new Error((j&&j.hint)||'no folder');
           e.code=j&&j.code;
-          e.off=!!(j&&j.code==='files_off');
-          e.noFolder=!e.off;
+          e.noFolder=!!(j&&j.code==='no_namespace');
+          // no_file is neither: the folder exists and this document is not in it.
+          e.off=!e.noFolder&&e.code!=='no_file';
           throw e;
         }
         var e2=new Error((j&&(j.hint||j.error))||('HTTP '+r.status));
@@ -6751,11 +6761,13 @@ window.fcRunPy = fcRunPy;
     var del=document.createElement('button'); del.textContent='Delete';
     del.style.cssText='background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.2);'+
       'color:#e8e8e8;border-radius:6px;padding:4px 10px;font:12px inherit;cursor:pointer';
+    // A delete is the one thing here that cannot be undone from inside the browser, so it
+    // takes a second press on the same button. Not by disabling it: a disabled button never
+    // fires the second click, so no file could be deleted at all.
+    var armed=false;
     del.addEventListener('click', function(){
-      del.textContent='Really?'; del.disabled=true;
-      // A delete is the one thing here that cannot be undone from inside the browser, so
-      // it takes a second press on the same button rather than one click.
-      del.onclick=function(){ fcFileDelete(f.name); };
+      if(armed){ del.disabled=true; fcFileDelete(f.name); return; }
+      armed=true; del.textContent='Really?';
     });
     row.appendChild(nm); row.appendChild(sz); row.appendChild(open); row.appendChild(del);
     panel.list.appendChild(row);

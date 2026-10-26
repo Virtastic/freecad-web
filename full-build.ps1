@@ -20,7 +20,7 @@ param(
     [string] $Dir  = '',
     # What to check out, which is not always what to download.
     [string] $Ref  = '',
-    [string] $Tag  = $(if ($env:FCWEB_RELEASE) { $env:FCWEB_RELEASE } else { 'v1.0.8' }),
+    [string] $Tag  = $(if ($env:FCWEB_RELEASE) { $env:FCWEB_RELEASE } else { 'v1.0.9' }),
     [string] $Repo = $(if ($env:FCWEB_REPO) { $env:FCWEB_REPO } else { 'Virtastic/freecad-web' }),
     [int]    $Port = $(if ($env:FCWEB_PORT) { $env:FCWEB_PORT } else { 8080 })
 )
