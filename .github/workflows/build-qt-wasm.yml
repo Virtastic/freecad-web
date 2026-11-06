@@ -61,7 +61,7 @@ jobs:
     runs-on: ${{ (inputs.runner || 'builder') == 'hosted' && 'ubuntu-latest' || (inputs.runner || 'builder') == 'vps' && fromJSON('["self-hosted","ovh","virtastic"]') || fromJSON('["self-hosted","builder","virtastic"]') }}
     timeout-minutes: 350
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # HOSTED RUNNERS ONLY. On a throwaway CI image these trees are reclaimable space; on the
       # OVH box they are somebody's filesystem, and that box also runs another product's
       # database. The `|| true` here would have swallowed the mistake rather than prevented

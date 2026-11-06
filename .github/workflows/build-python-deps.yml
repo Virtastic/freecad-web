@@ -78,7 +78,7 @@ jobs:
     timeout-minutes: 360
     runs-on: [self-hosted, builder, virtastic]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The key MUST change when any lane's recipe changes. It hashed five configure
       # scripts and numpy.patch only, so fixing rebuild-pyside-weh.sh left the key
       # identical -- and actions/cache will not overwrite an existing key:
