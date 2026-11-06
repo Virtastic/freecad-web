@@ -347,7 +347,7 @@ jobs:
 
       - name: Save CPython build tree
         if: always() && steps.cpycache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: deps/src/cpython
           key: fcweb-cpython-3.13.3-wasm64-emsdk6.0.9-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch', 'patches/cpython-trampoline-wasm64.patch') }}
@@ -698,7 +698,7 @@ jobs:
       # again. Partial progress is exactly what is worth caching here.
       - name: Save the Python extension libraries
         if: always()
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps/wasm/lib/numpy-mod
