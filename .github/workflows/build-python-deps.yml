@@ -90,7 +90,7 @@ jobs:
       - name: Restore the Python extension libraries
         id: pycache
         if: ${{ !inputs.rebuild }}
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps/wasm/lib/numpy-mod
@@ -132,7 +132,7 @@ jobs:
       # key, and none of that is anything this workflow changes.
       - name: Restore the C++ dependency stack
         id: depcache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: deps/wasm
           key: fcweb-deps-v2-wasm64-emsdk6.0.9-pydeps-consumer
@@ -141,7 +141,7 @@ jobs:
 
       - name: Restore CPython build tree
         id: cpycache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: deps/src/cpython
           key: fcweb-cpython-3.13.3-wasm64-emsdk6.0.9-${{ hashFiles('build-cpython.sh', 'build-cpython-mt.sh', 'patches/cpython-ctypes-wasm.patch', 'patches/cpython-trampoline-wasm64.patch') }}
@@ -357,7 +357,7 @@ jobs:
       # the first and installs the second with aqt; do the same rather than rebuild Qt.
       - name: Restore Qt (wasm)
         id: qtcache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: qt/6.11.2/wasm_mt_weh
           key: fcweb-qt-6.11.2-wasm64-eh-jspi-mt-emsdk6.0.9-v5

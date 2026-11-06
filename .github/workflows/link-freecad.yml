@@ -174,7 +174,7 @@ jobs:
       # and the Python one adds subdirectories (lib/*-mod, shiboken6, pyside-pkg) inside it.
       - name: Restore the C++ dependency stack
         id: depcache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: deps/wasm
           key: fcweb-deps-${{ env.DEPS_KEY }}-freecad-build
@@ -183,7 +183,7 @@ jobs:
 
       - name: Restore Qt 6.11.2 for wasm
         id: qtcache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: qt/6.11.2/wasm_mt_weh
           key: ${{ env.QT_KEY }}
@@ -197,7 +197,7 @@ jobs:
       # failed on ft2build.h against a cache that had contained it for hours.
       - name: Restore the Python extension libraries
         id: pydepscache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps/wasm/lib/numpy-mod
@@ -278,7 +278,7 @@ jobs:
 
       - name: Seed the store from the old cache (first run only)
         if: ${{ inputs.rebuild != true && steps.store-probe.outputs.need_cache == '1' }}
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             build-freecad-gui-weh
