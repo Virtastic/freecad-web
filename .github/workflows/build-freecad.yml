@@ -156,7 +156,7 @@ jobs:
       # the runner's own python3 (3.12 on ubuntu-24.04) would fail as "unsuitable version".
       - name: Host Python 3.13 (must match the wasm CPython)
         id: hostpy
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
